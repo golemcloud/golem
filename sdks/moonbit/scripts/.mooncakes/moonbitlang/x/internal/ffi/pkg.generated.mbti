@@ -1,0 +1,49 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/internal/ffi"
+
+// Values
+pub fn byte_array_from_extern(XExternByteArray) -> Bytes
+
+pub fn byte_array_to_extern(Bytes) -> XExternByteArray
+
+pub fn mbt_string_to_utf8_bytes(String, Bool) -> Bytes
+
+pub fn string_array_from_extern(XExternStringArray) -> Array[String]
+
+pub fn string_from_extern(XExternString) -> String
+
+pub fn string_to_extern(String) -> XExternString
+
+pub fn utf8_bytes_to_mbt_string(Bytes) -> String
+
+// Errors
+
+// Types and methods
+#external
+pub(all) type XByteArrayCreateHandle
+
+#external
+pub(all) type XByteArrayReadHandle
+
+#external
+pub(all) type XExternByteArray
+
+#external
+pub(all) type XExternString
+
+#external
+pub(all) type XExternStringArray
+
+#external
+pub(all) type XStringArrayReadHandle
+
+#external
+pub(all) type XStringCreateHandle
+
+#external
+pub(all) type XStringReadHandle
+
+// Type aliases
+
+// Traits
+

@@ -15,7 +15,7 @@ runs:
   steps:
     - name: Install cargo-test-r
       shell: bash
-      run: cargo binstall --force --locked cargo-test-r@2.2.4
+      run: cargo binstall --force --locked cargo-test-r@2.2.5
     - name: Restore packaged binaries from cache
       uses: actions/cache/restore@v5
       with:

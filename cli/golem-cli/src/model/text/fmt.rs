@@ -392,12 +392,6 @@ pub fn format_env(show_sensitive: bool, env: &BTreeMap<String, String>) -> Strin
         .join("\n")
 }
 
-pub fn format_wasi_config(vars: &BTreeMap<String, String>) -> String {
-    vars.iter()
-        .map(|(k, v)| format!("{}={}", k, v.log_color_highlight()))
-        .join("\n")
-}
-
 pub fn format_typed_config(config: &[TypedAgentConfigEntry]) -> String {
     config
         .iter()

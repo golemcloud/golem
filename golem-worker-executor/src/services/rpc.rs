@@ -50,7 +50,7 @@ use golem_common::model::{
 
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::EnvironmentAction;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -65,7 +65,6 @@ pub trait Rpc: Send + Sync {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
@@ -79,7 +78,6 @@ pub trait Rpc: Send + Sync {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError>;
 
@@ -92,7 +90,6 @@ pub trait Rpc: Send + Sync {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError>;
 }
@@ -266,7 +263,6 @@ impl Rpc for RemoteInvocationRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
@@ -280,7 +276,6 @@ impl Rpc for RemoteInvocationRpc {
                 owned_agent_id,
                 self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
-                self_config,
                 self_stack,
                 self_created_by,
                 config,
@@ -300,7 +295,6 @@ impl Rpc for RemoteInvocationRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError> {
         let principal = caller_agent_principal(self_agent_id);
@@ -316,7 +310,6 @@ impl Rpc for RemoteInvocationRpc {
                 idempotency_key,
                 self_agent_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
-                self_config,
                 self_stack,
                 self_created_by,
                 principal,
@@ -343,7 +336,6 @@ impl Rpc for RemoteInvocationRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         let principal = caller_agent_principal(self_agent_id);
@@ -358,7 +350,6 @@ impl Rpc for RemoteInvocationRpc {
                 idempotency_key,
                 self_agent_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
-                self_config,
                 self_stack,
                 self_created_by,
                 principal,
@@ -765,7 +756,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
@@ -790,7 +780,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
-                Some(self_config),
                 config,
                 None,
                 Some(self_agent_id.clone()),
@@ -810,7 +799,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_created_by,
                     self_agent_id,
                     self_env,
-                    self_config,
                     self_stack,
                     config,
                 )
@@ -827,7 +815,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
@@ -852,7 +839,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
-                Some(self_config),
                 Vec::new(),
                 None,
                 Some(self_agent_id.clone()),
@@ -889,7 +875,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_created_by,
                     self_agent_id,
                     self_env,
-                    self_config,
                     self_stack,
                 )
                 .await
@@ -905,7 +890,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
@@ -930,7 +914,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
-                Some(self_config),
                 Vec::new(),
                 None,
                 Some(self_agent_id.clone()),
@@ -961,7 +944,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_created_by,
                     self_agent_id,
                     self_env,
-                    self_config,
                     self_stack,
                 )
                 .await

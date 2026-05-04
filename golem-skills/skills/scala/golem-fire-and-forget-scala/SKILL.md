@@ -11,17 +11,17 @@ A **fire-and-forget** call enqueues a method invocation on the target agent and 
 
 ## Usage
 
-Access the `.trigger` proxy on the client to call methods without awaiting:
+Access the `.trigger()` method on a per-method wrapper to call methods without awaiting:
 
 ```scala
-val counter = CounterAgent.get("my-counter")
+val counter = CounterAgentClient.get("my-counter")
 
 // Fire-and-forget — returns immediately
-counter.trigger.increment()
+counter.increment.trigger()
 
 // With arguments
-val processor = DataProcessorAgent.get("pipeline-1")
-processor.trigger.processBatch(batchData)
+val processor = DataProcessorAgentClient.get("pipeline-1")
+processor.processBatch.trigger(batchData)
 ```
 
 ## When to Use
@@ -35,19 +35,19 @@ processor.trigger.processBatch(batchData)
 
 ```scala
 // In AgentA — calls AgentB and waits
-val b = AgentB.get("b1")
+val b = AgentBClient.get("b1")
 val result = b.doWork(data) // OK: awaited call
 
 // In AgentB — notifies AgentA without waiting (would deadlock if awaited)
-val a = AgentA.get("a1")
-a.trigger.onWorkDone(result) // OK: fire-and-forget
+val a = AgentAClient.get("a1")
+a.onWorkDone.trigger(result) // OK: fire-and-forget
 ```
 
 ## CLI Equivalent
 
-From the command line, use `--enqueue`:
+From the command line, use `--trigger`:
 
 ```shell
-golem agent invoke --enqueue 'counter-agent("my-counter")' \
+golem agent invoke --trigger 'counter-agent("my-counter")' \
   'my:comp/counter-agent.{increment}'
 ```

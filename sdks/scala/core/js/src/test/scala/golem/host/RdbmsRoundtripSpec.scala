@@ -537,6 +537,68 @@ object RdbmsRoundtripSpec extends ZIOSpecDefault {
       )
     },
 
+    test("parsePostgresResult accepts bigint column ordinals") {
+      val raw = js.Dynamic
+        .literal(
+          columns = js.Array(
+            js.Dynamic.literal(
+              ordinal = js.BigInt("0"),
+              name = "value",
+              dbTypeName = "text"
+            )
+          ),
+          rows = js.Array(
+            js.Dynamic.literal(
+              values = js.Array(
+                js.Dynamic.literal(
+                  tag = "text",
+                  `val` = "postgres-ok"
+                )
+              )
+            )
+          )
+        )
+        .asInstanceOf[golem.host.js.JsDbResult]
+
+      val result = Rdbms.parsePostgresResult(raw)
+
+      assertTrue(
+        result.columns.head.ordinal == 0L,
+        result.rows.head.values.head == PostgresDbValue.Text("postgres-ok")
+      )
+    },
+
+    test("parseMysqlResult accepts bigint column ordinals") {
+      val raw = js.Dynamic
+        .literal(
+          columns = js.Array(
+            js.Dynamic.literal(
+              ordinal = js.BigInt("0"),
+              name = "value",
+              dbTypeName = "varchar"
+            )
+          ),
+          rows = js.Array(
+            js.Dynamic.literal(
+              values = js.Array(
+                js.Dynamic.literal(
+                  tag = "varchar",
+                  `val` = "mysql-ok"
+                )
+              )
+            )
+          )
+        )
+        .asInstanceOf[golem.host.js.JsDbResult]
+
+      val result = Rdbms.parseMysqlResult(raw)
+
+      assertTrue(
+        result.columns.head.ordinal == 0L,
+        result.rows.head.values.head == MysqlDbValue.VarChar("mysql-ok")
+      )
+    },
+
     // --- Result types ---
 
     test("PostgresDbResult construction") {

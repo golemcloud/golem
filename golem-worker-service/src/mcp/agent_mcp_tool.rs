@@ -16,7 +16,7 @@ use crate::mcp::GolemAgentMcpServer;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_common::base_model::account::AccountId;
-use golem_common::base_model::agent::{AgentConstructor, AgentMethod, AgentTypeName};
+use golem_common::base_model::agent::{AgentConstructor, AgentMethod, AgentMode, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
 use rmcp::ErrorData;
@@ -33,6 +33,7 @@ pub struct AgentMcpTool {
     pub raw_method: AgentMethod,
     pub component_id: ComponentId,
     pub agent_type_name: AgentTypeName,
+    pub agent_mode: AgentMode,
 }
 
 impl CallToolHandler<GolemAgentMcpServer, ()> for AgentMcpTool {

@@ -17,6 +17,7 @@ use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
 use golem_common::base_model::Empty;
+use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::agent::{
     AgentConstructor, AgentMode, AgentType, AgentTypeName, DataSchema, NamedElementSchemas,
     Snapshotting,
@@ -234,7 +235,8 @@ pub async fn test_application_delete(deps: &Deps) {
         ..app.revision.clone()
     };
 
-    deps.application_repo
+    let _ = deps
+        .application_repo
         .delete(deleted_app.clone())
         .await
         .unwrap();
@@ -611,7 +613,7 @@ pub async fn test_component_stage(deps: &Deps) {
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         size: 10.into(),
         metadata: Blob::new(ComponentMetadata::from_parts(
-            vec![],
+            KnownExports::default(),
             vec![],
             Some("test".to_string()),
             Some("1.0".to_string()),
@@ -800,7 +802,8 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
                 AgentTypeName("test-agent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             )]),
-            webhooks_url: "/webhooks/".to_string(),
+            webhooks_prefix: "/webhooks/".to_string(),
+            openapi_endpoint_prefix: "/".to_string(),
         }),
     }
     .with_updated_hash()
@@ -1087,7 +1090,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     size: 0.into(),
                     metadata: Blob::new(ComponentMetadata::from_parts(
-                        vec![],
+                        KnownExports::default(),
                         vec![],
                         None,
                         None,
@@ -1212,7 +1215,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
                 audit: DeletableRevisionAuditFields::new(owner_account_id),
                 size: 0.into(),
                 metadata: Blob::new(ComponentMetadata::from_parts(
-                    vec![],
+                    KnownExports::default(),
                     vec![],
                     None,
                     None,

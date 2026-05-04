@@ -230,6 +230,7 @@ impl Services {
             repos.application_repo.clone(),
             account_service.clone(),
             account_usage_service.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let environment_service = Arc::new(EnvironmentService::new(
@@ -238,6 +239,7 @@ impl Services {
             account_usage_service.clone(),
             repos.plugin_repo.clone(),
             builtin_plugin_owner_account_id,
+            registry_change_notifier.clone(),
         ));
 
         let environment_share_service = Arc::new(EnvironmentShareService::new(
@@ -304,7 +306,7 @@ impl Services {
             environment_service.clone(),
             registry_change_notifier.clone(),
             config.domain_registration.clone(),
-        ));
+        )?);
 
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
             repos.security_scheme_repo.clone(),

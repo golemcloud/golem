@@ -182,8 +182,8 @@ object Rdbms {
             case "bigint"             => BigInt(scala.BigInt(v.asInstanceOf[js.BigInt].toString).toLong)
             case "tinyint-unsigned"   => TinyIntUnsigned(v.asInstanceOf[Double].toShort)
             case "smallint-unsigned"  => SmallIntUnsigned(v.asInstanceOf[Double].toInt)
-            case "mediumint-unsigned" => MediumIntUnsigned(v.asInstanceOf[Double].toLong)
-            case "int-unsigned"       => IntUnsigned(v.asInstanceOf[Double].toLong)
+            case "mediumint-unsigned" => MediumIntUnsigned(jsAnyToLong(v))
+            case "int-unsigned"       => IntUnsigned(jsAnyToLong(v))
             case "bigint-unsigned"    => BigIntUnsigned(scala.BigInt(v.asInstanceOf[js.BigInt].toString))
             case "float"              => FloatVal(v.asInstanceOf[Double].toFloat)
             case "double"             => DoubleVal(v.asInstanceOf[Double])
@@ -255,6 +255,82 @@ object Rdbms {
     }
 
     def toDynamic(v: MysqlDbValue): js.Dynamic = toJs(v).asInstanceOf[js.Dynamic]
+  }
+
+  // ===========================================================================
+  // Ignite db-value (17 variants including null)
+  // ===========================================================================
+
+  sealed trait IgniteDbValue extends Product with Serializable
+  object IgniteDbValue {
+    case object DbNull                                             extends IgniteDbValue
+    final case class DbBoolean(value: Boolean)                     extends IgniteDbValue
+    final case class DbByte(value: Byte)                           extends IgniteDbValue
+    final case class DbShort(value: Short)                         extends IgniteDbValue
+    final case class DbInt(value: Int)                             extends IgniteDbValue
+    final case class DbLong(value: Long)                           extends IgniteDbValue
+    final case class DbFloat(value: Float)                         extends IgniteDbValue
+    final case class DbDouble(value: Double)                       extends IgniteDbValue
+    final case class DbChar(value: Char)                           extends IgniteDbValue
+    final case class DbString(value: String)                       extends IgniteDbValue
+    final case class DbUuid(value: (scala.BigInt, scala.BigInt))   extends IgniteDbValue
+    final case class DbDate(value: Long)                           extends IgniteDbValue
+    final case class DbTimestamp(value: (Long, Int))               extends IgniteDbValue
+    final case class DbTime(value: Long)                           extends IgniteDbValue
+    final case class DbDecimal(value: String)                      extends IgniteDbValue
+    final case class DbByteArray(value: Array[Byte])               extends IgniteDbValue
+
+    def fromJs(raw: JsIgniteDbValue): IgniteDbValue =
+      raw.tag match {
+        case "db-null" => DbNull
+        case _ =>
+          val v = raw.asInstanceOf[JsIgniteDbValueWithValue].value
+          raw.tag match {
+            case "db-boolean"    => DbBoolean(v.asInstanceOf[Boolean])
+            case "db-byte"       => DbByte(v.asInstanceOf[Double].toByte)
+            case "db-short"      => DbShort(v.asInstanceOf[Double].toShort)
+            case "db-int"        => DbInt(v.asInstanceOf[Double].toInt)
+            case "db-long"       => DbLong(scala.BigInt(v.asInstanceOf[js.BigInt].toString).toLong)
+            case "db-float"      => DbFloat(v.asInstanceOf[Double].toFloat)
+            case "db-double"     => DbDouble(v.asInstanceOf[Double])
+            case "db-char"       => DbChar(v.asInstanceOf[Double].toChar)
+            case "db-string"     => DbString(v.asInstanceOf[String])
+            case "db-uuid"       =>
+              val t = v.asInstanceOf[js.Tuple2[js.BigInt, js.BigInt]]
+              DbUuid((scala.BigInt(t._1.toString), scala.BigInt(t._2.toString)))
+            case "db-date"       => DbDate(scala.BigInt(v.asInstanceOf[js.BigInt].toString).toLong)
+            case "db-timestamp"  =>
+              val t = v.asInstanceOf[js.Tuple2[js.BigInt, Double]]
+              DbTimestamp((scala.BigInt(t._1.toString).toLong, t._2.toInt))
+            case "db-time"       => DbTime(scala.BigInt(v.asInstanceOf[js.BigInt].toString).toLong)
+            case "db-decimal"    => DbDecimal(v.asInstanceOf[String])
+            case "db-byte-array" => DbByteArray(uint8ArrayToBytes(v.asInstanceOf[Uint8Array]))
+            case other           => throw new IllegalArgumentException(s"Unknown Ignite db-value tag: $other")
+          }
+      }
+
+    def fromDynamic(raw: js.Dynamic): IgniteDbValue = fromJs(raw.asInstanceOf[JsIgniteDbValue])
+
+    def toJs(v: IgniteDbValue): JsIgniteDbValue = v match {
+      case DbNull        => JsIgniteDbValue.dbNull
+      case DbBoolean(b)  => JsIgniteDbValue.dbBoolean(b)
+      case DbByte(n)     => JsIgniteDbValue.dbByte(n.toInt)
+      case DbShort(n)    => JsIgniteDbValue.dbShort(n.toInt)
+      case DbInt(n)      => JsIgniteDbValue.dbInt(n)
+      case DbLong(n)     => JsIgniteDbValue.dbLong(js.BigInt(n.toString))
+      case DbFloat(n)    => JsIgniteDbValue.dbFloat(n.toDouble)
+      case DbDouble(n)   => JsIgniteDbValue.dbDouble(n)
+      case DbChar(c)     => JsIgniteDbValue.dbChar(c.toInt)
+      case DbString(s)   => JsIgniteDbValue.dbString(s)
+      case DbUuid(t)     => JsIgniteDbValue.dbUuid(js.Tuple2(js.BigInt(t._1.toString), js.BigInt(t._2.toString)))
+      case DbDate(ms)    => JsIgniteDbValue.dbDate(js.BigInt(ms.toString))
+      case DbTimestamp(t) => JsIgniteDbValue.dbTimestamp(js.Tuple2(js.BigInt(t._1.toString), t._2))
+      case DbTime(ns)    => JsIgniteDbValue.dbTime(js.BigInt(ns.toString))
+      case DbDecimal(s)  => JsIgniteDbValue.dbDecimal(s)
+      case DbByteArray(b) => JsIgniteDbValue.dbByteArray(bytesToUint8Array(b))
+    }
+
+    def toDynamic(v: IgniteDbValue): js.Dynamic = toJs(v).asInstanceOf[js.Dynamic]
   }
 
   // ===========================================================================
@@ -575,7 +651,7 @@ object Rdbms {
               val r = v.asInstanceOf[JsDateRange]
               DateRangeVal(DateRange(parseDateBound(r.start), parseDateBound(r.end)))
             case "money"       => Money(scala.BigInt(v.asInstanceOf[js.BigInt].toString).toLong)
-            case "oid"         => Oid(v.asInstanceOf[Double].toLong)
+            case "oid"         => Oid(jsAnyToLong(v))
             case "enumeration" => Enumeration(parsePgEnumeration(v.asInstanceOf[JsPgEnumeration]))
             case "composite"   => Composite(parsePgComposite(v.asInstanceOf[JsPgComposite]))
             case "domain"      => Domain(parsePgDomain(v.asInstanceOf[JsPgDomain]))
@@ -665,6 +741,13 @@ object Rdbms {
     arr
   }
 
+  private[golem] def jsAnyToLong(value: js.Any): Long =
+    js.typeOf(value) match {
+      case "bigint" => scala.BigInt(value.toString).toLong
+      case "number" => value.asInstanceOf[Double].toLong
+      case other    => throw new IllegalArgumentException(s"Expected number or bigint, got: $other")
+    }
+
   // ===========================================================================
   // Typed row types
   // ===========================================================================
@@ -712,6 +795,32 @@ object Rdbms {
 
   final case class PostgresDbResult(columns: List[DbColumn], rows: List[PostgresDbRow])
 
+  final case class IgniteDbColumn(ordinal: Long, name: String)
+
+  final case class IgniteDbRow(values: List[IgniteDbValue]) {
+    def getString(index: Int): Option[String] = values(index) match {
+      case IgniteDbValue.DbNull => None
+      case v                    => Some(v.toString)
+    }
+
+    def getInt(index: Int): Option[Int] = values(index) match {
+      case IgniteDbValue.DbNull    => None
+      case IgniteDbValue.DbInt(n)  => Some(n)
+      case IgniteDbValue.DbByte(n) => Some(n.toInt)
+      case IgniteDbValue.DbShort(n) => Some(n.toInt)
+      case v                       => Some(v.toString.toInt)
+    }
+
+    def getLong(index: Int): Option[Long] = values(index) match {
+      case IgniteDbValue.DbNull    => None
+      case IgniteDbValue.DbLong(n) => Some(n)
+      case IgniteDbValue.DbInt(n)  => Some(n.toLong)
+      case v                       => Some(v.toString.toLong)
+    }
+  }
+
+  final case class IgniteDbResult(columns: List[IgniteDbColumn], rows: List[IgniteDbRow])
+
   // ===========================================================================
   // Error types
   // ===========================================================================
@@ -758,6 +867,16 @@ object Rdbms {
   private object MysqlModule extends js.Object
 
   @js.native
+  @JSImport("golem:rdbms/ignite2@1.5.0", "DbConnection")
+  private object IgniteDbConnectionClass extends js.Object {
+    def open(address: String): JsDbConnection = js.native
+  }
+
+  @js.native
+  @JSImport("golem:rdbms/ignite2@1.5.0", JSImport.Namespace)
+  private object IgniteModule extends js.Object
+
+  @js.native
   @JSImport("golem:rdbms/types@1.5.0", JSImport.Namespace)
   private object TypesModule extends js.Object
 
@@ -779,7 +898,7 @@ object Rdbms {
       try {
         val jsParams = js.Array[js.Any]()
         params.foreach(p => jsParams.push(PostgresDbValue.toJs(p).asInstanceOf[js.Any]))
-        Right(underlying.execute(statement, jsParams).asInstanceOf[Double].toLong)
+        Right(jsAnyToLong(underlying.execute(statement, jsParams).asInstanceOf[js.Any]))
       } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
 
     def beginTransaction(): Either[DbError, PostgresTransaction] =
@@ -800,7 +919,7 @@ object Rdbms {
       try {
         val jsParams = js.Array[js.Any]()
         params.foreach(p => jsParams.push(PostgresDbValue.toJs(p).asInstanceOf[js.Any]))
-        Right(underlying.execute(statement, jsParams).asInstanceOf[Double].toLong)
+        Right(jsAnyToLong(underlying.execute(statement, jsParams).asInstanceOf[js.Any]))
       } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
 
     def commit(): Either[DbError, Unit] =
@@ -830,7 +949,7 @@ object Rdbms {
       try {
         val jsParams = js.Array[js.Any]()
         params.foreach(p => jsParams.push(MysqlDbValue.toJs(p).asInstanceOf[js.Any]))
-        Right(underlying.execute(statement, jsParams).asInstanceOf[Double].toLong)
+        Right(jsAnyToLong(underlying.execute(statement, jsParams).asInstanceOf[js.Any]))
       } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
 
     def beginTransaction(): Either[DbError, MysqlTransaction] =
@@ -851,7 +970,58 @@ object Rdbms {
       try {
         val jsParams = js.Array[js.Any]()
         params.foreach(p => jsParams.push(MysqlDbValue.toJs(p).asInstanceOf[js.Any]))
-        Right(underlying.execute(statement, jsParams).asInstanceOf[Double].toLong)
+        Right(jsAnyToLong(underlying.execute(statement, jsParams).asInstanceOf[js.Any]))
+      } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
+
+    def commit(): Either[DbError, Unit] =
+      try { underlying.commit(); Right(()) }
+      catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
+
+    def rollback(): Either[DbError, Unit] =
+      try { underlying.rollback(); Right(()) }
+      catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
+  }
+
+  // ===========================================================================
+  // IgniteConnection resource
+  // ===========================================================================
+
+  final class IgniteConnection private[Rdbms] (private val underlying: JsDbConnection) {
+
+    def query(statement: String, params: List[IgniteDbValue] = Nil): Either[DbError, IgniteDbResult] =
+      try {
+        val jsParams = js.Array[js.Any]()
+        params.foreach(p => jsParams.push(IgniteDbValue.toJs(p).asInstanceOf[js.Any]))
+        val raw = underlying.query(statement, jsParams).asInstanceOf[JsDbResult]
+        Right(parseIgniteResult(raw))
+      } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
+
+    def execute(statement: String, params: List[IgniteDbValue] = Nil): Either[DbError, Long] =
+      try {
+        val jsParams = js.Array[js.Any]()
+        params.foreach(p => jsParams.push(IgniteDbValue.toJs(p).asInstanceOf[js.Any]))
+        Right(jsAnyToLong(underlying.execute(statement, jsParams).asInstanceOf[js.Any]))
+      } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
+
+    def beginTransaction(): Either[DbError, IgniteTransaction] =
+      try Right(new IgniteTransaction(underlying.beginTransaction()))
+      catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
+  }
+
+  final class IgniteTransaction private[Rdbms] (private val underlying: JsDbTransaction) {
+
+    def query(statement: String, params: List[IgniteDbValue] = Nil): Either[DbError, IgniteDbResult] =
+      try {
+        val jsParams = js.Array[js.Any]()
+        params.foreach(p => jsParams.push(IgniteDbValue.toJs(p).asInstanceOf[js.Any]))
+        Right(parseIgniteResult(underlying.query(statement, jsParams).asInstanceOf[JsDbResult]))
+      } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
+
+    def execute(statement: String, params: List[IgniteDbValue] = Nil): Either[DbError, Long] =
+      try {
+        val jsParams = js.Array[js.Any]()
+        params.foreach(p => jsParams.push(IgniteDbValue.toJs(p).asInstanceOf[js.Any]))
+        Right(jsAnyToLong(underlying.execute(statement, jsParams).asInstanceOf[js.Any]))
       } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
 
     def commit(): Either[DbError, Unit] =
@@ -867,16 +1037,16 @@ object Rdbms {
   // Result parsing
   // ===========================================================================
 
-  private def parseColumns(raw: JsDbResult): List[DbColumn] =
+  private[golem] def parseColumns(raw: JsDbResult): List[DbColumn] =
     raw.columns.toList.map { c =>
       DbColumn(
-        ordinal = c.ordinal.toLong,
+        ordinal = jsAnyToLong(c.ordinal),
         name = c.name,
         dbTypeName = c.dbTypeName
       )
     }
 
-  private def parsePostgresResult(raw: JsDbResult): PostgresDbResult = {
+  private[golem] def parsePostgresResult(raw: JsDbResult): PostgresDbResult = {
     val cols = parseColumns(raw)
     val rows = raw.rows.toList.map { r =>
       PostgresDbRow(r.values.toList.map(v => PostgresDbValue.fromJs(v.asInstanceOf[JsPostgresDbValue])))
@@ -884,12 +1054,28 @@ object Rdbms {
     PostgresDbResult(cols, rows)
   }
 
-  private def parseMysqlResult(raw: JsDbResult): MysqlDbResult = {
+  private[golem] def parseMysqlResult(raw: JsDbResult): MysqlDbResult = {
     val cols = parseColumns(raw)
     val rows = raw.rows.toList.map { r =>
       MysqlDbRow(r.values.toList.map(v => MysqlDbValue.fromJs(v.asInstanceOf[JsMysqlDbValue])))
     }
     MysqlDbResult(cols, rows)
+  }
+
+  private[golem] def parseIgniteColumns(raw: JsDbResult): List[IgniteDbColumn] =
+    raw.columns.toList.map { c =>
+      IgniteDbColumn(
+        ordinal = jsAnyToLong(c.ordinal),
+        name = c.name
+      )
+    }
+
+  private[golem] def parseIgniteResult(raw: JsDbResult): IgniteDbResult = {
+    val cols = parseIgniteColumns(raw)
+    val rows = raw.rows.toList.map { r =>
+      IgniteDbRow(r.values.toList.map(v => IgniteDbValue.fromJs(v.asInstanceOf[JsIgniteDbValue])))
+    }
+    IgniteDbResult(cols, rows)
   }
 
   // ===========================================================================
@@ -908,7 +1094,14 @@ object Rdbms {
       catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
   }
 
+  object Ignite {
+    def open(address: String): Either[DbError, IgniteConnection] =
+      try Right(new IgniteConnection(IgniteDbConnectionClass.open(address)))
+      catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
+  }
+
   def postgresRaw: Any = PostgresModule
   def mysqlRaw: Any    = MysqlModule
+  def igniteRaw: Any   = IgniteModule
   def typesRaw: Any    = TypesModule
 }

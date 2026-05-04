@@ -16,6 +16,7 @@
 
 package golem
 
+import golem.host.Retry
 import golem.host.RetryApi
 import golem.host.js.JsNamedRetryPolicy
 
@@ -44,6 +45,9 @@ object Guards {
   def withRetryPolicy[A](policy: JsNamedRetryPolicy)(block: => Future[A]): Future[A] =
     withGuard(useRetryPolicy(policy))(block)
 
+  def withRetryPolicy[A](policy: Retry.NamedPolicy)(block: => Future[A]): Future[A] =
+    withRetryPolicy(Retry.namedPolicyToJsOrThrow(policy))(block)
+
   def useRetryPolicy(policy: JsNamedRetryPolicy): RetryPolicyGuard = {
     val previous = RetryApi.getRetryPolicyByName(policy.name)
     val name     = policy.name
@@ -55,6 +59,9 @@ object Guards {
       }
     )
   }
+
+  def useRetryPolicy(policy: Retry.NamedPolicy): RetryPolicyGuard =
+    useRetryPolicy(Retry.namedPolicyToJsOrThrow(policy))
 
   def withIdempotenceMode[A](flag: Boolean)(block: => Future[A]): Future[A] =
     withGuard(useIdempotenceMode(flag))(block)
@@ -68,18 +75,26 @@ object Guards {
   /**
    * Executes a block atomically.
    *
-   * On success the atomic region is committed via `markEndOperation`.
-   * On failure the region is intentionally left open so the executor sees the
-   * trap as occurring *inside* the atomic region and can retry from the
-   * begin-operation marker (matching the Rust SDK behaviour where `Drop` is
-   * never called on panic because WASM panics don't unwind).
+   * On success the atomic region is committed via `markEndOperation`. On
+   * failure the SDK calls the host `trap` function, which surfaces as an
+   * uncatchable wasm trap so user code cannot observe the failure with a
+   * `try/catch` or `recover`. The atomic region is intentionally left open
+   * so the existing replay-time fallback in `markBeginOperation` deletes the
+   * partial inner side effects via a `Jump` and re-executes the block.
    */
   def atomically[A](block: => Future[A]): Future[A] = {
     val guard = markAtomicOperation()
     block.transform(
       result => { guard.drop(); result },
-      error  => { /* Do NOT drop — leave the atomic region open for retry */ error }
+      error => HostApi.trap(s"atomic block failed: ${formatErrorForTrap(error)}")
     )
+  }
+
+  private def formatErrorForTrap(error: Throwable): String = {
+    val sw = new java.io.StringWriter
+    val pw = new java.io.PrintWriter(sw)
+    error.printStackTrace(pw)
+    sw.toString
   }
 
   def markAtomicOperation(): AtomicOperationGuard = {
@@ -91,7 +106,12 @@ object Guards {
 
   private def withGuard[A, G <: Guard](guard: => G)(block: => Future[A]): Future[A] = {
     val active = guard
-    block.andThen { case _ => active.drop() }
+    try block.andThen { case _ => active.drop() }
+    catch {
+      case error: Throwable =>
+        active.drop()
+        throw error
+    }
   }
 
   sealed abstract class Guard private[golem] (release: () => Unit) extends AutoCloseable {

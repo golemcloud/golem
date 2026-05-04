@@ -64,7 +64,6 @@ sealed trait JsCreateParameters extends js.Object {
   def componentSize: js.BigInt                                        = js.native
   def initialTotalLinearMemorySize: js.BigInt                         = js.native
   def initialActivePlugins: js.Array[JsPluginInstallationDescription] = js.native
-  def configVars: js.Array[js.Tuple2[String, String]]                 = js.native
   def localAgentConfig: js.Array[JsLocalAgentConfigEntry]             = js.native
 }
 
@@ -152,8 +151,8 @@ sealed trait JsJumpParameters extends js.Object {
 
 @js.native
 sealed trait JsSetRetryPolicyParameters extends js.Object {
-  def timestamp: JsDatetime             = js.native
-  def policy: JsNamedRetryPolicy        = js.native
+  def timestamp: JsDatetime      = js.native
+  def policy: JsNamedRetryPolicy = js.native
 }
 
 // --- RemoveRetryPolicyParameters ---
@@ -317,10 +316,10 @@ sealed trait JsAgentInvocationStartedParameters extends js.Object {
 
 @js.native
 sealed trait JsAgentInvocationFinishedParameters extends js.Object {
-  def timestamp: JsDatetime                     = js.native
+  def timestamp: JsDatetime           = js.native
   def result: JsAgentInvocationResult = js.native
-  def consumedFuel: js.BigInt                   = js.native
-  def componentRevision: js.BigInt              = js.native
+  def consumedFuel: js.BigInt         = js.native
+  def componentRevision: js.BigInt    = js.native
 }
 
 // --- PendingAgentInvocationParameters ---
@@ -355,8 +354,8 @@ object JsUpdateDescription {
 
 @js.native
 sealed trait JsPendingUpdateParameters extends js.Object {
-  def timestamp: JsDatetime                  = js.native
-  def targetRevision: js.BigInt              = js.native
+  def timestamp: JsDatetime            = js.native
+  def targetRevision: js.BigInt        = js.native
   def description: JsUpdateDescription = js.native
 }
 
@@ -514,8 +513,8 @@ sealed trait JsSnapshotData extends js.Object {
 
 @js.native
 sealed trait JsSnapshotParameters extends js.Object {
-  def timestamp: JsDatetime  = js.native
-  def data: JsSnapshotData   = js.native
+  def timestamp: JsDatetime = js.native
+  def data: JsSnapshotData  = js.native
 }
 
 // --- OplogProcessorCheckpointParameters ---

@@ -335,7 +335,6 @@ impl WorkerGrpcApi {
             .create(
                 &agent_id,
                 request.env,
-                request.wasi_config.into_iter().collect(),
                 config,
                 request.ignore_already_existing,
                 auth,

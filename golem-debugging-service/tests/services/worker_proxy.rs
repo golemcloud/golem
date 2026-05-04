@@ -19,7 +19,7 @@ use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor_test_utils::TestContext;
 use golem_worker_executor_test_utils::component_writer::FileSystemComponentWriter;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
@@ -70,7 +70,6 @@ impl WorkerProxy for TestWorkerProxy {
         _owned_agent_id: &OwnedAgentId,
         _caller_agent_id: &AgentId,
         _caller_env: HashMap<String, String>,
-        _caller_config_vars: BTreeMap<String, String>,
         _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
         _agent_config: Vec<AgentConfigEntryDto>,
@@ -93,7 +92,6 @@ impl WorkerProxy for TestWorkerProxy {
         _idempotency_key: Option<IdempotencyKey>,
         _caller_agent_id: AgentId,
         _caller_env: HashMap<String, String>,
-        _caller_config_vars: BTreeMap<String, String>,
         _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
         _principal: Principal,

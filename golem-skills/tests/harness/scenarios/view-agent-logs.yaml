@@ -21,6 +21,10 @@ steps:
         In the test-app project, modify the CounterAgent's increment method to print the
         current counter value to stdout each time it is called, using println. For example,
         print "counter value: {value}" where {value} is the counter value after incrementing.
+      moonbit: >
+        In the test-app project, modify the CounterAgent's increment method to print the
+        current counter value to stdout each time it is called, using println. For example,
+        print "counter value: {value}" where {value} is the counter value after incrementing.
     verify:
       build: true
       deploy: true
@@ -38,6 +42,11 @@ steps:
         output looks like without streaming. Redirect the full CLI output (both stdout and stderr)
         to a file called no-stream-output.txt in the test-app directory.
       scala: >
+        I want to view the agent's stdout logs. First, invoke the CounterAgent's increment method
+        for a counter named "c1" with log streaming disabled (using --no-stream) to see what the
+        output looks like without streaming. Redirect the full CLI output (both stdout and stderr)
+        to a file called no-stream-output.txt in the test-app directory.
+      moonbit: >
         I want to view the agent's stdout logs. First, invoke the CounterAgent's increment method
         for a counter named "c1" with log streaming disabled (using --no-stream) to see what the
         output looks like without streaming. Redirect the full CLI output (both stdout and stderr)
@@ -65,6 +74,10 @@ steps:
         Now invoke the CounterAgent's increment method for counter "c1" again, this time with
         default streaming enabled (no --no-stream flag). Redirect the full CLI output (both
         stdout and stderr) to a file called stream-output.txt in the test-app directory.
+      moonbit: >
+        Now invoke the CounterAgent's increment method for counter "c1" again, this time with
+        default streaming enabled (no --no-stream flag). Redirect the full CLI output (both
+        stdout and stderr) to a file called stream-output.txt in the test-app directory.
     continueSession: true
     expectedSkills:
       - "golem-view-agent-logs"
@@ -88,6 +101,11 @@ steps:
         CLI output (both stdout and stderr) to a file called logs-only-output.txt in the
         test-app directory.
       scala: >
+        Now invoke the CounterAgent's increment method for counter "c1" again, this time with
+        --logs-only, --stream-no-timestamp, and --stream-no-log-level flags. Redirect the full
+        CLI output (both stdout and stderr) to a file called logs-only-output.txt in the
+        test-app directory.
+      moonbit: >
         Now invoke the CounterAgent's increment method for counter "c1" again, this time with
         --logs-only, --stream-no-timestamp, and --stream-no-log-level flags. Redirect the full
         CLI output (both stdout and stderr) to a file called logs-only-output.txt in the

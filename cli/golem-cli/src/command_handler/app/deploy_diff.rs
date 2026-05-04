@@ -785,7 +785,6 @@ fn normalized_diff_deployment(
                                     let masked = match config_hash.as_value() {
                                         Some(config) => diff::AgentTypeProvisionConfig {
                                             env: safe_env(&config.env),
-                                            wasi_config: config.wasi_config.clone(),
                                             config: config.config.clone(),
                                             files_by_path: config.files_by_path.clone(),
                                             plugins_by_grant_id: config.plugins_by_grant_id.clone(),

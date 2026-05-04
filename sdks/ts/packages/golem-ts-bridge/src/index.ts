@@ -142,7 +142,7 @@ export interface AgentInvocationResult {
   result?: DataValue;
 }
 
-export interface WorkerAgentConfigEntry {
+export interface AgentConfigEntry {
   path: string[];
   value: unknown;
 }
@@ -153,7 +153,7 @@ export interface CreateAgentRequest {
   agentTypeName: AgentTypeName;
   parameters: DataValue;
   phantomId?: PhantomId;
-  config?: WorkerAgentConfigEntry[];
+  config?: AgentConfigEntry[];
 }
 
 export interface AgentId {
@@ -179,7 +179,7 @@ export async function createAgent(
       token = LOCAL_WELL_KNOWN_TOKEN;
       break;
     case 'cloud':
-      baseUrl = 'https://api.golem.cloud';
+      baseUrl = 'https://release.api.golem.cloud';
       token = server.token;
       break;
     case 'custom':
@@ -243,7 +243,7 @@ export async function invokeAgent(
       token = LOCAL_WELL_KNOWN_TOKEN;
       break;
     case 'cloud':
-      baseUrl = 'https://api.golem.cloud';
+      baseUrl = 'https://release.api.golem.cloud';
       token = server.token;
       break;
     case 'custom':

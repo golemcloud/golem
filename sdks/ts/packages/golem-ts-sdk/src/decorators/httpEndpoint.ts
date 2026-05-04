@@ -32,9 +32,6 @@ export type EndpointDecoratorOptions = {
   delete?: string;
   patch?: string;
   head?: string;
-  options?: string;
-  connect?: string;
-  trace?: string;
   custom?: {
     method: string;
     path: string;
@@ -148,18 +145,7 @@ export function endpoint(opts: EndpointDecoratorOptions) {
       );
     }
 
-    const methods = [
-      'get',
-      'post',
-      'put',
-      'delete',
-      'patch',
-      'head',
-      'options',
-      'connect',
-      'trace',
-      'custom',
-    ] as const;
+    const methods = ['get', 'post', 'put', 'delete', 'patch', 'custom'] as const;
 
     const providedMethods = methods.filter((m) => (m === 'custom' ? !!opts.custom : !!opts[m]));
 

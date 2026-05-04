@@ -71,7 +71,7 @@ export class CliReplInterop {
     for (const command of this.commands) {
       replServer.defineCommand(command.replCommand, {
         help: command.about,
-        async action(rawArgs: string) {
+        action(rawArgs: string) {
           // Do not call this.pause() — it blocks stdin which prevents the readline
           // Interface from emitting 'SIGINT' events when the user presses Ctrl-C.
           // Instead we suppress concurrent eval for the duration of the command.
@@ -88,15 +88,18 @@ export class CliReplInterop {
             cb: (err: Error | null, result?: unknown) => void,
           ) => cb(null, undefined);
 
-          try {
-            await interop.runReplCliCommand(command, rawArgs, abortController.signal);
-          } finally {
-            suppressNextSigint = false;
-            (replServer as any).eval = savedEval;
-            replServer.off('SIGINT', onSigint);
-            this.displayPrompt();
-            this.clearBufferedCommand();
-          }
+          const self = this;
+          void (async () => {
+            try {
+              await interop.runReplCliCommand(command, rawArgs, abortController.signal);
+            } finally {
+              suppressNextSigint = false;
+              (replServer as any).eval = savedEval;
+              replServer.off('SIGINT', onSigint);
+              self.displayPrompt();
+              self.clearBufferedCommand();
+            }
+          })();
         },
       });
     }

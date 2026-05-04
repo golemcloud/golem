@@ -50,7 +50,8 @@ error_forwarding!(HttpApiDeploymentRepoError, RepoError);
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct HttpApiDeploymentData {
-    pub webhooks_url: String,
+    pub webhooks_prefix: String,
+    pub openapi_endpoint_prefix: String,
     pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
 }
 
@@ -92,7 +93,8 @@ impl HttpApiDeploymentRevisionRecord {
 
     pub fn creation(
         http_api_deployment_id: HttpApiDeploymentId,
-        webhooks_url: String,
+        webhooks_prefix: String,
+        openapi_endpoint_prefix: String,
         agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
         actor: AccountId,
     ) -> Result<Self, HttpApiDeploymentRepoError> {
@@ -102,7 +104,8 @@ impl HttpApiDeploymentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
             data: Blob::new(HttpApiDeploymentData {
-                webhooks_url,
+                webhooks_prefix,
+                openapi_endpoint_prefix,
                 agents,
             }),
         };
@@ -120,7 +123,8 @@ impl HttpApiDeploymentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             audit,
             data: Blob::new(HttpApiDeploymentData {
-                webhooks_url: value.webhooks_url,
+                webhooks_prefix: value.webhooks_prefix,
+                openapi_endpoint_prefix: value.openapi_endpoint_prefix,
                 agents: value.agents,
             }),
         };
@@ -139,7 +143,8 @@ impl HttpApiDeploymentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
             data: Blob::new(HttpApiDeploymentData {
-                webhooks_url: "".to_string(),
+                webhooks_prefix: "".to_string(),
+                openapi_endpoint_prefix: "".to_string(),
                 agents: BTreeMap::new(),
             }),
         };
@@ -149,7 +154,8 @@ impl HttpApiDeploymentRevisionRecord {
 
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
-            webhooks_url: self.data.value().webhooks_url.clone(),
+            webhooks_prefix: self.data.value().webhooks_prefix.clone(),
+            openapi_endpoint_prefix: self.data.value().openapi_endpoint_prefix.clone(),
             agents: self
                 .data
                 .value()
@@ -197,7 +203,8 @@ impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
             hash: value.revision.hash.into(),
-            webhooks_url: data.webhooks_url,
+            webhooks_prefix: data.webhooks_prefix,
+            openapi_endpoint_prefix: data.openapi_endpoint_prefix,
             agents: data.agents,
             created_at: value.entity_created_at.into(),
         })

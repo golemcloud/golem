@@ -341,6 +341,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("awaitWith("), s"missing awaitWith delegation in:\n$content")
     assert(content.contains("triggerWith("), s"missing triggerWith delegation in:\n$content")
     assert(content.contains("scheduleWith("), s"missing scheduleWith delegation in:\n$content")
+    assert(content.contains("scheduleCancelableWith("), s"missing scheduleCancelableWith delegation in:\n$content")
     assert(!content.contains("resolved.await("), s"should not directly call resolved.await:\n$content")
     assert(!content.contains("resolved.trigger("), s"should not directly call resolved.trigger:\n$content")
     assert(!content.contains("resolved.schedule("), s"should not directly call resolved.schedule:\n$content")

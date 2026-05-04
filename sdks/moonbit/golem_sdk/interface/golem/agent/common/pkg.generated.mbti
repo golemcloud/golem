@@ -1,0 +1,194 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/agent/common"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+}
+
+// Values
+
+// Errors
+pub(all) suberror AgentError {
+  InvalidInput(String)
+  InvalidMethod(String)
+  InvalidType(String)
+  InvalidAgentId(String)
+  CustomError(@types.ValueAndType)
+} derive(Eq, Show)
+
+// Types and methods
+pub(all) struct AgentConfigDeclaration {
+  source : AgentConfigSource
+  path : Array[String]
+  value_type : @types.WitType
+} derive(Eq, Show)
+
+pub(all) enum AgentConfigSource {
+  LOCAL
+  SECRET
+} derive(Eq, Show)
+pub fn AgentConfigSource::from(Int) -> Self
+pub fn AgentConfigSource::ordinal(Self) -> Int
+
+pub(all) struct AgentConstructor {
+  name : String?
+  description : String
+  prompt_hint : String?
+  input_schema : @types.DataSchema
+} derive(Eq, Show)
+
+pub(all) struct AgentDependency {
+  type_name : String
+  description : String?
+  constructor_ : AgentConstructor
+  methods : Array[AgentMethod]
+} derive(Eq, Show)
+
+pub(all) struct AgentMethod {
+  name : String
+  description : String
+  http_endpoint : Array[HttpEndpointDetails]
+  prompt_hint : String?
+  input_schema : @types.DataSchema
+  output_schema : @types.DataSchema
+} derive(Eq, Show)
+
+pub(all) enum AgentMode {
+  DURABLE
+  EPHEMERAL
+} derive(Eq, Show)
+pub fn AgentMode::from(Int) -> Self
+pub fn AgentMode::ordinal(Self) -> Int
+
+pub(all) struct AgentPrincipal {
+  agent_id : @types.AgentId
+} derive(Eq, Show)
+
+pub(all) struct AgentType {
+  type_name : String
+  description : String
+  source_language : String
+  constructor_ : AgentConstructor
+  methods : Array[AgentMethod]
+  dependencies : Array[AgentDependency]
+  mode : AgentMode
+  http_mount : HttpMountDetails?
+  snapshotting : Snapshotting
+  config : Array[AgentConfigDeclaration]
+} derive(Eq, Show)
+
+pub(all) struct AuthDetails {
+  required : Bool
+} derive(Eq, Show)
+
+pub(all) struct CorsOptions {
+  allowed_patterns : Array[String]
+} derive(Eq, Show)
+
+pub(all) struct GolemUserPrincipal {
+  account_id : @types.AccountId
+} derive(Eq, Show)
+
+pub(all) struct HeaderVariable {
+  header_name : String
+  variable_name : String
+} derive(Eq, Show)
+
+pub(all) struct HttpEndpointDetails {
+  http_method : HttpMethod
+  path_suffix : Array[PathSegment]
+  header_vars : Array[HeaderVariable]
+  query_vars : Array[QueryVariable]
+  auth_details : AuthDetails?
+  cors_options : CorsOptions
+} derive(Eq, Show)
+
+pub(all) enum HttpMethod {
+  Get
+  Head
+  Post
+  Put
+  Delete
+  Connect
+  Options
+  Trace
+  Patch
+  Custom(String)
+} derive(Eq, Show)
+
+pub(all) struct HttpMountDetails {
+  path_prefix : Array[PathSegment]
+  auth_details : AuthDetails?
+  phantom_agent : Bool
+  cors_options : CorsOptions
+  webhook_suffix : Array[PathSegment]
+} derive(Eq, Show)
+
+pub(all) struct OidcPrincipal {
+  sub : String
+  issuer : String
+  email : String?
+  name : String?
+  email_verified : Bool?
+  given_name : String?
+  family_name : String?
+  picture : String?
+  preferred_username : String?
+  claims : String
+} derive(Eq, Show)
+
+pub(all) enum PathSegment {
+  Literal(String)
+  SystemVariable(SystemVariable)
+  PathVariable(PathVariable)
+  RemainingPathVariable(PathVariable)
+} derive(Eq, Show)
+
+pub(all) struct PathVariable {
+  variable_name : String
+} derive(Eq, Show)
+
+pub(all) enum Principal {
+  Oidc(OidcPrincipal)
+  Agent(AgentPrincipal)
+  GolemUser(GolemUserPrincipal)
+  Anonymous
+} derive(Eq, Show)
+
+pub(all) struct QueryVariable {
+  query_param_name : String
+  variable_name : String
+} derive(Eq, Show)
+
+pub(all) struct RegisteredAgentType {
+  agent_type : AgentType
+  implemented_by : @types.ComponentId
+} derive(Eq, Show)
+
+pub(all) enum Snapshotting {
+  Disabled
+  Enabled(SnapshottingConfig)
+} derive(Eq, Show)
+
+pub(all) enum SnapshottingConfig {
+  Default
+  Periodic(UInt64)
+  EveryNInvocation(UInt)
+} derive(Eq, Show)
+
+pub(all) enum SystemVariable {
+  AGENT_TYPE
+  AGENT_VERSION
+} derive(Eq, Show)
+pub fn SystemVariable::from(Int) -> Self
+pub fn SystemVariable::ordinal(Self) -> Int
+
+pub(all) struct TypedAgentConfigValue {
+  path : Array[String]
+  value : @types.ValueAndType
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+

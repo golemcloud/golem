@@ -288,7 +288,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .try_into()?,
                 component_revision: create.component_revision.try_into()?,
                 env: create.env.into_iter().collect(),
-                config_vars: create.wasi_config.into_iter().collect(),
                 local_agent_config: create
                     .config
                     .into_iter()
@@ -744,7 +743,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         agent_id: Some(create.agent_id.into()),
                         component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
-                        wasi_config: create.config_vars.into_iter().collect(),
                         config: create
                             .local_agent_config
                             .into_iter()
@@ -2117,7 +2115,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 env: create.env.into_iter().collect(),
                 environment_id: create.environment_id,
                 created_by: create.created_by,
-                config_vars: create.config_vars,
                 local_agent_config: create.local_agent_config.into_iter().map(Into::into).collect(),
                 parent: create.parent,
                 component_size: create.component_size,
@@ -2796,7 +2793,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
-                config_vars,
                 local_agent_config,
                 original_phantom_id,
                 ..
@@ -2816,7 +2812,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .into_iter()
                     .map(Into::into)
                     .collect(),
-                config_vars: config_vars.into_iter().collect(),
                 local_agent_config: local_agent_config
                     .into_iter()
                     .map(|e| crate::serialization::serialize(&e))
@@ -3143,7 +3138,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .into_iter()
                     .map(|id| id.try_into())
                     .collect::<Result<std::collections::HashSet<_>, _>>()?;
-                let config_vars: BTreeMap<String, String> = p.config_vars.into_iter().collect();
                 let local_agent_config = p
                     .local_agent_config
                     .into_iter()
@@ -3164,7 +3158,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     component_size: p.component_size,
                     initial_total_linear_memory_size: p.initial_total_linear_memory_size,
                     initial_active_plugins,
-                    config_vars,
                     local_agent_config,
                     original_phantom_id,
                 })

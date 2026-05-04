@@ -18,6 +18,7 @@ pub mod app_raw;
 pub mod cascade;
 pub mod cli_command_metadata;
 pub mod component;
+pub mod config;
 pub mod deploy;
 pub mod environment;
 pub mod format;
@@ -62,6 +63,7 @@ pub enum GuestLanguage {
     TypeScript,
     Rust,
     Scala,
+    MoonBit,
 }
 
 impl GuestLanguage {
@@ -70,6 +72,7 @@ impl GuestLanguage {
             "rust" => Some(GuestLanguage::Rust),
             "ts" | "typescript" => Some(GuestLanguage::TypeScript),
             "scala" => Some(GuestLanguage::Scala),
+            "moonbit" => Some(GuestLanguage::MoonBit),
             _ => None,
         }
     }
@@ -79,6 +82,7 @@ impl GuestLanguage {
             "rust" => Some(GuestLanguage::Rust),
             "ts" => Some(GuestLanguage::TypeScript),
             "scala" => Some(GuestLanguage::Scala),
+            "moonbit" => Some(GuestLanguage::MoonBit),
             _ => None,
         }
     }
@@ -88,13 +92,14 @@ impl GuestLanguage {
             GuestLanguage::Rust => "rust",
             GuestLanguage::TypeScript => "ts",
             GuestLanguage::Scala => "scala",
+            GuestLanguage::MoonBit => "moonbit",
         }
     }
 
     pub fn supports_bridge_generation(&self) -> bool {
         match self {
             GuestLanguage::Rust | GuestLanguage::TypeScript => true,
-            GuestLanguage::Scala => false,
+            GuestLanguage::Scala | GuestLanguage::MoonBit => false,
         }
     }
 
@@ -103,6 +108,7 @@ impl GuestLanguage {
             GuestLanguage::Rust => "Rust",
             GuestLanguage::TypeScript => "TypeScript",
             GuestLanguage::Scala => "Scala",
+            GuestLanguage::MoonBit => "MoonBit",
         }
     }
 }

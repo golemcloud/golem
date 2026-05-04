@@ -22,15 +22,16 @@ use golem_cli::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptTyp
 use golem_cli::model::GuestLanguage;
 use golem_common::model::Empty;
 use golem_common::model::agent::{
-    AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryReference,
-    BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema,
-    ElementSchema, JsonComponentModelValue, NamedElementSchema, NamedElementSchemas, Snapshotting,
-    TextReference, TextReferenceValue, TextSource, UntypedJsonDataValue, UntypedJsonElementValue,
-    UntypedJsonElementValues, UntypedJsonNamedElementValue, UntypedJsonNamedElementValues,
+    AgentConfigDeclaration, AgentConfigSource, AgentConstructor, AgentMethod, AgentMode, AgentType,
+    AgentTypeName, BinaryReference, BinaryReferenceValue, BinarySource, BinaryType,
+    ComponentModelElementSchema, DataSchema, ElementSchema, JsonComponentModelValue,
+    NamedElementSchema, NamedElementSchemas, Snapshotting, TextReference, TextReferenceValue,
+    TextSource, UntypedJsonDataValue, UntypedJsonElementValue, UntypedJsonElementValues,
+    UntypedJsonNamedElementValue, UntypedJsonNamedElementValues,
 };
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type::{bool, f64, field, record, s32, str};
+use golem_wasm::analysis::analysed_type::{bool, f64, field, list, option, record, s32, str};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValueAndType, Value};
 use pretty_assertions::assert_eq;
@@ -266,6 +267,58 @@ fn ts_collision_parameter_names_agent() -> GeneratedPackage {
     GeneratedPackage::new(agent_type)
 }
 
+#[test_dep(tagged_as = "ts_config_nested_local_types_agent")]
+fn ts_config_nested_local_types_agent() -> GeneratedPackage {
+    GeneratedPackage::new(ts_config_nested_local_types_agent_type())
+}
+
+fn ts_config_nested_local_types_agent_type() -> AgentType {
+    let config_record_type = record(vec![field("x", s32()), field("y", str())]);
+
+    AgentType {
+        type_name: AgentTypeName("ConfigNestedLocalTypesAgent".to_string()),
+        description: "Agent with nested local config types".to_string(),
+        source_language: "typescript".to_string(),
+        constructor: AgentConstructor {
+            name: Some("ConfigNestedLocalTypesAgent".to_string()),
+            description: "Constructs the agent ConfigNestedLocalTypesAgent".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+        },
+        methods: vec![AgentMethod {
+            name: "ping".to_string(),
+            description: "Simple method for bridge generation".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "returnValue".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: str(),
+                    }),
+                }],
+            }),
+            http_endpoint: vec![],
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![
+            AgentConfigDeclaration {
+                source: AgentConfigSource::Local,
+                path: vec!["xyz".to_string()],
+                value_type: option(config_record_type.clone()),
+            },
+            AgentConfigDeclaration {
+                source: AgentConfigSource::Local,
+                path: vec!["records".to_string()],
+                value_type: list(config_record_type),
+            },
+        ],
+    }
+}
+
 #[test_dep(tagged_as = "ts_code_first_snippets_foo_agent")]
 fn ts_code_first_snippets_foo_agent() -> GeneratedPackage {
     GeneratedPackage::new(code_first_snippets_agent_type(
@@ -322,6 +375,12 @@ fn counter_agent_compiles(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage)
 #[test]
 fn collision_parameter_names_agent_compiles(
     #[tagged_as("ts_collision_parameter_names_agent")] _pkg: &GeneratedPackage,
+) {
+}
+
+#[test]
+fn config_nested_local_types_agent_bridge_compiles(
+    #[tagged_as("ts_config_nested_local_types_agent")] _pkg: &GeneratedPackage,
 ) {
 }
 

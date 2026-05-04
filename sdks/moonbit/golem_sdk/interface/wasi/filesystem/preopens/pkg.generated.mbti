@@ -1,0 +1,18 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/filesystem/preopens"
+
+import {
+  "golemcloud/golem_sdk/interface/wasi/filesystem/types",
+}
+
+// Values
+pub fn get_directories() -> Array[(@types.Descriptor, String)]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

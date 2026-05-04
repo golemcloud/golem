@@ -2,7 +2,6 @@ use golem_rust::{
     PromiseId, WebSocketMessage, WebsocketConnection, agent_definition, agent_implementation,
 };
 use std::cell::RefCell;
-use wasi::io::poll;
 
 #[agent_definition]
 pub trait WebsocketTest {
@@ -13,17 +12,13 @@ pub trait WebsocketTest {
     fn echo_and_record(&self, url: String, msg: String) -> String;
     /// Connects once, stores the connection in agent state and receives one message.
     fn connect_and_receive_first(&self, url: String) -> String;
-    /// Like `connect_and_receive_first`, but performs a poll subscription first so replay
-    /// exercises the websocket `subscribe()` path before consuming the persisted receive result.
-    fn connect_subscribe_and_receive_first(&self, url: String) -> String;
     /// Receives the next message from the connection stored in agent state.
     fn receive_next_from_persisted(&self) -> String;
     /// Like `receive_next_from_persisted`, but returns websocket errors to the caller.
     fn receive_next_from_persisted_result(&self) -> Result<String, String>;
     /// Closes the persisted websocket and returns any close error to the caller.
     fn close_persisted_result(&self) -> Result<(), String>;
-    /// Subscribes to the persisted websocket and reports whether poll observed it as ready.
-    fn subscribe_to_persisted(&self) -> bool;
+
     /// Activates the agent without touching the persisted websocket.
     fn noop(&self) -> String;
     fn create_promise(&self) -> PromiseId;
@@ -62,7 +57,7 @@ impl WebsocketTest for WebsocketTestImpl {
 
         ws.send(&WebSocketMessage::Text(msg)).expect("send failed");
 
-        match ws.receive().expect("receive failed") {
+        match ws.blocking_receive().expect("receive failed") {
             WebSocketMessage::Text(t) => t,
             WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
         }
@@ -76,21 +71,7 @@ impl WebsocketTest for WebsocketTestImpl {
 
     fn connect_and_receive_first(&self, url: String) -> String {
         let ws = WebsocketConnection::connect(&url, None).expect("connect failed");
-        let first = match ws.receive().expect("receive failed") {
-            WebSocketMessage::Text(t) => t,
-            WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
-        };
-        *self.persisted_ws.borrow_mut() = Some(ws);
-        first
-    }
-
-    fn connect_subscribe_and_receive_first(&self, url: String) -> String {
-        let ws = WebsocketConnection::connect(&url, None).expect("connect failed");
-        let pollable = ws.subscribe();
-        let ready = poll::poll(&[&pollable]);
-        assert!(ready.contains(&0), "websocket pollable was not ready");
-
-        let first = match ws.receive().expect("receive failed") {
+        let first = match ws.blocking_receive().expect("receive failed") {
             WebSocketMessage::Text(t) => t,
             WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
         };
@@ -103,7 +84,7 @@ impl WebsocketTest for WebsocketTestImpl {
         let ws = ws_ref
             .as_mut()
             .expect("persisted websocket was not initialized");
-        match ws.receive().expect("receive failed") {
+        match ws.blocking_receive().expect("receive failed") {
             WebSocketMessage::Text(t) => t,
             WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
         }
@@ -115,7 +96,7 @@ impl WebsocketTest for WebsocketTestImpl {
             .as_mut()
             .expect("persisted websocket was not initialized");
         match ws
-            .receive()
+            .blocking_receive()
             .map_err(|e| format!("Receive error: {:?}", e))?
         {
             WebSocketMessage::Text(t) => Ok(t),
@@ -130,16 +111,6 @@ impl WebsocketTest for WebsocketTestImpl {
             .expect("persisted websocket was not initialized");
         ws.close(None, None)
             .map_err(|e| format!("Close error: {:?}", e))
-    }
-
-    fn subscribe_to_persisted(&self) -> bool {
-        let mut ws_ref = self.persisted_ws.borrow_mut();
-        let ws = ws_ref
-            .as_mut()
-            .expect("persisted websocket was not initialized");
-        let pollable = ws.subscribe();
-        let ready = poll::poll(&[&pollable]);
-        ready.contains(&0)
     }
 
     fn noop(&self) -> String {
@@ -163,7 +134,7 @@ impl WebsocketTest for WebsocketTestImpl {
             ws.send(&WebSocketMessage::Text(payload.to_string()))
                 .map_err(|e| format!("Send error: {:?}", e))?;
             let message = ws
-                .receive()
+                .blocking_receive()
                 .map_err(|e| format!("Receive error: {:?}", e))?;
             match message {
                 WebSocketMessage::Text(text) => received.push(text),
@@ -180,7 +151,7 @@ impl WebsocketTest for WebsocketTestImpl {
             ws.send(&WebSocketMessage::Text(payload.to_string()))
                 .map_err(|e| format!("Send error: {:?}", e))?;
             let message = ws
-                .receive()
+                .blocking_receive()
                 .map_err(|e| format!("Receive error: {:?}", e))?;
             match message {
                 WebSocketMessage::Text(text) => received.push(text),
@@ -196,7 +167,10 @@ impl WebsocketTest for WebsocketTestImpl {
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String> {
         let ws = WebsocketConnection::connect(&url, None).expect("connect failed");
 
-        match ws.receive_with_timeout(timeout_ms).expect("receive failed") {
+        match ws
+            .blocking_receive_with_timeout(timeout_ms)
+            .expect("receive failed")
+        {
             Some(WebSocketMessage::Text(t)) => Some(t),
             Some(WebSocketMessage::Binary(b)) => Some(format!("{} bytes", b.len())),
             None => None,
@@ -214,12 +188,9 @@ impl WebsocketTest for WebsocketTestImpl {
             ws.send(&WebSocketMessage::Text(payload.to_string()))
                 .map_err(|e| format!("Send error: {:?}", e))?;
 
-            // Convert websocket pollable to an async future via wstd.
-            let pollable = ws.subscribe();
-            wstd::io::AsyncPollable::new(pollable).wait_for().await;
-
             let msg = ws
                 .receive()
+                .await
                 .map_err(|e| format!("Receive error: {:?}", e))?;
             match msg {
                 WebSocketMessage::Text(text) => received.push(text),
@@ -235,20 +206,13 @@ impl WebsocketTest for WebsocketTestImpl {
     fn poll_for_message(&self, url: String, timeout_ms: u64) -> Result<String, String> {
         let ws = WebsocketConnection::connect(&url, None)
             .map_err(|e| format!("Failed to connect: {:?}", e))?;
-        let pollable = ws.subscribe();
-        let clock = wasi::clocks::monotonic_clock::subscribe_duration(timeout_ms * 1_000_000);
-        let ready_list = poll::poll(&[&pollable, &clock]);
-
-        if ready_list.contains(&0) {
-            match ws.receive() {
-                Ok(WebSocketMessage::Text(text)) => Ok(text),
-                Ok(WebSocketMessage::Binary(data)) => Ok(format!("Binary: {} bytes", data.len())),
-                Err(e) => Err(format!("Receive error: {:?}", e)),
-            }
-        } else if ready_list.contains(&1) {
-            Err("Timeout waiting for message".to_string())
-        } else {
-            Err("Unexpected poll result".to_string())
+        match ws
+            .blocking_receive_with_timeout(timeout_ms)
+            .map_err(|e| format!("Receive error: {:?}", e))?
+        {
+            Some(WebSocketMessage::Text(text)) => Ok(text),
+            Some(WebSocketMessage::Binary(data)) => Ok(format!("Binary: {} bytes", data.len())),
+            None => Err("Timeout waiting for message".to_string()),
         }
     }
 
@@ -262,22 +226,15 @@ impl WebsocketTest for WebsocketTestImpl {
             .map_err(|e| format!("Failed to connect: {:?}", e))?;
 
         for _ in 0..max_timeouts {
-            let pollable = ws.subscribe();
-            let clock = wasi::clocks::monotonic_clock::subscribe_duration(timeout_ms * 1_000_000);
-            let ready_list = poll::poll(&[&pollable, &clock]);
-
-            if ready_list.contains(&0) {
-                return match ws.receive() {
-                    Ok(WebSocketMessage::Text(text)) => Ok(text),
-                    Ok(WebSocketMessage::Binary(data)) => {
-                        Ok(format!("Binary: {} bytes", data.len()))
-                    }
-                    Err(e) => Err(format!("Receive error: {:?}", e)),
-                };
-            }
-
-            if !ready_list.contains(&1) {
-                return Err("Unexpected poll result".to_string());
+            match ws
+                .blocking_receive_with_timeout(timeout_ms)
+                .map_err(|e| format!("Receive error: {:?}", e))?
+            {
+                Some(WebSocketMessage::Text(text)) => return Ok(text),
+                Some(WebSocketMessage::Binary(data)) => {
+                    return Ok(format!("Binary: {} bytes", data.len()))
+                }
+                None => continue,
             }
         }
 

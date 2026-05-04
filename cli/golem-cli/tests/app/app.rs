@@ -653,3 +653,269 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
         "Finished deployment planning, no changes are required for the environment [UP-TO-DATE]"
     ));
 }
+
+#[test]
+async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "test-app-component-level-ifs";
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
+        indoc! {
+            r#"
+            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import { readFileSync } from 'node:fs';
+
+            @agent({})
+            class CounterAgent extends BaseAgent {
+                constructor(name: string) {
+                    super();
+                }
+
+                async increment(): Promise<number> {
+                    return 1;
+                }
+
+                async readFile(path: string): Promise<string> {
+                    return readFileSync(path, 'utf8');
+                }
+            }
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("sample-agent.ts")),
+        indoc! {
+            r#"
+            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import { readFileSync } from 'node:fs';
+
+            @agent({})
+            class SampleAgent extends BaseAgent {
+                constructor(name: string) {
+                    super();
+                }
+
+                async sampleMethod(): Promise<number> {
+                    return 1;
+                }
+
+                async readFile(path: string): Promise<string> {
+                    return readFileSync(path, 'utf8');
+                }
+            }
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("main.ts")),
+        indoc! {
+            r#"
+            export const SHARED_IFS_MARKER = 'ifs-multi-agent-marker';
+            export * from './counter-agent';
+            export * from './sample-agent';
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+            manifestVersion: 1.5.0
+
+            app: test-app-component-level-ifs
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-component-level-ifs:ts-main:
+                templates: ts
+                presets:
+                  debug:
+                    files:
+                    - sourcePath: src/main.ts
+                      targetPath: /main.ts
+                      permissions: read-only
+        "},
+    )
+    .unwrap();
+
+    ctx.start_server().await;
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stderr_contains("Found duplicated IFS targets"));
+    assert!(outputs.stdout_contains("CounterAgent:"));
+    assert!(outputs.stdout_contains("SampleAgent:"));
+    assert!(outputs.stdout_contains("/main.ts:"));
+
+    let counter_read_main = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "CounterAgent(\"counter-1\")",
+            "readFile",
+            "\"/main.ts\"",
+        ])
+        .await;
+    assert!(counter_read_main.success_or_dump());
+    assert!(counter_read_main.stdout_contains("SHARED_IFS_MARKER"));
+    assert!(counter_read_main.stdout_contains("ifs-multi-agent-marker"));
+
+    let sample_read_main = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "SampleAgent(\"sample-1\")",
+            "readFile",
+            "\"/main.ts\"",
+        ])
+        .await;
+    assert!(sample_read_main.success_or_dump());
+    assert!(sample_read_main.stdout_contains("SHARED_IFS_MARKER"));
+    assert!(sample_read_main.stdout_contains("ifs-multi-agent-marker"));
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+            manifestVersion: 1.5.0
+
+            app: test-app-component-level-ifs
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-component-level-ifs:ts-main:
+                templates: ts
+
+            agents:
+              CounterAgent:
+                files:
+                - sourcePath: src/main.ts
+                  targetPath: /counter-main.ts
+                  permissions: read-only
+              SampleAgent:
+                files:
+                - sourcePath: src/main.ts
+                  targetPath: /sample-main.ts
+                  permissions: read-only
+        "},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stderr_contains("Found duplicated IFS targets"));
+    assert!(outputs.stdout_contains("/counter-main.ts:"));
+    assert!(outputs.stdout_contains("/sample-main.ts:"));
+
+    let counter_read_agent_target = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "CounterAgent(\"counter-2\")",
+            "readFile",
+            "\"/counter-main.ts\"",
+        ])
+        .await;
+    assert!(counter_read_agent_target.success_or_dump());
+    assert!(counter_read_agent_target.stdout_contains("SHARED_IFS_MARKER"));
+    assert!(counter_read_agent_target.stdout_contains("ifs-multi-agent-marker"));
+
+    let sample_read_agent_target = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "SampleAgent(\"sample-2\")",
+            "readFile",
+            "\"/sample-main.ts\"",
+        ])
+        .await;
+    assert!(sample_read_agent_target.success_or_dump());
+    assert!(sample_read_agent_target.stdout_contains("SHARED_IFS_MARKER"));
+    assert!(sample_read_agent_target.stdout_contains("ifs-multi-agent-marker"));
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+            manifestVersion: 1.5.0
+
+            app: test-app-component-level-ifs
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-component-level-ifs:ts-main:
+                templates: ts
+
+            agents:
+              CounterAgent:
+                files:
+                - sourcePath: src/main.ts
+                  targetPath: /shared.ts
+                  permissions: read-only
+              SampleAgent:
+                files:
+                - sourcePath: src/sample-agent.ts
+                  targetPath: /shared.ts
+                  permissions: read-only
+        "},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stderr_contains("Found duplicated IFS targets"));
+    assert!(outputs.stdout_contains("/shared.ts:"));
+
+    let counter_read_shared = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "CounterAgent(\"counter-3\")",
+            "readFile",
+            "\"/shared.ts\"",
+        ])
+        .await;
+    assert!(counter_read_shared.success_or_dump());
+    assert!(counter_read_shared.stdout_contains("SHARED_IFS_MARKER"));
+
+    let sample_read_shared = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "SampleAgent(\"sample-3\")",
+            "readFile",
+            "\"/shared.ts\"",
+        ])
+        .await;
+    assert!(sample_read_shared.success_or_dump());
+    assert!(sample_read_shared.stdout_contains("class SampleAgent"));
+}

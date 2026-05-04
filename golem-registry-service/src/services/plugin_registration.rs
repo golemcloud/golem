@@ -230,12 +230,7 @@ impl PluginRegistrationService {
                 other => other.into(),
             })?;
 
-        let implements_oplog_processor_interface = component
-            .metadata
-            .oplog_processor()
-            .ok()
-            .flatten()
-            .is_some();
+        let implements_oplog_processor_interface = component.metadata.has_oplog_processor();
 
         if !implements_oplog_processor_interface {
             return Err(PluginRegistrationError::OplogProcessorComponentDoesNotExist);

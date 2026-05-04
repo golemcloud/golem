@@ -38,6 +38,7 @@ WIT files are copied to these sub-projects by `cargo make wit`:
 | `cli/golem-cli/wit/deps/` | clocks, io, golem-1.x, golem-core, golem-agent, logging |
 | `sdks/rust/golem-rust/wit/deps/` | All deps + golem-ai |
 | `sdks/ts/wit/deps/` | All deps + golem-ai |
+| `sdks/moonbit/golem_sdk/wit/deps/` | All deps |
 | `test-components/oplog-processor/wit/deps/` | All deps |
 
 **Never manually edit** files in any `wit/deps/` directory. They are overwritten by `cargo make wit`.
@@ -109,7 +110,8 @@ If WIT changes affect SDK interfaces:
 1. **Rust SDK**: Rebuild `golem-rust` (bindings are generated via `wit_bindgen::generate!`)
 2. **TS SDK**: Rebuild packages (`npx pnpm run build` in `sdks/ts/`), then rebuild agent template WASM (`npx pnpm run build-agent-template`)
 3. **Scala SDK**: Regenerate `agent_guest.wasm`, adjust Scala SDK types or codecs if the WIT shape changed, and run the relevant Scala test suites
-4. **Test components**: Rebuild any test components that use the changed interfaces (see their `AGENTS.md`)
+4. **MoonBit SDK**: Regenerate WIT bindings (`wit-bindgen moonbit` in `sdks/moonbit/golem_sdk/`), then `moon fmt` and `moon check --target wasm`
+5. **Test components**: Rebuild any test components that use the changed interfaces (see their `AGENTS.md`)
 
 ## Checklist
 

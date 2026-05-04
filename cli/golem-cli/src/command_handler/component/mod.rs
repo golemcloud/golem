@@ -27,10 +27,12 @@ use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action,
 use crate::model::GuestLanguage;
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
+use crate::model::app_raw;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
     ComponentRevisionSelection, ComponentView, SelectedComponents,
 };
+use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{DeployConfig, TryUpdateAllWorkersResult};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
@@ -719,21 +721,16 @@ impl ComponentCommandHandler {
                         .ctx
                         .worker_handler()
                         .worker_metadata(component.id.0, &component.component_name, agent_name)
-                        .await
-                        .ok()
+                        .await?
                         .map(|worker_metadata| worker_metadata.component_revision),
                     ComponentRevisionSelection::ByExplicitRevision(revision) => Some(revision),
                 };
 
                 match revision {
                     Some(revision) => {
-                        let clients = self.ctx.golem_clients().await?;
-
-                        let component = clients
-                            .component
-                            .get_component_revision(&component.id.0, revision.into())
-                            .await
-                            .map_service_error()?;
+                        let component = self
+                            .get_component_revision_by_id(&component.id, revision)
+                            .await?;
 
                         Ok(Some(component))
                     }
@@ -850,7 +847,7 @@ impl ComponentCommandHandler {
             .iter()
             .map(|agent_type| (agent_type.type_name.clone(), component_name.clone()))
             .collect::<BTreeMap<_, _>>();
-        let resolved_agents = app_ctx.application().resolve_agents(&mapping);
+        let resolved_agents = app_ctx.application().resolve_agents(&mapping)?;
 
         let mut agent_type_configs =
             BTreeMap::<AgentTypeName, AgentTypeManifestProvisionConfig>::new();
@@ -871,11 +868,10 @@ impl ComponentCommandHandler {
                 agent_type.type_name.clone(),
                 AgentTypeManifestProvisionConfig {
                     env: resolve_env_vars(component_name, resolved_agent.env())?,
-                    wasi_config: resolved_agent.wasi_config().clone(),
                     config: materialize_agent_config_entries(agent_type, resolved_agent.config()),
                     files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
-                    plugins: resolved_agent.plugins().to_vec(),
+                    plugins: resolve_plugin_parameters(component_name, resolved_agent.plugins())?,
                 },
             );
         }
@@ -998,23 +994,37 @@ impl ComponentCommandHandler {
                 .plugins
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, p)| {
-                    let grant = plugin_grants.get(&PluginNameAndVersion {
-                        name: p.name.clone(),
-                        version: p.version.clone(),
-                    })?;
-                    Some((
+                .map(|(idx, p)| {
+                    let grant = plugin_grants
+                        .get(&PluginNameAndVersion {
+                            name: p.name.clone(),
+                            version: p.version.clone(),
+                        })
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "Plugin {}/{} is not available in this environment. \
+                                 Use 'golem plugin list' to see available plugins, \
+                                 or grant the plugin to this environment first.",
+                                p.name,
+                                p.version
+                            )
+                        })?;
+                    Ok((
                         grant.id.0,
                         diff::PluginInstallation {
                             priority: idx as i32,
                             name: p.name.clone(),
                             version: p.version.clone(),
                             grant_id: grant.id.0,
-                            parameters: Default::default(),
+                            parameters: p
+                                .parameters
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect(),
                         },
                     ))
                 })
-                .collect();
+                .collect::<anyhow::Result<_>>()?;
 
             let config = manifest_config
                 .config
@@ -1024,7 +1034,6 @@ impl ComponentCommandHandler {
 
             let provision_config = diff::AgentTypeProvisionConfig {
                 env: manifest_config.env.clone(),
-                wasi_config: manifest_config.wasi_config.clone(),
                 config,
                 files_by_path,
                 plugins_by_grant_id,
@@ -1077,7 +1086,8 @@ impl ComponentCommandHandler {
                 &ComponentCreation {
                     component_name: component_name.clone(),
                     agent_types,
-                    agent_type_provision_configs: component_stager.agent_type_provision_configs(),
+                    agent_type_provision_configs: component_stager
+                        .agent_type_provision_configs()?,
                 },
                 wasm,
                 OptionFuture::from(files.as_ref().map(|files| files.open_archive()))
@@ -1169,7 +1179,7 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     agent_types,
                     agent_type_provision_config_updates: component_stager
-                        .agent_type_provision_config_updates(&changed_files),
+                        .agent_type_provision_config_updates(&changed_files)?,
                 },
                 wasm,
                 changed_files.open_archive().await?,
@@ -1302,18 +1312,87 @@ fn resolve_env_vars(
     )
 }
 
-fn config_value_at_path<'a>(
-    root: &'a serde_json::Value,
-    path: &[String],
-) -> Option<&'a serde_json::Value> {
-    let mut current = root;
-    for segment in path {
-        current = match current {
-            serde_json::Value::Object(map) => map.get(segment)?,
-            _ => return None,
-        };
-    }
-    Some(current)
+fn resolve_plugin_parameters(
+    component_name: &ComponentName,
+    plugins: &[app_raw::PluginInstallation],
+) -> anyhow::Result<Vec<app_raw::PluginInstallation>> {
+    let renderer = crate::command_handler::template::EnvVarRenderer::new();
+
+    let mut resolved_plugins = Vec::with_capacity(plugins.len());
+    let mut validation = ValidationBuilder::new();
+    validation.with_context(
+        vec![("component", component_name.to_string())],
+        |validation| {
+            for plugin in plugins {
+                validation.with_context(
+                    vec![
+                        ("plugin", plugin.name.clone()),
+                        ("version", plugin.version.clone()),
+                    ],
+                    |validation| {
+                        let mut resolved_parameters = HashMap::with_capacity(plugin.parameters.len());
+                        for key in plugin.parameters.keys().sorted() {
+                            let value = plugin.parameters.get(key).unwrap();
+                            match renderer.render_str(value) {
+                                Ok(resolved_value) => {
+                                    resolved_parameters.insert(key.clone(), resolved_value);
+                                }
+                                Err(err) => {
+                                    let missing_env_vars = renderer.missing_env_vars(value, &err);
+                                    let error_message = if missing_env_vars.is_empty() {
+                                        format!(
+                                            "Failed to substitute environment variable(s) for plugin parameter {}",
+                                            key.log_color_highlight()
+                                        )
+                                    } else {
+                                        format!(
+                                            "Failed to substitute environment variable(s) ({}) for plugin parameter {}",
+                                            missing_env_vars
+                                                .iter()
+                                                .map(|key| key.log_color_highlight())
+                                                .join(", "),
+                                            key.log_color_highlight()
+                                        )
+                                    };
+                                    let mut context = vec![
+                                        ("key", key.to_string()),
+                                        ("template", value.to_string()),
+                                        (
+                                            "error",
+                                            err.to_string()
+                                                .log_color_error_highlight()
+                                                .to_string(),
+                                        ),
+                                    ];
+                                    if !missing_env_vars.is_empty() {
+                                        context.push(("missing", missing_env_vars.join(", ")));
+                                    }
+                                    validation.with_context(context, |validation| {
+                                        validation.add_error(error_message)
+                                    });
+                                }
+                            }
+                        }
+                        resolved_plugins.push(app_raw::PluginInstallation {
+                            account: plugin.account.clone(),
+                            name: plugin.name.clone(),
+                            version: plugin.version.clone(),
+                            parameters: resolved_parameters,
+                        });
+                    },
+                );
+            }
+        },
+    );
+
+    validated_to_anyhow(
+        &format!(
+            "Failed to prepare plugin parameters for component: {}",
+            component_name.as_str().log_color_highlight()
+        ),
+        validation.build(resolved_plugins),
+        None,
+    )
 }
 
 fn materialize_agent_config_entries(
@@ -1329,29 +1408,12 @@ fn materialize_agent_config_entries(
         .iter()
         .filter(|decl| decl.source == AgentConfigSource::Local)
         .filter_map(|decl| {
-            config_value_at_path(config_root, &decl.path).map(|value| AgentConfigEntryDto {
+            value_at_path(config_root, &decl.path).map(|value| AgentConfigEntryDto {
                 path: decl.path.clone(),
                 value: value.clone().into(),
             })
         })
         .collect()
-}
-
-fn collect_config_leaf_paths(
-    value: &serde_json::Value,
-    prefix: &mut Vec<String>,
-    result: &mut Vec<Vec<String>>,
-) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, nested) in map {
-                prefix.push(key.clone());
-                collect_config_leaf_paths(nested, prefix, result);
-                prefix.pop();
-            }
-        }
-        _ => result.push(prefix.clone()),
-    }
 }
 
 fn collect_unused_agent_config_paths(
@@ -1369,14 +1431,14 @@ fn collect_unused_agent_config_paths(
         .map(|decl| decl.path.clone())
         .collect::<BTreeSet<_>>();
 
-    let mut leaf_paths = Vec::new();
-    collect_config_leaf_paths(config_root, &mut vec![], &mut leaf_paths);
-
-    let mut unused = leaf_paths
-        .into_iter()
-        .filter(|path| !declared_paths.contains(path))
-        .map(|path| path.join("."))
-        .collect::<Vec<_>>();
+    let mut unused = collect_unused_leaf_paths(config_root, |path| {
+        declared_paths
+            .iter()
+            .any(|declared_path| path.starts_with(declared_path))
+    })
+    .into_iter()
+    .map(|path| path.join("."))
+    .collect::<Vec<_>>();
     unused.sort();
     unused
 }

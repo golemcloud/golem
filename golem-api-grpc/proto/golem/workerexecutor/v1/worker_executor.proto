@@ -120,16 +120,15 @@ message InterruptWorkerResponse {
 message CreateWorkerRequest {
   golem.worker.AgentId agent_id = 1;
   map<string, string> env = 2;
-  map<string, string> wasi_config = 3;
-  repeated golem.worker.AgentConfigEntryDto config = 4;
+  repeated golem.worker.AgentConfigEntryDto config = 3;
   // Account the component belongs to
-  golem.common.AccountId component_owner_account_id = 5;
+  golem.common.AccountId component_owner_account_id = 4;
   // Component's owner environment
-  golem.common.EnvironmentId environment_id = 6;
-  bool ignore_already_existing = 7;
-  golem.auth.AuthCtx auth_ctx = 8;
-  optional golem.component.Principal principal = 9;
-  optional golem.worker.InvocationContext invocation_context = 10;
+  golem.common.EnvironmentId environment_id = 5;
+  bool ignore_already_existing = 6;
+  golem.auth.AuthCtx auth_ctx = 7;
+  optional golem.component.Principal principal = 8;
+  optional golem.worker.InvocationContext invocation_context = 9;
 }
 
 message CreateWorkerResponse {

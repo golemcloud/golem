@@ -129,7 +129,6 @@ impl ComponentView {
 #[derive(Clone, Debug, Default)]
 pub struct AgentTypeManifestProvisionConfig {
     pub env: BTreeMap<String, String>,
-    pub wasi_config: BTreeMap<String, String>,
     pub config: Vec<AgentConfigEntryDto>,
     pub files_source: PathBuf,
     pub files: Vec<app_raw::InitialComponentFile>,
@@ -155,7 +154,6 @@ impl AgentTypeManifestProvisionConfig {
             .collect();
         AgentTypeProvisionConfigCreation {
             env: self.env.clone(),
-            wasi_config: self.wasi_config.clone(),
             config: self.config.clone(),
             files,
             plugin_installations: resolved_plugins,
@@ -269,9 +267,10 @@ fn render_agent_constructor_with_lang(
 fn render_param_name(name: &str, lang: &SourceLanguage) -> String {
     match lang {
         SourceLanguage::Rust => name.to_snake_case(),
-        SourceLanguage::TypeScript | SourceLanguage::Scala | SourceLanguage::Other(_) => {
-            name.to_lower_camel_case()
-        }
+        SourceLanguage::TypeScript
+        | SourceLanguage::Scala
+        | SourceLanguage::MoonBit
+        | SourceLanguage::Other(_) => name.to_lower_camel_case(),
     }
 }
 

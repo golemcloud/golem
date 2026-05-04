@@ -44,6 +44,10 @@ pub enum McpDeploymentError {
     McpDeploymentForDomainAlreadyExists(Domain),
     #[error("Domain {0} is not registered")]
     DomainNotRegistered(Domain),
+    #[error(
+        "Domain {0} cannot be used for an MCP deployment: it belongs to the HTTP API domain namespace"
+    )]
+    DomainNotValidForMcp(Domain),
     #[error("Concurrent update attempt")]
     ConcurrentUpdate,
     #[error(transparent)]
@@ -61,6 +65,7 @@ impl SafeDisplay for McpDeploymentError {
             Self::DeploymentRevisionNotFound(_) => self.to_string(),
             Self::McpDeploymentForDomainAlreadyExists(_) => self.to_string(),
             Self::DomainNotRegistered(_) => self.to_string(),
+            Self::DomainNotValidForMcp(_) => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -128,6 +133,15 @@ impl McpDeploymentService {
             .map_err(|err| match err {
                 DomainRegistrationError::DomainRegistrationByDomainNotFound(domain) => {
                     McpDeploymentError::DomainNotRegistered(domain)
+                }
+                other => other.into(),
+            })?;
+
+        self.domain_registration_service
+            .validate_domain_for_mcp(&data.domain)
+            .map_err(|err| match err {
+                DomainRegistrationError::DomainNotValidForMcp(domain) => {
+                    McpDeploymentError::DomainNotValidForMcp(domain)
                 }
                 other => other.into(),
             })?;

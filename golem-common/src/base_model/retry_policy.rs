@@ -297,21 +297,21 @@ declare_structs! {
         pub name: String,
         pub revision: RetryPolicyRevision,
         pub priority: u32,
-        pub predicate_json: String,
-        pub policy_json: String,
+        pub predicate: crate::base_model::UntypedJsonBody,
+        pub policy: crate::base_model::UntypedJsonBody,
     }
 
     pub struct RetryPolicyCreation {
         pub name: String,
         pub priority: u32,
-        pub predicate_json: String,
-        pub policy_json: String,
+        pub predicate: crate::base_model::UntypedJsonBody,
+        pub policy: crate::base_model::UntypedJsonBody,
     }
 
     pub struct RetryPolicyUpdate {
         pub current_revision: RetryPolicyRevision,
         pub priority: Option<u32>,
-        pub predicate_json: Option<String>,
-        pub policy_json: Option<String>,
+        pub predicate: Option<crate::base_model::UntypedJsonBody>,
+        pub policy: Option<crate::base_model::UntypedJsonBody>,
     }
 }

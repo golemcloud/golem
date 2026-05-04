@@ -1,0 +1,20 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/io/poll"
+
+// Values
+pub fn poll(Array[Pollable]) -> FixedArray[UInt]
+
+// Errors
+
+// Types and methods
+pub(all) struct Pollable(Int) derive(Eq, Show)
+pub fn Pollable::block(Self) -> Unit
+pub fn Pollable::drop(Self) -> Unit
+#deprecated
+pub fn Pollable::inner(Self) -> Int
+pub fn Pollable::ready(Self) -> Bool
+
+// Type aliases
+
+// Traits
+

@@ -15,6 +15,7 @@ export default defineConfig({
       'golem:api/retry@1.5.0': path.resolve(__dirname, 'types/golem_api_1_5_0_retry.d.ts'),
       'golem:agent/common@1.5.0': path.resolve(__dirname, 'types/golem_agent_1_5_0_common.d.ts'),
       'golem:agent/host@1.5.0': path.resolve(__dirname, 'types/golem_agent_1_5_0_host.d.ts'),
+      'golem:quota/types@1.5.0': path.resolve(__dirname, 'types/golem_quota_1_5_0_types.d.ts'),
       'wasi:clocks/wall-clock@0.2.3': path.resolve(
         __dirname,
         'types/wasi_clocks_0_2_3_wall_clock.d.ts',

@@ -3,15 +3,20 @@ syntax = "proto3";
 package golem.component;
 
 import "golem/component/agent.proto";
-import "golem/component/export.proto";
 import "golem/component/producers.proto";
 import "golem/component/linear_memory.proto";
 
+message KnownExports {
+  optional string agent_guest_interface = 1;
+  optional string save_snapshot_interface = 2;
+  optional string load_snapshot_interface = 3;
+  optional string oplog_processor_interface = 4;
+}
+
 message ComponentMetadata {
-  repeated Export exports = 1;
+  KnownExports known_exports = 10;
   repeated Producers producers = 2;
   repeated LinearMemory memories = 3;
-  bytes binary_wit = 5;
   optional string root_package_name = 6;
   optional string root_package_version = 7;
   repeated golem.component.AgentType agent_types = 8;

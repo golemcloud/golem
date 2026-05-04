@@ -16,7 +16,7 @@ mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
-    AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
+    AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::command_handler::Handlers;
@@ -34,7 +34,7 @@ use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
-    AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp, WorkerNameHelp,
+    AgentNameHelp, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
 };
 use crate::model::text::worker::{
     FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView, format_agent_name_match,
@@ -58,11 +58,13 @@ use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
     UpdateWorkerRequest,
 };
-use golem_common::model::agent::{AgentType, DataValue, ParsedAgentId, UntypedJsonDataValue};
+use golem_common::model::agent::{
+    AgentType, AgentTypeName, DataValue, ParsedAgentId, UntypedJsonDataValue,
+};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::component_metadata::ParsedFunctionSite;
+use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
@@ -76,7 +78,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -106,9 +108,8 @@ impl WorkerCommandHandler {
                 AgentSubcommand::New {
                     agent_id: agent_name,
                     env,
-                    wasi_config,
                     config,
-                } => self.cmd_new(agent_name, env, wasi_config, config).await,
+                } => self.cmd_new(agent_name, env, config).await,
                 AgentSubcommand::Invoke {
                     agent_id: agent_name,
                     function_name,
@@ -232,6 +233,22 @@ impl WorkerCommandHandler {
                     path,
                     output,
                 } => self.cmd_file_contents(agent_name, path, output).await,
+                AgentSubcommand::ActivatePlugin {
+                    agent_id: agent_name,
+                    plugin_name,
+                    plugin_priority,
+                } => {
+                    self.cmd_activate_plugin(agent_name, plugin_name, plugin_priority)
+                        .await
+                }
+                AgentSubcommand::DeactivatePlugin {
+                    agent_id: agent_name,
+                    plugin_name,
+                    plugin_priority,
+                } => {
+                    self.cmd_deactivate_plugin(agent_name, plugin_name, plugin_priority)
+                        .await
+                }
             }
         })
     }
@@ -240,13 +257,12 @@ impl WorkerCommandHandler {
         &self,
         agent_name: AgentIdArgs,
         env: Vec<(String, String)>,
-        wasi_config: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
         let agent_name = agent_name.agent_id;
-        let agent_name_match = self.match_agent_name(agent_name).await?;
+        let mut agent_name_match = self.match_agent_name(agent_name).await?;
         let component = self
             .ctx
             .component_handler()
@@ -261,9 +277,20 @@ impl WorkerCommandHandler {
             )
             .await?;
 
+        let agent_name = agent_name_match.agent_name.clone();
         let agent_name =
-            self.try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
-        self.validate_worker_and_function_names(&component, &agent_name, None)?;
+            match self.validate_worker_and_function_names(&component, &agent_name, None)? {
+                Some((agent_id, agent_type)) => {
+                    // `normalize_public_agent_id` may auto-generate a phantom
+                    // UUID for ephemeral agents, changing the canonical form.
+                    let normalized = normalize_public_agent_id(&agent_id, &agent_type)?;
+                    let canonical: RawAgentId = normalized.to_string().into();
+                    agent_name_match.agent_name = canonical.clone();
+                    agent_name_match.parsed_agent_id = Some(normalized);
+                    canonical
+                }
+                None => agent_name,
+            };
 
         log_action(
             "Creating",
@@ -274,15 +301,22 @@ impl WorkerCommandHandler {
             component.id.0,
             agent_name.0.clone(),
             env.into_iter().collect(),
-            BTreeMap::from_iter(wasi_config),
             config,
         )
         .await?;
 
+        let display_agent_name: RawAgentId = match &agent_name_match.parsed_agent_id {
+            Some(parsed) if agent_name_match.source_language.is_known() => {
+                crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
+                    .into()
+            }
+            _ => agent_name,
+        };
+
         logln("");
         self.ctx.log_handler().log_view(&WorkerCreateView {
             component_name: agent_name_match.component_name,
-            agent_name: Some(agent_name),
+            agent_name: Some(display_agent_name),
         });
 
         Ok(())
@@ -291,8 +325,8 @@ impl WorkerCommandHandler {
     async fn cmd_invoke(
         &self,
         agent_name: AgentIdArgs,
-        function_name: &WorkerFunctionName,
-        arguments: Vec<WorkerFunctionArgument>,
+        function_name: &AgentFunctionName,
+        arguments: Vec<AgentFunctionArgument>,
         trigger: bool,
         idempotency_key: Option<IdempotencyKey>,
         no_stream: bool,
@@ -345,14 +379,17 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        // First, validate without the function name
-        let agent_name =
-            self.try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
-        let agent_id_and_type =
-            self.validate_worker_and_function_names(&component, &agent_name, None)?;
+        // First, validate without the function name. The agent name was
+        // already canonicalized when the `AgentNameMatch` was constructed.
+        let agent_id_and_type = self.validate_worker_and_function_names(
+            &component,
+            &agent_name_match.agent_name,
+            None,
+        )?;
 
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
+        let agent_id = normalize_public_agent_id(&agent_id, &agent_type)?;
 
         // If the function name is fully qualified (e.g., "rust:agent/foo-agent.{fun-string}"),
         // extract the simple method name for fuzzy matching.
@@ -407,11 +444,10 @@ impl WorkerCommandHandler {
             },
         };
 
-        // Update agent_name with normalized agent id
-        let agent_name_match = AgentNameMatch {
-            agent_name: agent_id.to_string().into(),
-            ..agent_name_match
-        };
+        // Update agent_name with normalized agent id (and keep the parsed form
+        // for language-specific display).
+        let agent_name_match = agent_name_match
+            .with_canonical_and_parsed(agent_id.to_string().into(), Some(agent_id.clone()));
 
         let mode = if trigger {
             log_action(
@@ -557,7 +593,7 @@ impl WorkerCommandHandler {
 
     async fn cmd_repl_stream(
         &self,
-        agent_type_name: String,
+        agent_type_name: AgentTypeName,
         parameters: String,
         idempotency_key: IdempotencyKey,
         phantom_id: Option<Uuid>,
@@ -577,22 +613,20 @@ impl WorkerCommandHandler {
         let Some(agent_type) = self
             .ctx
             .app_handler()
-            .get_agent_type_by_name(&environment, &agent_type_name)
+            .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
             .await?
         else {
-            bail!("Agent type not found: {}", agent_type_name);
+            bail!("Agent type not found: {}", agent_type_name.0);
         };
 
-        let agent_type_name = agent_type.agent_type.type_name;
         let typed_parameters = DataValue::try_from_untyped_json(
             parameters,
-            agent_type.agent_type.constructor.input_schema,
+            agent_type.agent_type.constructor.input_schema.clone(),
         )
         .map_err(|err| {
             anyhow!("Failed to match agent type parameters to the latest metadata: {err}")
         })?;
-        let agent_id = ParsedAgentId::new(agent_type_name, typed_parameters, phantom_id)
-            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
+        let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
         let agent_name = RawAgentId(agent_id.to_string());
 
         let connection = WorkerConnection::new(
@@ -793,7 +827,7 @@ impl WorkerCommandHandler {
 
     async fn cmd_list(
         &self,
-        agent_type_name: Option<String>,
+        agent_type_name: Option<AgentTypeName>,
         component_name: Option<ComponentName>,
         filters: Vec<String>,
         scan_cursor: Option<ScanCursor>,
@@ -878,7 +912,7 @@ impl WorkerCommandHandler {
 
     async fn resolve_list_components(
         &self,
-        agent_type_name: Option<String>,
+        agent_type_name: Option<AgentTypeName>,
         component_name: Option<ComponentName>,
         filters: Vec<String>,
     ) -> anyhow::Result<(Vec<ComponentDto>, Vec<String>)> {
@@ -892,16 +926,16 @@ impl WorkerCommandHandler {
                     .environment_handler()
                     .resolve_environment(EnvironmentResolveMode::Any)
                     .await?;
-                debug!("Finding agent type {}", agent_type_name);
+                debug!("Finding agent type {}", agent_type_name.0);
                 let Some(agent_type) = self
                     .ctx
                     .app_handler()
-                    .get_agent_type_by_name(&environment, &agent_type_name)
+                    .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
                     .await?
                 else {
                     log_error(format!(
                         "Agent type {} not found",
-                        agent_type_name.log_color_highlight()
+                        agent_type_name.0.log_color_highlight()
                     ));
                     bail!(NonSuccessfulExit)
                 };
@@ -1013,31 +1047,57 @@ impl WorkerCommandHandler {
                 )
                 .await?;
 
-            view.agents.extend(workers.into_iter().map(|w| {
-                let raw_agent_name = w.agent_id.agent_id.clone();
-                let source_language = ParsedAgentId::parse_agent_type_name(&raw_agent_name)
-                    .ok()
+            for worker in workers {
+                let raw_agent_name = worker.agent_id.agent_id.clone();
+
+                let worker_component = self
+                    .ctx
+                    .component_handler()
+                    .get_component_revision_by_id(
+                        &worker.agent_id.component_id,
+                        worker.component_revision,
+                    )
+                    .await?;
+
+                let parsed_agent_type_name =
+                    ParsedAgentId::parse_agent_type_name(&raw_agent_name).ok();
+
+                let defaults = parsed_agent_type_name
+                    .as_ref()
+                    .and_then(|agent_type_name| {
+                        worker_component
+                            .metadata
+                            .agent_type_provision_configs()
+                            .get(agent_type_name)
+                            .cloned()
+                    })
+                    .unwrap_or_default();
+
+                let source_language = parsed_agent_type_name
+                    .as_ref()
                     .and_then(|type_name| {
-                        component
+                        worker_component
                             .metadata
                             .agent_types()
                             .iter()
-                            .find(|at| at.type_name == type_name)
+                            .find(|at| &at.type_name == type_name)
                             .map(|at| SourceLanguage::from(at.source_language.as_str()))
                     })
                     .unwrap_or_default();
 
-                let mut view = AgentMetadataView::from(w);
+                let mut agent_view = AgentMetadataView::from(worker).with_defaults(defaults);
 
                 if source_language.is_known()
-                    && let Ok(parsed) = ParsedAgentId::parse(&raw_agent_name, &component.metadata)
+                    && let Ok(parsed) =
+                        ParsedAgentId::parse(&raw_agent_name, &worker_component.metadata)
                 {
-                    view.agent_name =
+                    agent_view.agent_name =
                         crate::agent_id_display::render_agent_id(&parsed, &source_language).into();
                 }
 
-                view.with_source_language(source_language)
-            }));
+                view.agents
+                    .push(agent_view.with_source_language(source_language));
+            }
             component_scan_cursor
                 .into_iter()
                 .for_each(|component_scan_cursor| {
@@ -1114,11 +1174,11 @@ impl WorkerCommandHandler {
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_name_match = self.match_agent_name(agent_name.agent_id).await?;
-        let environment = &agent_name_match.environment;
 
         let (component, agent_name) = self
             .component_by_agent_name_match(&agent_name_match)
             .await?;
+        let environment = &agent_name_match.environment;
 
         let target_revision = match target_revision {
             Some(target_revision) => target_revision,
@@ -1141,6 +1201,8 @@ impl WorkerCommandHandler {
                 if !self.ctx.interactive_handler().confirm_update_to_current(
                     &component.component_name,
                     &agent_name,
+                    agent_name_match.parsed_agent_id.as_ref(),
+                    &agent_name_match.source_language,
                     current_deployed_revision.revision,
                 )? {
                     bail!(NonSuccessfulExit)
@@ -1173,7 +1235,7 @@ impl WorkerCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let result = {
+        let metadata = {
             let result = clients
                 .worker
                 .get_worker_metadata(&component.id.0, &agent_name.0)
@@ -1183,9 +1245,27 @@ impl WorkerCommandHandler {
             AgentMetadata::from(agent_name_match.component_name, result)
         };
 
+        let defaults = component
+            .metadata
+            .agent_type_provision_configs()
+            .get(&agent_name_match.agent_type_name)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut metadata_view = AgentMetadataView::from(metadata)
+            .with_defaults(defaults)
+            .with_source_language(agent_name_match.source_language.clone());
+        if let Some(parsed) = &agent_name_match.parsed_agent_id
+            && agent_name_match.source_language.is_known()
+        {
+            metadata_view.agent_name =
+                crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
+                    .into();
+        }
+
         self.ctx
             .log_handler()
-            .log_view(&WorkerGetView::from_metadata(result, true));
+            .log_view(&WorkerGetView::from_metadata(metadata_view, true));
 
         Ok(())
     }
@@ -1363,12 +1443,176 @@ impl WorkerCommandHandler {
         }
     }
 
+    async fn cmd_activate_plugin(
+        &self,
+        agent_name: AgentIdArgs,
+        plugin_name: String,
+        explicit_priority: Option<i32>,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_name_match = self.match_agent_name(agent_name.agent_id).await?;
+        let (component, agent_name) = self
+            .component_by_agent_name_match(&agent_name_match)
+            .await?;
+
+        let plugin_priority =
+            self.resolve_plugin_priority(&component, &agent_name, &plugin_name, explicit_priority)?;
+
+        log_action(
+            "Activating plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_name_match(&agent_name_match)
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        clients
+            .worker
+            .activate_plugin(&component.id.0, &agent_name.0, plugin_priority)
+            .await
+            .map(|_| ())
+            .map_service_error()?;
+
+        log_action(
+            "Activated plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_name_match(&agent_name_match)
+            ),
+        );
+
+        Ok(())
+    }
+
+    async fn cmd_deactivate_plugin(
+        &self,
+        agent_name: AgentIdArgs,
+        plugin_name: String,
+        explicit_priority: Option<i32>,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_name_match = self.match_agent_name(agent_name.agent_id).await?;
+        let (component, agent_name) = self
+            .component_by_agent_name_match(&agent_name_match)
+            .await?;
+
+        let plugin_priority =
+            self.resolve_plugin_priority(&component, &agent_name, &plugin_name, explicit_priority)?;
+
+        log_action(
+            "Deactivating plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_name_match(&agent_name_match)
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        clients
+            .worker
+            .deactivate_plugin(&component.id.0, &agent_name.0, plugin_priority)
+            .await
+            .map(|_| ())
+            .map_service_error()?;
+
+        log_action(
+            "Deactivated plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_name_match(&agent_name_match)
+            ),
+        );
+
+        Ok(())
+    }
+
+    fn resolve_plugin_priority(
+        &self,
+        component: &ComponentDto,
+        agent_name: &RawAgentId,
+        plugin_name: &str,
+        explicit_priority: Option<i32>,
+    ) -> anyhow::Result<i32> {
+        let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_name.0)
+            .map(|n| n.0)
+            .unwrap_or_default();
+
+        let agent_type = AgentTypeName(agent_type_name.clone());
+        let plugins = component
+            .metadata
+            .agent_type_plugins(&agent_type)
+            .unwrap_or_default();
+
+        let matching: Vec<_> = plugins
+            .iter()
+            .filter(|p| p.plugin_name == plugin_name)
+            .collect();
+
+        match matching.len() {
+            0 => {
+                let available: Vec<_> = plugins
+                    .iter()
+                    .map(|p| format!("{} (priority {})", p.plugin_name, p.priority.0))
+                    .collect();
+                logln("");
+                log_error(format!(
+                    "Plugin {} is not installed for agent type {}.",
+                    plugin_name.log_color_error_highlight(),
+                    agent_type_name.log_color_error_highlight(),
+                ));
+                if !available.is_empty() {
+                    logln(format!(
+                        "Installed plugins: {}",
+                        available.join(", ").log_color_highlight()
+                    ));
+                }
+                logln("");
+                bail!(NonSuccessfulExit);
+            }
+            1 => Ok(matching[0].priority.0),
+            _ => {
+                if let Some(priority) = explicit_priority {
+                    if matching.iter().any(|p| p.priority.0 == priority) {
+                        Ok(priority)
+                    } else {
+                        let priorities: Vec<_> = matching.iter().map(|p| p.priority.0).collect();
+                        logln("");
+                        log_error(format!(
+                            "Plugin {} has no installation with priority {}. Available priorities: {:?}",
+                            plugin_name.log_color_error_highlight(),
+                            priority,
+                            priorities,
+                        ));
+                        logln("");
+                        bail!(NonSuccessfulExit);
+                    }
+                } else {
+                    let priorities: Vec<_> = matching.iter().map(|p| p.priority.0).collect();
+                    logln("");
+                    log_error(format!(
+                        "Multiple installations of plugin {} found (priorities: {:?}).",
+                        plugin_name.log_color_error_highlight(),
+                        priorities,
+                    ));
+                    logln("Use --plugin-priority to specify which installation to target.");
+                    logln("Use `golem component plugin get` to list installed plugins.");
+                    logln("");
+                    bail!(NonSuccessfulExit);
+                }
+            }
+        }
+    }
+
     async fn new_worker(
         &self,
         component_id: Uuid,
         agent_name: String,
         env: HashMap<String, String>,
-        wasi_config: BTreeMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
@@ -1380,7 +1624,6 @@ impl WorkerCommandHandler {
                 &golem_client::model::AgentCreationRequest {
                     name: agent_name,
                     env,
-                    wasi_config,
                     config,
                 },
             )
@@ -1394,16 +1637,15 @@ impl WorkerCommandHandler {
         component_id: Uuid,
         component_name: &ComponentName,
         agent_name: &RawAgentId,
-    ) -> anyhow::Result<AgentMetadata> {
+    ) -> anyhow::Result<Option<AgentMetadata>> {
         let clients = self.ctx.golem_clients().await?;
 
-        let result = clients
+        Ok(clients
             .worker
             .get_worker_metadata(&component_id, &agent_name.0)
             .await
-            .map_service_error()?;
-
-        Ok(AgentMetadata::from(component_name.clone(), result))
+            .map_service_error_not_found_as_opt()?
+            .map(|result| AgentMetadata::from(component_name.clone(), result)))
     }
 
     async fn delete(&self, component_id: Uuid, agent_name: &str) -> anyhow::Result<()> {
@@ -1766,7 +2008,6 @@ impl WorkerCommandHandler {
             worker_metadata.agent_id.component_id.0,
             worker_metadata.agent_id.agent_id,
             worker_metadata.env,
-            worker_metadata.wasi_config,
             worker_metadata.config,
         )
         .await?;
@@ -1880,12 +2121,10 @@ impl WorkerCommandHandler {
             bail!(NonSuccessfulExit);
         };
 
-        // Try to re-canonicalize the agent name using language-aware parsing.
-        // Language is auto-detected from agent type metadata.
-        let agent_name =
-            self.try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
-
-        Ok((component, agent_name))
+        // `agent_name_match.agent_name` is already canonicalized in
+        // `match_agent_name_in_environment`. Just return a clone for callers
+        // that need it for downstream HTTP/gRPC calls.
+        Ok((component, agent_name_match.agent_name.clone()))
     }
 
     pub(crate) fn try_recanonicalize_agent_name(
@@ -1893,80 +2132,102 @@ impl WorkerCommandHandler {
         agent_name: &RawAgentId,
         component: &ComponentDto,
     ) -> RawAgentId {
-        let raw = &agent_name.0;
+        try_recanonicalize_agent_name_with_parsed(agent_name, component).0
+    }
+}
 
-        // Extract type name and params using ParsedAgentId::parse_agent_type_name
-        // and manual splitting for the params portion
-        let Some(paren_pos) = raw.find('(') else {
-            return agent_name.clone();
-        };
-        let type_name = &raw[..paren_pos];
+/// Re-canonicalize an agent id string against the component's agent type
+/// metadata. Returns the canonical structural form together with the parsed
+/// representation (when language-aware parsing succeeded). The parsed form
+/// can be used by display code to render the agent id in its source
+/// language (see [`crate::agent_id_display::render_agent_id`]).
+pub(crate) fn try_recanonicalize_agent_name_with_parsed(
+    agent_name: &RawAgentId,
+    component: &ComponentDto,
+) -> (RawAgentId, Option<ParsedAgentId>) {
+    let raw = &agent_name.0;
 
-        // Find matching closing paren (account for nesting and phantom id)
-        let mut nesting = 0i32;
-        let mut close_pos = None;
-        for (i, ch) in raw[paren_pos..].char_indices() {
-            match ch {
-                '(' => nesting += 1,
-                ')' => {
-                    nesting -= 1;
-                    if nesting == 0 {
-                        close_pos = Some(paren_pos + i);
-                        break;
-                    }
+    // Extract type name and params using ParsedAgentId::parse_agent_type_name
+    // and manual splitting for the params portion
+    let Some(paren_pos) = raw.find('(') else {
+        return (agent_name.clone(), None);
+    };
+    let type_name = &raw[..paren_pos];
+
+    // Find matching closing paren (account for nesting and phantom id)
+    let mut nesting = 0i32;
+    let mut close_pos = None;
+    for (i, ch) in raw[paren_pos..].char_indices() {
+        match ch {
+            '(' => nesting += 1,
+            ')' => {
+                nesting -= 1;
+                if nesting == 0 {
+                    close_pos = Some(paren_pos + i);
+                    break;
                 }
-                _ => {}
             }
+            _ => {}
         }
-
-        let Some(close_pos) = close_pos else {
-            return agent_name.clone();
-        };
-
-        let params_str = &raw[paren_pos + 1..close_pos];
-        let phantom_str = if close_pos + 1 < raw.len() {
-            Some(&raw[close_pos + 1..])
-        } else {
-            None
-        };
-
-        // Look up the agent type from component metadata
-        let agent_type = component
-            .metadata
-            .agent_types()
-            .iter()
-            .find(|at| at.type_name.0 == type_name);
-
-        let Some(agent_type) = agent_type else {
-            return agent_name.clone();
-        };
-
-        // Derive source language from agent type metadata
-        let source_language = SourceLanguage::from(agent_type.source_language.as_str());
-
-        // Try language-aware parse
-        let Ok(data_value) = crate::agent_id_display::parse_agent_id_params(
-            params_str,
-            &agent_type.constructor.input_schema,
-            &source_language,
-        ) else {
-            return agent_name.clone();
-        };
-
-        // Re-canonicalize using structural format
-        let Ok(canonical) =
-            golem_common::model::agent::structural_format::format_structural(&data_value)
-        else {
-            return agent_name.clone();
-        };
-
-        let mut new_id = format!("{}({canonical})", agent_type.type_name.0);
-        if let Some(phantom) = phantom_str {
-            new_id.push_str(phantom);
-        }
-        RawAgentId(new_id)
     }
 
+    let Some(close_pos) = close_pos else {
+        return (agent_name.clone(), None);
+    };
+
+    let params_str = &raw[paren_pos + 1..close_pos];
+    let phantom_str = if close_pos + 1 < raw.len() {
+        Some(&raw[close_pos + 1..])
+    } else {
+        None
+    };
+
+    // Look up the agent type from component metadata
+    let agent_type = component
+        .metadata
+        .agent_types()
+        .iter()
+        .find(|at| at.type_name.0 == type_name);
+
+    let Some(agent_type) = agent_type else {
+        return (agent_name.clone(), None);
+    };
+
+    // Derive source language from agent type metadata
+    let source_language = SourceLanguage::from(agent_type.source_language.as_str());
+
+    // Try language-aware parse
+    let Ok(data_value) = crate::agent_id_display::parse_agent_id_params(
+        params_str,
+        &agent_type.constructor.input_schema,
+        &source_language,
+    ) else {
+        return (agent_name.clone(), None);
+    };
+
+    // Re-canonicalize using structural format
+    let Ok(canonical) =
+        golem_common::model::agent::structural_format::format_structural(&data_value)
+    else {
+        return (agent_name.clone(), None);
+    };
+
+    let mut new_id = format!("{}({canonical})", agent_type.type_name.0);
+    // Parse the optional phantom uuid for the parsed form (`[uuid]`)
+    let phantom_uuid = phantom_str.and_then(|s| {
+        let trimmed = s.strip_prefix('[')?.strip_suffix(']')?;
+        uuid::Uuid::parse_str(trimmed).ok()
+    });
+    if let Some(phantom) = phantom_str {
+        new_id.push_str(phantom);
+    }
+
+    let parsed = ParsedAgentId::new(agent_type.type_name.clone(), data_value, phantom_uuid).ok();
+
+    (RawAgentId(new_id), parsed)
+}
+
+impl WorkerCommandHandler {
     async fn resume_worker(
         &self,
         component: &ComponentDto,
@@ -2016,7 +2277,7 @@ impl WorkerCommandHandler {
                     agent_name.log_color_error_highlight()
                 ));
                 logln("");
-                log_text_view(&WorkerNameHelp);
+                log_text_view(&AgentNameHelp);
                 bail!(NonSuccessfulExit);
             }
         };
@@ -2037,7 +2298,7 @@ impl WorkerCommandHandler {
                 "Deploy the component that defines this agent type or specify environment/application/account prefixes.",
             );
             logln("");
-            log_text_view(&WorkerNameHelp);
+            log_text_view(&AgentNameHelp);
             bail!(NonSuccessfulExit);
         };
 
@@ -2050,12 +2311,22 @@ impl WorkerCommandHandler {
             )
             .await?;
 
+        // Recanonicalize the user input against the component's agent type
+        // metadata so the canonical form (used for HTTP/gRPC calls) and the
+        // parsed form (used for language-specific display) are both available
+        // immediately on the resulting `AgentNameMatch`.
+        let raw_agent_name: RawAgentId = agent_name.into();
+        let (canonical_agent_name, parsed_agent_id) =
+            try_recanonicalize_agent_name_with_parsed(&raw_agent_name, &component);
+
         Ok(AgentNameMatch {
             environment,
             component_name_match_kind: ComponentNameMatchKind::Unknown,
             component_name: component.component_name,
-            agent_name: agent_name.into(),
+            agent_type_name: parsed_agent_type_name,
+            agent_name: canonical_agent_name,
             source_language: SourceLanguage::from(agent_type.agent_type.source_language.as_str()),
+            parsed_agent_id,
         })
     }
 
@@ -2086,7 +2357,7 @@ impl WorkerCommandHandler {
                             name = name.log_color_highlight()
                         ));
                         logln("");
-                        log_text_view(&WorkerNameHelp);
+                        log_text_view(&AgentNameHelp);
                         bail!(NonSuccessfulExit);
                     }
                     Ok(value)
@@ -2107,7 +2378,7 @@ impl WorkerCommandHandler {
                                 err = err.log_color_error_highlight()
                             ));
                             logln("");
-                            log_text_view(&WorkerNameHelp);
+                            log_text_view(&AgentNameHelp);
                             bail!(NonSuccessfulExit);
                         }
                     }
@@ -2174,7 +2445,7 @@ impl WorkerCommandHandler {
                     agent_name.0.log_color_error_highlight()
                 ));
                 logln("");
-                log_text_view(&WorkerNameHelp);
+                log_text_view(&AgentNameHelp);
                 bail!(NonSuccessfulExit);
             }
         }
@@ -2193,21 +2464,31 @@ impl WorkerCommandHandler {
         match ParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
             Ok((agent_id, agent_type)) => match function_name {
                 Some(function_name) => {
-                    if let Some((namespace, package, interface)) = component
-                        .metadata
-                        .find_function(function_name)
-                        .ok()
-                        .flatten()
-                        .and_then(|f| match f.name.site {
-                            ParsedFunctionSite::Global => None,
-                            ParsedFunctionSite::Interface { .. } => None,
-                            ParsedFunctionSite::PackagedInterface {
-                                namespace,
-                                package,
-                                interface,
-                                ..
-                            } => Some((namespace, package, interface)),
-                        })
+                    let parsed = match ParsedFunctionName::parse(function_name) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            logln("");
+                            log_error(format!(
+                                "Incompatible agent type ({}) and method ({})",
+                                agent_id.agent_type.as_str().log_color_error_highlight(),
+                                function_name.log_color_error_highlight()
+                            ));
+                            logln("");
+                            log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                                component,
+                                &agent_id,
+                                &agent_type,
+                            ));
+                            bail!(NonSuccessfulExit);
+                        }
+                    };
+
+                    if let ParsedFunctionSite::PackagedInterface {
+                        namespace,
+                        package,
+                        interface,
+                        ..
+                    } = parsed.site()
                     {
                         let component_name = format!("{namespace}:{package}");
                         if *interface == agent_id.agent_type.0
@@ -2422,11 +2703,72 @@ fn split_agent_name(agent_name: &str) -> Vec<&str> {
     }
 }
 
+fn build_repl_agent_id(
+    agent_type: &AgentType,
+    typed_parameters: DataValue,
+    phantom_id: Option<Uuid>,
+) -> anyhow::Result<ParsedAgentId> {
+    ParsedAgentId::new_auto_phantom(
+        agent_type.type_name.clone(),
+        typed_parameters,
+        phantom_id,
+        agent_type.mode,
+    )
+    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
+}
+
+fn normalize_public_agent_id(
+    agent_id: &ParsedAgentId,
+    agent_type: &AgentType,
+) -> anyhow::Result<ParsedAgentId> {
+    build_repl_agent_id(agent_type, agent_id.parameters.clone(), agent_id.phantom_id)
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::command_handler::worker::split_agent_name;
+    use super::{
+        build_repl_agent_id, extract_simple_method_name, normalize_public_agent_id,
+        split_agent_name,
+    };
+    use golem_common::model::Empty;
+    use golem_common::model::agent::{
+        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
+        ElementValues, NamedElementSchemas, ParsedAgentId, Snapshotting,
+    };
     use pretty_assertions::assert_eq;
     use test_r::test;
+    use uuid::Uuid;
+
+    fn test_agent_type(mode: AgentMode) -> AgentType {
+        AgentType {
+            type_name: AgentTypeName("repl-agent".to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            constructor: AgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+            },
+            methods: vec![AgentMethod {
+                name: "run".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                http_endpoint: vec![],
+            }],
+            dependencies: vec![],
+            mode,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        }
+    }
+
+    fn empty_tuple() -> golem_common::model::agent::DataValue {
+        golem_common::model::agent::DataValue::Tuple(ElementValues { elements: vec![] })
+    }
 
     #[test]
     fn test_split_agent_name() {
@@ -2445,15 +2787,11 @@ mod tests {
 
     #[test]
     fn test_extract_simple_method_name_simple() {
-        use super::extract_simple_method_name;
-
         assert_eq!(extract_simple_method_name("fun_string"), "fun_string");
     }
 
     #[test]
     fn test_extract_simple_method_name_qualified_kebab() {
-        use super::extract_simple_method_name;
-
         assert_eq!(
             extract_simple_method_name("rust:agent/FooAgent.{fun-string}"),
             "fun-string"
@@ -2462,11 +2800,50 @@ mod tests {
 
     #[test]
     fn test_extract_simple_method_name_qualified_underscore() {
-        use super::extract_simple_method_name;
-
         assert_eq!(
             extract_simple_method_name("rust:agent/FooAgent.{fun_string}"),
             "fun_string"
         );
+    }
+
+    #[test]
+    fn repl_agent_id_auto_generates_phantom_for_ephemeral_agents() {
+        let agent_id =
+            build_repl_agent_id(&test_agent_type(AgentMode::Ephemeral), empty_tuple(), None)
+                .unwrap();
+
+        assert!(agent_id.phantom_id.is_some());
+    }
+
+    #[test]
+    fn repl_agent_id_keeps_durable_agents_non_phantom() {
+        let agent_id =
+            build_repl_agent_id(&test_agent_type(AgentMode::Durable), empty_tuple(), None).unwrap();
+
+        assert!(agent_id.phantom_id.is_none());
+    }
+
+    #[test]
+    fn repl_agent_id_preserves_explicit_phantom_id() {
+        let explicit_phantom_id = Uuid::new_v4();
+        let agent_id = build_repl_agent_id(
+            &test_agent_type(AgentMode::Ephemeral),
+            empty_tuple(),
+            Some(explicit_phantom_id),
+        )
+        .unwrap();
+
+        assert_eq!(agent_id.phantom_id, Some(explicit_phantom_id));
+    }
+
+    #[test]
+    fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
+        let agent_id =
+            ParsedAgentId::new(AgentTypeName("repl-agent".to_string()), empty_tuple(), None)
+                .unwrap();
+        let normalized =
+            normalize_public_agent_id(&agent_id, &test_agent_type(AgentMode::Ephemeral)).unwrap();
+
+        assert!(normalized.phantom_id.is_some());
     }
 }

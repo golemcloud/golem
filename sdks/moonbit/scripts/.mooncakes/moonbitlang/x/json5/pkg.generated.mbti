@@ -1,0 +1,34 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/json5"
+
+// Values
+pub fn parse(String) -> Json raise ParseError
+
+// Errors
+pub(all) suberror ParseError {
+  ParseError(ParseErrorData)
+}
+pub fn ParseError::to_string(Self) -> String
+pub impl Show for ParseError
+
+// Types and methods
+pub(all) enum ParseErrorData {
+  NoValidToken(Position)
+  InvalidChar(Position, Char)
+  InvalidEof
+  InvalidNumber(Position, String)
+  InvalidIdentEscape(Position)
+}
+pub impl Eq for ParseErrorData
+
+pub(all) struct Position {
+  line : Int
+  column : Int
+}
+pub impl Eq for Position
+pub impl Show for Position
+
+// Type aliases
+
+// Traits
+

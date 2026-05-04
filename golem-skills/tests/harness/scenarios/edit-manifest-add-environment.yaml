@@ -1,0 +1,53 @@
+name: "edit-manifest-add-environment"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-environment"
+    prompt: >
+      In the test-app project, edit `golem.yaml` to add a new environment called `staging`
+      with the following configuration:
+
+      - Server: a custom server with URL `https://staging.example.com` and authentication
+        using a static token `{{ STAGING_TOKEN }}` (use template substitution syntax).
+      - Component presets: activate the `release` preset.
+      - CLI options: set the default output format to `json` and enable auto-confirm.
+
+      Do not change any source code files. Only modify `golem.yaml`.
+    expectedSkills:
+      - "golem-edit-manifest"
+    verify:
+      build: true
+
+  - id: "verify-staging-environment"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*environments:[\\s\\S]*staging:[\\s\\S]*"
+
+  - id: "verify-custom-server-url"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_contains: "https://staging.example.com"
+
+  - id: "verify-static-token-auth"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*staticToken:[\\s\\S]*STAGING_TOKEN[\\s\\S]*"
+
+  - id: "verify-cli-format"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*format:\\s*json[\\s\\S]*"
+
+  - id: "verify-auto-confirm"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*autoConfirm:\\s*true[\\s\\S]*"

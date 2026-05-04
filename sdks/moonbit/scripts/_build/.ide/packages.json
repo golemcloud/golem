@@ -1,0 +1,2566 @@
+{
+  "source_dir": "/home/vigoo/projects/moonbit-golem/scripts",
+  "name": "golemcloud/scripts",
+  "packages": [
+    {
+      "is-main": true,
+      "is-third-party": false,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/release",
+      "root": "golemcloud/scripts",
+      "rel": "release",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/release/main.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {},
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/env",
+          "alias": "env",
+          "fspath": "/home/vigoo/.moon/lib/core/env"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/fs",
+          "alias": "fs",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/fs"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/release/release.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/benchmark",
+      "root": "moonbitlang/x",
+      "rel": "benchmark",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/benchmark/benchmark.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/benchmark/types.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {},
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/cmp",
+          "alias": "cmp",
+          "fspath": "/home/vigoo/.moon/lib/core/cmp"
+        },
+        {
+          "path": "moonbitlang/core/double",
+          "alias": "double",
+          "fspath": "/home/vigoo/.moon/lib/core/double"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/benchmark/internal/benchmark_ffi",
+          "alias": "ffi",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/benchmark/internal/benchmark_ffi"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/benchmark/benchmark.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/benchmark/internal/benchmark_ffi",
+      "root": "moonbitlang/x",
+      "rel": "benchmark/internal/benchmark_ffi",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/benchmark/internal/benchmark_ffi/ffi_js.mbt": {
+          "backend": [
+            "Js"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/benchmark/internal/benchmark_ffi/ffi_native.mbt": {
+          "backend": [
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/benchmark/internal/benchmark_ffi/ffi_wasm.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/benchmark/internal/benchmark_ffi/ffi_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/benchmark/internal/benchmark_ffi/benchmark_ffi.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/codec/base64",
+      "root": "moonbitlang/x",
+      "rel": "codec/base64",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/codec/base64/base64.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/codec/base64/base64_wbtest.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "test-files": {},
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/codec/base64/base64.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto",
+      "root": "moonbitlang/x",
+      "rel": "crypto",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/byte_source.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/chacha.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/hmac.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/md5.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/sha1.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/sha224.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/sha256.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/sm3.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/traits.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/utils.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/chacha_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/hmac_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/md5_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/sha1_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/sha224_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/sha256_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/sm3_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/crypto/README.mbt.md": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "deps": [
+        {
+          "path": "moonbitlang/core/bench",
+          "alias": "bench",
+          "fspath": "/home/vigoo/.moon/lib/core/bench"
+        },
+        {
+          "path": "moonbitlang/core/cmp",
+          "alias": "cmp",
+          "fspath": "/home/vigoo/.moon/lib/core/cmp"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/encoding",
+          "alias": "encoding",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/crypto/crypto.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/decimal",
+      "root": "moonbitlang/x",
+      "rel": "decimal",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/decimal/decimal.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/decimal/decimal_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/bigint",
+          "alias": "bigint",
+          "fspath": "/home/vigoo/.moon/lib/core/bigint"
+        },
+        {
+          "path": "moonbitlang/core/json",
+          "alias": "json",
+          "fspath": "/home/vigoo/.moon/lib/core/json"
+        },
+        {
+          "path": "moonbitlang/core/math",
+          "alias": "math",
+          "fspath": "/home/vigoo/.moon/lib/core/math"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/core/quickcheck",
+          "alias": "quickcheck",
+          "fspath": "/home/vigoo/.moon/lib/core/quickcheck"
+        },
+        {
+          "path": "moonbitlang/core/strconv",
+          "alias": "strconv",
+          "fspath": "/home/vigoo/.moon/lib/core/strconv"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/decimal/decimal.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding",
+      "root": "moonbitlang/x",
+      "rel": "encoding",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/decoding.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/encoding.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/types.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/decoding_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/encoding_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/README.mbt.md": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "deps": [
+        {
+          "path": "moonbitlang/core/buffer",
+          "alias": "buffer",
+          "fspath": "/home/vigoo/.moon/lib/core/buffer"
+        },
+        {
+          "path": "moonbitlang/core/cmp",
+          "alias": "cmp",
+          "fspath": "/home/vigoo/.moon/lib/core/cmp"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/encoding/encoding.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/internal/benchmark",
+      "root": "moonbitlang/x",
+      "rel": "encoding/internal/benchmark",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/internal/benchmark/lib.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {},
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/buffer",
+          "alias": "buffer",
+          "fspath": "/home/vigoo/.moon/lib/core/buffer"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/core/random",
+          "alias": "random",
+          "fspath": "/home/vigoo/.moon/lib/core/random"
+        },
+        {
+          "path": "moonbitlang/x/encoding",
+          "alias": "encoding",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/encoding/internal/benchmark/benchmark.mi"
+    },
+    {
+      "is-main": true,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/internal/benchmark/decoding_batch",
+      "root": "moonbitlang/x",
+      "rel": "encoding/internal/benchmark/decoding_batch",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/internal/benchmark/decoding_batch/main.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {},
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/encoding",
+          "alias": "encoding",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding"
+        },
+        {
+          "path": "moonbitlang/x/encoding/internal/benchmark",
+          "alias": "bench",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/internal/benchmark"
+        },
+        {
+          "path": "moonbitlang/x/sys",
+          "alias": "sys",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/encoding/internal/benchmark/decoding_batch/decoding_batch.mi"
+    },
+    {
+      "is-main": true,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/internal/benchmark/decoding_streaming",
+      "root": "moonbitlang/x",
+      "rel": "encoding/internal/benchmark/decoding_streaming",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/internal/benchmark/decoding_streaming/main.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {},
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/encoding",
+          "alias": "encoding",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding"
+        },
+        {
+          "path": "moonbitlang/x/encoding/internal/benchmark",
+          "alias": "bench",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding/internal/benchmark"
+        },
+        {
+          "path": "moonbitlang/x/sys",
+          "alias": "sys",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/encoding/internal/benchmark/decoding_streaming/decoding_streaming.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/fs",
+      "root": "moonbitlang/x",
+      "rel": "fs",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/fs/fs.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/fs/fs_js.mbt": {
+          "backend": [
+            "Js"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/fs/fs_native.mbt": {
+          "backend": [
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/fs/fs_wasm.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/fs/blackbox_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/internal/ffi",
+          "alias": "ffi",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/internal/ffi"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/encoding",
+          "alias": "encoding",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/encoding"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/fs/fs.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/internal/ffi",
+      "root": "moonbitlang/x",
+      "rel": "internal/ffi",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/internal/ffi/byte_array_wasm.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/internal/ffi/dir_wasm.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/internal/ffi/string_convert.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/internal/ffi/string_wasm.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {},
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/internal/ffi/ffi.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5",
+      "root": "moonbitlang/x",
+      "rel": "json5",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/internal_types.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/lex_main.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/lex_misc.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/lex_number.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/lex_prop.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/lex_string.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/parse.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/types.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/unicode_gen.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/util.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/parse_error_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/parse_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/json5/README.mbt.md": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "deps": [
+        {
+          "path": "moonbitlang/core/double",
+          "alias": "double",
+          "fspath": "/home/vigoo/.moon/lib/core/double"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/core/strconv",
+          "alias": "strconv",
+          "fspath": "/home/vigoo/.moon/lib/core/strconv"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/json5/json5.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/num",
+      "root": "moonbitlang/x",
+      "rel": "num",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/num/num.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {},
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/num/num.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path",
+      "root": "moonbitlang/x",
+      "rel": "path",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/path.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {},
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/path/internal/ffi",
+          "alias": "ffi",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/internal/ffi"
+        },
+        {
+          "path": "moonbitlang/x/path/posix",
+          "alias": "posix",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/posix"
+        },
+        {
+          "path": "moonbitlang/x/path/win32",
+          "alias": "win32",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/win32"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/path/path.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/internal/ffi",
+      "root": "moonbitlang/x",
+      "rel": "path/internal/ffi",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/internal/ffi/is_windows.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/internal/ffi/is_windows_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/sys",
+          "alias": "sys",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/path/internal/ffi/ffi.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/posix",
+      "root": "moonbitlang/x",
+      "rel": "path/posix",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/posix/path.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/posix/unix_path.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/posix/unix_path_wbtest.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/posix/path_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/posix/README.mbt.md": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "deps": [
+        {
+          "path": "moonbitlang/core/env",
+          "alias": "env",
+          "fspath": "/home/vigoo/.moon/lib/core/env"
+        },
+        {
+          "path": "moonbitlang/core/json",
+          "alias": "json",
+          "fspath": "/home/vigoo/.moon/lib/core/json"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/path/posix/posix.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/win32",
+      "root": "moonbitlang/x",
+      "rel": "path/win32",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/win32/path.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/win32/win_path.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/win32/win_path_wbtest.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/win32/path_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/path/win32/README.mbt.md": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "deps": [
+        {
+          "path": "moonbitlang/core/env",
+          "alias": "env",
+          "fspath": "/home/vigoo/.moon/lib/core/env"
+        },
+        {
+          "path": "moonbitlang/core/json",
+          "alias": "json",
+          "fspath": "/home/vigoo/.moon/lib/core/json"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/path/win32/win32.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/rational",
+      "root": "moonbitlang/x",
+      "rel": "rational",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/rational/rational.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/rational/types.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/rational/rational_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/rational/README.mbt.md": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "deps": [
+        {
+          "path": "moonbitlang/core/int64",
+          "alias": "int64",
+          "fspath": "/home/vigoo/.moon/lib/core/int64"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/core/quickcheck",
+          "alias": "quickcheck",
+          "fspath": "/home/vigoo/.moon/lib/core/quickcheck"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/double",
+          "alias": "double",
+          "fspath": "/home/vigoo/.moon/lib/core/double"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/core/quickcheck",
+          "alias": "quickcheck",
+          "fspath": "/home/vigoo/.moon/lib/core/quickcheck"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/rational/rational.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/stack",
+      "root": "moonbitlang/x",
+      "rel": "stack",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/stack/deprecated.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/stack/stack.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/stack/types.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {},
+      "mbt-md-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/stack/README.mbt.md": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "deps": [
+        {
+          "path": "moonbitlang/core/list",
+          "alias": "list",
+          "fspath": "/home/vigoo/.moon/lib/core/list"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/stack/stack.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys",
+      "root": "moonbitlang/x",
+      "rel": "sys",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys/sys.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys/sys_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/sys/internal/ffi",
+          "alias": "ffi",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys/internal/ffi"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/sys/sys.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys/internal/ffi",
+      "root": "moonbitlang/x",
+      "rel": "sys/internal/ffi",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys/internal/ffi/sys_js.mbt": {
+          "backend": [
+            "Js"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys/internal/ffi/sys_native.mbt": {
+          "backend": [
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/sys/internal/ffi/sys_wasm.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {},
+      "mbt-md-files": {},
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/x/internal/ffi",
+          "alias": "common_ffi",
+          "fspath": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/internal/ffi"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/sys/internal/ffi/ffi.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time",
+      "root": "moonbitlang/x",
+      "rel": "time",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/duration.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/errors.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/period.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/plain_date.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/plain_date_time.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/plain_time.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/util.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/weekday.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/zone.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/zone_offset.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/zoned_date_time.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/duration_wbtest.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/plain_date_time_wbtest.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/plain_date_wbtest.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/plain_time_wbtest.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/zone_wbtest.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/duration_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/period_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/plain_date_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/plain_date_time_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/plain_time_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/zone_offset_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/zone_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/zoned_date_time_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/time/README.mbt.md": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "deps": [
+        {
+          "path": "moonbitlang/core/int",
+          "alias": "int",
+          "fspath": "/home/vigoo/.moon/lib/core/int"
+        },
+        {
+          "path": "moonbitlang/core/int64",
+          "alias": "int64",
+          "fspath": "/home/vigoo/.moon/lib/core/int64"
+        },
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        },
+        {
+          "path": "moonbitlang/core/strconv",
+          "alias": "strconv",
+          "fspath": "/home/vigoo/.moon/lib/core/strconv"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/time/time.mi"
+    },
+    {
+      "is-main": false,
+      "is-third-party": true,
+      "root-path": "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/uuid",
+      "root": "moonbitlang/x",
+      "rel": "uuid",
+      "files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/uuid/ops.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/uuid/uuid.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        },
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/uuid/variant.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "wbtest-files": {},
+      "test-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/uuid/uuid_test.mbt": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "mbt-md-files": {
+        "/home/vigoo/projects/moonbit-golem/scripts/.mooncakes/moonbitlang/x/uuid/README.mbt.md": {
+          "backend": [
+            "Wasm",
+            "WasmGC",
+            "Js",
+            "Native",
+            "LLVM"
+          ],
+          "optlevel": [
+            "Release",
+            "Debug"
+          ]
+        }
+      },
+      "deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "wbtest-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "test-deps": [
+        {
+          "path": "moonbitlang/core/prelude",
+          "alias": "prelude",
+          "fspath": "/home/vigoo/.moon/lib/core/prelude"
+        }
+      ],
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/.ide/wasm-gc/release/check/.mooncakes/moonbitlang/x/uuid/uuid.mi"
+    }
+  ],
+  "deps": [
+    "moonbitlang/x"
+  ],
+  "backend": "wasm-gc",
+  "opt_level": "release",
+  "source": null
+}

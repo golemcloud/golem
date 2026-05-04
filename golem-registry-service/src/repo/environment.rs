@@ -20,6 +20,9 @@ pub use crate::repo::model::environment::{
     EnvironmentExtRecord, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
 };
 use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
+use crate::repo::registry_change::{
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -29,7 +32,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::{BindingsStack, RepoError, ResultExt};
 use indoc::{formatdoc, indoc};
-use sqlx::Database;
+use sqlx::{Database, Row};
 use std::fmt::Debug;
 use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
@@ -81,7 +84,7 @@ pub trait EnvironmentRepo: Send + Sync {
     async fn delete(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
+    ) -> Result<RequiresNotificationSignal<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn list_visible_to_account(
         &self,
@@ -191,7 +194,8 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn delete(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+    ) -> Result<RequiresNotificationSignal<EnvironmentExtRevisionRecord>, EnvironmentRepoError>
+    {
         let span = Self::span_env(revision.environment_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -747,7 +751,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn delete(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+    ) -> Result<RequiresNotificationSignal<EnvironmentExtRevisionRecord>, EnvironmentRepoError>
+    {
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
@@ -839,6 +844,33 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 .await?
                 .ok_or(EnvironmentRepoError::ConcurrentModification)?;
 
+                // Emit an EnvironmentDeleted invalidation event carrying the
+                // human-readable app_name and env_name so subscribers can perform
+                // targeted cache invalidation without a full flush.
+                let app_name_row = tx
+                    .fetch_optional(
+                        sqlx::query(indoc! { r#"
+                            SELECT name FROM applications
+                            WHERE application_id = $1
+                        "#})
+                        .bind(environment_record.application_id),
+                    )
+                    .await?;
+                let app_name: String = app_name_row
+                    .as_ref()
+                    .and_then(|row| row.try_get::<String, _>("name").ok())
+                    .unwrap_or_default();
+                let change_event = NewRegistryChangeEvent::environment_deleted(
+                    revision.environment_id,
+                    app_name,
+                    revision.name.clone(),
+                );
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                    tx,
+                    &change_event,
+                )
+                .await?;
+
                 Ok(EnvironmentExtRevisionRecord {
                     application_id: environment_record.application_id,
                     revision,
@@ -855,6 +887,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             .boxed()
         })
         .await
+        .map(RequiresSignalExt::requires_notification_signal)
     }
 
     async fn list_visible_to_account(

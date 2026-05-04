@@ -28,6 +28,8 @@ steps:
         - "golem-add-http-endpoint-ts"
       scala:
         - "golem-add-http-endpoint-scala"
+      moonbit:
+        - "golem-add-http-endpoint-moonbit"
     verify:
       build: true
 

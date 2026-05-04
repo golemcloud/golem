@@ -20,6 +20,7 @@ use syn::{Error, Expr, ExprArray, ExprLit, Lit, Token};
 
 pub struct AgentDefinitionAttributes {
     pub agent_mode: TokenStream,
+    pub agent_is_durable: bool,
     pub http_mount: Option<TokenStream>,
     pub snapshotting: TokenStream,
 }
@@ -30,6 +31,7 @@ pub fn parse_agent_definition_attributes(
     let mut mode = quote! {
         golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
     };
+    let mut agent_is_durable = true;
     let mut snapshotting = quote! {
         golem_rust::golem_agentic::golem::agent::common::Snapshotting::Disabled
     };
@@ -44,6 +46,7 @@ pub fn parse_agent_definition_attributes(
     if attrs.is_empty() {
         return Ok(AgentDefinitionAttributes {
             agent_mode: mode,
+            agent_is_durable,
             http_mount: None,
             snapshotting,
         });
@@ -56,10 +59,12 @@ pub fn parse_agent_definition_attributes(
         if let Expr::Path(p) = expr {
             if p.path.is_ident("ephemeral") {
                 mode = quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral };
+                agent_is_durable = false;
                 continue;
             } else if p.path.is_ident("durable") {
                 mode =
                     quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable };
+                agent_is_durable = true;
                 continue;
             }
         }
@@ -74,9 +79,11 @@ pub fn parse_agent_definition_attributes(
                 {
                     mode = match lit.value().as_str() {
                         "ephemeral" => {
+                            agent_is_durable = false;
                             quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral }
                         }
                         "durable" => {
+                            agent_is_durable = true;
                             quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable }
                         }
                         other => {
@@ -138,6 +145,7 @@ pub fn parse_agent_definition_attributes(
 
     Ok(AgentDefinitionAttributes {
         agent_mode: mode,
+        agent_is_durable,
         http_mount: http_tokens,
         snapshotting,
     })

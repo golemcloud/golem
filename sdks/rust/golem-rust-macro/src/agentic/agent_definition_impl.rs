@@ -40,6 +40,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
     let AgentDefinitionAttributes {
         agent_mode,
+        agent_is_durable,
         http_mount,
         snapshotting,
     } = match parse_agent_definition_attributes(attrs) {
@@ -62,6 +63,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
     match get_agent_type_with_remote_client(
         &agent_definition_trait,
         agent_mode,
+        agent_is_durable,
         http_mount,
         snapshotting,
         &type_parameters,
@@ -147,6 +149,7 @@ struct AgentTypeWithRemoteClient {
 fn get_agent_type_with_remote_client(
     agent_definition_trait: &ItemTrait,
     mode_value: proc_macro2::TokenStream,
+    agent_is_durable: bool,
     http_options: Option<proc_macro2::TokenStream>,
     snapshotting_value: proc_macro2::TokenStream,
     type_parameters: &[String],
@@ -506,6 +509,7 @@ fn get_agent_type_with_remote_client(
         &client_agent_config_param_defs,
         &client_agent_config_param_idents,
         type_parameters,
+        agent_is_durable,
     );
 
     let constructor_prompt_hint = if constructor_prompt.is_empty() {

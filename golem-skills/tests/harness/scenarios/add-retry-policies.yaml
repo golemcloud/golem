@@ -1,0 +1,231 @@
+name: "add-retry-policies"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-retry-agent"
+    prompt:
+      rust: >
+        In the test-app project, add a new durable agent type called `RetryAgent`
+        identified by a single constructor parameter for the instance name.
+
+        RetryAgent must use the Golem semantic retry policy system. In the
+        constructor, define a NamedPolicy called "http-transient" that uses
+        exponential backoff with a base delay of 200ms, factor 2.0, clamped
+        to [100ms, 5s], with 15% jitter, filtered to only apply when
+        status-code is one of [502, 503, 504], with max 5 retries and
+        priority 10. Apply it using `with_named_policy`.
+
+        Expose a method called `fetch_with_retry` that takes a `url` string
+        parameter and returns a record with two fields:
+        - `url` (string) — the URL that was fetched
+        - `status` (u16) — the HTTP status code received
+
+        Inside the `with_named_policy` block, make an HTTP GET request to the
+        given URL and return the status code. If the request fails, return
+        status 0.
+
+        Also expose a method called `list_retry_policies` that takes no
+        parameters and returns a list of records, each with two fields:
+        - `name` (string) — the policy name
+        - `priority` (u32) — the policy priority
+
+        This method must query the currently active retry policies from the
+        Golem host at runtime and map each entry's name and priority into the
+        output record. Do NOT hardcode any policy names — read them
+        dynamically using the SDK.
+
+        In `golem.yaml`, define retry policy defaults under
+        `retryPolicyDefaults` for the `local` environment:
+        - policy name: `catch-all`
+        - priority: 0
+        - predicate: true
+        - policy: countBox with maxRetries 3, inner exponential with
+          baseDelay "100ms" and factor 3.0
+
+        Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, add a new durable agent type called `RetryAgent`
+        identified by a single constructor parameter for the instance name.
+
+        RetryAgent must use the Golem semantic retry policy system. In the
+        constructor, define a NamedPolicy called "http-transient" that uses
+        exponential backoff with a base delay of 200ms, factor 2.0, clamped
+        to [100ms, 5s], with 15% jitter, filtered to only apply when
+        statusCode is one of [502, 503, 504], with max 5 retries and
+        priority 10. Apply it using `withRetryPolicy`.
+
+        Expose a method called `fetchWithRetry` that takes a `url` string
+        parameter and returns a record/object with two fields:
+        - `url` (string) — the URL that was fetched
+        - `status` (number) — the HTTP status code received
+
+        Inside the `withRetryPolicy` block, make an HTTP GET request (using
+        fetch) to the given URL and return the status code. If the request
+        fails, return status 0.
+
+        Also expose a method called `listRetryPolicies` that takes no
+        parameters and returns an array of objects, each with two fields:
+        - `name` (string) — the policy name
+        - `priority` (number) — the policy priority
+
+        This method must query the currently active retry policies from the
+        Golem host at runtime and map each entry's name and priority into the
+        output. Do NOT hardcode any policy names — read them dynamically
+        using the SDK.
+
+        In `golem.yaml`, define retry policy defaults under
+        `retryPolicyDefaults` for the `local` environment:
+        - policy name: `catch-all`
+        - priority: 0
+        - predicate: true
+        - policy: countBox with maxRetries 3, inner exponential with
+          baseDelay "100ms" and factor 3.0
+
+        Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, add a new durable agent type called `RetryAgent`
+        identified by a single constructor parameter for the instance name.
+
+        RetryAgent must use the Golem semantic retry policy system. In the
+        constructor, define a named policy called "http-transient" that uses
+        exponential backoff with a base delay of 200ms, factor 2.0, clamped
+        to [100ms, 5s], with 15% jitter, filtered to only apply when
+        statusCode is one of [502, 503, 504], with max 5 retries and
+        priority 10. Apply it using `withRetryPolicy`.
+
+        Expose a method called `fetchWithRetry` that takes a `url` string
+        parameter and returns a record/object with two fields:
+        - `url` (string) — the URL that was fetched
+        - `status` (int) — the HTTP status code received
+
+        Inside the `withRetryPolicy` block, make an HTTP GET request (using
+        fetch) to the given URL and return the status code. If the request
+        fails, return status 0.
+
+        Also expose a method called `listRetryPolicies` that takes no
+        parameters and returns a list of records, each with two fields:
+        - `name` (string) — the policy name
+        - `priority` (int) — the policy priority
+
+        This method must query the currently active retry policies from the
+        Golem host at runtime and map each entry's name and priority into the
+        output. Do NOT hardcode any policy names — read them dynamically
+        using the SDK.
+
+        In `golem.yaml`, define retry policy defaults under
+        `retryPolicyDefaults` for the `local` environment:
+        - policy name: `catch-all`
+        - priority: 0
+        - predicate: true
+        - policy: countBox with maxRetries 3, inner exponential with
+          baseDelay "100ms" and factor 3.0
+
+        Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, add a new durable agent type called `RetryAgent`
+        identified by a single constructor parameter for the instance name.
+
+        RetryAgent must use the Golem semantic retry policy system. In the
+        constructor, define a NamedPolicy called "http-transient" that uses
+        exponential backoff with a base delay of 200ms, factor 2.0, clamped
+        to [100ms, 5s], with 15% jitter, filtered to only apply when
+        status_code is one of [502, 503, 504], with max 5 retries and
+        priority 10. Apply it using `with_named_policy!`.
+
+        Expose a method called `fetch_with_retry` that takes a `url` string
+        parameter and returns a record with two fields:
+        - `url` (String) — the URL that was fetched
+        - `status` (UInt) — the HTTP status code received
+
+        Inside the `with_named_policy!` block, make an HTTP GET request to
+        the given URL and return the status code. If the request fails,
+        return status 0.
+
+        Also expose a method called `list_retry_policies` that takes no
+        parameters and returns an array of records, each with two fields:
+        - `name` (String) — the policy name
+        - `priority` (UInt) — the policy priority
+
+        This method must query the currently active retry policies from the
+        Golem host at runtime and map each entry's name and priority into the
+        output. Do NOT hardcode any policy names — read them dynamically
+        using the SDK.
+
+        In `golem.yaml`, define retry policy defaults under
+        `retryPolicyDefaults` for the `local` environment:
+        - policy name: `catch-all`
+        - priority: 0
+        - predicate: true
+        - policy: countBox with maxRetries 3, inner exponential with
+          baseDelay "100ms" and factor 3.0
+
+        Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-retry-policies-rust"
+      ts:
+        - "golem-retry-policies-ts"
+      scala:
+        - "golem-retry-policies-scala"
+      moonbit:
+        - "golem-retry-policies-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-golem-yaml-retry-policies"
+    shell:
+      command: "cat"
+      args: ["test-app/golem.yaml"]
+    expect:
+      stdout_matches: "[\\s\\S]*retryPolicyDefaults:[\\s\\S]*catch-all:[\\s\\S]*countBox:[\\s\\S]*exponential[\\s\\S]*"
+
+  - id: "verify-retry-api-in-source"
+    shell:
+      command: "rg"
+      args:
+        rust: ["-l", "get_retry_policies|with_named_policy|NamedPolicy::named|Policy::exponential", "test-app/", "-g", "*.rs"]
+        ts: ["-l", "getRetryPolicies|withRetryPolicy|NamedPolicy\\.named|Policy\\.exponential", "test-app/", "-g", "*.ts"]
+        scala: ["-l", "getRetryPolicies|withRetryPolicy|named\\(|Policy\\.exponential", "test-app/", "-g", "*.scala"]
+        moonbit: ["-l", "get_retry_policies|with_named_policy|NamedPolicy::named|Policy::exponential", "test-app/", "-g", "*.mbt"]
+    expect:
+      exit_code: 0
+
+  - id: "invoke-list-retry-policies"
+    invoke_json:
+      agent: 'RetryAgent("test")'
+      method:
+        rust: "list_retry_policies"
+        ts: "listRetryPolicies"
+        scala: "listRetryPolicies"
+        moonbit: "list_retry_policies"
+      args: ""
+    expect:
+      rust:
+        result_json:
+          - path: "$[?(@.name=='catch-all')].priority"
+            equals: 0
+          - path: "$[?(@.name=='http-transient')].priority"
+            equals: 10
+      ts:
+        result_json:
+          - path: "$[?(@.name=='catch-all')].priority"
+            equals: 0
+          - path: "$[?(@.name=='http-transient')].priority"
+            equals: 10
+      scala:
+        result_json:
+          - path: "$[?(@.name=='catch-all')].priority"
+            equals: 0
+          - path: "$[?(@.name=='http-transient')].priority"
+            equals: 10
+      moonbit:
+        result_json:
+          - path: "$[?(@.name=='catch-all')].priority"
+            equals: 0
+          - path: "$[?(@.name=='http-transient')].priority"
+            equals: 10

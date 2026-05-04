@@ -153,7 +153,7 @@ impl Default for RegistryServiceConfig {
             },
         );
         initial_accounts.insert(
-            "builtin-plugin-owner".to_string(),
+            "builtin_plugin_owner".to_string(),
             PrecreatedAccount {
                 id: AccountId(uuid!("adb2694f-cd9f-425d-905d-ca2888c9c5de")),
                 name: "Builtin Plugin Owner".to_string(),

@@ -15,7 +15,6 @@
 use crate::app::context::ApplicationContext;
 use crate::command::shared_args::PostDeployArgs;
 use crate::command_handler::Handlers;
-use crate::command_handler::repl::rust::RustRepl;
 use crate::command_handler::repl::typescript::TypeScriptRepl;
 use crate::config::{builtin_local_url, uses_default_builtin_local_url};
 use crate::context::Context;
@@ -34,7 +33,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-mod rust;
 mod typescript;
 
 #[derive(Clone)]
@@ -82,13 +80,13 @@ impl ReplHandler {
 
     async fn bridge_repl(
         &self,
-        language: Option<GuestLanguage>,
+        agent_language: Option<GuestLanguage>,
         script: Option<ReplScriptSource>,
         stream_logs: bool,
         disable_auto_imports: bool,
         post_deploy_args: Option<&PostDeployArgs>,
     ) -> anyhow::Result<()> {
-        let language = match language {
+        let agent_language = match agent_language {
             Some(language) => language,
             None => {
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -114,6 +112,12 @@ impl ReplHandler {
             }
         };
 
+        // Map agent language to REPL implementation language. Currently every agent
+        // language uses the TypeScript REPL implementation, but the dispatch is kept
+        // here so additional REPLs can be added in the future.
+        let repl_language: ReplLanguage = agent_language.try_into()?;
+        let repl_guest_language = repl_language.to_guest_language();
+
         let environment = self
             .ctx
             .environment_handler()
@@ -126,11 +130,11 @@ impl ReplHandler {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
 
-            let repl_root_dir = app_ctx.application().repl_root_dir(language);
+            let repl_root_dir = app_ctx.application().repl_root_dir(repl_guest_language);
             fs::create_dir_all(&repl_root_dir)?;
             let repl_root_dir = fs::absolute_lexical_path(&repl_root_dir)?;
 
-            let repl_bridge_sdk_target = app_ctx.new_repl_bridge_sdk_target(language);
+            let repl_bridge_sdk_target = app_ctx.new_repl_bridge_sdk_target(repl_guest_language);
             let repl_root_bridge_sdk_dir = repl_bridge_sdk_target
                 .output_dir
                 .clone()
@@ -138,9 +142,7 @@ impl ReplHandler {
             fs::create_dir_all(&repl_root_bridge_sdk_dir)?;
             let repl_root_bridge_sdk_dir = fs::absolute_lexical_path(&repl_root_bridge_sdk_dir)?;
 
-            let repl_history_file_path = app_ctx
-                .application()
-                .repl_history_file(language.try_into()?);
+            let repl_history_file_path = app_ctx.application().repl_history_file(repl_language);
             if !repl_history_file_path.exists() {
                 fs::write(&repl_history_file_path, "")?;
             }
@@ -148,11 +150,13 @@ impl ReplHandler {
 
             let repl_cli_commands_metadata_json_path = app_ctx
                 .application()
-                .repl_cli_commands_metadata_json(language);
+                .repl_cli_commands_metadata_json(repl_guest_language);
             let repl_cli_commands_metadata_json_path =
                 fs::absolute_lexical_path(&repl_cli_commands_metadata_json_path)?;
 
-            let repl_metadata_json_path = app_ctx.application().repl_metadata_json(language);
+            let repl_metadata_json_path = app_ctx
+                .application()
+                .repl_metadata_json(repl_guest_language);
             let repl_metadata_json_path = fs::absolute_lexical_path(&repl_metadata_json_path)?;
 
             let component_names = app_ctx.application().component_names().cloned().collect();
@@ -183,7 +187,7 @@ impl ReplHandler {
                         approve_staging_steps: false,
                         force_build: None,
                         post_deploy_args: post_deploy_args.clone(),
-                        repl_bridge_sdk_target: Some(language),
+                        repl_bridge_sdk_target: Some(repl_guest_language),
                         skip_build: false,
                     })
                     .await?;
@@ -212,7 +216,7 @@ impl ReplHandler {
                             component_name,
                             None,
                             post_deploy_args,
-                            Some(language),
+                            Some(repl_guest_language),
                             true,
                         )
                         .await?;
@@ -220,12 +224,8 @@ impl ReplHandler {
             }
         }
 
-        match language {
-            GuestLanguage::Rust => RustRepl::new(self.ctx.clone()).run(args).await,
-            GuestLanguage::TypeScript => TypeScriptRepl::new(self.ctx.clone()).run(args).await,
-            GuestLanguage::Scala => {
-                bail!("REPL is not yet supported for Scala")
-            }
+        match repl_language {
+            ReplLanguage::TypeScript => TypeScriptRepl::new(self.ctx.clone()).run(args).await,
         }
     }
 

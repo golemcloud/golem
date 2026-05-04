@@ -19,6 +19,8 @@ steps:
         - "golem-schedule-agent-ts"
       scala:
         - "golem-schedule-agent-scala"
+      moonbit:
+        - "golem-schedule-agent-moonbit"
 
   - id: "invoke-before-schedule"
     invoke_json:

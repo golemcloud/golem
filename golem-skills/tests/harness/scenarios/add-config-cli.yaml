@@ -36,6 +36,8 @@ steps:
         - "golem-add-config-ts"
       scala:
         - "golem-add-config-scala"
+      moonbit:
+        - "golem-add-config-moonbit"
     verify:
       build: true
       deploy: true
@@ -54,7 +56,7 @@ steps:
       name: 'GreeterAgent("g1")'
       config:
         greeting: "Howdy"
-        style.uppercase: "false"
+        style.uppercase: false
         style.suffix: "!"
 
   - id: "invoke-greet"
@@ -64,6 +66,7 @@ steps:
         rust: "greet"
         ts: "greet"
         scala: "greet"
+        moonbit: "greet"
       args: '"World"'
     expect:
       result_json:

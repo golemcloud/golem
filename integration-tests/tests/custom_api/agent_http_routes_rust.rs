@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::assert_json_content_type;
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
@@ -62,6 +63,7 @@ async fn string_path_var(agent: &HttpTestContext) -> anyhow::Result<()> {
         .send()
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
 
@@ -83,6 +85,7 @@ async fn multi_path_vars(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "joined": "foo:bar" }));
@@ -104,6 +107,7 @@ async fn remaining_path_variable(agent: &HttpTestContext) -> anyhow::Result<()> 
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(
@@ -143,6 +147,7 @@ async fn path_and_query(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(
@@ -171,6 +176,7 @@ async fn path_and_header(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(
@@ -202,6 +208,7 @@ async fn json_body(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "ok": true }));
@@ -266,6 +273,7 @@ async fn unrestricted_unstructured_binary_inline(agent: &HttpTestContext) -> any
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!(5));
@@ -289,6 +297,7 @@ async fn unrestricted_unstructured_binary_missing_body(
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!(0));
@@ -313,6 +322,7 @@ async fn unrestricted_unstructured_binary_json_content_type(
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!(13));
@@ -336,6 +346,7 @@ async fn restricted_unstructured_binary_inline(agent: &HttpTestContext) -> anyho
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!(5));
@@ -413,6 +424,7 @@ async fn response_json(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "value": "ok" }));
@@ -434,6 +446,7 @@ async fn response_optional_found(agent: &HttpTestContext) -> anyhow::Result<()> 
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "value": "yes" }));
@@ -474,6 +487,7 @@ async fn response_result_ok(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "value": "ok" }));
@@ -498,6 +512,7 @@ async fn response_result_err(agent: &HttpTestContext) -> anyhow::Result<()> {
         response.status(),
         reqwest::StatusCode::INTERNAL_SERVER_ERROR
     );
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "error": "boom" }));
@@ -522,6 +537,7 @@ async fn response_result_void_err(agent: &HttpTestContext) -> anyhow::Result<()>
         response.status(),
         reqwest::StatusCode::INTERNAL_SERVER_ERROR
     );
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "error": "fail" }));
@@ -543,6 +559,7 @@ async fn response_result_json_void(agent: &HttpTestContext) -> anyhow::Result<()
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "value": "ok" }));
@@ -671,6 +688,7 @@ async fn cors_preflight_wildcard(agent: &HttpTestContext) -> anyhow::Result<()> 
             agent.base_url.join("/cors-agents/test-agent/wildcard")?,
         )
         .header("Origin", "https://any-origin.com")
+        .header("Access-Control-Request-Method", "GET")
         .send()
         .await?;
 
@@ -684,7 +702,10 @@ async fn cors_preflight_wildcard(agent: &HttpTestContext) -> anyhow::Result<()> 
     assert_eq!(allow_origin, "https://any-origin.com");
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
-    assert_eq!(vary, "Origin");
+    assert_eq!(
+        vary,
+        "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+    );
 
     Ok(())
 }
@@ -701,6 +722,7 @@ async fn cors_preflight_specific_origin(agent: &HttpTestContext) -> anyhow::Resu
                 .join("/cors-agents/test-agent/preflight-required")?,
         )
         .header("Origin", "https://app.example.com")
+        .header("Access-Control-Request-Method", "POST")
         .send()
         .await?;
 
@@ -721,7 +743,10 @@ async fn cors_preflight_specific_origin(agent: &HttpTestContext) -> anyhow::Resu
     assert!(allow_methods.contains("POST"));
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
-    assert_eq!(vary, "Origin");
+    assert_eq!(
+        vary,
+        "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+    );
 
     Ok(())
 }
@@ -747,7 +772,6 @@ async fn cors_get_with_origin_header(agent: &HttpTestContext) -> anyhow::Result<
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
     assert_eq!(vary, "Origin");
-
     Ok(())
 }
 
@@ -794,7 +818,6 @@ async fn cors_get_wildcard_origin(agent: &HttpTestContext) -> anyhow::Result<()>
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
     assert_eq!(vary, "Origin");
-
     Ok(())
 }
 
@@ -876,6 +899,7 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "payload_length": 5 }));
@@ -898,14 +922,17 @@ async fn patch_resource_success(agent: &HttpTestContext) -> anyhow::Result<()> {
                 .join("/http-agents/test-agent/resource/item-123")?,
         )
         .json(&json!({
-            "name": "Updated Item",
-            "description": "Updated description",
-            "enabled": true
+            "update": {
+                "name": "Updated Item",
+                "description": "Updated description",
+                "enabled": true
+            }
         }))
         .send()
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(
@@ -934,6 +961,7 @@ async fn patch_partial_success(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(
@@ -947,248 +975,6 @@ async fn patch_partial_success(agent: &HttpTestContext) -> anyhow::Result<()> {
 
     Ok(())
 }
-
-// HEAD method tests
-
-#[test]
-#[tracing::instrument]
-async fn head_resource_exists(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .head(
-            agent
-                .base_url
-                .join("/http-agents/test-agent/resource/item-789")?,
-        )
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-
-    let body: serde_json::Value = response.json().await?;
-    assert_eq!(
-        body,
-        json!({
-            "id": "item-789",
-            "exists": true,
-            "content_length": 1024
-        })
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn head_resource_exists_no_body(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .head(
-            agent
-                .base_url
-                .join("/http-agents/test-agent/resource/item-999/exists")?,
-        )
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
-    assert!(response.bytes().await?.is_empty());
-
-    Ok(())
-}
-
-// OPTIONS method tests
-
-#[test]
-#[tracing::instrument]
-async fn options_resource_methods(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .request(
-            reqwest::Method::OPTIONS,
-            agent
-                .base_url
-                .join("/http-agents/test-agent/resource/resource-1")?,
-        )
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-
-    let body: serde_json::Value = response.json().await?;
-    assert_eq!(
-        body,
-        json!({
-            "allowed_methods": ["GET", "POST", "PATCH", "HEAD", "OPTIONS", "DELETE"],
-            "allowed_headers": ["Content-Type", "Authorization", "X-Request-ID"],
-            "max_age": 86400
-        })
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn options_api_info(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .request(
-            reqwest::Method::OPTIONS,
-            agent.base_url.join("/http-agents/test-agent/api")?,
-        )
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-
-    let body: serde_json::Value = response.json().await?;
-    assert_eq!(
-        body,
-        json!({
-            "version": "1.0.0",
-            "endpoints": [
-                "/resource/{id}",
-                "/api",
-                "/tunnel/{host}/{port}",
-                "/proxy/{target}",
-                "/trace/{path}"
-            ]
-        })
-    );
-
-    Ok(())
-}
-
-// CONNECT method tests
-
-#[test]
-#[tracing::instrument]
-async fn connect_tunnel_success(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .request(
-            reqwest::Method::from_bytes(b"CONNECT").unwrap(),
-            agent
-                .base_url
-                .join("/http-agents/test-agent/tunnel/example.com/8080")?,
-        )
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-
-    let body: serde_json::Value = response.json().await?;
-    assert_eq!(
-        body,
-        json!({
-            "host": "example.com",
-            "port": 8080,
-            "connected": true
-        })
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn connect_proxy_success(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .request(
-            reqwest::Method::from_bytes(b"CONNECT").unwrap(),
-            agent
-                .base_url
-                .join("/http-agents/test-agent/proxy/target-service")?,
-        )
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-
-    let body: serde_json::Value = response.json().await?;
-    assert_eq!(
-        body,
-        json!({
-            "target": "target-service",
-            "proxy_active": true
-        })
-    );
-
-    Ok(())
-}
-
-// TRACE method tests
-
-#[test]
-#[tracing::instrument]
-async fn trace_path_with_headers(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .request(
-            reqwest::Method::from_bytes(b"TRACE").unwrap(),
-            agent
-                .base_url
-                .join("/http-agents/test-agent/trace/api/v1/users")?,
-        )
-        .header("X-Trace-Request", "debug-request")
-        .header("X-Debug-Info", "test-debug")
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-
-    let body: serde_json::Value = response.json().await?;
-
-    // Check that the response contains expected fields
-    assert!(body.get("path").is_some());
-    assert!(body.get("received_headers").is_some());
-    assert!(body.get("timestamp").is_some());
-
-    // Verify path is correct
-    assert_eq!(body["path"], "/api/v1/users");
-
-    // Verify headers contain expected values
-    let headers = body["received_headers"].as_array().unwrap();
-    assert!(headers.len() >= 3); // Should have at least 3 headers
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn trace_root_path(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .request(
-            reqwest::Method::from_bytes(b"TRACE").unwrap(),
-            agent.base_url.join("/http-agents/test-agent/trace")?,
-        )
-        .header("X-Root-Trace", "root-check")
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-
-    let body: serde_json::Value = response.json().await?;
-
-    // Check that the response contains expected fields
-    assert!(body.get("path").is_some());
-    assert!(body.get("received_headers").is_some());
-    assert!(body.get("timestamp").is_some());
-
-    // Verify path is root
-    assert_eq!(body["path"], "/");
-
-    // Verify headers contain expected values
-    let headers = body["received_headers"].as_array().unwrap();
-    assert!(headers.len() >= 2); // Should have at least 2 headers
-
-    Ok(())
-}
-
-// Negative tests for new HTTP methods
 
 #[test]
 #[tracing::instrument]
@@ -1204,51 +990,5 @@ async fn patch_resource_missing_body(agent: &HttpTestContext) -> anyhow::Result<
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn head_resource_not_found(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .head(
-            agent
-                .base_url
-                .join("/http-agents/test-agent/resource/nonexistent")?,
-        )
-        .send()
-        .await?;
-
-    // HEAD requests should still return metadata even for non-existent resources in our test
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-
-    let body: serde_json::Value = response.json().await?;
-    assert_eq!(body["exists"], false);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn connect_invalid_target(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent
-        .client
-        .request(
-            reqwest::Method::from_bytes(b"CONNECT").unwrap(),
-            agent
-                .base_url
-                .join("/http-agents/test-agent/tunnel/invalid-host/99999")?,
-        )
-        .send()
-        .await?;
-
-    // Our test implementation accepts any host/port, so this should still succeed
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-
-    let body: serde_json::Value = response.json().await?;
-    assert_eq!(body["host"], "invalid-host");
-    assert_eq!(body["port"], 99999);
-    assert_eq!(body["connected"], true);
-
     Ok(())
 }

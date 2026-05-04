@@ -1553,18 +1553,6 @@ mod tests {
 
         #[endpoint(patch = "/patch")]
         fn patch_method(&self) -> String;
-
-        #[endpoint(head = "/head")]
-        fn head_method(&self) -> String;
-
-        #[endpoint(options = "/options")]
-        fn options_method(&self) -> String;
-
-        #[endpoint(connect = "/connect")]
-        fn connect_method(&self) -> String;
-
-        #[endpoint(trace = "/trace")]
-        fn trace_method(&self) -> String;
     }
 
     struct AllHttpMethodsAgentImpl;
@@ -1594,22 +1582,6 @@ mod tests {
         fn patch_method(&self) -> String {
             "PATCH".to_string()
         }
-
-        fn head_method(&self) -> String {
-            "HEAD".to_string()
-        }
-
-        fn options_method(&self) -> String {
-            "OPTIONS".to_string()
-        }
-
-        fn connect_method(&self) -> String {
-            "CONNECT".to_string()
-        }
-
-        fn trace_method(&self) -> String {
-            "TRACE".to_string()
-        }
     }
 
     #[test]
@@ -1629,10 +1601,6 @@ mod tests {
             ("put_method", "HttpMethod::Put"),
             ("delete_method", "HttpMethod::Delete"),
             ("patch_method", "HttpMethod::Patch"),
-            ("head_method", "HttpMethod::Head"),
-            ("options_method", "HttpMethod::Options"),
-            ("connect_method", "HttpMethod::Connect"),
-            ("trace_method", "HttpMethod::Trace"),
         ];
 
         for (method_name, expected_http_method) in expected_methods {

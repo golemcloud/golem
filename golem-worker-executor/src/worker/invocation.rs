@@ -21,7 +21,7 @@ use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::agent::{
     DataSchema, ElementSchema, NamedElementSchema, UntypedElementValue,
 };
-use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::oplog::RawSnapshotData;
 use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionReference};
@@ -38,6 +38,7 @@ pub enum InvocationMode {
     /// The invocation is being replayed from the oplog; no markers need to be written.
     Replay,
 }
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm::validate_value_matches_type;
 use golem_wasm::wasmtime::{DecodeParamResult, decode_param, encode_output};
 use golem_wasm::{FromValue, IntoValue, Value};
@@ -58,13 +59,12 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    component_metadata: &ComponentMetadata,
     mode: InvocationMode,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
 
-    let result = invoke_observed(lowered, &mut store, instance, component_metadata, mode).await;
+    let result = invoke_observed(lowered, &mut store, instance, mode).await;
 
     match &result {
         Err(_) => {
@@ -175,7 +175,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
-    component_metadata: &ComponentMetadata,
     mode: InvocationMode,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
@@ -206,15 +205,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     store.data_mut().set_running();
 
-    let metadata = component_metadata
-        .find_parsed_function(&parsed)
-        .map_err(WorkerExecutorError::runtime)?
-        .ok_or_else(|| {
-            WorkerExecutorError::invalid_request(format!(
-                "Could not find exported function: {parsed}"
-            ))
-        })?;
-
     let kind = lowered.kind;
     let call_result = match function {
         FindFunctionResult::ExportedFunction(function) => {
@@ -223,7 +213,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
                 function,
                 decoded_params,
                 &lowered.wit_fqfn,
-                &metadata,
                 kind,
             )
             .await
@@ -308,7 +297,6 @@ async fn invoke<Ctx: WorkerCtx>(
     function: Func,
     decoded_function_input: Vec<DecodeParamResult>,
     raw_function_name: &str,
-    metadata: &InvokableFunction,
     kind: AgentInvocationKind,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
@@ -340,10 +328,11 @@ async fn invoke<Ctx: WorkerCtx>(
                     "Function returned with more than one values, which is not supported",
                 ))
             } else {
+                let analysed_result_type = analysed_result_type_for_kind(kind);
                 let output = match results
                     .iter()
                     .zip(types.iter())
-                    .zip(metadata.analysed_export.result.as_ref().map(|r| &r.typ))
+                    .zip(analysed_result_type.as_ref())
                     .next()
                 {
                     Some(((val, typ), analysed_type)) => Some(
@@ -365,6 +354,35 @@ async fn invoke<Ctx: WorkerCtx>(
                 retry_from,
             ))
         }
+    }
+}
+
+/// Returns the static `AnalysedType` for the result of an invocation based on
+/// the `AgentInvocationKind`. This replaces the previous approach of looking up
+/// the analysed result type from persisted export metadata.
+///
+/// The return types correspond to the fixed WIT interfaces:
+/// - `AgentInitialization` → `result<_, agent-error>`
+/// - `AgentMethod` → `result<untyped data-value, agent-error>`
+/// - `SaveSnapshot` → `raw-snapshot-data` (record)
+/// - `LoadSnapshot` → `result<_, string>`
+/// - `ProcessOplogEntries` → `result<_, string>`
+/// - `ManualUpdate` → no return value
+fn analysed_result_type_for_kind(kind: AgentInvocationKind) -> Option<AnalysedType> {
+    use golem_wasm::analysis::analysed_type::{result, result_err, str};
+
+    match kind {
+        AgentInvocationKind::AgentInitialization => {
+            Some(result_err(AgentInvocationError::get_type()))
+        }
+        AgentInvocationKind::AgentMethod => Some(result(
+            UntypedDataValue::get_type(),
+            AgentInvocationError::get_type(),
+        )),
+        AgentInvocationKind::SaveSnapshot => Some(RawSnapshotData::get_type()),
+        AgentInvocationKind::LoadSnapshot => Some(result_err(str())),
+        AgentInvocationKind::ProcessOplogEntries => Some(result_err(str())),
+        AgentInvocationKind::ManualUpdate => None,
     }
 }
 
@@ -554,9 +572,8 @@ pub fn lower_invocation(
         AgentInvocation::AgentInitialization {
             input, principal, ..
         } => {
-            let initialize = component_metadata
-                .agent_initialize()
-                .map_err(WorkerExecutorError::runtime)?
+            let wit_fqfn = component_metadata
+                .agent_initialize_function_name()
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(
                         "agent initialize function not found in component".to_string(),
@@ -567,7 +584,7 @@ pub fn lower_invocation(
                 .unwrap_or_default();
             Ok(LoweredInvocation {
                 kind,
-                wit_fqfn: initialize.name.to_string(),
+                wit_fqfn,
                 display_name: "initialize".to_string(),
                 params: vec![
                     Value::String(agent_type_str),
@@ -605,9 +622,8 @@ pub fn lower_invocation(
                 }
             }
 
-            let invoke_fn = component_metadata
-                .agent_invoke()
-                .map_err(WorkerExecutorError::runtime)?
+            let wit_fqfn = component_metadata
+                .agent_invoke_function_name()
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(
                         "agent invoke function not found in component".to_string(),
@@ -615,7 +631,7 @@ pub fn lower_invocation(
                 })?;
             Ok(LoweredInvocation {
                 kind,
-                wit_fqfn: invoke_fn.name.to_string(),
+                wit_fqfn,
                 display_name: method_name.clone(),
                 params: vec![
                     Value::String(method_name),
@@ -628,9 +644,8 @@ pub fn lower_invocation(
             "ManualUpdate should not be invoked as a wasm function directly".to_string(),
         )),
         AgentInvocation::SaveSnapshot { .. } => {
-            let save_snapshot = component_metadata
-                .save_snapshot()
-                .map_err(WorkerExecutorError::runtime)?
+            let wit_fqfn = component_metadata
+                .save_snapshot_function_name()
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(
                         "save-snapshot function not found in component".to_string(),
@@ -638,15 +653,14 @@ pub fn lower_invocation(
                 })?;
             Ok(LoweredInvocation {
                 kind,
-                wit_fqfn: save_snapshot.name.to_string(),
+                wit_fqfn,
                 display_name: "save-snapshot".to_string(),
                 params: vec![],
             })
         }
         AgentInvocation::LoadSnapshot { snapshot, .. } => {
-            let load_snapshot = component_metadata
-                .load_snapshot()
-                .map_err(WorkerExecutorError::runtime)?
+            let wit_fqfn = component_metadata
+                .load_snapshot_function_name()
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(
                         "load-snapshot function not found in component".to_string(),
@@ -654,7 +668,7 @@ pub fn lower_invocation(
                 })?;
             Ok(LoweredInvocation {
                 kind,
-                wit_fqfn: load_snapshot.name.to_string(),
+                wit_fqfn,
                 display_name: "load-snapshot".to_string(),
                 params: vec![snapshot.into_value()],
             })
@@ -667,9 +681,8 @@ pub fn lower_invocation(
             entries,
             ..
         } => {
-            let oplog_processor = component_metadata
-                .oplog_processor()
-                .map_err(WorkerExecutorError::runtime)?
+            let wit_fqfn = component_metadata
+                .oplog_processor_function_name()
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(
                         "oplog-processor process function not found in component".to_string(),
@@ -696,7 +709,7 @@ pub fn lower_invocation(
 
             Ok(LoweredInvocation {
                 kind,
-                wit_fqfn: oplog_processor.name.to_string(),
+                wit_fqfn,
                 display_name: "process-oplog-entries".to_string(),
                 params: vec![
                     val_account_info,
@@ -928,5 +941,117 @@ fn validate_element_against_schema(
         _ => Err(WorkerExecutorError::invalid_request(format!(
             "Method '{method_name}', parameter {param_desc}: element type mismatch"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_wasm::IntoValue;
+    use golem_wasm::analysis::analysed_type::{result, result_err, str};
+    use test_r::test;
+
+    #[test]
+    fn analysed_result_type_matches_each_agent_invocation_kind() {
+        assert_eq!(
+            analysed_result_type_for_kind(AgentInvocationKind::AgentInitialization),
+            Some(result_err(AgentInvocationError::get_type()))
+        );
+        assert_eq!(
+            analysed_result_type_for_kind(AgentInvocationKind::AgentMethod),
+            Some(result(
+                UntypedDataValue::get_type(),
+                AgentInvocationError::get_type()
+            ))
+        );
+        assert_eq!(
+            analysed_result_type_for_kind(AgentInvocationKind::SaveSnapshot),
+            Some(RawSnapshotData::get_type())
+        );
+        assert_eq!(
+            analysed_result_type_for_kind(AgentInvocationKind::LoadSnapshot),
+            Some(result_err(str()))
+        );
+        assert_eq!(
+            analysed_result_type_for_kind(AgentInvocationKind::ProcessOplogEntries),
+            Some(result_err(str()))
+        );
+        assert_eq!(
+            analysed_result_type_for_kind(AgentInvocationKind::ManualUpdate),
+            None
+        );
+    }
+
+    #[test]
+    fn wrap_output_decodes_agent_method_result_using_data_value_shape() {
+        let result = wrap_output_as_agent_result(
+            AgentInvocationKind::AgentMethod,
+            Some(Value::Result(Ok(Some(Box::new(
+                UntypedDataValue::Tuple(vec![]).into_value(),
+            ))))),
+            42,
+        )
+        .unwrap();
+
+        match result {
+            InvokeResult::Succeeded {
+                consumed_fuel,
+                result: AgentInvocationResult::AgentMethod { output },
+            } => {
+                assert_eq!(consumed_fuel, 42);
+                assert_eq!(output, UntypedDataValue::Tuple(vec![]));
+            }
+            other => panic!("unexpected invoke result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wrap_output_decodes_load_snapshot_error_result() {
+        let result = wrap_output_as_agent_result(
+            AgentInvocationKind::LoadSnapshot,
+            Some(Err::<(), _>("failed to load snapshot".to_string()).into_value()),
+            7,
+        )
+        .unwrap();
+
+        match result {
+            InvokeResult::Succeeded {
+                consumed_fuel,
+                result: AgentInvocationResult::LoadSnapshot { error },
+            } => {
+                assert_eq!(consumed_fuel, 7);
+                assert_eq!(error, Some("failed to load snapshot".to_string()));
+            }
+            other => panic!("unexpected invoke result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wrap_output_decodes_save_snapshot_record() {
+        let snapshot = RawSnapshotData {
+            data: vec![1, 2, 3],
+            mime_type: "application/octet-stream".to_string(),
+        };
+
+        let result = wrap_output_as_agent_result(
+            AgentInvocationKind::SaveSnapshot,
+            Some(snapshot.clone().into_value()),
+            11,
+        )
+        .unwrap();
+
+        match result {
+            InvokeResult::Succeeded {
+                consumed_fuel,
+                result:
+                    AgentInvocationResult::SaveSnapshot {
+                        snapshot: actual_snapshot,
+                    },
+            } => {
+                assert_eq!(consumed_fuel, 11);
+                assert_eq!(actual_snapshot, snapshot);
+            }
+            other => panic!("unexpected invoke result: {other:?}"),
+        }
     }
 }

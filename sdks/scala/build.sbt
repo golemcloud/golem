@@ -289,7 +289,8 @@ lazy val integrationTests = project
 addCommandAlias(
   "golemTest3",
   s"""; ++$Scala3Golem
-     ; model/test
+     ; modelJVM/test
+     ; modelJS/test
      ; core/test
      ; macros/test
      ; testAgents/fastLinkJS
@@ -299,7 +300,8 @@ addCommandAlias(
 addCommandAlias(
   "golemTest2",
   s"""; ++$Scala213
-     ; model/test
+     ; modelJVM/test
+     ; modelJS/test
      ; core/test
      ; macros/test
      ; testAgents/fastLinkJS

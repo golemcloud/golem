@@ -76,7 +76,9 @@ pub async fn start_grpc_server(
             .add_service(
                 WorkerServiceServer::new(WorkerGrpcApi::new(services.worker_service.clone()))
                     .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip),
+                    .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(config.max_message_size)
+                    .max_encoding_message_size(config.max_message_size),
             )
             .serve_with_incoming(TcpListenerStream::new(listener))
             .map_err(anyhow::Error::from)

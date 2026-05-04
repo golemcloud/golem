@@ -122,7 +122,7 @@ use golem_service_base::model::{
 use golem_wasm::Uri;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use replay_state::ReplayEvent;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -321,14 +321,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }
 
-        let wasi_config = effective_config_vars(
-            worker_config.initial_wasi_config.clone(),
-            agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.wasi_config.clone())
-                .unwrap_or_default(),
-        );
-
         let agent_config = if agent_id.is_some() {
             effective_agent_config(
                 worker_config.initial_agent_config.clone(),
@@ -398,8 +390,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 TRwLock::new(files),
                 file_loader,
                 worker_config.created_by,
-                worker_config.initial_wasi_config,
-                wasi_config,
                 worker_config.initial_agent_config,
                 agent_config,
                 shard_service,
@@ -955,6 +945,42 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } = &entry
         {
+            // Oplog processor plugin logs are emitted into the server log because
+            // they cannot be easily watched with CLI tools.
+            if self.state.component_metadata.metadata.has_oplog_processor() {
+                let agent_id = &self.owned_agent_id;
+                match level {
+                    LogLevel::Stdout | LogLevel::Debug | LogLevel::Trace => {
+                        tracing::debug!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Stderr | LogLevel::Info => {
+                        tracing::info!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Warn => {
+                        tracing::warn!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Error | LogLevel::Critical => {
+                        tracing::error!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                }
+            }
+
             match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
                 LogEventEmitBehaviour::LiveOnly => {
                     // Stdout and stderr writes are persistent and overwritten by sending the data to the event
@@ -1524,6 +1550,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             }
                         };
 
+                        let invocation_context = InvocationContextStack::fresh();
+                        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+                        if let Err(err) = store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
+                            .set_current_invocation_context(invocation_context)
+                            .await
+                        {
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .on_worker_update_failed(
+                                    target_revision,
+                                    Some(format!(
+                                        "Manual update failed to install invocation context: {err}"
+                                    )),
+                                )
+                                .await;
+                            return Some(RetryDecision::Immediate);
+                        }
+
                         store
                             .as_context_mut()
                             .data_mut()
@@ -1533,7 +1581,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            &component_metadata,
                             InvocationMode::Replay,
                         )
                         .await;
@@ -1542,6 +1589,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .as_context_mut()
                             .data_mut()
                             .end_call_snapshotting_function();
+
+                        for span_id in local_span_ids {
+                            let _ = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .remove_span(&span_id);
+                        }
+                        for span_id in inherited_span_ids {
+                            let _ = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .remove_span(&span_id);
+                        }
 
                         let failed = match load_result {
                             Err(error) => {
@@ -1742,24 +1804,46 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         };
 
+        let invocation_context = InvocationContextStack::fresh();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+        if let Err(err) = store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_invocation_context(invocation_context)
+            .await
+        {
+            warn!("Snapshot recovery failed to install invocation context: {err}");
+            return SnapshotRecoveryResult::Failed;
+        }
+
         store
             .as_context_mut()
             .data_mut()
             .begin_call_snapshotting_function();
 
-        let load_result = invoke_observed_and_traced(
-            lowered,
-            store,
-            instance,
-            &component_metadata,
-            InvocationMode::Replay,
-        )
-        .await;
+        let load_result =
+            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
 
         store
             .as_context_mut()
             .data_mut()
             .end_call_snapshotting_function();
+
+        for span_id in local_span_ids {
+            let _ = store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .remove_span(&span_id);
+        }
+        for span_id in inherited_span_ids {
+            let _ = store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .remove_span(&span_id);
+        }
 
         let failed = match load_result {
             Err(error) => Some(format!(
@@ -1952,14 +2036,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
-
-        self.state.wasi_config = effective_config_vars(
-            self.state.initial_config_vars.clone(),
-            new_agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.wasi_config.clone())
-                .unwrap_or_default(),
-        );
 
         if let Some(agent_id) = self.parsed_agent_id() {
             let agent_type = new_metadata
@@ -2487,13 +2563,17 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
 
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if &self.state.current_span_id == span_id {
-            self.state.current_span_id = self
+            // Walk up to the parent if it still exists in the invocation context;
+            // otherwise fall back to the root.
+            let parent_id = self
                 .state
                 .invocation_context
                 .get(span_id)
-                .unwrap()
-                .parent()
-                .map(|p| p.span_id().clone())
+                .ok()
+                .and_then(|span| span.parent().map(|p| p.span_id().clone()));
+
+            self.state.current_span_id = parent_id
+                .filter(|id| self.state.invocation_context.get(id).is_ok())
                 .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
         }
         let _ = self
@@ -2701,7 +2781,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            &component_metadata,
                             InvocationMode::Replay,
                         )
                         .instrument(span)
@@ -2980,11 +3059,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             .on_shard_assignment_changed()
             .await?;
 
-        info!("Recovering workers");
-
+        let _current_assignment = this.shard_service().try_get_current_assignment();
         let workers = this.worker_service().get_running_workers_in_shards().await;
 
-        debug!("Recovering running workers: {:?}", workers);
+        debug!(workers = ?workers, "Recovering running workers");
 
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
@@ -2996,30 +3074,83 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             .await;
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
-            match latest_worker_status.status {
-                AgentStatus::Running
-                | AgentStatus::Idle
-                | AgentStatus::Retrying
-                | AgentStatus::Interrupted => {
-                    let _ = Worker::get_or_create_running(
-                        this,
-                        &owned_agent_id,
-                        None,
-                        None,
-                        Vec::new(),
-                        None,
-                        None,
-                        &InvocationContextStack::fresh(),
-                        Principal::anonymous(),
-                    )
-                    .await?;
-                }
-                _ => {}
+            if should_restart_after_shard_assignment_change(&latest_worker_status) {
+                let _ = Worker::get_or_create_running(
+                    this,
+                    &owned_agent_id,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    &InvocationContextStack::fresh(),
+                    Principal::anonymous(),
+                )
+                .await?;
             }
         }
 
-        info!("Finished recovering workers");
         Ok(())
+    }
+}
+
+fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
+    matches!(
+        status.status,
+        AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying | AgentStatus::Interrupted
+    ) || status.has_pending_work()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::AgentInvocation;
+    use golem_common::model::TimestampedAgentInvocation;
+    use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+    use test_r::test;
+
+    #[test]
+    fn shard_assignment_recovery_restarts_idle_workers_with_pending_invocations() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Idle,
+            ..AgentStatusRecord::default()
+        };
+        status.pending_invocations.push(TimestampedAgentInvocation {
+            timestamp: Timestamp::now_utc(),
+            invocation: AgentInvocation::ManualUpdate {
+                target_revision: ComponentRevision::INITIAL,
+            },
+        });
+
+        assert!(should_restart_after_shard_assignment_change(&status));
+    }
+
+    #[test]
+    fn shard_assignment_recovery_restarts_idle_workers_with_pending_updates() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Idle,
+            ..AgentStatusRecord::default()
+        };
+        status
+            .pending_updates
+            .push_back(TimestampedUpdateDescription {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::INITIAL,
+                description: UpdateDescription::Automatic {
+                    target_revision: ComponentRevision::INITIAL,
+                },
+            });
+
+        assert!(should_restart_after_shard_assignment_change(&status));
+    }
+
+    #[test]
+    fn shard_assignment_recovery_skips_suspended_workers_without_pending_work() {
+        let status = AgentStatusRecord {
+            status: AgentStatus::Suspended,
+            ..AgentStatusRecord::default()
+        };
+
+        assert!(!should_restart_after_shard_assignment_change(&status));
     }
 }
 
@@ -3567,11 +3698,6 @@ struct PrivateDurableWorkerState {
 
     shard_service: Arc<dyn ShardService>,
 
-    /// The initial config vars that the worker was configured with
-    initial_config_vars: BTreeMap<String, String>,
-    /// The current config vars of the worker, taking into account component version, etc.
-    wasi_config: BTreeMap<String, String>,
-
     // The initial local agent config that the worker was configured with
     initial_agent_config: Vec<TypedAgentConfigEntry>,
     /// The current local agent config of the worker, taking the component revision into account
@@ -3663,8 +3789,6 @@ impl PrivateDurableWorkerState {
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
-        initial_config_vars: BTreeMap<String, String>,
-        wasi_config: BTreeMap<String, String>,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
         shard_service: Arc<dyn ShardService>,
@@ -3740,8 +3864,6 @@ impl PrivateDurableWorkerState {
             files,
             file_loader,
             created_by,
-            initial_config_vars,
-            wasi_config,
             initial_agent_config,
             config,
             cached_agent_config_retry_policies: None,
@@ -4466,23 +4588,6 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
         _ => None,
     });
     HashSet::from_iter(ro_paths)
-}
-
-fn effective_config_vars(
-    worker_config_vars: BTreeMap<String, String>,
-    component_config_vars: BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut result = BTreeMap::new();
-
-    for (k, v) in component_config_vars {
-        result.insert(k, v);
-    }
-
-    for (k, v) in worker_config_vars {
-        result.insert(k, v);
-    }
-
-    result
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

@@ -14,7 +14,7 @@
 
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
-    InjectToPrebuiltQuickJsCommandMarkerHash, NpmInstallDepsMarkerHash,
+    InjectToPrebuiltQuickJsCommandMarkerHash, MoonInstallDepsMarkerHash, NpmInstallDepsMarkerHash,
     PreinitializeJsCommandMarkerHash, ResolvedExternalCommandMarkerHash, TaskResultMarker,
 };
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
@@ -434,6 +434,19 @@ pub async fn ensure_common_deps_for_tool(ctx: &BuildContext<'_>, tool: &str) -> 
                 })
                 .await
         }
+        "moon" => {
+            let moon_mod_json_path = ctx.application().app_root_dir().join("moon.mod.json");
+            if !moon_mod_json_path.exists() {
+                return Ok(());
+            }
+
+            let app_root_dir = ctx.application().app_root_dir().to_path_buf();
+            ctx.tools_with_ensured_common_deps()
+                .ensure_common_deps_for_tool_once("moon", || async {
+                    ensure_moon_dependencies(ctx, &app_root_dir).await
+                })
+                .await
+        }
         _ => Ok(()),
     }
 }
@@ -498,6 +511,63 @@ async fn run_npm_install(app_root_dir: &Path) -> anyhow::Result<()> {
         .args(["install"])
         .current_dir(app_root_dir)
         .stream_and_run("npm")
+        .await
+}
+
+async fn ensure_moon_dependencies(
+    ctx: &BuildContext<'_>,
+    app_root_dir: &Path,
+) -> anyhow::Result<()> {
+    let moon_mod_json_path = app_root_dir.join("moon.mod.json");
+    let mooncakes_path = app_root_dir.join(".mooncakes");
+
+    let moon_mod_json_hash = blake3::hash(&std::fs::read(&moon_mod_json_path)?)
+        .to_hex()
+        .to_string();
+
+    let marker = TaskResultMarker::new(
+        &ctx.application().task_result_marker_dir(),
+        MoonInstallDepsMarkerHash {
+            moon_mod_json_hash: &moon_mod_json_hash,
+        },
+    )?;
+
+    if marker.is_up_to_date() && std::fs::exists(&mooncakes_path)? {
+        return Ok(());
+    }
+
+    if std::fs::exists(&mooncakes_path)? {
+        log_warn_action(
+            "Detected",
+            format!(
+                "dependency changes, executing {}",
+                "moon install".log_color_highlight()
+            ),
+        );
+    } else {
+        log_warn_action(
+            "Detected",
+            format!(
+                "missing {}, executing {}",
+                ".mooncakes".log_color_highlight(),
+                "moon install".log_color_highlight()
+            ),
+        );
+    }
+
+    marker.result(run_moon_install(app_root_dir).await)
+}
+
+async fn run_moon_install(app_root_dir: &Path) -> anyhow::Result<()> {
+    Command::new(which("moon")?)
+        .args(["update"])
+        .current_dir(app_root_dir)
+        .stream_and_run("moon")
+        .await?;
+    Command::new(which("moon")?)
+        .args(["install"])
+        .current_dir(app_root_dir)
+        .stream_and_run("moon")
         .await
 }
 

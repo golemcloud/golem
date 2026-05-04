@@ -1,0 +1,1 @@
+wasi-cloud Blobstore service definition

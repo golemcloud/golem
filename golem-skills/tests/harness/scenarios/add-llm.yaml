@@ -1,0 +1,68 @@
+name: "add-llm"
+prerequisites:
+  services:
+    - openai-mock
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-llm-method"
+    prompt: >
+      In the test-app project, modify the existing CounterAgent to add a new method called
+      `ask_llm` (in Rust and MoonBit) or `askLlm` (in TypeScript and Scala).
+      The method takes a single string parameter called `question` and returns the LLM's
+      response as a plain string.
+
+      There is an OpenAI-compatible LLM server running at `{{openai_mock_url}}`. Use model
+      `mock-model` and API key `test-mock-key`. Send the question as a user message and return
+      the assistant's reply text.
+
+      Keep the existing increment method unchanged. Make sure the project builds and deploys
+      successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-llm-rust"
+      ts:
+        - "golem-add-llm-ts"
+      scala:
+        - "golem-add-llm-scala"
+      moonbit:
+        - "golem-add-llm-moonbit"
+    allowedExtraSkills:
+      rust:
+        - "golem-make-http-request-rust"
+        - "golem-add-secret-rust"
+        - "golem-add-rust-crate"
+      ts:
+        - "golem-make-http-request-ts"
+        - "golem-add-secret-ts"
+        - "golem-add-npm-package"
+      scala:
+        - "golem-make-http-request-scala"
+        - "golem-add-secret-scala"
+        - "golem-add-scala-dependency"
+      moonbit:
+        - "golem-make-http-request-moonbit"
+        - "golem-add-secret-moonbit"
+        - "golem-add-moonbit-package"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-llm-method"
+    invoke_json:
+      agent: 'CounterAgent("llm-test")'
+      method:
+        rust: "ask_llm"
+        ts: "askLlm"
+        scala: "askLlm"
+        moonbit: "ask_llm"
+      args: '"hello"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "mock-llm-ok"

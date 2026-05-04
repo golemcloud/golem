@@ -104,10 +104,16 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     for client in [&client_1, &client_2] {
         let grants = client
             .list_environment_environment_plugin_grants(&shared_env.id.0)
-            .await?;
+            .await?
+            .values
+            .into_iter()
+            .filter(|v| {
+                v.plugin_account.id != deps.registry_service().builtin_plugin_owner_account_id()
+            })
+            .collect::<Vec<_>>();
 
-        assert_eq!(grants.values.len(), 1);
-        let grant = &grants.values[0];
+        assert_eq!(grants.len(), 1);
+        let grant = &grants[0];
 
         assert_eq!(grant.id, plugin_grant.id);
         assert_eq!(grant.environment_id, shared_env.id);
@@ -148,8 +154,15 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     for client in [&client_1, &client_2] {
         let grants = client
             .list_environment_environment_plugin_grants(&shared_env.id.0)
-            .await?;
-        assert!(grants.values.is_empty());
+            .await?
+            .values
+            .into_iter()
+            .filter(|v| {
+                v.plugin_account.id != deps.registry_service().builtin_plugin_owner_account_id()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(grants.is_empty());
     }
 
     // both users cannot get the plugin grant by id anymore

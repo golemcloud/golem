@@ -135,7 +135,33 @@ Scans sources for `@agentImplementation` classes using scalameta's parser, then 
 - `sdks/scala/sbt/src/main/scala/golem/sbt/GolemPlugin.scala` — sbt wrapper (source generator + module initializer)
 - `sdks/scala/mill/src/golem/mill/GolemAutoRegister.scala` — Mill wrapper
 
-### 2. Scala 3 Macros (compile-time, not build-time)
+### 2. RPC Client Generation (shared codegen + sbt/Mill wrappers)
+
+Scans sources for `@agentDefinition` traits, extracts their method surfaces, and generates `XClient` companion objects with `XRemote` traits and per-method wrapper classes.
+
+**Generated per-method class provides five call modes:**
+- `apply(args...)` — async await via `asyncInvokeAndAwait` host function + pollable
+- `cancelable(args...)` — returns `(Future[Out], CancellationToken)` for cancellable async await
+- `trigger(args...)` — fire-and-forget via `invoke` host function
+- `scheduleAt(args..., when)` — scheduled invocation
+- `scheduleCancelableAt(args..., when)` — cancelable scheduled invocation
+
+**Runtime call chain:** Generated method → `AbstractRemoteMethod.awaitWith/cancelableAwaitWith/triggerWith/scheduleWith` → `ResolvedAgent.await/cancelableAwait/trigger/schedule` → `RpcInvoker.asyncInvokeAndAwait/cancelableAsyncInvokeAndAwait/invoke/...` → `WasmRpcApi.WasmRpcClient` → WIT `golem:agent/host@1.5.0` `wasm-rpc` resource
+
+**Key async detail:** The default `apply()` path uses `async-invoke-and-await` (not `invoke-and-await`), returning a `FutureInvokeResult` resource. The runtime polls via `subscribe()` → `pollable.promise()` → `get()`, yielding genuine async `Future`s that allow concurrent RPC calls. This matches the TypeScript SDK behavior.
+
+**Files:**
+- `sdks/scala/codegen/src/main/scala/golem/codegen/rpc/RpcCodegen.scala` — shared generation logic
+- `sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AbstractRemoteMethod.scala` — base class for generated wrappers
+- `sdks/scala/core/js/src/main/scala/golem/runtime/rpc/AgentClientRuntime.scala` — `ResolvedAgent` with async/cancelable dispatch
+- `sdks/scala/core/js/src/main/scala/golem/runtime/rpc/RemoteAgentClient.scala` — `WasmRpcInvoker` implementing pollable-based async
+- `sdks/scala/core/js/src/main/scala/golem/runtime/rpc/host/WasmRpcApi.scala` — Scala.js facades for `WasmRpc` and `FutureInvokeResult`
+- `sdks/scala/core/js/src/main/scala/golem/runtime/rpc/RpcInvoker.scala` — trait with sync, async, and cancelable invoke methods
+- `sdks/scala/core/js/src/main/scala/golem/runtime/rpc/CancellationToken.scala` — cancellation token (wraps `() => Unit`)
+- `sdks/scala/sbt/src/main/scala/golem/sbt/GolemPlugin.scala` — sbt wrapper
+- `sdks/scala/mill/src/golem/mill/GolemAutoRegister.scala` — Mill wrapper
+
+### 3. Scala 3 Macros (compile-time, not build-time)
 
 Macros generate code at compile time, not as a build step. They live in `sdks/scala/macros/` and use `scala.quoted.*`:
 

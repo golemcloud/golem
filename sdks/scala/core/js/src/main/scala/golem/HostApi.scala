@@ -49,6 +49,23 @@ object HostApi {
   def markEndOperation(begin: OplogIndex): Unit =
     AgentHostApi.markEndOperation(toJsBigInt(begin))
 
+  /**
+   * Unconditionally traps the current invocation with the given reason.
+   *
+   * This call never returns: it surfaces as an uncatchable wasm trap on the
+   * host side and the worker enters the standard trap-recovery flow. SDK
+   * guard helpers use this to guarantee that a failed atomic region always
+   * leads to a trap, regardless of whether the guest language could
+   * otherwise catch the failure.
+   */
+  def trap(reason: String): Nothing = {
+    AgentHostApi.trap(reason)
+    // The host call must not return; if Scala.js reaches this point the host
+    // implementation is broken. Throw a fatal error so the worker terminates
+    // even in that pathological case.
+    throw new Error(s"trap host call returned unexpectedly: $reason")
+  }
+
   def oplogCommit(replicas: Int): Unit =
     AgentHostApi.oplogCommit(replicas)
 
@@ -102,7 +119,7 @@ object HostApi {
     agentId: AgentIdLiteral,
     args: List[String],
     env: Map[String, String],
-    configVars: Map[String, String],
+    config: Map[String, String],
     status: AgentStatus,
     componentRevision: BigInt,
     retryCount: BigInt,
@@ -131,7 +148,7 @@ object HostApi {
   type AgentVersionFilter     = AgentHostApi.AgentVersionFilter
   type AgentCreatedAtFilter   = AgentHostApi.AgentCreatedAtFilter
   type AgentEnvFilter         = AgentHostApi.AgentEnvFilter
-  type AgentConfigVarsFilter  = AgentHostApi.AgentConfigVarsFilter
+  type AgentConfigFilter      = AgentHostApi.AgentConfigFilter
   type AgentAllFilter         = AgentHostApi.AgentAllFilter
   type AgentAnyFilter         = AgentHostApi.AgentAnyFilter
   sealed trait ForkResult {
@@ -291,9 +308,9 @@ object HostApi {
       AgentHostApi.AgentEnvFilter(name, comparator, value)
   }
 
-  object AgentConfigVarsFilter {
-    def apply(name: String, comparator: StringFilterComparator, value: String): AgentConfigVarsFilter =
-      AgentHostApi.AgentConfigVarsFilter(name, comparator, value)
+  object AgentConfigFilter {
+    def apply(name: String, comparator: StringFilterComparator, value: String): AgentConfigFilter =
+      AgentHostApi.AgentConfigFilter(name, comparator, value)
   }
 
   object AgentPropertyFilter {
@@ -307,8 +324,8 @@ object HostApi {
       AgentHostApi.AgentPropertyFilter.createdAt(filter)
     def env(filter: AgentEnvFilter): AgentPropertyFilter =
       AgentHostApi.AgentPropertyFilter.env(filter)
-    def wasiConfigVars(filter: AgentConfigVarsFilter): AgentPropertyFilter =
-      AgentHostApi.AgentPropertyFilter.wasiConfigVars(filter)
+    def config(filter: AgentConfigFilter): AgentPropertyFilter =
+      AgentHostApi.AgentPropertyFilter.config(filter)
   }
 
   object AgentAllFilter {
@@ -580,7 +597,7 @@ object HostApi {
     val rt         = m.asInstanceOf[JsAgentMetadataRuntime]
     val args       = if (m.args == null || js.isUndefined(m.args)) Nil else m.args.toList
     val env        = tuplesToMap(m.env)
-    val configVars = tuplesToMap(m.configVars)
+    val config = tuplesToMap(m.config)
     val compRev    =
       if (js.isUndefined(m.componentRevision.asInstanceOf[js.Any])) BigInt(0) else fromJsBigInt(m.componentRevision)
     val retry                      = if (js.isUndefined(m.retryCount.asInstanceOf[js.Any])) BigInt(0) else fromJsBigInt(m.retryCount)
@@ -592,7 +609,7 @@ object HostApi {
       agentId = m.agentId,
       args = args,
       env = env,
-      configVars = configVars,
+      config = config,
       status = m.status,
       componentRevision = compRev,
       retryCount = retry,

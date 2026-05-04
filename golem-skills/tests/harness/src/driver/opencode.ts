@@ -4,17 +4,20 @@ import {
   AgentResult,
   killProcessTree,
   ActivityMonitor,
+  CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
+  type UsageStats,
 } from "./base.js";
 import * as log from "../log.js";
 
-const STARTUP_STALL_TIMEOUT_SECONDS = 90;
+const STARTUP_STALL_TIMEOUT_SECONDS = 120;
 
 export class OpenCodeAgentDriver extends BaseAgentDriver {
   protected readonly driverName = "opencode";
   protected readonly skillDirs = [".agents/skills"];
   private lastSessionId: string | null = null;
   private activatedSkillNames: Set<string> = new Set();
+  private accumulatedUsage: UsageStats = {};
 
   private buildArgs(prompt: string, isFollowup: boolean): string[] {
     const args = ["run", "--format", "json", "--dangerously-skip-permissions"];
@@ -56,6 +59,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
     isFollowup: boolean,
     opts: DriverTimeoutOptions,
   ): Promise<AgentResult> {
+    this.accumulatedUsage = {};
     const prefix = this.logPrefix;
     const startTime = Date.now();
     const textParts: string[] = [];
@@ -76,6 +80,8 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       let stderrBytes = 0;
       let receivedFirstOutput = false;
       let startupStalled = false;
+      let creditInsufficient = false;
+      let encounteredError = false;
 
       const model = process.env.OPENCODE_MODEL;
       log.driver(
@@ -88,10 +94,17 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           `OPENCODE_MODEL=${model ? "present" : "absent"}`,
       );
 
-      const monitor = new ActivityMonitor(prefix, opts, (_kind) => {
+      // OpenCode in --format json mode writes nothing to stdout until the
+      // entire run completes. Its BubbleTea spinner may or may not produce
+      // stderr bytes depending on TTY detection. Disable idle timeout since
+      // it's unreliable here — the step timeout provides the safety net.
+      const monitor = new ActivityMonitor(prefix, { ...opts, idleTimeoutSeconds: 0 }, (_kind) => {
         killProcessTree(child);
       });
 
+      // Startup stall timer — fires if neither stdout nor stderr produces
+      // any output within the timeout. Uses a generous timeout since Gemini
+      // models can take a long time before the first response chunk.
       const startupTimer = setTimeout(() => {
         if (!receivedFirstOutput) {
           startupStalled = true;
@@ -118,7 +131,16 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
         for (const line of lines) {
-          this.processJsonLine(prefix, line, textParts);
+          const signal = this.processJsonLine(prefix, line, textParts);
+          if (signal === "credit") {
+            creditInsufficient = true;
+            log.driverFatal(prefix, "✗ credit balance too low — aborting run");
+            killProcessTree(child);
+            return;
+          }
+          if (signal === "error") {
+            encounteredError = true;
+          }
         }
       });
 
@@ -128,6 +150,11 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         stderrBytes += data.length;
         rawOutput += chunk;
         stderrBuf += chunk;
+
+        if (!receivedFirstOutput) {
+          receivedFirstOutput = true;
+          clearTimeout(startupTimer);
+        }
 
         const lines = stderrBuf.split("\n");
         stderrBuf = lines.pop()!;
@@ -139,11 +166,30 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       child.on("close", (exitCode) => {
         clearTimeout(startupTimer);
         monitor.finish();
-        if (stdoutBuf) this.processJsonLine(prefix, stdoutBuf, textParts);
+        if (stdoutBuf) {
+          const signal = this.processJsonLine(prefix, stdoutBuf, textParts);
+          if (signal === "credit") {
+            creditInsufficient = true;
+          } else if (signal === "error") {
+            encounteredError = true;
+          }
+        }
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
 
         const durationSeconds = (Date.now() - startTime) / 1000;
         const durationStr = `(${durationSeconds.toFixed(1)}s)`;
+
+        if (creditInsufficient) {
+          resolve({
+            success: false,
+            output: `Credit balance too low. ${rawOutput}`,
+            durationSeconds,
+            exitCode: exitCode,
+            creditInsufficient: true,
+            usage: { ...this.accumulatedUsage },
+          });
+          return;
+        }
 
         if (startupStalled) {
           log.driver(
@@ -157,6 +203,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
             exitCode: null,
             timedOut: true,
             timeoutKind: "idle",
+            usage: { ...this.accumulatedUsage },
           });
           return;
         }
@@ -170,11 +217,12 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
             exitCode: null,
             timedOut: true,
             timeoutKind: monitor.timeoutKind,
+            usage: { ...this.accumulatedUsage },
           });
           return;
         }
 
-        const success = exitCode === 0;
+        const success = exitCode === 0 && !encounteredError;
         const output = textParts.join("\n") || rawOutput;
 
         if (!success) {
@@ -190,7 +238,13 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           log.driverSuccess(prefix, durationStr);
         }
 
-        resolve({ success, output, durationSeconds, exitCode });
+        resolve({
+          success,
+          output,
+          durationSeconds,
+          exitCode,
+          usage: { ...this.accumulatedUsage },
+        });
       });
 
       child.on("error", (err) => {
@@ -203,6 +257,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           output: rawOutput + (err.message || "Unknown error"),
           durationSeconds,
           exitCode: null,
+          usage: { ...this.accumulatedUsage },
         });
       });
     });
@@ -210,18 +265,16 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
 
   /**
    * Parse a single JSONL line from opencode's `--format json` output and emit
-   * structured log output.
-   *
-   * Event types (per opencode docs):
-   *   step_start  — beginning of a processing step (contains sessionID)
-   *   tool_use    — tool invocation completed
-   *   text        — assistant text output
-   *   step_finish — end of step (contains token/cost stats)
-   *   error       — session error
+   * structured log output. Returns `"credit"` if a credit-insufficient error
+   * was detected, `"error"` for other error events, or `null` otherwise.
    */
-  private processJsonLine(prefix: string, line: string, textParts: string[]): void {
+  private processJsonLine(
+    prefix: string,
+    line: string,
+    textParts: string[],
+  ): "credit" | "error" | null {
     const trimmed = line.trim();
-    if (!trimmed) return;
+    if (!trimmed) return null;
 
     let event: Record<string, unknown>;
     try {
@@ -229,7 +282,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
     } catch {
       // Not JSON — log as plain text
       log.driver(prefix, trimmed);
-      return;
+      return null;
     }
 
     const sessionId = event.sessionID as string | undefined;
@@ -271,6 +324,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
             for (const l of text.split("\n")) {
               log.driver(prefix, l);
             }
+            if (CREDIT_INSUFFICIENT_PATTERN.test(text)) return "credit";
           }
         }
         break;
@@ -283,9 +337,15 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           if (tokens || cost !== undefined) {
             const input = (tokens?.input as number) ?? 0;
             const output = (tokens?.output as number) ?? 0;
+            this.accumulatedUsage.inputTokens = (this.accumulatedUsage.inputTokens ?? 0) + input;
+            this.accumulatedUsage.outputTokens = (this.accumulatedUsage.outputTokens ?? 0) + output;
+            if (cost !== undefined) {
+              this.accumulatedUsage.costUsd = (this.accumulatedUsage.costUsd ?? 0) + cost;
+            }
             const extra = `tokens=${input}+${output}` + (cost ? ` cost=$${cost.toFixed(4)}` : "");
             log.driver(prefix, extra);
           }
+          this.accumulatedUsage.numTurns = (this.accumulatedUsage.numTurns ?? 0) + 1;
         }
         break;
       }
@@ -295,7 +355,8 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         const errData = error?.data as Record<string, unknown> | undefined;
         const errMsg = (errData?.message as string) || (error?.name as string) || "unknown error";
         log.driverError(prefix, errMsg);
-        break;
+        if (CREDIT_INSUFFICIENT_PATTERN.test(errMsg)) return "credit";
+        return "error";
       }
 
       default: {
@@ -304,5 +365,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         break;
       }
     }
+
+    return null;
   }
 }

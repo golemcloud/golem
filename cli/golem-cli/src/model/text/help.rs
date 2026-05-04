@@ -26,9 +26,9 @@ use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
 use std::path::PathBuf;
 
-pub struct WorkerNameHelp;
+pub struct AgentNameHelp;
 
-impl MessageWithFields for WorkerNameHelp {
+impl MessageWithFields for AgentNameHelp {
     fn message(&self) -> String {
         "Accepted agent name formats:"
             .log_color_help_group()

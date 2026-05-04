@@ -67,6 +67,7 @@ WORKER_EXECUTOR_GRPC_PORT=9093
 WORKER_SERVICE_GRPC_PORT=9094
 
 WORKER_SERVICE_CUSTOM_REQUEST_HTTP_PORT=9005
+WORKER_SERVICE_MCP_HTTP_PORT=9006
 
 # start registry service
 pushd "${GOLEM_DIR}/golem-registry-service" || exit
@@ -113,8 +114,10 @@ pushd "${GOLEM_DIR}/golem-shard-manager" || exit
 RUST_LOG=info,h2=warn,hyper=warn,tower=warn \
 GOLEM__HTTP_PORT=${SHARD_MANAGER_HTTP_PORT} \
 GOLEM__GRPC__PORT=${SHARD_MANAGER_GRPC_PORT} \
-GOLEM__PERSISTENCE__TYPE="FileSystem" \
-GOLEM__PERSISTENCE__CONFIG__PATH="../local-run/data/shard-manager/data.bin" \
+GOLEM__DB__TYPE="Sqlite" \
+GOLEM__DB__CONFIG__DATABASE="../local-run/data/shard-manager/golem_shard_manager.sqlite" \
+GOLEM__REGISTRY_SERVICE__HOST="localhost" \
+GOLEM__REGISTRY_SERVICE__PORT=${REGISTRY_SERVICE_GRPC_PORT} \
 ../target/debug/golem-shard-manager &
 
 shard_manager_pid=$!
@@ -131,9 +134,10 @@ GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem" \
 GOLEM__BLOB_STORAGE__CONFIG__ROOT="${FS_BLOB_STORAGE_DIR}" \
 GOLEM__REGISTRY_SERVICE__HOST="localhost" \
 GOLEM__REGISTRY_SERVICE__PORT=${REGISTRY_SERVICE_GRPC_PORT} \
-GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT=${SHARD_MANAGER_GRPC_PORT} \
-GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS=10 \
-GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY=1s \
+GOLEM__SHARD_MANAGER__HOST="localhost" \
+GOLEM__SHARD_MANAGER__PORT=${SHARD_MANAGER_GRPC_PORT} \
+GOLEM__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS=10 \
+GOLEM__SHARD_MANAGER__RETRIES__MIN_DELAY=1s \
 ../target/debug/worker-executor &
 
 worker_executor_pid=$!
@@ -145,15 +149,18 @@ pushd "${GOLEM_DIR}/golem-worker-service" || exit
 RUST_LOG=debug,h2=warn,hyper=warn,tower=warn \
 GOLEM__PORT=${WORKER_SERVICE_HTTP_PORT} \
 GOLEM__CUSTOM_REQUEST_PORT=${WORKER_SERVICE_CUSTOM_REQUEST_HTTP_PORT} \
+GOLEM__MCP_PORT=${WORKER_SERVICE_MCP_HTTP_PORT} \
 GOLEM__GRPC__PORT=${WORKER_SERVICE_GRPC_PORT} \
-GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem" \
-GOLEM__BLOB_STORAGE__CONFIG__ROOT="${FS_BLOB_STORAGE_DIR}" \
-GOLEM__DB__TYPE="Sqlite" \
-GOLEM__DB__CONFIG__DATABASE="../local-run/data/golem_worker.sqlite" \
+GOLEM__GATEWAY_SESSION_STORAGE__TYPE="Sqlite" \
+GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PENDING_LOGIN_EXPIRATION="1h" \
+GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__CLEANUP_INTERVAL="5m" \
+GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__DATABASE="../local-run/data/golem_worker_service_session_store.sqlite" \
+GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__MAX_CONNECTIONS=10 \
+GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__FOREIGN_KEYS=false \
 GOLEM__REGISTRY_SERVICE__HOST="localhost" \
 GOLEM__REGISTRY_SERVICE__PORT=${REGISTRY_SERVICE_GRPC_PORT} \
-GOLEM__ROUTING_TABLE__HOST="localhost" \
-GOLEM__ROUTING_TABLE__PORT=${SHARD_MANAGER_GRPC_PORT} \
+GOLEM__SHARD_MANAGER__HOST="localhost" \
+GOLEM__SHARD_MANAGER__PORT=${SHARD_MANAGER_GRPC_PORT} \
 GOLEM__CORS_ORIGIN_REGEX="http://localhost:3000" \
 ../target/debug/golem-worker-service &
 
@@ -180,19 +187,28 @@ nginx -e /dev/stdout -p "${LOCAL_RUN_DIR}" -c "${LOCAL_RUN_DIR}/nginx.conf" &> "
 router_pid=$!
 
 echo "Started services"
-echo " - registry service: $registy_service_pid"
-echo " - worker executor: $worker_executor_pid"
-echo " - worker service: $worker_service_pid"
+echo " - registry service:              $registy_service_pid"
+echo " - worker executor:               $worker_executor_pid"
+echo " - worker service:                $worker_service_pid"
 echo " - component compilation service: $component_compilation_service_pid"
-echo " - shard manager: $shard_manager_pid"
+echo " - shard manager:                 $shard_manager_pid"
 echo " - debugging service:             $debugging_service_pid"
-echo " - router: $router_pid"
-echo " - redis: $redis_pid"
+echo " - router:                        $router_pid"
+echo " - redis:                         $redis_pid"
 echo ""
 echo "Kill all manually:"
 echo "kill -9 $registy_service_pid $worker_executor_pid $worker_service_pid $component_compilation_service_pid $shard_manager_pid $router_pid $redis_pid"
 
-lnav "${LOCAL_RUN_DIR}/logs"
+echo "Press 'q' to exit. Use 'lnav local-run/logs/' in another tab to follow logs"
+while true; do
+  read -r -n 1 input
+  if [[ "$input" == "q" ]]; then
+    echo
+    break
+  fi
+done
+
+echo "Stopping services"
 
 kill $registy_service_pid || true
 kill $worker_executor_pid || true

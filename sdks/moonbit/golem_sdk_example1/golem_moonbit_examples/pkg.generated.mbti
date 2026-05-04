@@ -1,0 +1,260 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk_example1/golem_moonbit_examples"
+
+import {
+  "golemcloud/golem_sdk/config",
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
+  "golemcloud/golem_sdk/rpc",
+  "moonbitlang/core/json",
+}
+
+// Values
+pub fn cabi_realloc(Int, Int, Int, Int) -> Int
+
+pub fn wasmExportDiscoverAgentTypes() -> Int
+
+pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
+
+pub fn wasmExportGetDefinition() -> Int
+
+pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
+
+pub fn wasmExportInitialize(Int) -> Int
+
+pub fn wasmExportInitializePostReturn(Int) -> Unit
+
+pub fn wasmExportInvoke(Int) -> Int
+
+pub fn wasmExportInvokePostReturn(Int) -> Unit
+
+pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
+
+pub fn wasmExportLoadPostReturn(Int) -> Unit
+
+pub fn wasmExportSave() -> Int
+
+pub fn wasmExportSavePostReturn(Int) -> Unit
+
+// Errors
+
+// Types and methods
+pub(all) struct AppConfig {
+  app_name : String
+  debug : Bool
+  api_key : @config.Secret[String]
+  db : DatabaseConfig
+}
+
+type AuditLog
+pub fn AuditLog::add_entry(Self, String, @common.Principal) -> Unit
+pub fn AuditLog::get_creator(Self) -> String
+pub fn AuditLog::get_entries(Self) -> Array[String]
+
+pub(all) struct AuditLogClient {
+  client : @rpc.AgentClient
+}
+pub fn AuditLogClient::add_entry(Self, String) -> Unit raise @common.AgentError
+pub fn AuditLogClient::drop(Self) -> Unit
+pub fn AuditLogClient::get(String) -> Self raise @common.AgentError
+pub fn AuditLogClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn AuditLogClient::get_creator(Self) -> String raise @common.AgentError
+pub fn AuditLogClient::get_entries(Self) -> Array[String] raise @common.AgentError
+pub fn AuditLogClient::get_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.Uuid) -> Self raise @common.AgentError
+pub fn AuditLogClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn AuditLogClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
+pub fn AuditLogClient::schedule_add_entry(Self, @wallClock.Datetime, String) -> Unit raise @common.AgentError
+pub fn AuditLogClient::schedule_get_creator(Self, @wallClock.Datetime) -> Unit
+pub fn AuditLogClient::schedule_get_entries(Self, @wallClock.Datetime) -> Unit
+pub fn[T] AuditLogClient::scoped(String, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] AuditLogClient::scoped_get_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] AuditLogClient::scoped_new_phantom(String, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn AuditLogClient::trigger_add_entry(Self, String) -> Unit raise @common.AgentError
+pub fn AuditLogClient::trigger_get_creator(Self) -> Unit
+pub fn AuditLogClient::trigger_get_entries(Self) -> Unit
+
+type ConfiguredAgent
+pub fn ConfiguredAgent::get_request_count(Self) -> UInt64
+pub fn ConfiguredAgent::handle_request(Self) -> Unit
+
+pub(all) struct ConfiguredAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn ConfiguredAgentClient::drop(Self) -> Unit
+pub fn ConfiguredAgentClient::get() -> Self raise @common.AgentError
+pub fn ConfiguredAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn ConfiguredAgentClient::get_phantom(@golemcloud/golem_sdk/interface/golem/core/types.Uuid) -> Self raise @common.AgentError
+pub fn ConfiguredAgentClient::get_request_count(Self) -> UInt64 raise @common.AgentError
+pub fn ConfiguredAgentClient::handle_request(Self) -> Unit
+pub fn ConfiguredAgentClient::new_phantom() -> Self raise @common.AgentError
+pub fn ConfiguredAgentClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
+pub fn ConfiguredAgentClient::schedule_get_request_count(Self, @wallClock.Datetime) -> Unit
+pub fn ConfiguredAgentClient::schedule_handle_request(Self, @wallClock.Datetime) -> Unit
+pub fn[T] ConfiguredAgentClient::scoped((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] ConfiguredAgentClient::scoped_get_phantom(@golemcloud/golem_sdk/interface/golem/core/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] ConfiguredAgentClient::scoped_new_phantom((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn ConfiguredAgentClient::trigger_get_request_count(Self) -> Unit
+pub fn ConfiguredAgentClient::trigger_handle_request(Self) -> Unit
+
+type Counter
+pub fn Counter::decrement(Self) -> Unit
+pub fn Counter::get_value(Self) -> UInt64
+pub fn Counter::increment(Self) -> Unit
+pub impl ToJson for Counter
+pub impl @json.FromJson for Counter
+
+pub(all) struct CounterClient {
+  client : @rpc.AgentClient
+}
+pub fn CounterClient::decrement(Self) -> Unit
+pub fn CounterClient::drop(Self) -> Unit
+pub fn CounterClient::get(String) -> Self raise @common.AgentError
+pub fn CounterClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn CounterClient::get_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.Uuid) -> Self raise @common.AgentError
+pub fn CounterClient::get_value(Self) -> UInt64 raise @common.AgentError
+pub fn CounterClient::increment(Self) -> Unit
+pub fn CounterClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn CounterClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
+pub fn CounterClient::schedule_decrement(Self, @wallClock.Datetime) -> Unit
+pub fn CounterClient::schedule_get_value(Self, @wallClock.Datetime) -> Unit
+pub fn CounterClient::schedule_increment(Self, @wallClock.Datetime) -> Unit
+pub fn[T] CounterClient::scoped(String, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] CounterClient::scoped_get_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] CounterClient::scoped_new_phantom(String, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn CounterClient::trigger_decrement(Self) -> Unit
+pub fn CounterClient::trigger_get_value(Self) -> Unit
+pub fn CounterClient::trigger_increment(Self) -> Unit
+
+pub(all) struct DatabaseConfig {
+  host : String
+  port : UInt
+  timeout : UInt64
+}
+
+pub(all) enum Priority {
+  Low
+  Medium
+  High
+}
+pub impl Eq for Priority
+pub impl ToJson for Priority
+pub impl @json.FromJson for Priority
+
+type RpcExampleAgent
+pub fn RpcExampleAgent::counter_rpc_example(Self) -> UInt64 raise @common.AgentError
+pub fn RpcExampleAgent::get_last_value(Self) -> UInt64
+pub fn RpcExampleAgent::task_rpc_example(Self) -> UInt64 raise @common.AgentError
+
+pub(all) struct RpcExampleAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn RpcExampleAgentClient::counter_rpc_example(Self) -> UInt64 raise @common.AgentError
+pub fn RpcExampleAgentClient::drop(Self) -> Unit
+pub fn RpcExampleAgentClient::get() -> Self raise @common.AgentError
+pub fn RpcExampleAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn RpcExampleAgentClient::get_last_value(Self) -> UInt64 raise @common.AgentError
+pub fn RpcExampleAgentClient::get_phantom(@golemcloud/golem_sdk/interface/golem/core/types.Uuid) -> Self raise @common.AgentError
+pub fn RpcExampleAgentClient::new_phantom() -> Self raise @common.AgentError
+pub fn RpcExampleAgentClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
+pub fn RpcExampleAgentClient::schedule_counter_rpc_example(Self, @wallClock.Datetime) -> Unit
+pub fn RpcExampleAgentClient::schedule_get_last_value(Self, @wallClock.Datetime) -> Unit
+pub fn RpcExampleAgentClient::schedule_task_rpc_example(Self, @wallClock.Datetime) -> Unit
+pub fn[T] RpcExampleAgentClient::scoped((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] RpcExampleAgentClient::scoped_get_phantom(@golemcloud/golem_sdk/interface/golem/core/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] RpcExampleAgentClient::scoped_new_phantom((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn RpcExampleAgentClient::task_rpc_example(Self) -> UInt64 raise @common.AgentError
+pub fn RpcExampleAgentClient::trigger_counter_rpc_example(Self) -> Unit
+pub fn RpcExampleAgentClient::trigger_get_last_value(Self) -> Unit
+pub fn RpcExampleAgentClient::trigger_task_rpc_example(Self) -> Unit
+
+pub(all) struct TaskInfo {
+  title : String
+  priority : Priority
+  description : String?
+}
+pub impl ToJson for TaskInfo
+pub impl @json.FromJson for TaskInfo
+
+type TaskManager
+pub fn TaskManager::add_task(Self, TaskInfo) -> UInt64
+pub fn TaskManager::get_by_priority(Self, Priority) -> Array[TaskInfo]
+pub fn TaskManager::get_tasks(Self) -> Array[TaskInfo]
+pub impl ToJson for TaskManager
+pub impl @json.FromJson for TaskManager
+
+pub(all) struct TaskManagerClient {
+  client : @rpc.AgentClient
+}
+pub fn TaskManagerClient::add_task(Self, TaskInfo) -> UInt64 raise @common.AgentError
+pub fn TaskManagerClient::drop(Self) -> Unit
+pub fn TaskManagerClient::get() -> Self raise @common.AgentError
+pub fn TaskManagerClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn TaskManagerClient::get_by_priority(Self, Priority) -> Array[TaskInfo] raise @common.AgentError
+pub fn TaskManagerClient::get_phantom(@golemcloud/golem_sdk/interface/golem/core/types.Uuid) -> Self raise @common.AgentError
+pub fn TaskManagerClient::get_tasks(Self) -> Array[TaskInfo] raise @common.AgentError
+pub fn TaskManagerClient::new_phantom() -> Self raise @common.AgentError
+pub fn TaskManagerClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
+pub fn TaskManagerClient::schedule_add_task(Self, @wallClock.Datetime, TaskInfo) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::schedule_get_by_priority(Self, @wallClock.Datetime, Priority) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::schedule_get_tasks(Self, @wallClock.Datetime) -> Unit
+pub fn[T] TaskManagerClient::scoped((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] TaskManagerClient::scoped_get_phantom(@golemcloud/golem_sdk/interface/golem/core/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] TaskManagerClient::scoped_new_phantom((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn TaskManagerClient::trigger_add_task(Self, TaskInfo) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::trigger_get_by_priority(Self, Priority) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::trigger_get_tasks(Self) -> Unit
+
+pub(all) enum TextOrImage {
+  Text(String)
+  Image(Bytes)
+}
+
+type VisionAgent
+pub fn VisionAgent::analyze(Self, @golemcloud/golem_sdk/agents/types.Multimodal[TextOrImage]) -> String
+
+pub(all) struct VisionAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn VisionAgentClient::analyze(Self, @golemcloud/golem_sdk/agents/types.Multimodal[TextOrImage]) -> String raise @common.AgentError
+pub fn VisionAgentClient::drop(Self) -> Unit
+pub fn VisionAgentClient::get() -> Self raise @common.AgentError
+pub fn VisionAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn VisionAgentClient::get_phantom(@golemcloud/golem_sdk/interface/golem/core/types.Uuid) -> Self raise @common.AgentError
+pub fn VisionAgentClient::new_phantom() -> Self raise @common.AgentError
+pub fn VisionAgentClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
+pub fn VisionAgentClient::schedule_analyze(Self, @wallClock.Datetime, @golemcloud/golem_sdk/agents/types.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
+pub fn[T] VisionAgentClient::scoped((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] VisionAgentClient::scoped_get_phantom(@golemcloud/golem_sdk/interface/golem/core/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] VisionAgentClient::scoped_new_phantom((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn VisionAgentClient::trigger_analyze(Self, @golemcloud/golem_sdk/agents/types.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
+
+pub(all) struct WeatherAgent {
+  city : String
+  mut last_temperature : Double
+}
+pub fn WeatherAgent::get_temperature(Self, String) -> Double
+pub fn WeatherAgent::set_temperature(Self, Double, String) -> String
+
+pub(all) struct WeatherAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn WeatherAgentClient::drop(Self) -> Unit
+pub fn WeatherAgentClient::get(String) -> Self raise @common.AgentError
+pub fn WeatherAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn WeatherAgentClient::get_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.Uuid) -> Self raise @common.AgentError
+pub fn WeatherAgentClient::get_temperature(Self, String) -> Double raise @common.AgentError
+pub fn WeatherAgentClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn WeatherAgentClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
+pub fn WeatherAgentClient::schedule_get_temperature(Self, @wallClock.Datetime, String) -> Unit raise @common.AgentError
+pub fn WeatherAgentClient::schedule_set_temperature(Self, @wallClock.Datetime, Double, String) -> Unit raise @common.AgentError
+pub fn[T] WeatherAgentClient::scoped(String, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] WeatherAgentClient::scoped_get_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] WeatherAgentClient::scoped_new_phantom(String, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn WeatherAgentClient::set_temperature(Self, Double, String) -> String raise @common.AgentError
+pub fn WeatherAgentClient::trigger_get_temperature(Self, String) -> Unit raise @common.AgentError
+pub fn WeatherAgentClient::trigger_set_temperature(Self, Double, String) -> Unit raise @common.AgentError
+
+// Type aliases
+
+// Traits
+

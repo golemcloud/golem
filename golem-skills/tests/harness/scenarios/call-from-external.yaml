@@ -1,0 +1,95 @@
+name: "call-from-external"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-counter-methods"
+    prompt: >
+      In the test-app project, modify the existing CounterAgent so that the `increment`
+      method returns the new count as an unsigned 64-bit integer after incrementing.
+      Keep the existing constructor parameter (the counter name).
+
+      Make sure the project builds and deploys successfully.
+    verify:
+      build: true
+      deploy: true
+
+  - id: "call-from-external"
+    prompt:
+      rust: >
+        I want to call my CounterAgent from an external Rust application that runs outside
+        of Golem — not from another agent, but from a regular standalone Rust program.
+
+        Set up everything needed in the project, then write a small standalone Rust CLI
+        application (outside the Golem component) that:
+        1. Connects to the local Golem server
+        2. Creates or gets a CounterAgent instance named "ext-test"
+        3. Calls `increment` three times, awaiting each result
+        4. Prints the result of the last increment to stdout
+
+        Build and run the application to verify it works.
+      ts: >
+        I want to call my CounterAgent from an external TypeScript application that runs
+        outside of Golem — not from another agent, but from a regular standalone TypeScript
+        program.
+
+        Set up everything needed in the project, then write a small standalone TypeScript
+        CLI application (outside the Golem component) that:
+        1. Connects to the local Golem server
+        2. Creates or gets a CounterAgent instance named "ext-test"
+        3. Calls `increment` three times, awaiting each result
+        4. Prints the result of the last increment to stdout
+
+        Build and run the application to verify it works.
+      scala: >
+        I want to call my CounterAgent from an external Scala application that runs outside
+        of Golem — not from another agent, but from a regular standalone Scala program.
+
+        Set up everything needed in the project, then write a small standalone Scala CLI
+        application (outside the Golem component) that:
+        1. Connects to the local Golem server
+        2. Creates or gets a CounterAgent instance named "ext-test"
+        3. Calls `increment` three times, awaiting each result
+        4. Prints the result of the last increment to stdout
+
+        Build and run the application to verify it works.
+      moonbit: >
+        I want to call my CounterAgent from an external MoonBit application that runs
+        outside of Golem — not from another agent, but from a regular standalone MoonBit
+        program.
+
+        Set up everything needed in the project, then write a small standalone MoonBit CLI
+        application (outside the Golem component) that:
+        1. Connects to the local Golem server
+        2. Creates or gets a CounterAgent instance named "ext-test"
+        3. Calls `increment` three times, awaiting each result
+        4. Prints the result of the last increment to stdout
+
+        Build and run the application to verify it works.
+    expectedSkills:
+      rust:
+        - "golem-call-from-external-rust"
+      ts:
+        - "golem-call-from-external-ts"
+      scala:
+        - "golem-call-from-external-scala"
+      moonbit:
+        - "golem-call-from-external-moonbit"
+    allowedExtraSkills:
+      - "golem-edit-manifest"
+      - "golem-build"
+      - "golem-deploy"
+    verify:
+      build: true
+
+  - id: "verify-counter-state"
+    invoke_json:
+      agent: 'CounterAgent("ext-test")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 4

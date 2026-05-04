@@ -173,7 +173,7 @@ async fn get_component_version_from_previous_deployment(
                 current_revision: component.revision,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
-                    AgentTypeName("CounterAgent".to_string()),
+                    AgentTypeName("Counter".to_string()),
                     AgentTypeProvisionConfigUpdate {
                         env: Some(BTreeMap::from_iter(vec![(
                             "ENV_VAR".to_string(),
@@ -260,7 +260,8 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             AgentTypeName("HttpAgent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
+        openapi_endpoint_prefix: HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
     };
 
     let http_api_deployment = client
@@ -430,7 +431,7 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
                 current_revision: component.revision,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
-                    AgentTypeName("CounterAgent".to_string()),
+                    AgentTypeName("Counter".to_string()),
                     AgentTypeProvisionConfigUpdate {
                         env: Some(BTreeMap::from_iter(vec![(
                             "ENV_VAR".to_string(),
@@ -502,7 +503,7 @@ async fn deploy_creates_missing_secret_from_default(
 
     let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
-    assert_eq!(secrets.values.len(), 3);
+    assert_eq!(secrets.values.len(), 4);
     let secret = secrets
         .values
         .iter()
@@ -564,7 +565,7 @@ async fn deploy_ignores_default_if_secret_already_exists(
 
     let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
-    assert_eq!(secrets.values.len(), 3);
+    assert_eq!(secrets.values.len(), 4);
     let secret = secrets
         .values
         .iter()
@@ -628,7 +629,7 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
 
     let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
-    assert_eq!(secrets.values.len(), 3);
+    assert_eq!(secrets.values.len(), 4);
     let secret = secrets
         .values
         .iter()

@@ -192,6 +192,30 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_ignore_unused_agent_secret_defaults(
+        &self,
+        paths: &[String],
+    ) -> anyhow::Result<bool> {
+        let rendered = paths
+            .iter()
+            .map(|path| format!(" - {}", path.log_color_warn()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        self.confirm(
+            true,
+            format!(
+                concat!(
+                    "The following secret default paths do not match any declared secret config path and will be ignored:\n\n",
+                    "{}\n\n",
+                    "Do you want to continue?"
+                ),
+                rendered
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_deleting_agents(&self, number_of_agents: usize) -> anyhow::Result<bool> {
         self.confirm(
             true,
@@ -208,13 +232,21 @@ impl InteractiveHandler {
         &self,
         component_name: &ComponentName,
         agent_name: &RawAgentId,
+        parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentId>,
+        source_language: &crate::agent_id_display::SourceLanguage,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
+        let rendered_agent_name = match parsed_agent_id {
+            Some(parsed) if source_language.is_known() => {
+                crate::agent_id_display::render_agent_id(parsed, source_language)
+            }
+            _ => agent_name.0.clone(),
+        };
         self.confirm(
             true,
             format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
-                    agent_name.0.log_color_highlight(),
+                    rendered_agent_name.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()
             ),
             None,

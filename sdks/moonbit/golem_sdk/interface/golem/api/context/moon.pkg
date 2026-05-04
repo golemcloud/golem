@@ -1,0 +1,5 @@
+import {
+  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
+}
+
+warnings = "-44"

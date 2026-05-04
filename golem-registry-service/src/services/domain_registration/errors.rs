@@ -32,6 +32,14 @@ pub enum DomainRegistrationError {
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Domain is already registered: {0}")]
     DomainAlreadyExists(Domain),
+    #[error(
+        "Domain {0} cannot be used for an HTTP API deployment: it belongs to the MCP domain namespace"
+    )]
+    DomainNotValidForHttpApi(Domain),
+    #[error(
+        "Domain {0} cannot be used for an MCP deployment: it belongs to the HTTP API domain namespace"
+    )]
+    DomainNotValidForMcp(Domain),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -46,6 +54,8 @@ impl SafeDisplay for DomainRegistrationError {
             Self::DomainRegistrationByDomainNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::DomainAlreadyExists(_) => self.to_string(),
+            Self::DomainNotValidForHttpApi(_) => self.to_string(),
+            Self::DomainNotValidForMcp(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }

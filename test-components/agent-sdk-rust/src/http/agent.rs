@@ -1,5 +1,5 @@
 use super::model::*;
-use golem_rust::{agent_definition, agent_implementation, endpoint, AllowedMimeTypes};
+use golem_rust::{agent_definition, agent_implementation, description, endpoint, AllowedMimeTypes};
 use golem_rust::agentic::{create_webhook, UnstructuredBinary};
 use serde::Deserialize;
 use serde::Serialize;
@@ -10,9 +10,11 @@ pub trait HttpAgent {
     fn new(agent_name: String) -> Self;
 
     #[endpoint(get = "/string-path-var/{path_var}")]
+    #[description("Returns the provided path variable as a response")]
     fn string_path_var(&self, path_var: String) -> StringPathVarResponse;
 
     #[endpoint(get = "/multi-path-vars/{first}/{second}")]
+    #[description("Combines two path variables with a colon separator")]
     fn multi_path_vars(
         &self,
         first: String,
@@ -20,9 +22,11 @@ pub trait HttpAgent {
     ) -> MultiPathVarsResponse;
 
     #[endpoint(get = "/rest/{*tail}")]
+    #[description("Returns the remaining path after the /rest prefix")]
     fn remaining_path(&self, tail: String) -> RemainingPathResponse;
 
     #[endpoint(get = "/path-and-query/{item_id}?limit={limit}")]
+    #[description("Combines a path variable with a query parameter in the response")]
     fn path_and_query(
         &self,
         item_id: String,
@@ -33,6 +37,7 @@ pub trait HttpAgent {
         get = "/path-and-header/{resource_id}",
         headers("x-request-id" = "request_id")
     )]
+    #[description("Combines a path variable with a header value in the response")]
     fn path_and_header(
         &self,
         resource_id: String,
@@ -40,6 +45,7 @@ pub trait HttpAgent {
     ) -> PathAndHeaderResponse;
 
     #[endpoint(post = "/json-body/{id}")]
+    #[description("Accepts JSON body parameters and returns a success response")]
     fn json_body(
         &self,
         id: String,
@@ -48,6 +54,7 @@ pub trait HttpAgent {
     ) -> JsonBodyResponse;
 
     #[endpoint(post = "/unrestricted-unstructured-binary/{bucket}")]
+    #[description("Accepts unrestricted binary data and returns the payload size")]
     fn unrestricted_unstructured_binary(
         &self,
         bucket: String,
@@ -55,6 +62,7 @@ pub trait HttpAgent {
     ) -> i64;
 
     #[endpoint(post = "/restricted-unstructured-binary/{bucket}")]
+    #[description("Accepts restricted binary data (image/gif only) and returns the payload size")]
     fn restricted_unstructured_binary(
         &self,
         bucket: String,
@@ -62,64 +70,45 @@ pub trait HttpAgent {
     ) -> i64;
 
     #[endpoint(get = "/resp/no-content")]
+    #[description("Returns a 204 No Content response")]
     fn no_content(&self);
 
     // https://github.com/golemcloud/golem/issues/2725
     #[endpoint(get = "/resp/json")]
+    #[description("Returns a JSON response with a value field")]
     fn json_response_func(&self) -> JsonResponse;
 
     #[endpoint(get = "/resp/optional/{found}")]
+    #[description("Returns an optional response based on the found parameter")]
     fn optional_response_func(&self, found: bool) -> Option<OptionalResponse>;
 
     #[endpoint(get = "/resp/result-json-json/{ok}")]
+    #[description("Returns either a success or error result based on the ok parameter")]
     fn result_ok_or_err(
         &self,
         ok: bool,
     ) -> Result<ResultOkResponse, ResultErrResponse>;
 
     #[endpoint(post = "/resp/result-void-json")]
+    #[description("Returns either unit success or a JSON error result")]
     fn result_void_err(&self) -> Result<(), ResultErrResponse>;
 
     #[endpoint(get = "/resp/result-json-void")]
+    #[description("Returns either a JSON success result or unit error")]
     fn result_json_void(&self) -> Result<ResultOkResponse, ()>;
 
     #[endpoint(get = "/resp/binary")]
+    #[description("Returns binary data as an unstructured binary response")]
     fn binary_response(&self) -> UnstructuredBinary<String>;
 
     // PATCH method endpoints
     #[endpoint(patch = "/resource/{id}")]
+    #[description("Updates a resource using PATCH method with provided update data")]
     fn patch_resource(&self, id: String, update: ResourceUpdate) -> ResourceResponse;
 
     #[endpoint(patch = "/resource/{id}/partial")]
+    #[description("Performs a partial update on a resource using PATCH method")]
     fn patch_partial(&self, id: String) -> ResourceResponse;
-
-    // HEAD method endpoints
-    #[endpoint(head = "/resource/{id}")]
-    fn head_resource(&self, id: String) -> ResourceMetadata;
-
-    #[endpoint(head = "/resource/{id}/exists")]
-    fn head_exists(&self, id: String);
-
-    // OPTIONS method endpoints
-    #[endpoint(options = "/resource/{id}")]
-    fn options_resource(&self, id: String) -> OptionsResponse;
-
-    #[endpoint(options = "/api")]
-    fn options_api(&self) -> ApiOptionsResponse;
-
-    // CONNECT method endpoints
-    #[endpoint(connect = "/tunnel/{host}/{port}")]
-    fn connect_tunnel(&self, host: String, port: u16) -> TunnelResponse;
-
-    #[endpoint(connect = "/proxy/{target}")]
-    fn connect_proxy(&self, target: String) -> ProxyResponse;
-
-    // TRACE method endpoints
-    #[endpoint(trace = "/trace/{path}")]
-    fn trace_path(&self, path: String) -> TraceResponse;
-
-    #[endpoint(trace = "/trace")]
-    fn trace_root(&self) -> TraceResponse;
 }
 
 #[derive(AllowedMimeTypes, Clone, Debug)]
@@ -265,7 +254,7 @@ impl HttpAgent for HttpAgentImpl {
     }
 
     // PATCH method implementations
-    fn patch_resource(&self, id: String, _update: ResourceUpdate) -> ResourceResponse {
+    fn patch_resource(&self, id: String, update: ResourceUpdate) -> ResourceResponse {
         ResourceResponse {
             id: id.clone(),
             updated: true,
@@ -278,104 +267,6 @@ impl HttpAgent for HttpAgentImpl {
             id: id.clone(),
             updated: true,
             method: "PATCH".to_string(),
-        }
-    }
-
-    // HEAD method implementations
-    fn head_resource(&self, id: String) -> ResourceMetadata {
-        ResourceMetadata {
-            id: id.clone(),
-            exists: true,
-            content_length: Some(1024),
-        }
-    }
-
-    fn head_exists(&self, _id: String) {
-        // HEAD method with no response body (204)
-    }
-
-    // OPTIONS method implementations
-    fn options_resource(&self, _id: String) -> OptionsResponse {
-        OptionsResponse {
-            allowed_methods: vec![
-                "GET".to_string(),
-                "POST".to_string(),
-                "PATCH".to_string(),
-                "HEAD".to_string(),
-                "OPTIONS".to_string(),
-                "DELETE".to_string(),
-            ],
-            allowed_headers: vec![
-                "Content-Type".to_string(),
-                "Authorization".to_string(),
-                "X-Request-ID".to_string(),
-            ],
-            max_age: 86400,
-        }
-    }
-
-    fn options_api(&self) -> ApiOptionsResponse {
-        ApiOptionsResponse {
-            version: "1.0.0".to_string(),
-            endpoints: vec![
-                "/resource/{id}".to_string(),
-                "/api".to_string(),
-                "/tunnel/{host}/{port}".to_string(),
-                "/proxy/{target}".to_string(),
-                "/trace/{path}".to_string(),
-            ],
-        }
-    }
-
-    // CONNECT method implementations
-    fn connect_tunnel(&self, host: String, port: u16) -> TunnelResponse {
-        TunnelResponse {
-            host: host.clone(),
-            port,
-            connected: true,
-        }
-    }
-
-    fn connect_proxy(&self, target: String) -> ProxyResponse {
-        ProxyResponse {
-            target: target.clone(),
-            proxy_active: true,
-        }
-    }
-
-    // TRACE method implementations
-    fn trace_path(&self, path: String) -> TraceResponse {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        TraceResponse {
-            path: path.clone(),
-            received_headers: vec![
-                "X-Trace-Request".to_string(),
-                "X-Debug-Info".to_string(),
-                "User-Agent: TestClient".to_string(),
-            ],
-            timestamp,
-        }
-    }
-
-    fn trace_root(&self) -> TraceResponse {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        TraceResponse {
-            path: "/".to_string(),
-            received_headers: vec![
-                "X-Root-Trace".to_string(),
-                "X-System-Check".to_string(),
-            ],
-            timestamp,
         }
     }
 }

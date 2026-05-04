@@ -1,0 +1,7 @@
+interface:
+  display_name: "MoonBit Proof Code"
+  short_description: "Write proof-carrying MoonBit code"
+  default_prompt: "Use $moonbit-proof to implement or refactor verified MoonBit code with clear abstractions, invariants, and proof assertions."
+
+policy:
+  allow_implicit_invocation: true

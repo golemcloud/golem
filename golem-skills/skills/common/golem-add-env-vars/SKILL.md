@@ -177,6 +177,12 @@ agents:
 
 If a referenced host variable is missing, deployment fails with a clear error listing the missing variables. The substitution engine uses strict mode — all referenced variables must be defined.
 
+The same `{{ VAR }}` syntax also works in:
+
+- Plugin parameter values (under `plugins.*.parameters`) — see the `golem-manage-plugins` skill.
+- Custom server `auth.staticToken` (under `environments.*.server.auth.staticToken`) — see the `golem-profiles-and-environments` skill.
+- `secretDefaults` values.
+
 ## Reading Environment Variables in Agent Code
 
 **Rust and TypeScript** agents use the standard APIs to read environment variables (`std::env::var` in Rust, `process.env` in TypeScript).

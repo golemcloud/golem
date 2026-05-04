@@ -243,6 +243,9 @@ object RpcCodegen {
     sb.append(s"    def apply($paramDecls): _root_.scala.concurrent.Future[$outputType] =\n")
     sb.append(s"      awaitWith($packExpr)\n\n")
 
+    sb.append(s"    def cancelable($paramDecls): (_root_.scala.concurrent.Future[$outputType], _root_.golem.runtime.rpc.CancellationToken) =\n")
+    sb.append(s"      cancelableAwaitWith($packExpr)\n\n")
+
     sb.append(s"    def trigger($paramDecls): _root_.scala.concurrent.Future[_root_.scala.Unit] =\n")
     sb.append(s"      triggerWith($packExpr)\n\n")
 
@@ -251,6 +254,10 @@ object RpcCodegen {
       else s"$paramDecls, when: _root_.golem.Datetime"
     sb.append(s"    def scheduleAt($scheduleParamDecls): _root_.scala.concurrent.Future[_root_.scala.Unit] =\n")
     sb.append(s"      scheduleWith($packExpr, when)\n\n")
+
+    val scheduleCancelableParamDecls = scheduleParamDecls
+    sb.append(s"    def scheduleCancelableAt($scheduleCancelableParamDecls): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.CancellationToken] =\n")
+    sb.append(s"      scheduleCancelableWith($packExpr, when)\n\n")
 
     sb.append(s"  }\n\n")
   }

@@ -32,8 +32,8 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWi
 use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
-    AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
-    ComponentRevision, ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
+    AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentRevision,
+    ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
     PluginInstallationAction,
 };
 use golem_common::model::component::{
@@ -197,7 +197,6 @@ impl ComponentWriteService {
                 agent_type_name.clone(),
                 AgentTypeProvisionConfig {
                     env: creation.env.clone(),
-                    wasi_config: creation.wasi_config.clone(),
                     config,
                     plugins,
                     files,
@@ -206,7 +205,6 @@ impl ComponentWriteService {
         }
 
         let component_metadata = analyze_and_validate_component_wasm(
-            &component_creation.component_name,
             component_creation.agent_types,
             wasm.clone(),
             provision_configs,
@@ -337,7 +335,6 @@ impl ComponentWriteService {
             let existing_provision_configs =
                 component.metadata.agent_type_provision_configs().clone();
             component.metadata = analyze_and_validate_component_wasm(
-                &component.component_name,
                 agent_types,
                 new_wasm.clone(),
                 existing_provision_configs,
@@ -353,7 +350,6 @@ impl ComponentWriteService {
             let existing_provision_configs =
                 component.metadata.agent_type_provision_configs().clone();
             component.metadata = analyze_and_validate_component_wasm(
-                &component.component_name,
                 agent_types,
                 Arc::from(old_data),
                 existing_provision_configs,
@@ -712,9 +708,6 @@ impl ComponentWriteService {
         // Env
         let env = update.env.unwrap_or(existing.env);
 
-        // Wasi config
-        let wasi_config = update.wasi_config.unwrap_or(existing.wasi_config);
-
         // Config entries: validate and transform new ones, or keep existing
         let config = if let Some(new_config) = update.config {
             validate_and_transform_config_entries(agent_type, new_config)?
@@ -764,7 +757,6 @@ impl ComponentWriteService {
 
         Ok(AgentTypeProvisionConfig {
             env,
-            wasi_config,
             config,
             plugins,
             files,
@@ -848,6 +840,8 @@ fn validate_and_transform_config_entries(
     agent_type: &AgentType,
     config_entries: Vec<AgentConfigEntryDto>,
 ) -> Result<Vec<TypedAgentConfigEntry>, ComponentError> {
+    validate_agent_config_declarations(agent_type)?;
+
     let mut results = Vec::new();
     let mut seen_keys = HashSet::new();
 
@@ -898,6 +892,8 @@ fn check_config_entries_match(
     agent_type: &AgentType,
     config: &[TypedAgentConfigEntry],
 ) -> Result<(), ComponentError> {
+    validate_agent_config_declarations(agent_type)?;
+
     for entry in config {
         let matching_declaration = agent_type
             .config
@@ -928,24 +924,40 @@ fn check_config_entries_match(
 }
 
 async fn analyze_and_validate_component_wasm(
-    component_name: &ComponentName,
     agent_types: Vec<AgentType>,
     wasm: Arc<[u8]>,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 ) -> Result<ComponentMetadata, ComponentError> {
+    for agent_type in &agent_types {
+        validate_agent_config_declarations(agent_type)?;
+    }
+
     let component_metadata = run_cpu_bound_work(move || {
         ComponentMetadata::analyse_component(&wasm, agent_types, agent_type_provision_configs)
     })
     .await?;
 
-    if let Some(known_root_package_name) = &component_metadata.root_package_name()
-        && component_name.0 != *known_root_package_name
-    {
-        return Err(ComponentError::InvalidComponentName {
-            actual: component_name.0.clone(),
-            expected: known_root_package_name.clone(),
+    Ok(component_metadata)
+}
+
+fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), ComponentError> {
+    for declaration in &agent_type.config {
+        validate_agent_config_path(&agent_type.type_name, &declaration.path)?;
+    }
+
+    Ok(())
+}
+
+fn validate_agent_config_path(
+    agent: &AgentTypeName,
+    path: &[String],
+) -> Result<(), ComponentError> {
+    if path.iter().any(|segment| segment.contains('.')) {
+        return Err(ComponentError::AgentConfigPathSegmentContainsDot {
+            agent: agent.clone(),
+            key: path.to_vec(),
         });
     }
 
-    Ok(component_metadata)
+    Ok(())
 }

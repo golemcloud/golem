@@ -18,6 +18,7 @@ const external = [
   'golem:core/types@1.5.0',
   'golem:quota/types@1.5.0',
   'wasi:cli/environment@0.2.3',
+  'wasi:clocks/monotonic-clock@0.2.3',
   'wasi:clocks/wall-clock@0.2.3',
   'node:sqlite',
 ];

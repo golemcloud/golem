@@ -11,6 +11,14 @@ componentTemplates:
         customCommands:
           copy:
           - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
+      quick:
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
+      optimized:
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
   ts-test-component:
     customCommands:
       copy:

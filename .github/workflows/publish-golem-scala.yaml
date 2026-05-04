@@ -7,7 +7,7 @@ on:
 
 env:
   JDK_JAVA_OPTIONS: -XX:+PrintCommandLineFlags
-  WASM_RQUICKJS_VERSION: "v0.2.1"
+  WASM_RQUICKJS_VERSION: "0.2.4"
   WASI_SDK_VERSION: 25
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -36,6 +36,7 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           rust-targets: wasm32-wasip1 wasm32-wasip2
+          install-cargo-binstall: 'true'
 
       - name: Install cargo-make
         run: cargo install --force cargo-make

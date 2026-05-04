@@ -37,6 +37,13 @@ export function killProcessTree(child: ChildProcess): void {
   }, 5000);
 }
 
+export interface UsageStats {
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  numTurns?: number;
+}
+
 export interface AgentResult {
   success: boolean;
   output: string;
@@ -44,7 +51,14 @@ export interface AgentResult {
   exitCode: number | null;
   timedOut?: boolean;
   timeoutKind?: "step" | "idle";
+  /** The agent reported that the credit balance is too low to continue. */
+  creditInsufficient?: boolean;
+  usage?: UsageStats;
 }
+
+/** Pattern that matches credit-balance / quota errors emitted by LLM providers. */
+export const CREDIT_INSUFFICIENT_PATTERN =
+  /credit balance is too low|quota exceeded[.]? check your plan and billing|you have reached your specified API usage limits/i;
 
 export interface DriverTimeoutOptions {
   stepTimeoutSeconds: number;
@@ -53,7 +67,7 @@ export interface DriverTimeoutOptions {
 }
 
 export interface AgentDriver {
-  setup(workspace: string, bootstrapSkillSourceDir: string): Promise<void>;
+  setup(workspace: string, bootstrapSkillSourceDirs: string[]): Promise<void>;
   sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult>;
   sendFollowup(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult>;
   teardown(): Promise<void>;
@@ -71,6 +85,12 @@ export interface AgentDriver {
    * prompt in a scenario, or any prompt with `continueSession: false`).
    */
   getActivatedSkills(): string[] | undefined;
+
+  /**
+   * Per-driver default idle timeout override in seconds. Returns `undefined`
+   * if the driver has no preference (use the global default).
+   */
+  getDefaultIdleTimeoutSeconds(): number | undefined;
 
   /**
    * Clear the driver's internal list of activated skills.
@@ -199,7 +219,7 @@ export class ActivityMonitor {
 
 export abstract class BaseAgentDriver implements AgentDriver {
   protected workspace: string = ".";
-  protected bootstrapSkillSourceDir: string = "";
+  protected bootstrapSkillSourceDirs: string[] = [];
 
   /** Short tag used in log output (e.g. "claude-code", "amp") */
   protected abstract readonly driverName: string;
@@ -207,34 +227,49 @@ export abstract class BaseAgentDriver implements AgentDriver {
   /** Directories relative to workspace where the bootstrap skill should be copied. */
   protected abstract readonly skillDirs: string[];
 
+  /**
+   * Per-driver default idle timeout in seconds. If set, overrides the global
+   * default when the executor doesn't provide an explicit idle timeout.
+   * Drivers whose underlying CLI has long silent gaps (e.g. retry backoff)
+   * can increase this.
+   */
+  protected readonly defaultIdleTimeoutOverride: number | undefined = undefined;
+
   /** Returns the driver log tag, e.g. `claude-code` */
   protected get logPrefix(): string {
     return this.driverName;
   }
 
-  async setup(workspace: string, bootstrapSkillSourceDir: string): Promise<void> {
+  async setup(workspace: string, bootstrapSkillSourceDirs: string[]): Promise<void> {
     this.workspace = workspace;
-    this.bootstrapSkillSourceDir = bootstrapSkillSourceDir;
-    await this.seedBootstrapSkill();
+    this.bootstrapSkillSourceDirs = bootstrapSkillSourceDirs;
+    await this.seedBootstrapSkills();
   }
 
   setWorkingDirectory(dir: string): void {
     this.workspace = dir;
   }
 
-  protected async seedBootstrapSkill(): Promise<void> {
-    const sourceDir = path.resolve(this.bootstrapSkillSourceDir);
-    await fs.access(path.join(sourceDir, "SKILL.md"));
+  protected async seedBootstrapSkills(): Promise<void> {
+    for (const bootstrapSkillSourceDir of this.bootstrapSkillSourceDirs) {
+      const sourceDir = path.resolve(bootstrapSkillSourceDir);
+      await fs.access(path.join(sourceDir, "SKILL.md"));
+      const skillName = path.basename(sourceDir);
 
-    for (const targetDir of this.skillDirs) {
-      const destDir = path.join(this.workspace, targetDir, "golem-new-project");
-      await fs.mkdir(path.dirname(destDir), { recursive: true });
-      await fs.cp(sourceDir, destDir, { recursive: true });
+      for (const targetDir of this.skillDirs) {
+        const destDir = path.join(this.workspace, targetDir, skillName);
+        await fs.mkdir(path.dirname(destDir), { recursive: true });
+        await fs.cp(sourceDir, destDir, { recursive: true });
+      }
     }
   }
 
   getActivatedSkills(): string[] | undefined {
     return undefined;
+  }
+
+  getDefaultIdleTimeoutSeconds(): number | undefined {
+    return this.defaultIdleTimeoutOverride;
   }
 
   resetActivatedSkills(): void {

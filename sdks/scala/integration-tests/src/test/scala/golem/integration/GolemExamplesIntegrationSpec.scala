@@ -160,7 +160,7 @@ object GolemServer {
       "db.password" -> """"test-password""""
     )
 
-    runGolemCmd(dir, 30L, "agent-secret", "list", "--format", "json").flatMap { listResult =>
+    runGolemCmd(dir, 30L, "secret", "list", "--format", "json").flatMap { listResult =>
       if (listResult.exitCode != 0)
         ZIO.fail(new RuntimeException(s"Failed to list secrets: ${listResult.output}"))
       else {
@@ -183,7 +183,7 @@ object GolemServer {
                   runGolemCmd(
                     dir,
                     30L,
-                    "agent-secret",
+                    "secret",
                     "update-value",
                     "--id",
                     id,
@@ -217,9 +217,9 @@ object GolemServer {
         name,
         "--priority",
         priority.toString,
-        "--predicate-json",
+        "--predicate",
         predicateJson,
-        "--policy-json",
+        "--policy",
         policyJson
       ).flatMap { result =>
         if (result.exitCode == 0) ZIO.unit

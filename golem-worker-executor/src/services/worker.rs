@@ -114,12 +114,23 @@ impl DefaultWorkerService {
     fn running_in_shard_key(shard_id: &ShardId) -> String {
         format!("worker:running_in_shard:{shard_id}")
     }
+
+    fn should_track_for_assignment_recovery(status: &AgentStatusRecord) -> bool {
+        matches!(
+            status.status,
+            AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Interrupted
+        ) || status.has_pending_work()
+    }
 }
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
     async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         record_worker_call("get");
+
+        if !self.oplog_service.exists(owned_agent_id).await {
+            return None;
+        }
 
         let initial_oplog_entry = self
             .oplog_service
@@ -145,7 +156,6 @@ impl WorkerService for DefaultWorkerService {
                     component_size,
                     initial_total_linear_memory_size,
                     initial_active_plugins,
-                    config_vars: wasi_config,
                     local_agent_config,
                     original_phantom_id,
                 },
@@ -172,7 +182,6 @@ impl WorkerService for DefaultWorkerService {
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
                     env,
-                    wasi_config,
                     config,
                     environment_id,
                     created_by,
@@ -319,7 +328,7 @@ impl WorkerService for DefaultWorkerService {
             let shard_id =
                 ShardId::from_agent_id(&owned_agent_id.agent_id, shard_assignment.number_of_shards);
 
-            if status_value.status == AgentStatus::Running {
+            if Self::should_track_for_assignment_recovery(status_value) {
                 debug!("Adding worker to the set of running workers in shard {shard_id}");
 
                 self
@@ -359,5 +368,65 @@ impl HasOplogService for DefaultWorkerService {
 impl HasConfig for DefaultWorkerService {
     fn config(&self) -> Arc<GolemConfig> {
         self.config.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::AgentInvocation;
+    use golem_common::model::Timestamp;
+    use golem_common::model::TimestampedAgentInvocation;
+    use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+    use std::collections::VecDeque;
+    use test_r::test;
+
+    #[test]
+    fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Idle,
+            ..AgentStatusRecord::default()
+        };
+        status.pending_invocations.push(TimestampedAgentInvocation {
+            timestamp: Timestamp::now_utc(),
+            invocation: AgentInvocation::ManualUpdate {
+                target_revision: golem_common::model::component::ComponentRevision::INITIAL,
+            },
+        });
+
+        assert!(DefaultWorkerService::should_track_for_assignment_recovery(
+            &status
+        ));
+    }
+
+    #[test]
+    fn tracks_workers_with_pending_updates_for_assignment_recovery() {
+        let status = AgentStatusRecord {
+            status: AgentStatus::Idle,
+            pending_updates: VecDeque::from([TimestampedUpdateDescription {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::INITIAL,
+                description: UpdateDescription::Automatic {
+                    target_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                },
+            }]),
+            ..AgentStatusRecord::default()
+        };
+
+        assert!(DefaultWorkerService::should_track_for_assignment_recovery(
+            &status
+        ));
+    }
+
+    #[test]
+    fn does_not_track_idle_workers_without_pending_work() {
+        let status = AgentStatusRecord {
+            status: AgentStatus::Idle,
+            ..AgentStatusRecord::default()
+        };
+
+        assert!(!DefaultWorkerService::should_track_for_assignment_recovery(
+            &status
+        ));
     }
 }

@@ -25,7 +25,7 @@ use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::format::Format;
 use crate::model::text::fmt::{DecoratedIndent, log_text_view};
-use crate::model::text::help::{AvailableFunctionNamesHelp, EnvironmentNameHelp, WorkerNameHelp};
+use crate::model::text::help::{AgentNameHelp, AvailableFunctionNamesHelp, EnvironmentNameHelp};
 use colored::Colorize;
 use indoc::indoc;
 use std::sync::Arc;
@@ -186,9 +186,9 @@ impl ErrorHandler {
                 }
                 Ok(())
             }
-            GolemCliCommandPartialMatch::WorkerInvokeMissingWorkerName => {
+            GolemCliCommandPartialMatch::AgentInvokeMissingAgentName => {
                 logln("");
-                log_text_view(&WorkerNameHelp);
+                log_text_view(&AgentNameHelp);
                 logln("");
 
                 self.ctx.silence_app_context_init().await;

@@ -65,10 +65,19 @@ async fn agent_reads_updated_environment_secret(
     let secret_path = vec!["secret".to_string()];
 
     user.deploy_environment_with(env.id, |d| {
-        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
-            path: AgentSecretPath(secret_path.clone()),
-            secret_value: json!("foo"),
-        }];
+        d.agent_secret_defaults = vec![
+            DeploymentAgentSecretDefault {
+                path: AgentSecretPath(secret_path.clone()),
+                secret_value: json!("foo"),
+            },
+            DeploymentAgentSecretDefault {
+                path: AgentSecretPath(vec![ctx.case_config_path_segment("complex-secret")]),
+                secret_value: json!({
+                    "foo": "foo",
+                    "bar": 1,
+                }),
+            },
+        ];
     })
     .await?;
 
@@ -90,7 +99,16 @@ async fn agent_reads_updated_environment_secret(
     let_assert!(Value::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
-    assert_eq!(parsed, json!({"secret": "foo"}));
+    assert_eq!(
+        parsed,
+        json!({
+            "secret": "foo",
+            "complexSecret": {
+                "foo": "foo",
+                "bar": 1,
+            }
+        })
+    );
 
     let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
     let secret = secrets
@@ -123,7 +141,16 @@ async fn agent_reads_updated_environment_secret(
     let_assert!(Value::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
-    assert_eq!(parsed, json!({"secret": "bar"}));
+    assert_eq!(
+        parsed,
+        json!({
+            "secret": "bar",
+            "complexSecret": {
+                "foo": "foo",
+                "bar": 1,
+            }
+        })
+    );
 
     Ok(())
 }
@@ -148,10 +175,19 @@ async fn agent_fails_on_deleted_environment_secret(
     let secret_path = vec!["secret".to_string()];
 
     user.deploy_environment_with(env.id, |d| {
-        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
-            path: AgentSecretPath(secret_path.clone()),
-            secret_value: json!("foo"),
-        }];
+        d.agent_secret_defaults = vec![
+            DeploymentAgentSecretDefault {
+                path: AgentSecretPath(secret_path.clone()),
+                secret_value: json!("foo"),
+            },
+            DeploymentAgentSecretDefault {
+                path: AgentSecretPath(vec![ctx.case_config_path_segment("complex-secret")]),
+                secret_value: json!({
+                    "foo": "foo",
+                    "bar": 1,
+                }),
+            },
+        ];
     })
     .await?;
 
@@ -172,7 +208,17 @@ async fn agent_fails_on_deleted_environment_secret(
 
     let_assert!(Value::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
-    assert_eq!(parsed, json!({"secret": "foo"}));
+
+    assert_eq!(
+        parsed,
+        json!({
+            "secret": "foo",
+            "complexSecret": {
+                "foo": "foo",
+                "bar": 1,
+            }
+        })
+    );
 
     let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
     let secret = secrets
@@ -228,10 +274,19 @@ async fn agent_reads_recreated_environment_secret(
     let secret_path = vec!["secret".to_string()];
 
     user.deploy_environment_with(env.id, |d| {
-        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
-            path: AgentSecretPath(secret_path.clone()),
-            secret_value: json!("foo"),
-        }];
+        d.agent_secret_defaults = vec![
+            DeploymentAgentSecretDefault {
+                path: AgentSecretPath(secret_path.clone()),
+                secret_value: json!("foo"),
+            },
+            DeploymentAgentSecretDefault {
+                path: AgentSecretPath(vec![ctx.case_config_path_segment("complex-secret")]),
+                secret_value: json!({
+                    "foo": "foo",
+                    "bar": 1,
+                }),
+            },
+        ];
     })
     .await?;
 
@@ -278,7 +333,11 @@ async fn agent_reads_recreated_environment_secret(
     assert_eq!(
         parsed,
         json!({
-            "secret": "bar"
+            "secret": "bar",
+            "complexSecret": {
+                "foo": "foo",
+                "bar": 1,
+            }
         })
     );
 

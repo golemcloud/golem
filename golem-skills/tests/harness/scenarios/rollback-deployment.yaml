@@ -1,0 +1,55 @@
+name: "rollback-deployment"
+steps:
+  # 1. Create a default project and deploy it (revision 0)
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  # 2. Verify the default counter works
+  - id: "invoke-increment-v1"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  # 3. Ask the agent to change the increment step from 1 to 10, then build and deploy (revision 1)
+  - id: "change-increment-step"
+    prompt: >
+      In the test-app project, modify the CounterAgent so that the `increment` method
+      increases the counter by 10 instead of 1. Do not change anything else — keep the
+      same method name, signature, and return type.
+    verify:
+      deploy: true
+
+  # 4. Verify the new behavior (incrementing by 10)
+  - id: "invoke-increment-v2"
+    invoke_json:
+      agent: 'CounterAgent("c2")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 10
+
+  # 5. Rollback to revision 0
+  - id: "rollback-to-revision-0"
+    prompt: >
+      Roll back the deployment to revision 0.
+    expectedSkills:
+      - "golem-rollback"
+
+  # 6. Verify we are back to the original behavior (incrementing by 1)
+  - id: "invoke-increment-after-rollback"
+    invoke_json:
+      agent: 'CounterAgent("c3")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1

@@ -1,6 +1,6 @@
 ---
 name: sdk-development
-description: "Working on the Rust or TypeScript SDKs in sdks/. Use when modifying SDK code, adding SDK features, or testing SDK changes with the main Golem platform."
+description: "Working on the Rust, TypeScript, or MoonBit SDKs in sdks/. Use when modifying SDK code, adding SDK features, or testing SDK changes with the main Golem platform."
 ---
 
 # SDK Development
@@ -117,6 +117,42 @@ golem-cli app new my-test-app
 ```shell
 npx pnpm run lint
 npx pnpm run format
+```
+
+## MoonBit SDK (`sdks/moonbit/`)
+
+See `sdks/moonbit/AGENTS.md` for full details. The MoonBit SDK has its own build system (`moon`) and code generation tools (`golem_sdk_tools`).
+
+### Building
+
+```shell
+cd sdks/moonbit/golem_sdk
+moon check --target wasm          # Type-check
+moon build --target wasm          # Build
+```
+
+### Testing
+
+```shell
+cd sdks/moonbit/golem_sdk
+moon test                         # Run SDK tests
+cd sdks/moonbit/golem_sdk_tools
+moon test                         # Run code generation tool tests
+```
+
+### Regenerating WIT bindings
+
+```shell
+cd sdks/moonbit/golem_sdk
+wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub
+moon fmt
+```
+
+### Code style
+
+```shell
+moon fmt
+moon info    # Regenerate .mbti interface files
 ```
 
 ## Downstream Rebuild Requirements

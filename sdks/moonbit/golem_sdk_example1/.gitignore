@@ -1,0 +1,10 @@
+.DS_Store
+target/
+.mooncakes/
+.moonagent/
+_build/
+golem-temp/
+golem_reexports.mbt
+golem_agents.mbt
+golem_clients.mbt
+golem_derive.mbt

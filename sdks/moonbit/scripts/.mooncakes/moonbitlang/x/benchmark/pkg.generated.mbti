@@ -1,0 +1,37 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/benchmark"
+
+// Values
+
+// Errors
+
+// Types and methods
+#deprecated
+type Criterion
+#deprecated
+pub fn Criterion::add(Self, Task) -> Unit
+#deprecated
+pub fn Criterion::new() -> Self
+#deprecated
+pub fn Criterion::run(Self) -> Map[String, TaskResult]
+
+#deprecated
+type Task
+#deprecated
+pub fn Task::new(String, () -> Unit, count? : Int) -> Self
+#deprecated
+pub fn Task::run(Self) -> TaskResult
+
+#deprecated
+pub struct TaskResult {
+  task : Task
+  average : Double
+  max : Double
+  min : Double
+}
+pub impl Show for TaskResult
+
+// Type aliases
+
+// Traits
+

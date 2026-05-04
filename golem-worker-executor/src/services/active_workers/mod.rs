@@ -26,7 +26,6 @@ pub use fs_semaphore::{
     filesystem_storage_permits_to_bytes, filesystem_storage_pool_bytes_to_permits,
 };
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
@@ -97,7 +96,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
-        worker_config_vars: Option<BTreeMap<String, String>>,
         worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
@@ -120,7 +118,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                             &deps,
                             owned_agent_id,
                             worker_env,
-                            worker_config_vars,
                             worker_agent_config,
                             component_revision,
                             parent,

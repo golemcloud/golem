@@ -1,0 +1,29 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/path/posix"
+
+// Values
+pub let delimiter : Char
+
+pub let sep : Char
+
+// Errors
+
+// Types and methods
+pub(all) struct Path(String)
+pub fn Path::basename(Self) -> StringView
+pub fn Path::dirname(Self) -> Self
+pub fn Path::extname(Self) -> StringView
+#deprecated
+pub fn Path::inner(Self) -> String
+pub fn Path::is_absolute(Self) -> Bool
+pub fn Path::join(Self, Self) -> Self
+pub fn Path::normalize(Self) -> Self
+pub fn Path::relative(Self, base~ : Self) -> Self
+pub fn Path::resolve(Self) -> Self
+pub impl Eq for Path
+pub impl Show for Path
+
+// Type aliases
+
+// Traits
+

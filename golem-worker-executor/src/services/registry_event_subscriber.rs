@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::services::agent_types::AgentTypesService;
+use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
 use golem_common::model::agent::RegistryInvalidationEvent;
 use golem_service_base::clients::registry::{RegistryInvalidationHandler, RegistryService};
@@ -21,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 pub(crate) struct WorkerExecutorRegistryInvalidationHandler {
+    component_service: Arc<dyn ComponentService>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     agent_types_service: Arc<dyn AgentTypesService>,
 }
@@ -28,6 +30,7 @@ pub(crate) struct WorkerExecutorRegistryInvalidationHandler {
 impl WorkerExecutorRegistryInvalidationHandler {
     pub async fn run(
         registry_service: Arc<dyn RegistryService>,
+        component_service: Arc<dyn ComponentService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         shutdown_token: CancellationToken,
@@ -37,6 +40,7 @@ impl WorkerExecutorRegistryInvalidationHandler {
                 "worker-executor",
                 Some(shutdown_token),
                 Arc::new(Self {
+                    component_service,
                     environment_state_service,
                     agent_types_service,
                 }),
@@ -51,6 +55,7 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
         match &event {
             RegistryInvalidationEvent::CursorExpired { .. } => {
                 warn!("Registry invalidation cursor expired, flushing all caches");
+                self.component_service.invalidate_all().await;
                 self.environment_state_service.invalidate_all().await;
                 self.agent_types_service.invalidate_all().await;
             }
@@ -59,6 +64,9 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                     environment_id = %environment_id,
                     "Received deployment changed event, invalidating environment caches"
                 );
+                self.component_service
+                    .invalidate_latest_deployed_metadata_for_environment(*environment_id)
+                    .await;
                 self.environment_state_service
                     .invalidate_environment(*environment_id)
                     .await;
@@ -123,6 +131,56 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                     "Received agent secret changed event, invalidating environment cache"
                 );
                 self.environment_state_service
+                    .invalidate_environment(*environment_id)
+                    .await;
+            }
+            RegistryInvalidationEvent::ApplicationDeleted {
+                application_id,
+                account_id,
+                app_name,
+                environment_ids,
+                ..
+            } => {
+                debug!(
+                    application_id = %application_id,
+                    account_id = %account_id,
+                    app_name,
+                    environment_count = environment_ids.len(),
+                    "Received application deleted event, invalidating per-environment caches"
+                );
+                // Invalidate each environment individually using the provided UUIDs
+                // rather than flushing all caches.
+                for env_id in environment_ids {
+                    self.component_service
+                        .invalidate_latest_deployed_metadata_for_environment(*env_id)
+                        .await;
+                    self.environment_state_service
+                        .invalidate_environment(*env_id)
+                        .await;
+                    self.agent_types_service
+                        .invalidate_environment(*env_id)
+                        .await;
+                }
+            }
+            RegistryInvalidationEvent::EnvironmentDeleted {
+                environment_id,
+                app_name,
+                env_name,
+                ..
+            } => {
+                debug!(
+                    environment_id = %environment_id,
+                    app_name,
+                    env_name,
+                    "Received environment deleted event, invalidating environment caches"
+                );
+                self.component_service
+                    .invalidate_latest_deployed_metadata_for_environment(*environment_id)
+                    .await;
+                self.environment_state_service
+                    .invalidate_environment(*environment_id)
+                    .await;
+                self.agent_types_service
                     .invalidate_environment(*environment_id)
                     .await;
             }

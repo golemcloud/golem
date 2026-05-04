@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::TestWorkerExecutor;
+use crate::component_writer::CachedAnalysis;
 use anyhow::anyhow;
 use applying::Apply;
 use bytes::Bytes;
@@ -30,6 +31,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::agent::{DataValue, ParsedAgentId, UntypedDataValue};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
@@ -49,8 +51,10 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, rename_component_if_needed};
+use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
+use golem_wasm::ValueAndType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use tonic::Streaming;
@@ -72,18 +76,9 @@ impl TestDsl for TestWorkerExecutor {
         environment_id: EnvironmentId,
         name: &str,
         unique: bool,
-        unverified: bool,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
-        if agent_type_provision_configs
-            .values()
-            .any(|c| !c.config.is_empty())
-        {
-            return Err(anyhow!(
-                "Agent config isn't supported in worker executor tests"
-            ));
-        }
         if agent_type_provision_configs
             .values()
             .any(|c| !c.plugin_installations.is_empty())
@@ -104,19 +99,7 @@ impl TestDsl for TestWorkerExecutor {
             ComponentName(name.to_string())
         };
 
-        let source_path = if !unverified {
-            rename_component_if_needed(
-                self.deps.component_temp_directory.path(),
-                &source_path,
-                &component_name.0,
-            )
-            .expect("Failed to verify and change component metadata")
-        } else {
-            source_path
-        };
-
-        let mut file_map: std::collections::HashMap<ArchiveFilePath, (AgentFileContentHash, u64)> =
-            std::collections::HashMap::new();
+        let mut file_map: HashMap<ArchiveFilePath, (AgentFileContentHash, u64)> = HashMap::new();
         for ifs_entry in &files_for_archive {
             let full_source_path = component_directory.join(&ifs_entry.source_path);
             let data = tokio::fs::read(&full_source_path).await?;
@@ -136,10 +119,16 @@ impl TestDsl for TestWorkerExecutor {
             );
         }
 
+        let analyzed_component = self
+            .deps
+            .component_writer
+            .analyze_component_metadata(&source_path, Some(original_source_hash))
+            .await?;
+
         let stored_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig> =
             agent_type_provision_configs
                 .into_iter()
-                .map(|(agent_type_name, creation)| {
+                .map(|(agent_type_name, creation)| -> anyhow::Result<_> {
                     let files: Vec<InitialAgentFile> = creation
                         .files
                         .iter()
@@ -154,20 +143,22 @@ impl TestDsl for TestWorkerExecutor {
                                 })
                         })
                         .collect();
-                    (
+                    let config = parse_provision_config_from_cached_analysis(
+                        &analyzed_component,
+                        &agent_type_name,
+                        creation.config,
+                    )?;
+                    Ok((
                         agent_type_name,
                         AgentTypeProvisionConfig {
                             env: creation.env,
-                            wasi_config: creation.wasi_config,
                             files,
-                            // config requires parse_with_type — not supported in executor tests
-                            config: vec![],
-                            // plugin grants cannot be resolved in executor tests
+                            config,
                             plugins: vec![],
                         },
-                    )
+                    ))
                 })
-                .collect();
+                .collect::<anyhow::Result<_>>()?;
 
         let component = {
             if unique {
@@ -177,7 +168,6 @@ impl TestDsl for TestWorkerExecutor {
                         &source_path,
                         &component_name.0,
                         stored_provision_configs,
-                        unverified,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -193,7 +183,6 @@ impl TestDsl for TestWorkerExecutor {
                         &source_path,
                         &component_name.0,
                         stored_provision_configs,
-                        unverified,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -245,17 +234,12 @@ impl TestDsl for TestWorkerExecutor {
         >,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
-        if let Some(ref updates) = agent_type_provision_config_updates {
-            if updates.values().any(|u| u.config.is_some()) {
-                return Err(anyhow!(
-                    "Agent config isn't supported in worker executor tests"
-                ));
-            }
-            if updates.values().any(|u| !u.plugin_updates.is_empty()) {
-                return Err(anyhow!(
-                    "Plugin updates aren't supported in worker executor tests"
-                ));
-            }
+        if let Some(ref updates) = agent_type_provision_config_updates
+            && updates.values().any(|u| !u.plugin_updates.is_empty())
+        {
+            return Err(anyhow!(
+                "Plugin updates aren't supported in worker executor tests"
+            ));
         }
 
         let latest_revision = self
@@ -276,11 +260,6 @@ impl TestDsl for TestWorkerExecutor {
         let (source_path, original_source_hash) = if let Some(wasm_name) = wasm_name {
             let source_path = component_dir.join(format!("{wasm_name}.wasm"));
             let original_hash = blake3::hash(&std::fs::read(&source_path)?);
-            let source_path = rename_component_if_needed(
-                self.deps.component_temp_directory.path(),
-                &source_path,
-                &latest_revision.component_name.0,
-            )?;
             (Some(source_path), Some(original_hash))
         } else {
             (None, None)
@@ -318,7 +297,14 @@ impl TestDsl for TestWorkerExecutor {
                 let existing = configs.get(&agent_type_name).cloned().unwrap_or_default();
 
                 let new_env = update.env.unwrap_or(existing.env);
-                let new_wasi_config = update.wasi_config.unwrap_or(existing.wasi_config);
+                let new_config = match update.config {
+                    Some(config) => parse_provision_config_from_component_metadata(
+                        &latest_revision.metadata,
+                        &agent_type_name,
+                        config,
+                    )?,
+                    None => existing.config,
+                };
 
                 let mut files: std::collections::HashMap<AgentFilePath, InitialAgentFile> =
                     existing
@@ -347,9 +333,8 @@ impl TestDsl for TestWorkerExecutor {
                     agent_type_name,
                     AgentTypeProvisionConfig {
                         env: new_env,
-                        wasi_config: new_wasi_config,
                         files: files.into_values().collect(),
-                        config: existing.config,
+                        config: new_config,
                         plugins: existing.plugins,
                     },
                 );
@@ -379,7 +364,6 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         id: ParsedAgentId,
         env: HashMap<String, String>,
-        wasi_config: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
@@ -397,7 +381,6 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_revision.account_id.into()),
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
-                wasi_config,
                 config: config.into_iter().map(|lac| lac.into()).collect(),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
@@ -1192,4 +1175,68 @@ impl WorkerLogEventStream for GrpcWorkerLogEventStream {
             .await
             .map_err(|e| anyhow!("Failed to receive log event: {e}"))
     }
+}
+
+fn parse_provision_config_from_cached_analysis(
+    cached_analysis: &CachedAnalysis,
+    agent_type_name: &AgentTypeName,
+    config: Vec<AgentConfigEntryDto>,
+) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
+    let agent_type = cached_analysis
+        .agent_types
+        .iter()
+        .find(|agent_type| &agent_type.type_name == agent_type_name)
+        .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found in cached analysis"))?;
+
+    parse_provision_config_from_agent_type(agent_type, agent_type_name, config)
+}
+
+fn parse_provision_config_from_component_metadata(
+    component_metadata: &golem_common::model::component_metadata::ComponentMetadata,
+    agent_type_name: &AgentTypeName,
+    config: Vec<AgentConfigEntryDto>,
+) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
+    let agent_type = component_metadata
+        .find_agent_type_by_name(agent_type_name)
+        .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found in component metadata"))?;
+
+    parse_provision_config_from_agent_type(&agent_type, agent_type_name, config)
+}
+
+fn parse_provision_config_from_agent_type(
+    agent_type: &golem_common::model::agent::AgentType,
+    agent_type_name: &AgentTypeName,
+    config: Vec<AgentConfigEntryDto>,
+) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
+    config
+        .into_iter()
+        .map(|entry| {
+            let declaration = agent_type
+                .config
+                .iter()
+                .find(|c| c.path == entry.path)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Agent type {agent_type_name} does not declare config {}",
+                        entry.path.join(".")
+                    )
+                })?;
+
+            let parsed_value =
+                ValueAndType::parse_with_type(&entry.value.0, &declaration.value_type).map_err(
+                    |err| {
+                        anyhow!(
+                            "config value for path {} does not match expected schema: [{}]",
+                            entry.path.join("."),
+                            err.join(", ")
+                        )
+                    },
+                )?;
+
+            Ok(TypedAgentConfigEntry {
+                path: entry.path,
+                value: parsed_value,
+            })
+        })
+        .collect()
 }

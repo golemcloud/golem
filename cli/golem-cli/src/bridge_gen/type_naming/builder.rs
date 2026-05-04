@@ -104,6 +104,9 @@ impl Builder {
                 RootOwner::ConstructorInput => TypeLocationRoot::AgentConstructorInput {
                     input_name: self.root_item_name.clone(),
                 },
+                RootOwner::AgentConfig => TypeLocationRoot::AgentConfig {
+                    config_name: self.root_item_name.clone(),
+                },
                 RootOwner::MethodInput { method_name } => TypeLocationRoot::AgentMethodInput {
                     method_name: method_name.clone(),
                     input_name: self.root_item_name.clone(),
@@ -120,6 +123,7 @@ impl Builder {
 
 pub(super) enum RootOwner {
     ConstructorInput,
+    AgentConfig,
     MethodInput { method_name: String },
     MethodOutput { method_name: String },
 }

@@ -125,6 +125,12 @@ impl<TN: TypeName> TypeNaming<TN> {
             });
             self.collect_wit_types_in_data_schema(&mut builder, &method.output_schema);
         }
+
+        builder.set_root_owner(RootOwner::AgentConfig);
+        for config in &agent_type.config {
+            builder.set_root_item_name(&config.path.join("_"));
+            self.collect_analysed_type(&mut builder, &config.value_type);
+        }
     }
 
     fn collect_wit_types_in_data_schema(&mut self, builder: &mut Builder, schema: &DataSchema) {

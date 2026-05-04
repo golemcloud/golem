@@ -27,14 +27,12 @@ use strum_macros::EnumIter;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter)]
 pub enum ReplLanguage {
-    Rust,
     TypeScript,
 }
 
 impl ReplLanguage {
     pub fn from_string(s: impl AsRef<str>) -> Option<ReplLanguage> {
         match s.as_ref().to_lowercase().as_str() {
-            "rust" => Some(ReplLanguage::Rust),
             "ts" | "typescript" => Some(ReplLanguage::TypeScript),
             _ => None,
         }
@@ -42,14 +40,12 @@ impl ReplLanguage {
 
     pub fn to_guest_language(&self) -> GuestLanguage {
         match self {
-            ReplLanguage::Rust => GuestLanguage::Rust,
             ReplLanguage::TypeScript => GuestLanguage::TypeScript,
         }
     }
 
     pub fn id(&self) -> &'static str {
         match self {
-            ReplLanguage::Rust => "rust",
             ReplLanguage::TypeScript => "ts",
         }
     }
@@ -58,7 +54,6 @@ impl ReplLanguage {
 impl Display for ReplLanguage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ReplLanguage::Rust => write!(f, "Rust"),
             ReplLanguage::TypeScript => write!(f, "TypeScript"),
         }
     }
@@ -83,9 +78,10 @@ impl TryFrom<GuestLanguage> for ReplLanguage {
 
     fn try_from(guest_language: GuestLanguage) -> Result<Self, Self::Error> {
         match guest_language {
-            GuestLanguage::Rust => Ok(ReplLanguage::Rust),
             GuestLanguage::TypeScript => Ok(ReplLanguage::TypeScript),
-            GuestLanguage::Scala => Err(anyhow::anyhow!("REPL is not yet supported for Scala")),
+            GuestLanguage::Rust => Ok(ReplLanguage::TypeScript),
+            GuestLanguage::Scala => Ok(ReplLanguage::TypeScript),
+            GuestLanguage::MoonBit => Ok(ReplLanguage::TypeScript),
         }
     }
 }

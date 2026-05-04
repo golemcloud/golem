@@ -1,0 +1,1 @@
+A generic keyvalue interface for WASI.

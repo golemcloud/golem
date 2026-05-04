@@ -116,7 +116,11 @@ mod tests {
     fn language_common_templates_include_expected_agents_sections() {
         let repo = AppTemplateRepo::get(false).unwrap();
 
-        for language in [GuestLanguage::TypeScript, GuestLanguage::Rust] {
+        for language in [
+            GuestLanguage::TypeScript,
+            GuestLanguage::Rust,
+            GuestLanguage::MoonBit,
+        ] {
             let source = repo
                 .common_template_file_contents(language, Path::new("AGENTS.md"))
                 .unwrap()

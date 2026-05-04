@@ -14,7 +14,7 @@
 
 use golem_common::base_model::account::AccountId;
 use golem_common::base_model::agent::{
-    AgentMethod, AgentTypeName, DataSchema, NamedElementSchemas,
+    AgentMethod, AgentMode, AgentTypeName, DataSchema, NamedElementSchemas,
 };
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
@@ -31,6 +31,7 @@ pub struct AgentMcpResource {
     pub raw_method: AgentMethod,
     pub component_id: ComponentId,
     pub agent_type_name: AgentTypeName,
+    pub agent_mode: AgentMode,
 }
 
 #[derive(Clone)]

@@ -124,6 +124,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -245,6 +251,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -315,6 +327,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -409,6 +427,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -488,6 +512,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -575,6 +605,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -673,6 +709,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -742,6 +784,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -822,6 +870,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -931,6 +985,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1007,6 +1067,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1089,6 +1155,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1180,6 +1252,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1266,6 +1344,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1347,6 +1431,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1423,6 +1513,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1510,6 +1606,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1575,6 +1677,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1648,6 +1756,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1706,6 +1820,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1794,11 +1914,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfig:
-          type: object
-          default: {}
-          additionalProperties:
-            type: string
         config:
           type: array
           default: []
@@ -1871,7 +1986,7 @@ components:
           And: '#/components/schemas/AgentFilter_AgentAndFilter'
           Or: '#/components/schemas/AgentFilter_AgentOrFilter'
           Not: '#/components/schemas/AgentFilter_AgentNotFilter'
-          WasiConfig: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+          Config: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
     AgentFilter_AgentAndFilter:
       allOf:
       - type: object
@@ -1893,8 +2008,8 @@ components:
           type:
             type: string
             enum:
-            - WasiConfig
-            example: WasiConfig
+            - Config
+            example: Config
       - $ref: '#/components/schemas/AgentConfigVarsFilter'
     AgentFilter_AgentCreatedAtFilter:
       allOf:
@@ -2073,7 +2188,11 @@ components:
     AgentInvocationResult:
       type: object
       title: AgentInvocationResult
+      required:
+      - agentId
       properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
         componentRevision:
@@ -2087,7 +2206,6 @@ components:
       - environmentId
       - createdBy
       - env
-      - wasiConfig
       - config
       - status
       - componentRevision
@@ -2111,10 +2229,6 @@ components:
           type: string
           format: uuid
         env:
-          type: object
-          additionalProperties:
-            type: string
-        wasiConfig:
           type: object
           additionalProperties:
             type: string
@@ -5842,7 +5956,6 @@ components:
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
-      - configVars
       - localAgentConfig
       properties:
         timestamp:
@@ -5875,10 +5988,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-        configVars:
-          type: object
-          additionalProperties:
-            type: string
         localAgentConfig:
           type: array
           items:

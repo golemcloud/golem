@@ -236,6 +236,9 @@ async fn gen_bridge_sdk_target(
                     GuestLanguage::Scala => {
                         bail!("Bridge generation is not yet supported for Scala")
                     }
+                    GuestLanguage::MoonBit => {
+                        bail!("Bridge generation is not yet supported for MoonBit")
+                    }
                 };
 
                 fs::remove(&output_dir)?;

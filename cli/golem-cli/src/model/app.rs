@@ -28,13 +28,14 @@ use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
 use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
+use anyhow::{Context, anyhow};
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
-use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
+use golem_common::model::deployment::DeploymentRetryPolicyDefault;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::quota::ResourceDefinitionCreation;
+use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
 use golem_common::model::validate_lower_kebab_case_identifier;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
@@ -346,11 +347,11 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
-    agent_secrets_defaults:
-        BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
-    retry_policy_defaults: BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+    agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<serde_json::Value>>,
+    retry_policy_defaults:
+        BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
     resource_definition_defaults:
-        BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
+        BTreeMap<EnvironmentName, BTreeMap<ResourceName, WithSource<ResourceDefinitionCreation>>>,
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
@@ -434,34 +435,43 @@ impl Application {
         self.agents.keys()
     }
 
-    pub fn resolve_agents(&self, mapping: &BTreeMap<AgentTypeName, ComponentName>) -> Agents {
-        let resolved_by_type = mapping
-            .iter()
-            .map(|(agent_type_name, component_name)| {
-                let component = self.component(component_name);
-                let component_base = component.agent_base_properties();
-                let (properties, layer_properties) =
-                    self.resolve_agent(component_name, agent_type_name, component_base);
+    pub fn resolve_agents(
+        &self,
+        mapping: &BTreeMap<AgentTypeName, ComponentName>,
+    ) -> anyhow::Result<Agents> {
+        let mut resolved_by_type = BTreeMap::new();
 
-                let source = self
-                    .agents
-                    .get(agent_type_name)
-                    .map(|agent| agent.source.clone())
-                    .unwrap_or_else(|| component.source().to_path_buf());
+        for (agent_type_name, component_name) in mapping {
+            let component = self.component(component_name);
+            let component_base = component.agent_base_properties();
+            let (properties, layer_properties) = self
+                .resolve_agent(component_name, agent_type_name, component_base)
+                .with_context(|| {
+                    format!(
+                        "Failed to resolve agent '{}' for component '{}'",
+                        agent_type_name.0,
+                        component_name.as_str()
+                    )
+                })?;
 
-                (
-                    agent_type_name.clone(),
-                    ResolvedAgent {
-                        component_name: component_name.clone(),
-                        source,
-                        properties,
-                        layer_properties,
-                    },
-                )
-            })
-            .collect();
+            let source = self
+                .agents
+                .get(agent_type_name)
+                .map(|agent| agent.source.clone())
+                .unwrap_or_else(|| component.source().to_path_buf());
 
-        Agents { resolved_by_type }
+            resolved_by_type.insert(
+                agent_type_name.clone(),
+                ResolvedAgent {
+                    component_name: component_name.clone(),
+                    source,
+                    properties,
+                    layer_properties,
+                },
+            );
+        }
+
+        Ok(Agents { resolved_by_type })
     }
 
     fn resolve_agent(
@@ -469,15 +479,23 @@ impl Application {
         component_name: &ComponentName,
         agent_type_name: &AgentTypeName,
         component_base: app_raw::AgentLayerProperties,
-    ) -> (AgentProperties, AgentLayerProperties) {
+    ) -> anyhow::Result<(AgentProperties, AgentLayerProperties)> {
         let base_component_id = AgentLayerId::Component(component_name.clone());
         let mut agent_layer_store = Store::new();
 
-        let _ = agent_layer_store.add_layer(AgentLayer {
-            id: base_component_id.clone(),
-            parents: vec![],
-            properties: AgentLayerPropertiesKind::Common(Box::new(component_base)),
-        });
+        agent_layer_store
+            .add_layer(AgentLayer {
+                id: base_component_id.clone(),
+                parents: vec![],
+                properties: AgentLayerPropertiesKind::Common(Box::new(component_base)),
+            })
+            .map_err(|err| anyhow!(err.to_string()))
+            .with_context(|| {
+                format!(
+                    "Failed to add base component agent layer '{}'",
+                    base_component_id
+                )
+            })?;
 
         let target_id =
             if let Some(agent) = self.agents.get(agent_type_name).map(|agent| &agent.value) {
@@ -504,76 +522,101 @@ impl Application {
                 for template_name in agent.templates.clone().into_vec() {
                     let template_layer_id =
                         ComponentLayerId::TemplateCustomPresets(template_name.clone());
-                    if let Ok(template_layer_props) = self.component_layer_store.value(
-                        &template_layer_id,
-                        &self.component_preset_selector,
-                        &template_apply_ctx,
-                    ) {
-                        let template_agent_props = app_raw::AgentLayerProperties {
-                            config: template_layer_props.config.value().clone(),
-                            env_merge_mode: None,
-                            env: Some(template_layer_props.env.value().clone()),
-                            wasi_config_merge_mode: None,
-                            wasi_config: Some(template_layer_props.wasi_config.value().clone()),
-                            plugins_merge_mode: None,
-                            plugins: Some(template_layer_props.plugins.value().clone()),
-                            files_merge_mode: None,
-                            files: Some(template_layer_props.files.value().clone()),
-                        };
+                    let template_layer_props = self
+                        .component_layer_store
+                        .value(
+                            &template_layer_id,
+                            &self.component_preset_selector,
+                            &template_apply_ctx,
+                        )
+                        .map_err(|err| anyhow!(err.to_string()))
+                        .with_context(|| {
+                            format!(
+                                "Failed to resolve template layer '{}' for agent '{}'",
+                                template_layer_id, agent_type_name.0
+                            )
+                        })?;
 
-                        let template_id =
-                            AgentLayerId::AgentTemplate(agent_type_name.clone(), template_name);
-                        let _ = agent_layer_store.add_layer(AgentLayer {
+                    let template_agent_props = app_raw::AgentLayerProperties {
+                        config: template_layer_props.config.value().clone(),
+                        env_merge_mode: None,
+                        env: Some(template_layer_props.env.value().clone()),
+                        plugins_merge_mode: None,
+                        plugins: Some(template_layer_props.plugins.value().clone()),
+                        files_merge_mode: None,
+                        files: Some(template_layer_props.files.value().clone()),
+                    };
+
+                    let template_id =
+                        AgentLayerId::AgentTemplate(agent_type_name.clone(), template_name);
+                    agent_layer_store
+                        .add_layer(AgentLayer {
                             id: template_id.clone(),
                             parents: vec![latest_parent_id],
                             properties: AgentLayerPropertiesKind::Common(Box::new(
                                 template_agent_props,
                             )),
-                        });
+                        })
+                        .map_err(|err| anyhow!(err.to_string()))
+                        .with_context(|| {
+                            format!("Failed to add agent template layer '{}'", template_id)
+                        })?;
 
-                        latest_parent_id = template_id;
-                    }
+                    latest_parent_id = template_id;
                 }
 
                 let partitioned = PartitionedAgentPresets::new(agent.presets.clone());
 
+                let common_id = AgentLayerId::AgentCommon(agent_type_name.clone());
+                agent_layer_store
+                    .add_layer(AgentLayer {
+                        id: common_id.clone(),
+                        parents: vec![latest_parent_id],
+                        properties: AgentLayerPropertiesKind::Common(Box::new(
+                            agent.agent_layer_properties(),
+                        )),
+                    })
+                    .map_err(|err| anyhow!(err.to_string()))
+                    .with_context(|| format!("Failed to add agent common layer '{}'", common_id))?;
+
                 let env_id = AgentLayerId::AgentEnvironmentPresets(agent_type_name.clone());
-                let _ = agent_layer_store.add_layer(AgentLayer {
-                    id: env_id.clone(),
-                    parents: vec![latest_parent_id],
-                    properties: if partitioned.env_presets.is_empty() {
-                        AgentLayerPropertiesKind::Empty
-                    } else {
-                        AgentLayerPropertiesKind::Presets {
-                            presets: partitioned.env_presets,
-                            default_preset: EMPTY_STR.to_string(),
-                        }
-                    },
-                });
+                agent_layer_store
+                    .add_layer(AgentLayer {
+                        id: env_id.clone(),
+                        parents: vec![common_id],
+                        properties: if partitioned.env_presets.is_empty() {
+                            AgentLayerPropertiesKind::Empty
+                        } else {
+                            AgentLayerPropertiesKind::Presets {
+                                presets: partitioned.env_presets,
+                                default_preset: EMPTY_STR.to_string(),
+                            }
+                        },
+                    })
+                    .map_err(|err| anyhow!(err.to_string()))
+                    .with_context(|| {
+                        format!("Failed to add agent environment preset layer '{}'", env_id)
+                    })?;
 
                 let custom_id = AgentLayerId::AgentCustomPresets(agent_type_name.clone());
-                let _ = agent_layer_store.add_layer(AgentLayer {
-                    id: custom_id.clone(),
-                    parents: vec![env_id],
-                    properties: match partitioned.default_custom_preset {
-                        Some(default_custom_preset) => AgentLayerPropertiesKind::Presets {
-                            presets: partitioned.custom_presets,
-                            default_preset: default_custom_preset,
+                agent_layer_store
+                    .add_layer(AgentLayer {
+                        id: custom_id.clone(),
+                        parents: vec![env_id],
+                        properties: match partitioned.default_custom_preset {
+                            Some(default_custom_preset) => AgentLayerPropertiesKind::Presets {
+                                presets: partitioned.custom_presets,
+                                default_preset: default_custom_preset,
+                            },
+                            None => AgentLayerPropertiesKind::Empty,
                         },
-                        None => AgentLayerPropertiesKind::Empty,
-                    },
-                });
+                    })
+                    .map_err(|err| anyhow!(err.to_string()))
+                    .with_context(|| {
+                        format!("Failed to add agent custom preset layer '{}'", custom_id)
+                    })?;
 
-                let common_id = AgentLayerId::AgentCommon(agent_type_name.clone());
-                let _ = agent_layer_store.add_layer(AgentLayer {
-                    id: common_id.clone(),
-                    parents: vec![custom_id],
-                    properties: AgentLayerPropertiesKind::Common(Box::new(
-                        agent.agent_properties.clone(),
-                    )),
-                });
-
-                common_id
+                custom_id
             } else {
                 base_component_id
             };
@@ -583,9 +626,10 @@ impl Application {
             &self.component_preset_selector,
             &agent_layer_store,
         )
-        .unwrap_or_default();
+        .map_err(|err| anyhow!(err))
+        .with_context(|| format!("Failed to resolve final agent layer '{}'", target_id))?;
 
-        (AgentProperties::from_resolved(&resolved), resolved)
+        Ok((AgentProperties::from_resolved(&resolved), resolved))
     }
 
     pub fn contains_component(&self, component_name: &ComponentName) -> bool {
@@ -634,29 +678,23 @@ impl Application {
     pub fn deployment_agent_secret_defaults(
         &self,
         environment: &EnvironmentName,
-    ) -> Vec<DeploymentAgentSecretDefault> {
-        let mut result = Vec::new();
-        if let Some(environment_agent_secret_defaults) =
-            self.agent_secrets_defaults.get(environment)
-        {
-            for agent_secret_default in environment_agent_secret_defaults {
-                result.push(agent_secret_default.value.clone())
-            }
-        }
-        result
+    ) -> Option<WithSource<serde_json::Value>> {
+        self.agent_secrets_defaults.get(environment).cloned()
     }
 
     pub fn deployment_retry_policy_defaults(
         &self,
         environment: &EnvironmentName,
     ) -> Vec<DeploymentRetryPolicyDefault> {
-        let mut result = Vec::new();
-        if let Some(env_defaults) = self.retry_policy_defaults.get(environment) {
-            for default in env_defaults {
-                result.push(default.value.clone())
-            }
-        }
-        result
+        self.retry_policy_defaults
+            .get(environment)
+            .map(|defaults_by_name| {
+                defaults_by_name
+                    .values()
+                    .map(|default| default.value.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn resource_definition_defaults(
@@ -665,7 +703,12 @@ impl Application {
     ) -> Vec<ResourceDefinitionCreation> {
         self.resource_definition_defaults
             .get(environment)
-            .map(|v| v.iter().map(|ws| ws.value.clone()).collect())
+            .map(|defaults_by_name| {
+                defaults_by_name
+                    .values()
+                    .map(|with_source| with_source.value.clone())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -787,13 +830,13 @@ impl PartitionedAgentPresets {
         for (preset_name, preset) in presets {
             match preset_name.strip_prefix(APP_ENV_PRESET_PREFIX) {
                 Some(env_name) => {
-                    env_presets.insert(env_name.to_string(), preset.agent_properties);
+                    env_presets.insert(env_name.to_string(), preset.into_agent_layer_properties());
                 }
                 None => {
                     if preset.default == Some(app_raw::Marker) || default_custom_preset.is_none() {
                         default_custom_preset = Some(preset_name.clone());
                     }
-                    custom_presets.insert(preset_name, preset.agent_properties);
+                    custom_presets.insert(preset_name, preset.into_agent_layer_properties());
                 }
             }
         }
@@ -815,13 +858,17 @@ impl PartitionedComponentPresets {
         for (preset_name, preset) in presets {
             match preset_name.strip_prefix(APP_ENV_PRESET_PREFIX) {
                 Some(env_name) => {
-                    env_presets.insert(env_name.to_string(), preset.component_properties.into());
+                    env_presets.insert(
+                        env_name.to_string(),
+                        preset.into_component_layer_properties().into(),
+                    );
                 }
                 None => {
                     if preset.default == Some(app_raw::Marker) || default_custom_preset.is_none() {
                         default_custom_preset = Some(preset_name.clone());
                     }
-                    custom_presets.insert(preset_name, preset.component_properties.into());
+                    custom_presets
+                        .insert(preset_name, preset.into_component_layer_properties().into());
                 }
             }
         }
@@ -1184,15 +1231,6 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value.wasi_config.apply_layer(
-                id,
-                selection,
-                (
-                    properties.wasi_config_merge_mode.unwrap_or_default(),
-                    properties.wasi_config.value().clone(),
-                ),
-            );
-
             value.plugins.apply_layer(
                 id,
                 selection,
@@ -1263,10 +1301,6 @@ impl<'a> Agent<'a> {
         &self.resolved.properties.env
     }
 
-    pub fn wasi_config(&self) -> &BTreeMap<String, String> {
-        &self.resolved.properties.wasi_config
-    }
-
     pub fn plugins(&self) -> &[app_raw::PluginInstallation] {
         &self.resolved.properties.plugins
     }
@@ -1312,6 +1346,7 @@ impl<'a> Component<'a> {
                     "ts" => Some(GuestLanguage::TypeScript),
                     "rust" => Some(GuestLanguage::Rust),
                     "scala" => Some(GuestLanguage::Scala),
+                    "moonbit" => Some(GuestLanguage::MoonBit),
                     _ => None,
                 })
         })
@@ -1401,10 +1436,6 @@ impl<'a> Component<'a> {
         &self.properties().env
     }
 
-    pub fn wasi_config(&self) -> &BTreeMap<String, String> {
-        &self.properties().wasi_config
-    }
-
     pub fn config(&self) -> &Option<JsonValue> {
         &self.properties().config
     }
@@ -1434,8 +1465,6 @@ impl<'a> Component<'a> {
             config: self.layer_properties().config.value().clone(),
             env_merge_mode: None,
             env: Some(self.layer_properties().env.value().clone()),
-            wasi_config_merge_mode: None,
-            wasi_config: Some(self.layer_properties().wasi_config.value().clone()),
             plugins_merge_mode: None,
             plugins: Some(self.layer_properties().plugins.value().clone()),
             files_merge_mode: None,
@@ -1465,9 +1494,6 @@ pub struct ComponentLayerProperties {
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasi_config_merge_mode: Option<MapMergeMode>,
-    pub wasi_config: MapProperty<ComponentLayer, String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins_merge_mode: Option<VecMergeMode>,
     pub plugins: VecProperty<ComponentLayer, app_raw::PluginInstallation>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1488,12 +1514,6 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             config: value.agent_properties.config.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
             env: value.agent_properties.env.unwrap_or_default().into(),
-            wasi_config_merge_mode: value.agent_properties.wasi_config_merge_mode,
-            wasi_config: value
-                .agent_properties
-                .wasi_config
-                .unwrap_or_default()
-                .into(),
             plugins_merge_mode: value.agent_properties.plugins_merge_mode,
             plugins: value.agent_properties.plugins.unwrap_or_default().into(),
             files_merge_mode: value.agent_properties.files_merge_mode,
@@ -1511,7 +1531,6 @@ impl ComponentLayerProperties {
         self.clean.compact_trace();
         self.config.compact_trace();
         self.env.compact_trace();
-        self.wasi_config.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
     }
@@ -1685,14 +1704,6 @@ impl Layer for AgentLayer {
                     properties.env.clone().unwrap_or_default(),
                 ),
             );
-            value.wasi_config.apply_layer(
-                id,
-                selection,
-                (
-                    properties.wasi_config_merge_mode.unwrap_or_default(),
-                    properties.wasi_config.clone().unwrap_or_default(),
-                ),
-            );
             value.plugins.apply_layer(
                 id,
                 selection,
@@ -1724,7 +1735,6 @@ pub struct AgentLayerProperties {
     pub applied_layers: Vec<(AgentLayerId, Option<String>)>,
     config: JsonProperty<AgentLayer>,
     env: MapProperty<AgentLayer, String, String>,
-    wasi_config: MapProperty<AgentLayer, String, String>,
     plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
     files: VecProperty<AgentLayer, app_raw::InitialComponentFile>,
 }
@@ -1743,7 +1753,6 @@ impl AgentLayerProperties {
     pub fn compact_traces(&mut self) {
         self.config.compact_trace();
         self.env.compact_trace();
-        self.wasi_config.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
     }
@@ -1778,7 +1787,6 @@ impl AgentLayerProperties {
 pub struct AgentProperties {
     pub config: Option<JsonValue>,
     pub env: BTreeMap<String, String>,
-    pub wasi_config: BTreeMap<String, String>,
     pub plugins: Vec<app_raw::PluginInstallation>,
     pub files: Vec<app_raw::InitialComponentFile>,
 }
@@ -1789,12 +1797,6 @@ impl AgentProperties {
             config: layer_properties.config.value().clone(),
             env: layer_properties
                 .env
-                .value()
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            wasi_config: layer_properties
-                .wasi_config
                 .value()
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
@@ -1817,7 +1819,6 @@ pub struct ComponentProperties {
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
-    pub wasi_config: BTreeMap<String, String>,
     pub config: Option<JsonValue>,
 }
 
@@ -1850,12 +1851,6 @@ impl ComponentProperties {
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value().iter()),
-            wasi_config: merged
-                .wasi_config
-                .value()
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
             config: merged.config.value().clone(),
         };
 
@@ -2045,6 +2040,7 @@ impl PluginInstallation {
 
 mod app_builder {
     use super::ResourceDefinitionCreation;
+    use super::ResourceName;
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
@@ -2063,12 +2059,9 @@ mod app_builder {
     use crate::{fs, fuzzy};
     use colored::Colorize;
     use golem_common::model::agent::AgentTypeName;
-    use golem_common::model::agent_secret::AgentSecretPath;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
-    use golem_common::model::deployment::{
-        DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault,
-    };
+    use golem_common::model::deployment::DeploymentRetryPolicyDefault;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
@@ -2114,6 +2107,9 @@ mod app_builder {
         Component(ComponentName),
         Agent(AgentTypeName),
         Environment(EnvironmentName),
+        SecretDefaults(EnvironmentName),
+        RetryPolicyDefaults(EnvironmentName),
+        ResourceDefaults(EnvironmentName),
         Bridge,
     }
 
@@ -2128,6 +2124,9 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
                 UniqueSourceCheckedEntityKey::Agent(_) => "Agent",
                 UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
+                UniqueSourceCheckedEntityKey::SecretDefaults(_) => property,
+                UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
+                UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
             }
         }
@@ -2152,6 +2151,27 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::Environment(environment_name) => {
                     environment_name.0.log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::SecretDefaults(environment_name) => {
+                    format!(
+                        "{}.{}",
+                        "secretDefaults".log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+                UniqueSourceCheckedEntityKey::RetryPolicyDefaults(environment_name) => {
+                    format!(
+                        "{}.{}",
+                        "retryPolicyDefaults".log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+                UniqueSourceCheckedEntityKey::ResourceDefaults(environment_name) => {
+                    format!(
+                        "{}.{}",
+                        "resourceDefaults".log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
                 }
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
             }
@@ -2194,14 +2214,15 @@ mod app_builder {
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
-        agent_secret_defaults:
-            BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
+        agent_secret_defaults: BTreeMap<EnvironmentName, WithSource<serde_json::Value>>,
 
         retry_policy_defaults:
-            BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+            BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
 
-        resource_definition_defaults:
-            BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
+        resource_definition_defaults: BTreeMap<
+            EnvironmentName,
+            BTreeMap<ResourceName, WithSource<ResourceDefinitionCreation>>,
+        >,
 
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
@@ -2442,7 +2463,12 @@ mod app_builder {
                                 deployments.entry(api_deployment.domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
-                                        webhooks_url: api_deployment.webhook_url.unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_url),
+                                        webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
+                                            api_deployment
+                                                .webhook_url
+                                                .unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_prefix),
+                                        ),
+                                        openapi_prefix: HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix(api_deployment.openapi_endpoint.unwrap_or(HttpApiDeploymentCreation::default_openapi_endpoint_prefix())),
                                         agents,
                                     },
                                 ));
@@ -2471,48 +2497,68 @@ mod app_builder {
                         }
                     }
 
-                    for (environment, environment_agent_secrets) in app.application.secret_defaults {
-                        let entry = self.agent_secret_defaults
-                            .entry(environment.clone())
-                            .or_default();
-
-                        for environment_agent_secret in environment_agent_secrets {
-                            entry.push(
-                                WithSource::new(
-                                    app.source.to_path_buf(),
-                                    DeploymentAgentSecretDefault { path: AgentSecretPath(environment_agent_secret.path), secret_value: environment_agent_secret.value }
-                                )
-                            )
+                    for (environment, environment_secret_defaults) in app.application.secret_defaults {
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::SecretDefaults(environment.clone()),
+                            &app.source,
+                        ) {
+                            self.agent_secret_defaults.insert(
+                                environment.clone(),
+                                WithSource::new(app.source.to_path_buf(), environment_secret_defaults),
+                            );
                         }
                     }
 
                     for (environment, env_retry_policy_defaults) in app.application.retry_policy_defaults {
-                        let entry = self.retry_policy_defaults
-                            .entry(environment.clone())
-                            .or_default();
-
-                        for rpd in env_retry_policy_defaults {
-                            entry.push(
-                                WithSource::new(
-                                    app.source.to_path_buf(),
-                                    DeploymentRetryPolicyDefault {
-                                        name: rpd.name,
-                                        priority: rpd.priority,
-                                        predicate: rpd.predicate.into(),
-                                        policy: rpd.policy.into(),
-                                    }
-                                )
-                            )
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::RetryPolicyDefaults(environment.clone()),
+                            &app.source,
+                        ) {
+                            for (retry_policy_name, retry_policy) in env_retry_policy_defaults {
+                                let entry = self
+                                    .retry_policy_defaults
+                                    .entry(environment.clone())
+                                    .or_default();
+                                entry.insert(
+                                    retry_policy_name.clone(),
+                                    WithSource::new(
+                                        app.source.to_path_buf(),
+                                        DeploymentRetryPolicyDefault {
+                                            name: retry_policy_name,
+                                            priority: retry_policy.priority,
+                                            predicate: retry_policy.predicate.into(),
+                                            policy: retry_policy.policy.into(),
+                                        },
+                                    ),
+                                );
+                            }
                         }
                     }
 
                     for (environment, resource_defs) in app.application.resource_defaults {
-                        let entry = self.resource_definition_defaults
-                            .entry(environment.clone())
-                            .or_default();
-
-                        for resource_def in resource_defs {
-                            entry.push(WithSource::new(app.source.to_path_buf(), resource_def));
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::ResourceDefaults(environment.clone()),
+                            &app.source,
+                        ) {
+                            for (resource_name, resource) in resource_defs {
+                                let entry = self
+                                    .resource_definition_defaults
+                                    .entry(environment.clone())
+                                    .or_default();
+                                entry.insert(
+                                    resource_name.clone(),
+                                    WithSource::new(
+                                        app.source.to_path_buf(),
+                                        ResourceDefinitionCreation {
+                                            name: resource_name,
+                                            limit: resource.limit,
+                                            enforcement_action: resource.enforcement_action,
+                                            unit: resource.unit,
+                                            units: resource.units,
+                                        },
+                                    ),
+                                );
+                            }
                         }
                     }
 
@@ -2642,10 +2688,10 @@ mod app_builder {
                         .add_layer(ComponentLayer {
                             id: ComponentLayerId::TemplateCommon(template_name.clone()),
                             parents: ComponentLayerId::parent_ids_from_raw_template_references(
-                                template.templates,
+                                template.templates.clone(),
                             ),
                             properties: ComponentLayerPropertiesKind::Common(Box::new(
-                                template.component_properties.into(),
+                                template.component_layer_properties().into(),
                             )),
                         })
                         .err()
@@ -2717,10 +2763,10 @@ mod app_builder {
                         .add_layer(ComponentLayer {
                             id: ComponentLayerId::ComponentCommon(component_name.clone()),
                             parents: ComponentLayerId::parent_ids_from_raw_template_references(
-                                component.templates,
+                                component.templates.clone(),
                             ),
                             properties: ComponentLayerPropertiesKind::Common(Box::new(
-                                component.component_properties.into(),
+                                component.component_layer_properties().into(),
                             )),
                         })
                         .err()
@@ -3081,18 +3127,278 @@ mod test {
 
         "# };
 
-        let (app, app_tmp_dir) = load_app(
-            source,
-            &ComponentPresetSelector {
-                environment: "local".parse().unwrap(),
-                presets: vec!["debug".parse().unwrap()],
-            },
-        );
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &["debug"]);
 
-        let component_name: ComponentName = "app:main".parse().unwrap();
+        let component_name = parse_component_name("app:main");
         let component = app.component(&component_name);
 
         assert_eq!(component.wasm(), app_tmp_dir.path().join("a.wasm"));
+    }
+
+    #[test]
+    fn test_component_resolution_order_is_common_env_custom() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              app:main:
+                componentWasm: common.wasm
+                env:
+                  KEY: common
+                  COMMON_ONLY: common
+                presets:
+                  app-env:local:
+                    componentWasm: env.wasm
+                    env:
+                      KEY: env
+                      ENV_ONLY: env
+                  debug:
+                    componentWasm: custom.wasm
+                    env:
+                      KEY: custom
+                      CUSTOM_ONLY: custom
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &["debug"]);
+
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+
+        assert_eq!(component.wasm(), app_tmp_dir.path().join("custom.wasm"));
+        assert_eq!(
+            component.env().get("KEY").cloned(),
+            Some("custom".to_string())
+        );
+        assert_eq!(
+            component.env().get("COMMON_ONLY").cloned(),
+            Some("common".to_string())
+        );
+        assert_eq!(
+            component.env().get("ENV_ONLY").cloned(),
+            Some("env".to_string())
+        );
+        assert_eq!(
+            component.env().get("CUSTOM_ONLY").cloned(),
+            Some("custom".to_string())
+        );
+        assert_eq!(
+            component_applied_layers_trace(&component),
+            vec![
+                "app:main".to_string(),
+                "app:main[app-env:local]".to_string(),
+                "app:main[debug]".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_component_environment_preset_selected_by_environment_name() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+              cloud:
+                server: cloud
+
+            components:
+              app:main:
+                componentWasm: common.wasm
+                env:
+                  COMMON_ONLY: common
+                presets:
+                  app-env:local:
+                    componentWasm: local.wasm
+                    env:
+                      ENV_ONLY: local
+                  app-env:cloud:
+                    componentWasm: cloud.wasm
+                    env:
+                      ENV_ONLY: cloud
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "cloud", &[]);
+
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+
+        assert_eq!(component.wasm(), app_tmp_dir.path().join("cloud.wasm"));
+        assert_eq!(
+            component.env().get("COMMON_ONLY").cloned(),
+            Some("common".to_string())
+        );
+        assert_eq!(
+            component.env().get("ENV_ONLY").cloned(),
+            Some("cloud".to_string())
+        );
+        assert_eq!(
+            component_applied_layers_trace(&component),
+            vec![
+                "app:main".to_string(),
+                "app:main[app-env:cloud]".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_component_custom_template_single_is_applied() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            componentTemplates:
+              custom-template:
+                componentWasm: template-common.wasm
+                env:
+                  KEY: template-common
+                  TEMPLATE_COMMON_ONLY: template-common
+                presets:
+                  app-env:local:
+                    componentWasm: template-env.wasm
+                    env:
+                      KEY: template-env
+                      TEMPLATE_ENV_ONLY: template-env
+                  debug:
+                    componentWasm: template-custom.wasm
+                    env:
+                      KEY: template-custom
+                      TEMPLATE_CUSTOM_ONLY: template-custom
+
+            components:
+              app:main:
+                templates: custom-template
+                env:
+                  COMPONENT_ONLY: component
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &["debug"]);
+
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+
+        assert_eq!(
+            component_applied_layers_trace(&component),
+            vec![
+                "custom-template".to_string(),
+                "custom-template[app-env:local]".to_string(),
+                "custom-template[debug]".to_string(),
+                "app:main".to_string(),
+            ]
+        );
+        assert_eq!(
+            component.wasm(),
+            app_tmp_dir.path().join("template-custom.wasm")
+        );
+        assert_eq!(
+            component.env().get("KEY").cloned(),
+            Some("template-custom".to_string())
+        );
+        assert_eq!(
+            component.env().get("TEMPLATE_COMMON_ONLY").cloned(),
+            Some("template-common".to_string())
+        );
+        assert_eq!(
+            component.env().get("TEMPLATE_ENV_ONLY").cloned(),
+            Some("template-env".to_string())
+        );
+        assert_eq!(
+            component.env().get("TEMPLATE_CUSTOM_ONLY").cloned(),
+            Some("template-custom".to_string())
+        );
+        assert_eq!(
+            component.env().get("COMPONENT_ONLY").cloned(),
+            Some("component".to_string())
+        );
+    }
+
+    #[test]
+    fn test_component_custom_template_multiple_are_applied_in_order() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            componentTemplates:
+              template-a:
+                componentWasm: template-a-common.wasm
+                env:
+                  KEY: template-a-common
+                presets:
+                  app-env:local:
+                    componentWasm: template-a-env.wasm
+                    env:
+                      KEY: template-a-env
+                  debug:
+                    componentWasm: template-a-custom.wasm
+                    env:
+                      KEY: template-a-custom
+                      A_ONLY: template-a-custom
+              template-b:
+                componentWasm: template-b-common.wasm
+                env:
+                  KEY: template-b-common
+                presets:
+                  app-env:local:
+                    componentWasm: template-b-env.wasm
+                    env:
+                      KEY: template-b-env
+                  debug:
+                    componentWasm: template-b-custom.wasm
+                    env:
+                      KEY: template-b-custom
+                      B_ONLY: template-b-custom
+
+            components:
+              app:main:
+                templates: [template-a, template-b]
+        "# };
+
+        let (app, app_tmp_dir) = load_app_for_env(source, "local", &["debug"]);
+
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+
+        assert_eq!(
+            component.wasm(),
+            app_tmp_dir.path().join("template-b-custom.wasm")
+        );
+        assert_eq!(
+            component.env().get("KEY").cloned(),
+            Some("template-b-custom".to_string())
+        );
+        assert_eq!(
+            component.env().get("A_ONLY").cloned(),
+            Some("template-a-custom".to_string())
+        );
+        assert_eq!(
+            component.env().get("B_ONLY").cloned(),
+            Some("template-b-custom".to_string())
+        );
+        assert_eq!(
+            component_applied_layers_trace(&component),
+            vec![
+                "template-a".to_string(),
+                "template-a[app-env:local]".to_string(),
+                "template-a[debug]".to_string(),
+                "template-b".to_string(),
+                "template-b[app-env:local]".to_string(),
+                "template-b[debug]".to_string(),
+                "app:main".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -3137,8 +3443,6 @@ mod test {
                 env:
                   KEY: fallback
                   ONLY_FALLBACK: fb
-                wasiConfig:
-                  key: fallback
 
             agents:
               test-agent:
@@ -3160,8 +3464,6 @@ mod test {
                           keep: "custom"
                           plus: "custom"
                       replacedByScalar: "scalar"
-                    wasiConfig:
-                      key: custom
                 config:
                   common: "common"
                   nested:
@@ -3170,57 +3472,490 @@ mod test {
                       keep: "common"
                 env:
                   KEY: common
-                wasiConfig:
-                  key: common
         "# };
 
-        let (app, _app_tmp_dir) = load_app(
-            source,
-            &ComponentPresetSelector {
-                environment: "local".parse().unwrap(),
-                presets: vec!["custom".parse().unwrap()],
-            },
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &["custom"]);
+
+        with_resolved_agent(&app, "app:main", "test-agent", |agent| {
+            assert_eq!(
+                agent.config().cloned(),
+                Some(json!({
+                    "fallback": "fallback",
+                    "env": "env",
+                    "custom": "custom",
+                    "common": "common",
+                    "nested": {
+                        "from_component": true,
+                        "from_env": true,
+                        "from_common": true,
+                        "deep": {
+                            "keep": "custom",
+                            "plus": "custom"
+                        }
+                    },
+                    "replacedByScalar": "scalar"
+                }))
+            );
+
+            assert_eq!(agent.env().get("KEY").cloned(), Some("env".to_string()));
+            assert_eq!(
+                agent.env().get("ONLY_FALLBACK").cloned(),
+                Some("fb".to_string())
+            );
+
+            assert_eq!(agent.applied_layers().len(), 4);
+        });
+    }
+
+    #[test]
+    fn test_agent_resolution_order_is_common_env_custom() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                config:
+                  level: component
+                env:
+                  KEY: component
+
+            agents:
+              test-agent:
+                config:
+                  level: common
+                  commonOnly: true
+                env:
+                  KEY: common
+                  COMMON_ONLY: common
+                presets:
+                  app-env:local:
+                    config:
+                      level: env
+                      envOnly: true
+                    env:
+                      KEY: env
+                      ENV_ONLY: env
+                  debug:
+                    config:
+                      level: custom
+                      customOnly: true
+                    env:
+                      KEY: custom
+                      CUSTOM_ONLY: custom
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &["debug"]);
+
+        with_resolved_agent(&app, "app:main", "test-agent", |agent| {
+            assert_eq!(
+                agent.config().cloned(),
+                Some(json!({
+                    "level": "custom",
+                    "commonOnly": true,
+                    "envOnly": true,
+                    "customOnly": true
+                }))
+            );
+            assert_eq!(agent.env().get("KEY").cloned(), Some("custom".to_string()));
+            assert_eq!(
+                agent.env().get("COMMON_ONLY").cloned(),
+                Some("common".to_string())
+            );
+            assert_eq!(
+                agent.env().get("ENV_ONLY").cloned(),
+                Some("env".to_string())
+            );
+            assert_eq!(
+                agent.env().get("CUSTOM_ONLY").cloned(),
+                Some("custom".to_string())
+            );
+            assert_eq!(
+                agent_applied_layers_trace(agent),
+                vec![
+                    "component:app:main".to_string(),
+                    "agent:test-agent:common".to_string(),
+                    "agent:test-agent:environment-presets[app-env:local]".to_string(),
+                    "agent:test-agent:custom-presets[debug]".to_string(),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn test_agent_custom_preset_falls_back_to_default() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            agents:
+              test-agent:
+                config:
+                  source: common
+                presets:
+                  default-custom:
+                    default: true
+                    config:
+                      selected: default-custom
+                  another-custom:
+                    config:
+                      selected: another-custom
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &["missing"]);
+
+        with_resolved_agent(&app, "app:main", "test-agent", |agent| {
+            assert_eq!(
+                agent.config().cloned(),
+                Some(json!({
+                    "source": "common",
+                    "selected": "default-custom"
+                }))
+            );
+            assert_eq!(
+                agent_applied_layers_trace(agent),
+                vec![
+                    "component:app:main".to_string(),
+                    "agent:test-agent:common".to_string(),
+                    "agent:test-agent:custom-presets[default-custom]".to_string(),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn test_agent_environment_preset_selected_by_environment_name() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+              cloud:
+                server: cloud
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            agents:
+              test-agent:
+                config:
+                  source: common
+                presets:
+                  app-env:local:
+                    config:
+                      envPreset: local
+                  app-env:cloud:
+                    config:
+                      envPreset: cloud
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "cloud", &[]);
+
+        with_resolved_agent(&app, "app:main", "test-agent", |agent| {
+            assert_eq!(
+                agent.config().cloned(),
+                Some(json!({
+                    "source": "common",
+                    "envPreset": "cloud"
+                }))
+            );
+            assert_eq!(
+                agent_applied_layers_trace(agent),
+                vec![
+                    "component:app:main".to_string(),
+                    "agent:test-agent:common".to_string(),
+                    "agent:test-agent:environment-presets[app-env:cloud]".to_string(),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn test_agent_custom_template_single_is_applied() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            componentTemplates:
+              template-for-agent:
+                config:
+                  source: template-common
+                  templateCommonOnly: true
+                presets:
+                  app-env:local:
+                    config:
+                      source: template-env
+                      templateEnvOnly: true
+                  debug:
+                    config:
+                      source: template-custom
+                      templateCustomOnly: true
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            agents:
+              test-agent:
+                templates: template-for-agent
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &["debug"]);
+
+        with_resolved_agent(&app, "app:main", "test-agent", |agent| {
+            assert_eq!(
+                agent.config().cloned(),
+                Some(json!({
+                    "source": "template-custom",
+                    "templateCommonOnly": true,
+                    "templateEnvOnly": true,
+                    "templateCustomOnly": true
+                }))
+            );
+            assert_eq!(
+                agent_applied_layers_trace(agent),
+                vec![
+                    "component:app:main".to_string(),
+                    "agent:test-agent:template:template-for-agent".to_string(),
+                    "agent:test-agent:common".to_string(),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn test_agent_custom_template_multiple_are_applied_in_order() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            componentTemplates:
+              template-a:
+                config:
+                  from: template-a-common
+                  fromACommon: true
+                presets:
+                  app-env:local:
+                    config:
+                      from: template-a-env
+                      fromAEnv: true
+                  debug:
+                    config:
+                      from: template-a-custom
+                      fromACustom: true
+              template-b:
+                config:
+                  from: template-b-common
+                  fromBCommon: true
+                presets:
+                  app-env:local:
+                    config:
+                      from: template-b-env
+                      fromBEnv: true
+                  debug:
+                    config:
+                      from: template-b-custom
+                      fromBCustom: true
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            agents:
+              test-agent:
+                templates: [template-a, template-b]
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &["debug"]);
+
+        with_resolved_agent(&app, "app:main", "test-agent", |agent| {
+            assert_eq!(
+                agent.config().cloned(),
+                Some(json!({
+                    "from": "template-b-custom",
+                    "fromACommon": true,
+                    "fromAEnv": true,
+                    "fromACustom": true,
+                    "fromBCommon": true,
+                    "fromBEnv": true,
+                    "fromBCustom": true
+                }))
+            );
+            assert_eq!(
+                agent_applied_layers_trace(agent),
+                vec![
+                    "component:app:main".to_string(),
+                    "agent:test-agent:template:template-a".to_string(),
+                    "agent:test-agent:template:template-b".to_string(),
+                    "agent:test-agent:common".to_string(),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn test_agent_resolution_fails_on_unknown_template() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            agents:
+              test-agent:
+                templates: missing-template
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        let err = resolve_agents_for(&app, "app:main", "test-agent").unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("missing-template"),
+            "error should mention missing template: {message}"
         );
+        assert!(
+            message.contains("test-agent"),
+            "error should mention agent name: {message}"
+        );
+    }
 
-        let component_name: ComponentName = "app:main".parse().unwrap();
-        let agent_type_name: AgentTypeName = "test-agent".parse().unwrap();
+    #[test]
+    fn test_agent_resolution_fails_on_duplicate_template_layer() {
+        let source = indoc! { r#"
+            app: hello-app
 
-        let mapping = BTreeMap::from([(agent_type_name.clone(), component_name.clone())]);
-        let resolved_agents = app.resolve_agents(&mapping);
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              shared-template:
+                config:
+                  source: template
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+
+            agents:
+              test-agent:
+                templates: [shared-template, shared-template]
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        let err = resolve_agents_for(&app, "app:main", "test-agent").unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("Layer already exists") || message.contains("already exists"),
+            "error should mention duplicate layer: {message}"
+        );
+        assert!(
+            message.contains("shared-template"),
+            "error should mention duplicate template name: {message}"
+        );
+    }
+
+    fn component_applied_layers_trace(component: &crate::model::app::Component<'_>) -> Vec<String> {
+        component
+            .applied_layers()
+            .iter()
+            .map(|(id, selection)| match selection {
+                Some(selection) => format!("{}[{selection}]", id.name()),
+                None => id.name().to_string(),
+            })
+            .collect()
+    }
+
+    fn agent_applied_layers_trace(agent: crate::model::app::Agent<'_>) -> Vec<String> {
+        agent
+            .applied_layers()
+            .iter()
+            .map(|(id, selection)| match selection {
+                Some(selection) => format!("{}[{selection}]", id.name()),
+                None => id.name(),
+            })
+            .collect()
+    }
+
+    fn selector(environment: &str, presets: &[&str]) -> ComponentPresetSelector {
+        ComponentPresetSelector {
+            environment: environment.parse().unwrap(),
+            presets: presets
+                .iter()
+                .map(|preset| preset.parse().unwrap())
+                .collect(),
+        }
+    }
+
+    fn parse_component_name(name: &str) -> ComponentName {
+        name.parse().unwrap()
+    }
+
+    fn parse_agent_type_name(name: &str) -> AgentTypeName {
+        name.parse().unwrap()
+    }
+
+    fn load_app_for_env(
+        source: &str,
+        environment: &str,
+        presets: &[&str],
+    ) -> (Application, TempDir) {
+        load_app(source, &selector(environment, presets))
+    }
+
+    fn with_resolved_agent<T>(
+        app: &Application,
+        component_name_str: &str,
+        agent_type_name_str: &str,
+        test_fn: impl FnOnce(crate::model::app::Agent<'_>) -> T,
+    ) -> T {
+        let agent_type_name = parse_agent_type_name(agent_type_name_str);
+        let resolved_agents = resolve_agents_for(app, component_name_str, agent_type_name_str)
+            .unwrap_or_else(|err| {
+                panic!("Failed to resolve test agent '{agent_type_name_str}': {err}")
+            });
         let agent = resolved_agents.agent(&agent_type_name).unwrap();
+        test_fn(agent)
+    }
 
-        assert_eq!(
-            agent.config().cloned(),
-            Some(json!({
-                "fallback": "fallback",
-                "env": "env",
-                "custom": "custom",
-                "common": "common",
-                "nested": {
-                    "from_component": true,
-                    "from_env": true,
-                    "from_common": true,
-                    "deep": {
-                        "keep": "common",
-                        "plus": "custom"
-                    }
-                },
-                "replacedByScalar": "scalar"
-            }))
-        );
-
-        assert_eq!(agent.env().get("KEY").cloned(), Some("common".to_string()));
-        assert_eq!(
-            agent.env().get("ONLY_FALLBACK").cloned(),
-            Some("fb".to_string())
-        );
-
-        assert_eq!(
-            agent.wasi_config().get("key").cloned(),
-            Some("common".to_string())
-        );
-
-        assert_eq!(agent.applied_layers().len(), 4);
+    fn resolve_agents_for(
+        app: &Application,
+        component_name_str: &str,
+        agent_type_name_str: &str,
+    ) -> anyhow::Result<crate::model::app::Agents> {
+        let component_name = parse_component_name(component_name_str);
+        let agent_type_name = parse_agent_type_name(agent_type_name_str);
+        let mapping = BTreeMap::from([(agent_type_name, component_name)]);
+        app.resolve_agents(&mapping)
     }
 
     fn load_app(source: &str, selector: &ComponentPresetSelector) -> (Application, TempDir) {

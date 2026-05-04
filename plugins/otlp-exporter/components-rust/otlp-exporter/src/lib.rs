@@ -93,6 +93,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
         };
 
         if has_traces {
+            let span_count = output.spans.len();
             let request_body = ExportTraceServiceRequest {
                 resource_spans: vec![ResourceSpans {
                     resource: OtlpResource {
@@ -105,9 +106,11 @@ impl OplogProcessorGuest for OtlpExporterComponent {
                 }],
             };
             send_spans(&exporter_config, request_body)?;
+            println!("OTLP: exported {span_count} trace span(s)");
         }
 
         if has_logs {
+            let log_count = output.log_records.len();
             let request_body = ExportLogsServiceRequest {
                 resource_logs: vec![ResourceLogs {
                     resource: OtlpResource {
@@ -120,9 +123,11 @@ impl OplogProcessorGuest for OtlpExporterComponent {
                 }],
             };
             send_logs(&exporter_config, request_body)?;
+            println!("OTLP: exported {log_count} log record(s)");
         }
 
         if has_metrics {
+            let metric_count = output.metrics.len();
             let request_body = ExportMetricsServiceRequest {
                 resource_metrics: vec![ResourceMetrics {
                     resource: OtlpResource {
@@ -135,6 +140,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
                 }],
             };
             send_metrics(&exporter_config, request_body)?;
+            println!("OTLP: exported {metric_count} metric(s)");
         }
 
         WORKER_STATES.with(|states| {

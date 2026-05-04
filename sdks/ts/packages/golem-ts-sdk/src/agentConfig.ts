@@ -73,10 +73,10 @@ export class Config<T> {
 function loadConfigKey(path: string[], type: Type.Type): any {
   const [witType, analysedType] = Either.getOrThrowWith(
     WitType.fromTsType(type, undefined),
-    (err) => new Error(`Failed to analyse config type: ${err}`),
+    (err) => new Error(`Failed to analyse config type at path '${path.join('.')}': ${err}`),
   );
 
-  let witValue = getConfigValue(path, witType);
+  const witValue = getConfigValue(path, witType);
 
   return WitValue.toTsValue(witValue, analysedType);
 }

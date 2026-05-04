@@ -42,6 +42,9 @@ pub struct ServerConfig {
 
     pub grpc: GrpcApiConfig,
 
+    // Engine
+    pub engine: EngineConfig,
+
     // Metrics and healthcheck
     pub http_host: String,
     pub http_port: u16,
@@ -80,6 +83,9 @@ impl SafeDisplay for ServerConfig {
         let _ = writeln!(&mut result, "grpc");
         let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
 
+        let _ = writeln!(&mut result, "engine:");
+        let _ = writeln!(&mut result, "{}", self.engine.to_safe_string_indented());
+
         let _ = writeln!(&mut result, "HTTP host: {}", self.http_host);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
         result
@@ -102,6 +108,7 @@ impl Default for ServerConfig {
             blob_storage: BlobStorageConfig::default_local_file_system(),
             compile_worker: Default::default(),
             grpc: GrpcApiConfig::default(),
+            engine: EngineConfig::default(),
             http_host: "0.0.0.0".to_string(),
             http_port: 8084,
         }
@@ -198,7 +205,6 @@ impl SafeDisplay for StaticRegistryServiceConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompileWorkerConfig {
-    pub max_message_size: usize,
     #[serde(flatten)]
     pub client_config: GrpcClientConfig,
 }
@@ -206,7 +212,6 @@ pub struct CompileWorkerConfig {
 impl SafeDisplay for CompileWorkerConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
         let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
     }
@@ -230,13 +235,25 @@ impl Default for RegistryServiceConfig {
 impl Default for CompileWorkerConfig {
     fn default() -> Self {
         Self {
-            max_message_size: 1000000,
             client_config: GrpcClientConfig {
                 retries_on_unavailable: RetryConfig::max_attempts_3(),
                 connect_timeout: Duration::from_secs(10),
                 ..Default::default()
             },
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct EngineConfig {
+    pub enable_fs_cache: bool,
+}
+
+impl SafeDisplay for EngineConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "enable fs cache: {}", self.enable_fs_cache);
+        result
     }
 }
 

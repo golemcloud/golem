@@ -6,6 +6,7 @@ world agent-guest {
 
   import golem:rdbms/postgres@1.5.0;
   import golem:rdbms/mysql@1.5.0;
+  import golem:rdbms/ignite2@1.5.0;
   import golem:rdbms/types@1.5.0;
 
   import golem:api/context@1.5.0;
@@ -26,6 +27,8 @@ world agent-guest {
   import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
 
   import wasi:config/store@0.2.0-draft;
+
+  import wasi:logging/logging;
 
   include golem:agent/agent-guest@1.5.0;
 

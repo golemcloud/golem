@@ -100,13 +100,7 @@ async fn websocket_echo_rust(
 
     let agent_id = agent_id!("WebsocketTest", "ws-echo-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor
@@ -182,13 +176,7 @@ async fn websocket_echo_rust_oplog_replay(
 
     let agent_id = agent_id!("WebsocketTest", "ws-echo-oplog-replay");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     // First invocation: full WebSocket session (connect/send/receive/drop) and
@@ -311,13 +299,7 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
 
     let agent_id = agent_id!("WebsocketTest", "ws-phase2-reconnect");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let promise_id_value = executor
@@ -492,13 +474,7 @@ async fn websocket_reconnect_failure_returns_guest_error(
 
     let agent_id = agent_id!("WebsocketTest", "ws-reconnect-failure");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let promise_id_value = executor
@@ -566,119 +542,6 @@ async fn websocket_reconnect_failure_returns_guest_error(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn websocket_subscribe_does_not_reconnect_during_replay(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-    let accepted_connections = Arc::new(AtomicUsize::new(0));
-    let accepted_connections_for_server = Arc::clone(&accepted_connections);
-
-    let ws_server = spawn(
-        async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    break;
-                };
-                accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("WS handshake failed");
-                let (mut write, _read) = StreamExt::split(ws_stream);
-                for i in 0..5u32 {
-                    let msg = tokio_tungstenite::tungstenite::Message::text(format!("msg-{i}"));
-                    if SinkExt::send(&mut write, msg).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-        .in_current_span(),
-    );
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
-    let agent_id = agent_id!("WebsocketTest", "ws-subscribe-replay-guard");
-    let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
-        .await?;
-
-    let first = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "connect_subscribe_and_receive_first",
-            data_value!(format!("ws://localhost:{ws_port}")),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(first, Value::String("msg-0".to_string()));
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-    drop(executor);
-
-    let executor = start(deps, &context).await?;
-    let activation_result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "subscribe_to_persisted",
-            data_value!(),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(activation_result, Value::Bool(true));
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(
-        accepted_connections.load(Ordering::SeqCst),
-        1,
-        "subscribe on a replayed websocket must not reconnect before the first durable websocket operation"
-    );
-
-    let next = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "receive_next_from_persisted",
-            data_value!(),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(next, Value::String("msg-0".to_string()));
-    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-    drop(executor);
-    ws_server.abort();
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("2m")]
 async fn websocket_closed_connection_stays_terminal_after_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -736,13 +599,7 @@ async fn websocket_closed_connection_stays_terminal_after_replay(
 
     let agent_id = agent_id!("WebsocketTest", "ws-terminal-close-replay");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let first = executor
@@ -863,13 +720,7 @@ async fn websocket_successful_close_terminalizes_handle_and_prevents_reconnect(
 
     let agent_id = agent_id!("WebsocketTest", "ws-close-terminal-replay");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let first = executor
@@ -1056,13 +907,7 @@ async fn websocket_receive_with_timeout(
 
     let agent_id = agent_id!("WebsocketTest", "ws-timeout-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor
@@ -1126,13 +971,7 @@ async fn websocket_polling_test(
 
     let agent_id = agent_id!("WebsocketTest", "websocket-polling-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor
@@ -1200,13 +1039,7 @@ async fn websocket_polling_survives_repeated_timeouts(
 
     let agent_id = agent_id!("WebsocketTest", "websocket-polling-timeout-race-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor
@@ -1279,13 +1112,7 @@ async fn websocket_async_bidirectional_test(
 
     let agent_id = agent_id!("WebsocketTest", "websocket-async-bidi-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor
@@ -1365,13 +1192,7 @@ async fn websocket_async_bidirectional_test_oplog_replay(
 
     let agent_id = agent_id!("WebsocketTest", "websocket-async-bidi-oplog-replay");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let first_result = executor
@@ -1469,13 +1290,7 @@ async fn websocket_echo_ts(
 
     let agent_id = agent_id!("WebSocketTest", "ws-echo-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor

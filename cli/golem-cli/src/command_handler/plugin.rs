@@ -18,11 +18,15 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
 use crate::model::PathBufOrStdin;
+use crate::model::environment::EnvironmentResolveMode;
 use crate::model::plugin_manifest::{PluginManifest, PluginTypeSpecificManifest};
-use crate::model::text::plugin::{PluginRegistrationGetView, PluginRegistrationRegisterView};
+use crate::model::text::plugin::{
+    PluginListEntry, PluginRegistrationGetView, PluginRegistrationRegisterView, PluginSource,
+};
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::api::PluginClient;
 use golem_client::model::PluginRegistrationCreation;
+use golem_common::model::account::AccountSummary;
 use golem_common::model::base64::Base64;
 use golem_common::model::plugin_registration::{OplogProcessorPluginSpec, PluginSpecDto};
 use std::sync::Arc;
@@ -48,15 +52,56 @@ impl PluginCommandHandler {
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
+        let account_id = self.ctx.account_id().await?;
 
-        let plugin_definitions = clients
+        let own_plugins = clients
             .plugin
-            .list_account_plugins(&self.ctx.account_id().await?.0)
+            .list_account_plugins(&account_id.0)
             .await
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(&plugin_definitions);
+        let mut entries: Vec<PluginListEntry> = own_plugins
+            .into_iter()
+            .map(|p| PluginListEntry {
+                plugin: p,
+                source: PluginSource::Own,
+            })
+            .collect();
+
+        if let Ok(environment) = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await
+            && let Ok(grants) = self
+                .ctx
+                .environment_handler()
+                .plugin_grants(&environment)
+                .await
+        {
+            for (_, grant) in grants {
+                if grant.plugin_account.id != account_id {
+                    let already_listed = entries.iter().any(|e| {
+                        e.plugin.name == grant.plugin.name
+                            && e.plugin.version == grant.plugin.version
+                    });
+                    if !already_listed {
+                        let source = if is_builtin_plugin_owner(&grant.plugin_account) {
+                            PluginSource::Builtin
+                        } else {
+                            PluginSource::Shared
+                        };
+                        entries.push(PluginListEntry {
+                            plugin: grant.plugin,
+                            source,
+                        });
+                    }
+                }
+            }
+        }
+
+        self.ctx.log_handler().log_view(&entries);
 
         Ok(())
     }
@@ -152,4 +197,10 @@ impl PluginCommandHandler {
 
         Ok(())
     }
+}
+
+const BUILTIN_PLUGIN_OWNER_EMAIL: &str = "builtin-plugin-owner@golem.cloud";
+
+fn is_builtin_plugin_owner(account: &AccountSummary) -> bool {
+    account.email.as_str() == BUILTIN_PLUGIN_OWNER_EMAIL
 }

@@ -135,6 +135,7 @@ pub struct AgentInvocationRequest {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInvocationResult {
+    pub agent_id: AgentId,
     pub result: Option<UntypedJsonDataValue>,
     pub component_revision: Option<ComponentRevision>,
 }

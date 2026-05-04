@@ -18,14 +18,12 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::collections::BTreeMap;
 use tracing::warn;
 
 pub trait CanStartWorker {
     fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError>;
     fn agent_id(&self) -> Result<AgentId, WorkerExecutorError>;
     fn env(&self) -> Option<Vec<(String, String)>>;
-    fn wasi_config(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
     fn config(&self) -> Vec<AgentConfigEntryDto>;
     fn parent(&self) -> Option<AgentId>;
     fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
@@ -69,13 +67,6 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
         self.proto_invocation_context()
             .as_ref()
             .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
-    }
-
-    fn wasi_config(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError> {
-        match self.proto_invocation_context() {
-            Some(ctx) => Ok(Some(ctx.wasi_config.clone().into_iter().collect())),
-            None => Ok(None),
-        }
     }
 
     fn config(&self) -> Vec<AgentConfigEntryDto> {

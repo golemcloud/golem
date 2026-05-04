@@ -284,7 +284,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 .get_or_create_running(
                     &target_owned,
                     None,
-                    None,
                     Vec::new(),
                     Some(running_plugin.component_revision),
                     None,
@@ -318,7 +317,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     agent_id: Some(worker_metadata.agent_id.clone().into()),
                     environment_id: Some(worker_metadata.environment_id.into()),
                     env: HashMap::from_iter(worker_metadata.env.iter().cloned()),
-                    wasi_config: worker_metadata.wasi_config.clone().into_iter().collect(),
                     config: worker_metadata
                         .config
                         .clone()
@@ -1103,6 +1101,15 @@ impl ForwardingOplogState {
             None => return,
         };
 
+        tracing::info!(
+            plugin_name = plugin.plugin_name,
+            source_agent = %self.initial_worker_metadata.agent_id,
+            batch_start = %batch_start,
+            batch_end = %batch_end,
+            is_retry,
+            "Oplog processor: flushing batch to plugin"
+        );
+
         let target_agent_id = if let Some(id) = &live.target_agent_id {
             id.clone()
         } else {
@@ -1112,6 +1119,11 @@ impl ForwardingOplogState {
                 .await
             {
                 Ok(id) => {
+                    tracing::info!(
+                        plugin_name = plugin.plugin_name,
+                        target_agent = %id,
+                        "Oplog processor: resolved target plugin worker"
+                    );
                     self.write_checkpoint(
                         grant_id,
                         &id,
@@ -1198,6 +1210,14 @@ impl ForwardingOplogState {
             .await
         {
             Ok(()) => {
+                tracing::info!(
+                    plugin_name = plugin.plugin_name,
+                    source_agent = %metadata.agent_id,
+                    target_agent = %target_agent_id,
+                    batch_start = %batch_start,
+                    batch_end = %batch_end,
+                    "Oplog processor: batch enqueued successfully"
+                );
                 // Enqueue succeeded — immediately confirm
                 self.write_checkpoint(
                     grant_id,
@@ -1596,9 +1616,12 @@ impl ForwardingOplogState {
                 s.target_agent_id = Some(new_target.clone());
             }
             tracing::info!(
+                source_worker = %self.initial_worker_metadata.agent_id,
                 plugin = %grant_id,
                 old_target = %old_target,
                 new_target = %new_target,
+                confirmed_up_to = confirmed.as_u64(),
+                last_batch_start = last_batch_start.as_u64(),
                 "Locality recovery: migrated plugin to new local target"
             );
         }
@@ -1628,6 +1651,7 @@ fn oplog_processor_idempotency_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::Timestamp;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
@@ -1905,7 +1929,7 @@ mod tests {
                 account_id: AccountId::new(),
                 component_size: 100,
                 metadata: ComponentMetadata::from_parts(
-                    vec![],
+                    KnownExports::default(),
                     vec![],
                     None,
                     None,
@@ -2049,7 +2073,6 @@ mod tests {
             env: vec![],
             environment_id,
             created_by: account_id,
-            wasi_config: BTreeMap::new(),
             config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,

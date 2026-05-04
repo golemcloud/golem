@@ -1,0 +1,192 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/schema"
+
+import {
+  "golemcloud/golem_sdk/extractor",
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+}
+
+// Values
+pub fn extract_enum(&@extractor.Extractor) -> UInt raise @common.AgentError
+
+pub fn[T : FromExtractor] extract_field(&@extractor.Extractor, Int) -> T raise @common.AgentError
+
+pub fn[T : FromExtractor] extract_tuple_element(&@extractor.Extractor, Int) -> T raise @common.AgentError
+
+pub fn extract_variant(&@extractor.Extractor) -> (UInt, &@extractor.Extractor?) raise @common.AgentError
+
+pub fn[T : FromElementValue] from_element_value_as(@types.ElementValue) -> T raise @common.AgentError
+
+pub fn[T : FromExtractor] from_extractor_as(&@extractor.Extractor) -> T raise @common.AgentError
+
+pub fn make_enum_schema(Array[String]) -> @types.ElementSchema
+
+pub fn make_enum_value(UInt) -> @types.ElementValue
+
+pub fn make_record_schema(Array[(String, @types.ElementSchema)]) -> @types.ElementSchema
+
+pub fn make_record_value(Array[@types.ElementValue]) -> @types.ElementValue raise @common.AgentError
+
+pub fn make_tuple_schema(Array[@types.ElementSchema]) -> @types.ElementSchema
+
+pub fn make_tuple_value(Array[@types.ElementValue]) -> @types.ElementValue raise @common.AgentError
+
+pub fn make_variant_schema(Array[(String, @types.ElementSchema?)]) -> @types.ElementSchema
+
+pub fn make_variant_value(UInt, @types.ElementValue?) -> @types.ElementValue raise @common.AgentError
+
+pub fn[T : HasElementSchema] schema_of(T) -> @types.ElementSchema
+
+pub fn[T : HasElementSchema] schema_of_tag(TypeTag[T]) -> @types.ElementSchema
+
+pub fn[T : HasElementSchema] schema_of_tag_with_options(TypeTag[T], SchemaOptions) -> @types.ElementSchema raise @common.AgentError
+
+pub fn[T : ToElementValue] to_element_value_as(T) -> @types.ElementValue raise @common.AgentError
+
+// Errors
+
+// Types and methods
+pub(all) struct SchemaOptions {
+  text_languages : Array[String]
+  binary_mime_types : Array[String]
+} derive(Eq, Show)
+
+pub(all) struct TypeTag[T] {
+}
+
+// Type aliases
+
+// Traits
+pub(open) trait FromElementValue {
+  from_element_value(@types.ElementValue) -> Self raise @common.AgentError
+}
+pub impl FromElementValue for Bool
+pub impl FromElementValue for Byte
+pub impl FromElementValue for Char
+pub impl FromElementValue for Int
+pub impl FromElementValue for Int64
+pub impl FromElementValue for UInt
+pub impl FromElementValue for UInt64
+pub impl FromElementValue for Float
+pub impl FromElementValue for Double
+pub impl FromElementValue for String
+pub impl[T : FromExtractor] FromElementValue for T?
+pub impl[T : FromExtractor, E : FromExtractor] FromElementValue for Result[T, E]
+pub impl FromElementValue for Bytes
+pub impl[T : FromExtractor] FromElementValue for Array[T]
+pub impl[T0 : FromExtractor, T1 : FromExtractor] FromElementValue for (T0, T1)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor] FromElementValue for (T0, T1, T2)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor] FromElementValue for (T0, T1, T2, T3)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5, T6)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5, T6, T7)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor, T12 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor, T12 : FromExtractor, T13 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor, T12 : FromExtractor, T13 : FromExtractor, T14 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor, T12 : FromExtractor, T13 : FromExtractor, T14 : FromExtractor, T15 : FromExtractor] FromElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+
+pub(open) trait FromExtractor {
+  from_extractor(&@extractor.Extractor) -> Self raise @common.AgentError
+}
+pub impl FromExtractor for Bool
+pub impl FromExtractor for Byte
+pub impl FromExtractor for Char
+pub impl FromExtractor for Int
+pub impl FromExtractor for Int64
+pub impl FromExtractor for UInt
+pub impl FromExtractor for UInt64
+pub impl FromExtractor for Float
+pub impl FromExtractor for Double
+pub impl FromExtractor for String
+pub impl[T : FromExtractor] FromExtractor for T?
+pub impl[T : FromExtractor, E : FromExtractor] FromExtractor for Result[T, E]
+pub impl FromExtractor for Bytes
+pub impl[T : FromExtractor] FromExtractor for Array[T]
+pub impl[T0 : FromExtractor, T1 : FromExtractor] FromExtractor for (T0, T1)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor] FromExtractor for (T0, T1, T2)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor] FromExtractor for (T0, T1, T2, T3)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6, T7)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor, T12 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor, T12 : FromExtractor, T13 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor, T12 : FromExtractor, T13 : FromExtractor, T14 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor, T12 : FromExtractor, T13 : FromExtractor, T14 : FromExtractor, T15 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+
+pub(open) trait HasElementSchema {
+  element_schema() -> @types.ElementSchema
+}
+pub impl HasElementSchema for Bool
+pub impl HasElementSchema for Byte
+pub impl HasElementSchema for Char
+pub impl HasElementSchema for Int
+pub impl HasElementSchema for Int64
+pub impl HasElementSchema for UInt
+pub impl HasElementSchema for UInt64
+pub impl HasElementSchema for Float
+pub impl HasElementSchema for Double
+pub impl HasElementSchema for String
+pub impl[T : HasElementSchema] HasElementSchema for T?
+pub impl[T : HasElementSchema, E : HasElementSchema] HasElementSchema for Result[T, E]
+pub impl HasElementSchema for Bytes
+pub impl[T : HasElementSchema] HasElementSchema for Array[T]
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema] HasElementSchema for (T0, T1)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema] HasElementSchema for (T0, T1, T2)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema, T7 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6, T7)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema, T7 : HasElementSchema, T8 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema, T7 : HasElementSchema, T8 : HasElementSchema, T9 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema, T7 : HasElementSchema, T8 : HasElementSchema, T9 : HasElementSchema, T10 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema, T7 : HasElementSchema, T8 : HasElementSchema, T9 : HasElementSchema, T10 : HasElementSchema, T11 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema, T7 : HasElementSchema, T8 : HasElementSchema, T9 : HasElementSchema, T10 : HasElementSchema, T11 : HasElementSchema, T12 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema, T7 : HasElementSchema, T8 : HasElementSchema, T9 : HasElementSchema, T10 : HasElementSchema, T11 : HasElementSchema, T12 : HasElementSchema, T13 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema, T7 : HasElementSchema, T8 : HasElementSchema, T9 : HasElementSchema, T10 : HasElementSchema, T11 : HasElementSchema, T12 : HasElementSchema, T13 : HasElementSchema, T14 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema, T7 : HasElementSchema, T8 : HasElementSchema, T9 : HasElementSchema, T10 : HasElementSchema, T11 : HasElementSchema, T12 : HasElementSchema, T13 : HasElementSchema, T14 : HasElementSchema, T15 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+
+pub(open) trait ToElementValue {
+  to_element_value(Self) -> @types.ElementValue raise @common.AgentError
+}
+pub impl ToElementValue for Bool
+pub impl ToElementValue for Byte
+pub impl ToElementValue for Char
+pub impl ToElementValue for Int
+pub impl ToElementValue for Int64
+pub impl ToElementValue for UInt
+pub impl ToElementValue for UInt64
+pub impl ToElementValue for Float
+pub impl ToElementValue for Double
+pub impl ToElementValue for String
+pub impl[T : ToElementValue] ToElementValue for T?
+pub impl[T : ToElementValue, E : ToElementValue] ToElementValue for Result[T, E]
+pub impl ToElementValue for Bytes
+pub impl[T : ToElementValue] ToElementValue for Array[T]
+pub impl[T0 : ToElementValue, T1 : ToElementValue] ToElementValue for (T0, T1)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue] ToElementValue for (T0, T1, T2)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue] ToElementValue for (T0, T1, T2, T3)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue, T6 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5, T6)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue, T6 : ToElementValue, T7 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5, T6, T7)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue, T6 : ToElementValue, T7 : ToElementValue, T8 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue, T6 : ToElementValue, T7 : ToElementValue, T8 : ToElementValue, T9 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue, T6 : ToElementValue, T7 : ToElementValue, T8 : ToElementValue, T9 : ToElementValue, T10 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue, T6 : ToElementValue, T7 : ToElementValue, T8 : ToElementValue, T9 : ToElementValue, T10 : ToElementValue, T11 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue, T6 : ToElementValue, T7 : ToElementValue, T8 : ToElementValue, T9 : ToElementValue, T10 : ToElementValue, T11 : ToElementValue, T12 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue, T6 : ToElementValue, T7 : ToElementValue, T8 : ToElementValue, T9 : ToElementValue, T10 : ToElementValue, T11 : ToElementValue, T12 : ToElementValue, T13 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue, T6 : ToElementValue, T7 : ToElementValue, T8 : ToElementValue, T9 : ToElementValue, T10 : ToElementValue, T11 : ToElementValue, T12 : ToElementValue, T13 : ToElementValue, T14 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue, T3 : ToElementValue, T4 : ToElementValue, T5 : ToElementValue, T6 : ToElementValue, T7 : ToElementValue, T8 : ToElementValue, T9 : ToElementValue, T10 : ToElementValue, T11 : ToElementValue, T12 : ToElementValue, T13 : ToElementValue, T14 : ToElementValue, T15 : ToElementValue] ToElementValue for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+
