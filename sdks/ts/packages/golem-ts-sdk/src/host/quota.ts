@@ -128,26 +128,22 @@ export function acquireQuotaToken(resourceName: string, expectedUse: bigint): Qu
   return new QuotaToken(new RawQuotaToken(resourceName, expectedUse));
 }
 
-/**
- * Reserve `amount` units, run `fn`, then commit the actual usage returned
- * by `fn`.  Commits zero if `fn` throws or the returned Promise rejects.
- *
- * Returns `Result.ok(value)` on success, or `Result.err(failedReservation)`
- * if the reservation could not be granted.
- *
- * @param token  - The token to reserve against.
- * @param amount - Units to reserve.
- * @param fn     - Async work to perform; must resolve with the actual units consumed.
- */
 export function withReservation<R>(
   token: QuotaToken,
   amount: bigint,
   fn: (reservation: Reservation) => Promise<{ used: bigint; value: R }>,
 ): Promise<Result<R, FailedReservation>>;
 
+export function withReservation<R>(
+  token: QuotaToken,
+  amount: bigint,
+  fn: (reservation: Reservation) => { used: bigint; value: R },
+): Result<R, FailedReservation>;
+
 /**
  * Reserve `amount` units, run `fn`, then commit the actual usage returned
- * by `fn`.  Commits zero if `fn` throws.
+ * by `fn`. Commits zero if `fn` throws or the returned Promise rejects.
+ * Supports both sync and async callbacks.
  *
  * Returns `Result.ok(value)` on success, or `Result.err(failedReservation)`
  * if the reservation could not be granted.
@@ -155,14 +151,7 @@ export function withReservation<R>(
  * @param token  - The token to reserve against.
  * @param amount - Units to reserve.
  * @param fn     - Work to perform; must return the actual units consumed.
- */
-export function withReservation<R>(
-  token: QuotaToken,
-  amount: bigint,
-  fn: (reservation: Reservation) => { used: bigint; value: R },
-): Result<R, FailedReservation>;
-
-export function withReservation<R>(
+ */ export function withReservation<R>(
   token: QuotaToken,
   amount: bigint,
   fn: (

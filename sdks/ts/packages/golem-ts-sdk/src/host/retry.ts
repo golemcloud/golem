@@ -29,7 +29,8 @@ import {
   setRetryPolicy as rawSetRetryPolicy,
   removeRetryPolicy as rawRemoveRetryPolicy,
 } from 'golem:api/retry@1.5.0';
-import { executeWithDrop } from './guard';
+import { isPromiseLike } from './guard';
+import { trap } from './hostapi';
 import {
   Duration,
   NamedPolicy,
@@ -100,15 +101,62 @@ export function useRetryPolicy(policy: NamedPolicyInput): RetryPolicyGuard {
   return new RetryPolicyGuard(previous, name);
 }
 
+export function withRetryPolicy<R>(policy: NamedPolicyInput, f: () => Promise<R>): Promise<R>;
+export function withRetryPolicy<R>(policy: NamedPolicyInput, f: () => R): R;
+
 /**
  * Executes a function with a named retry policy temporarily set.
  * Supports both sync and async callbacks.
- * The policy is restored (or removed) after the function completes.
- * @param policy - The named retry policy to set, either as a raw WIT shape or a high-level NamedPolicy.
+ *
+ * On failure the worker is immediately terminated and retried by the executor
+ * according to the active retry policy. This has two practical consequences:
+ *
+ * - Errors thrown inside `f` always trigger the retry policy — this is the
+ *   recommended way to make user-land exceptions subject to executor-level
+ *   retries.
+ * - The callback cannot be wrapped in a `try/catch` to suppress the retry:
+ *   any thrown error unconditionally causes the worker to be retried.
+ *
+ * @param policy - The named retry policy to set.
  * @param f - The function to execute (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function withRetryPolicy<R>(policy: NamedPolicyInput, f: () => R): R {
+export function withRetryPolicy<R>(
+  policy: NamedPolicyInput,
+  f: () => R | Promise<R>,
+): R | Promise<R> {
   const guard = useRetryPolicy(policy);
-  return executeWithDrop([guard], f);
+  try {
+    const result = f();
+    if (isPromiseLike(result)) {
+      return result.then(
+        (val) => {
+          guard.drop();
+          return val;
+        },
+        (err) => {
+          // Leave the retry policy active and terminate the worker so the
+          // executor retries the invocation with the policy applied.
+          trap(`withRetryPolicy: ${formatErrorForTrap(err)}`);
+          throw err;
+        },
+      ) as R;
+    }
+    guard.drop();
+    return result;
+  } catch (e) {
+    trap(`withRetryPolicy: ${formatErrorForTrap(e)}`);
+    throw e;
+  }
+}
+
+function formatErrorForTrap(err: unknown): string {
+  if (err instanceof Error) {
+    return err.stack ?? `${err.name}: ${err.message}`;
+  }
+  try {
+    return String(err);
+  } catch {
+    return '<unprintable error>';
+  }
 }
