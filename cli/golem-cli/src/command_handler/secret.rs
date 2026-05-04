@@ -527,15 +527,15 @@ mod tests {
 
     fn extract_create_args(cmd: GolemCliCommand) -> (String, Option<String>) {
         match cmd.subcommand {
-            GolemCliSubcommand::AgentSecret {
+            GolemCliSubcommand::Secret {
                 subcommand:
-                    AgentSecretSubcommand::Create {
+                    SecretSubcommand::Create {
                         secret_type,
                         secret_value,
                         ..
                     },
             } => (secret_type, secret_value),
-            _ => panic!("expected AgentSecret Create"),
+            _ => panic!("expected Secret Create"),
         }
     }
 
@@ -543,7 +543,7 @@ mod tests {
     fn create_type_before_value_parses() {
         let cmd = GolemCliCommand::try_parse_from([
             "golem-cli",
-            "agent-secret",
+            "secret",
             "create",
             "apiKey",
             "--secret-type",
@@ -561,7 +561,7 @@ mod tests {
     fn create_value_before_type_parses() {
         let cmd = GolemCliCommand::try_parse_from([
             "golem-cli",
-            "agent-secret",
+            "secret",
             "create",
             "apiKey",
             "--secret-value",
@@ -579,7 +579,7 @@ mod tests {
     fn create_both_orderings_produce_same_args() {
         let order1 = GolemCliCommand::try_parse_from([
             "golem-cli",
-            "agent-secret",
+            "secret",
             "create",
             "apiKey",
             "--secret-type",
@@ -590,7 +590,7 @@ mod tests {
         .unwrap();
         let order2 = GolemCliCommand::try_parse_from([
             "golem-cli",
-            "agent-secret",
+            "secret",
             "create",
             "apiKey",
             "--secret-value",
