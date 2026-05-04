@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::cloud::account::AccountSubcommand;
+use crate::command::account::AccountSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
@@ -26,11 +26,11 @@ use golem_client::model::{Account, AccountCreation, AccountUpdate};
 use golem_common::model::account::{AccountEmail, AccountId};
 use std::sync::Arc;
 
-pub struct CloudAccountCommandHandler {
+pub struct AccountCommandHandler {
     ctx: Arc<Context>,
 }
 
-impl CloudAccountCommandHandler {
+impl AccountCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
     }

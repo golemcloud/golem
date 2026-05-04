@@ -413,6 +413,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
+    async fn trap(&mut self, reason: String) -> anyhow::Result<()> {
+        self.observe_function_call("golem::api", "trap");
+        Err(anyhow::anyhow!("guest-requested trap: {reason}"))
+    }
+
     async fn get_oplog_persistence_level(
         &mut self,
     ) -> anyhow::Result<golem_api_1_x::host::PersistenceLevel> {

@@ -43,6 +43,7 @@ export {
   oplogCommit,
   markBeginOperation,
   markEndOperation,
+  trap,
   getOplogPersistenceLevel,
   setOplogPersistenceLevel,
   getIdempotenceMode,

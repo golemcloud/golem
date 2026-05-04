@@ -22,15 +22,14 @@ use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
 };
+use crate::command_handler::account::AccountCommandHandler;
 use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
 use crate::command_handler::api::domain::ApiDomainCommandHandler;
 use crate::command_handler::api::security_scheme::ApiSecuritySchemeCommandHandler;
+use crate::command_handler::api_token::ApiTokenCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::bridge::BridgeCommandHandler;
-use crate::command_handler::cloud::CloudCommandHandler;
-use crate::command_handler::cloud::account::CloudAccountCommandHandler;
-use crate::command_handler::cloud::token::CloudTokenCommandHandler;
 use crate::command_handler::component::ComponentCommandHandler;
 use crate::command_handler::environment::EnvironmentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
@@ -55,11 +54,12 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::{Level, debug};
 
+mod account;
 mod agent_secret;
 mod api;
+mod api_token;
 mod app;
 mod bridge;
-mod cloud;
 mod component;
 mod environment;
 pub(crate) mod interactive;
@@ -411,8 +411,14 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handler_server_commands(self.ctx.clone(), subcommand)
                         .await
                 }
-                GolemCliSubcommand::Cloud { subcommand } => {
-                    self.ctx.cloud_handler().handle_command(subcommand).await
+                GolemCliSubcommand::Account { subcommand } => {
+                    self.ctx.account_handler().handle_command(subcommand).await
+                }
+                GolemCliSubcommand::ApiToken { subcommand } => {
+                    self.ctx
+                        .api_token_handler()
+                        .handle_command(subcommand)
+                        .await
                 }
                 GolemCliSubcommand::AgentSecret { subcommand } => {
                     self.ctx
@@ -450,6 +456,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       by moving these simple factory methods into the specific handlers on-demand,
 //       if the need ever arises
 pub trait Handlers {
+    fn account_handler(&self) -> AccountCommandHandler;
     fn agent_secret_handler(&self) -> AgentSecretCommandHandler;
     fn retry_policy_handler(&self) -> RetryPolicyCommandHandler;
     fn resource_definition_handler(&self) -> ResourceDefinitionCommandHandler;
@@ -457,12 +464,9 @@ pub trait Handlers {
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
     fn api_handler(&self) -> ApiCommandHandler;
     fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler;
+    fn api_token_handler(&self) -> ApiTokenCommandHandler;
     fn app_handler(&self) -> AppCommandHandler;
     fn bridge_handler(&self) -> BridgeCommandHandler;
-    // TODO: atomic: fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler;
-    fn cloud_account_handler(&self) -> CloudAccountCommandHandler;
-    fn cloud_handler(&self) -> CloudCommandHandler;
-    fn cloud_token_handler(&self) -> CloudTokenCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
     fn environment_handler(&self) -> EnvironmentCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
@@ -476,6 +480,10 @@ pub trait Handlers {
 }
 
 impl Handlers for Arc<Context> {
+    fn account_handler(&self) -> AccountCommandHandler {
+        AccountCommandHandler::new(self.clone())
+    }
+
     fn agent_secret_handler(&self) -> AgentSecretCommandHandler {
         AgentSecretCommandHandler::new(self.clone())
     }
@@ -504,31 +512,16 @@ impl Handlers for Arc<Context> {
         ApiSecuritySchemeCommandHandler::new(self.clone())
     }
 
+    fn api_token_handler(&self) -> ApiTokenCommandHandler {
+        ApiTokenCommandHandler::new(self.clone())
+    }
+
     fn app_handler(&self) -> AppCommandHandler {
         AppCommandHandler::new(self.clone())
     }
 
     fn bridge_handler(&self) -> BridgeCommandHandler {
         BridgeCommandHandler::new(self.clone())
-    }
-
-    // TODO: atomic
-    /*
-    fn cloud_account_grant_handler(&self) -> CloudAccountGrantCommandHandler {
-        CloudAccountGrantCommandHandler::new(self.clone())
-    }
-    */
-
-    fn cloud_account_handler(&self) -> CloudAccountCommandHandler {
-        CloudAccountCommandHandler::new(self.clone())
-    }
-
-    fn cloud_handler(&self) -> CloudCommandHandler {
-        CloudCommandHandler::new(self.clone())
-    }
-
-    fn cloud_token_handler(&self) -> CloudTokenCommandHandler {
-        CloudTokenCommandHandler::new(self.clone())
     }
 
     fn component_handler(&self) -> ComponentCommandHandler {

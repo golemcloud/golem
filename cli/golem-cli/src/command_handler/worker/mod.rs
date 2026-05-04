@@ -264,7 +264,7 @@ impl WorkerCommandHandler {
         self.ctx.silence_app_context_init().await;
 
         let agent_name = agent_name.agent_id;
-        let agent_name_match = self.match_agent_name(agent_name).await?;
+        let mut agent_name_match = self.match_agent_name(agent_name).await?;
         let component = self
             .ctx
             .component_handler()
@@ -279,12 +279,17 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        let agent_name =
-            self.try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
+        let agent_name = agent_name_match.agent_name.clone();
         let agent_name =
             match self.validate_worker_and_function_names(&component, &agent_name, None)? {
                 Some((agent_id, agent_type)) => {
-                    RawAgentId(normalize_public_agent_id(&agent_id, &agent_type)?.to_string())
+                    // `normalize_public_agent_id` may auto-generate a phantom
+                    // UUID for ephemeral agents, changing the canonical form.
+                    let normalized = normalize_public_agent_id(&agent_id, &agent_type)?;
+                    let canonical: RawAgentId = normalized.to_string().into();
+                    agent_name_match.agent_name = canonical.clone();
+                    agent_name_match.parsed_agent_id = Some(normalized);
+                    canonical
                 }
                 None => agent_name,
             };
@@ -302,10 +307,18 @@ impl WorkerCommandHandler {
         )
         .await?;
 
+        let display_agent_name: RawAgentId = match &agent_name_match.parsed_agent_id {
+            Some(parsed) if agent_name_match.source_language.is_known() => {
+                crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
+                    .into()
+            }
+            _ => agent_name,
+        };
+
         logln("");
         self.ctx.log_handler().log_view(&WorkerCreateView {
             component_name: agent_name_match.component_name,
-            agent_name: Some(agent_name),
+            agent_name: Some(display_agent_name),
         });
 
         Ok(())
@@ -368,11 +381,13 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        // First, validate without the function name
-        let agent_name =
-            self.try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
-        let agent_id_and_type =
-            self.validate_worker_and_function_names(&component, &agent_name, None)?;
+        // First, validate without the function name. The agent name was
+        // already canonicalized when the `AgentNameMatch` was constructed.
+        let agent_id_and_type = self.validate_worker_and_function_names(
+            &component,
+            &agent_name_match.agent_name,
+            None,
+        )?;
 
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
@@ -431,11 +446,10 @@ impl WorkerCommandHandler {
             },
         };
 
-        // Update agent_name with normalized agent id
-        let agent_name_match = AgentNameMatch {
-            agent_name: agent_id.to_string().into(),
-            ..agent_name_match
-        };
+        // Update agent_name with normalized agent id (and keep the parsed form
+        // for language-specific display).
+        let agent_name_match = agent_name_match
+            .with_canonical_and_parsed(agent_id.to_string().into(), Some(agent_id.clone()));
 
         let mode = if trigger {
             log_action(
@@ -1164,11 +1178,11 @@ impl WorkerCommandHandler {
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_name_match = self.match_agent_name(agent_name.agent_id).await?;
-        let environment = &agent_name_match.environment;
 
         let (component, agent_name) = self
             .component_by_agent_name_match(&agent_name_match)
             .await?;
+        let environment = &agent_name_match.environment;
 
         let target_revision = match target_revision {
             Some(target_revision) => target_revision,
@@ -1191,6 +1205,8 @@ impl WorkerCommandHandler {
                 if !self.ctx.interactive_handler().confirm_update_to_current(
                     &component.component_name,
                     &agent_name,
+                    agent_name_match.parsed_agent_id.as_ref(),
+                    &agent_name_match.source_language,
                     current_deployed_revision.revision,
                 )? {
                     bail!(NonSuccessfulExit)
@@ -1240,7 +1256,16 @@ impl WorkerCommandHandler {
             .cloned()
             .unwrap_or_default();
 
-        let metadata_view = AgentMetadataView::from(metadata).with_defaults(defaults);
+        let mut metadata_view = AgentMetadataView::from(metadata)
+            .with_defaults(defaults)
+            .with_source_language(agent_name_match.source_language.clone());
+        if let Some(parsed) = &agent_name_match.parsed_agent_id
+            && agent_name_match.source_language.is_known()
+        {
+            metadata_view.agent_name =
+                crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
+                    .into();
+        }
 
         self.ctx
             .log_handler()
@@ -2100,12 +2125,10 @@ impl WorkerCommandHandler {
             bail!(NonSuccessfulExit);
         };
 
-        // Try to re-canonicalize the agent name using language-aware parsing.
-        // Language is auto-detected from agent type metadata.
-        let agent_name =
-            self.try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
-
-        Ok((component, agent_name))
+        // `agent_name_match.agent_name` is already canonicalized in
+        // `match_agent_name_in_environment`. Just return a clone for callers
+        // that need it for downstream HTTP/gRPC calls.
+        Ok((component, agent_name_match.agent_name.clone()))
     }
 
     pub(crate) fn try_recanonicalize_agent_name(
@@ -2113,80 +2136,102 @@ impl WorkerCommandHandler {
         agent_name: &RawAgentId,
         component: &ComponentDto,
     ) -> RawAgentId {
-        let raw = &agent_name.0;
+        try_recanonicalize_agent_name_with_parsed(agent_name, component).0
+    }
+}
 
-        // Extract type name and params using ParsedAgentId::parse_agent_type_name
-        // and manual splitting for the params portion
-        let Some(paren_pos) = raw.find('(') else {
-            return agent_name.clone();
-        };
-        let type_name = &raw[..paren_pos];
+/// Re-canonicalize an agent id string against the component's agent type
+/// metadata. Returns the canonical structural form together with the parsed
+/// representation (when language-aware parsing succeeded). The parsed form
+/// can be used by display code to render the agent id in its source
+/// language (see [`crate::agent_id_display::render_agent_id`]).
+pub(crate) fn try_recanonicalize_agent_name_with_parsed(
+    agent_name: &RawAgentId,
+    component: &ComponentDto,
+) -> (RawAgentId, Option<ParsedAgentId>) {
+    let raw = &agent_name.0;
 
-        // Find matching closing paren (account for nesting and phantom id)
-        let mut nesting = 0i32;
-        let mut close_pos = None;
-        for (i, ch) in raw[paren_pos..].char_indices() {
-            match ch {
-                '(' => nesting += 1,
-                ')' => {
-                    nesting -= 1;
-                    if nesting == 0 {
-                        close_pos = Some(paren_pos + i);
-                        break;
-                    }
+    // Extract type name and params using ParsedAgentId::parse_agent_type_name
+    // and manual splitting for the params portion
+    let Some(paren_pos) = raw.find('(') else {
+        return (agent_name.clone(), None);
+    };
+    let type_name = &raw[..paren_pos];
+
+    // Find matching closing paren (account for nesting and phantom id)
+    let mut nesting = 0i32;
+    let mut close_pos = None;
+    for (i, ch) in raw[paren_pos..].char_indices() {
+        match ch {
+            '(' => nesting += 1,
+            ')' => {
+                nesting -= 1;
+                if nesting == 0 {
+                    close_pos = Some(paren_pos + i);
+                    break;
                 }
-                _ => {}
             }
+            _ => {}
         }
-
-        let Some(close_pos) = close_pos else {
-            return agent_name.clone();
-        };
-
-        let params_str = &raw[paren_pos + 1..close_pos];
-        let phantom_str = if close_pos + 1 < raw.len() {
-            Some(&raw[close_pos + 1..])
-        } else {
-            None
-        };
-
-        // Look up the agent type from component metadata
-        let agent_type = component
-            .metadata
-            .agent_types()
-            .iter()
-            .find(|at| at.type_name.0 == type_name);
-
-        let Some(agent_type) = agent_type else {
-            return agent_name.clone();
-        };
-
-        // Derive source language from agent type metadata
-        let source_language = SourceLanguage::from(agent_type.source_language.as_str());
-
-        // Try language-aware parse
-        let Ok(data_value) = crate::agent_id_display::parse_agent_id_params(
-            params_str,
-            &agent_type.constructor.input_schema,
-            &source_language,
-        ) else {
-            return agent_name.clone();
-        };
-
-        // Re-canonicalize using structural format
-        let Ok(canonical) =
-            golem_common::model::agent::structural_format::format_structural(&data_value)
-        else {
-            return agent_name.clone();
-        };
-
-        let mut new_id = format!("{}({canonical})", agent_type.type_name.0);
-        if let Some(phantom) = phantom_str {
-            new_id.push_str(phantom);
-        }
-        RawAgentId(new_id)
     }
 
+    let Some(close_pos) = close_pos else {
+        return (agent_name.clone(), None);
+    };
+
+    let params_str = &raw[paren_pos + 1..close_pos];
+    let phantom_str = if close_pos + 1 < raw.len() {
+        Some(&raw[close_pos + 1..])
+    } else {
+        None
+    };
+
+    // Look up the agent type from component metadata
+    let agent_type = component
+        .metadata
+        .agent_types()
+        .iter()
+        .find(|at| at.type_name.0 == type_name);
+
+    let Some(agent_type) = agent_type else {
+        return (agent_name.clone(), None);
+    };
+
+    // Derive source language from agent type metadata
+    let source_language = SourceLanguage::from(agent_type.source_language.as_str());
+
+    // Try language-aware parse
+    let Ok(data_value) = crate::agent_id_display::parse_agent_id_params(
+        params_str,
+        &agent_type.constructor.input_schema,
+        &source_language,
+    ) else {
+        return (agent_name.clone(), None);
+    };
+
+    // Re-canonicalize using structural format
+    let Ok(canonical) =
+        golem_common::model::agent::structural_format::format_structural(&data_value)
+    else {
+        return (agent_name.clone(), None);
+    };
+
+    let mut new_id = format!("{}({canonical})", agent_type.type_name.0);
+    // Parse the optional phantom uuid for the parsed form (`[uuid]`)
+    let phantom_uuid = phantom_str.and_then(|s| {
+        let trimmed = s.strip_prefix('[')?.strip_suffix(']')?;
+        uuid::Uuid::parse_str(trimmed).ok()
+    });
+    if let Some(phantom) = phantom_str {
+        new_id.push_str(phantom);
+    }
+
+    let parsed = ParsedAgentId::new(agent_type.type_name.clone(), data_value, phantom_uuid).ok();
+
+    (RawAgentId(new_id), parsed)
+}
+
+impl WorkerCommandHandler {
     async fn resume_worker(
         &self,
         component: &ComponentDto,
@@ -2270,13 +2315,22 @@ impl WorkerCommandHandler {
             )
             .await?;
 
+        // Recanonicalize the user input against the component's agent type
+        // metadata so the canonical form (used for HTTP/gRPC calls) and the
+        // parsed form (used for language-specific display) are both available
+        // immediately on the resulting `AgentNameMatch`.
+        let raw_agent_name: RawAgentId = agent_name.into();
+        let (canonical_agent_name, parsed_agent_id) =
+            try_recanonicalize_agent_name_with_parsed(&raw_agent_name, &component);
+
         Ok(AgentNameMatch {
             environment,
             component_name_match_kind: ComponentNameMatchKind::Unknown,
             component_name: component.component_name,
             agent_type_name: parsed_agent_type_name,
-            agent_name: agent_name.into(),
+            agent_name: canonical_agent_name,
             source_language: SourceLanguage::from(agent_type.agent_type.source_language.as_str()),
+            parsed_agent_id,
         })
     }
 

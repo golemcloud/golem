@@ -12,24 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::evcxr_repl::repl::Repl;
-use crate::log::log_anyhow_error;
-use std::process::ExitCode;
+import { agent, BaseAgent, Config } from '../src';
 
-mod cli_repl_interop;
-mod config;
-mod log;
-mod repl;
+class UnsupportedClass {
+  value = 42;
+}
 
-pub use config::REPL_CONFIG_FILE_NAME;
-pub use config::ReplConfig;
+type BadConfig = {
+  name: string;
+  unsupported: UnsupportedClass;
+};
 
-pub fn main() -> ExitCode {
-    match Repl::run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(err) => {
-            log_anyhow_error(&err);
-            ExitCode::FAILURE
-        }
-    }
+@agent()
+export class AgentWithInvalidConfig extends BaseAgent {
+  constructor(readonly config: Config<BadConfig>) {
+    super();
+  }
+
+  async run(): Promise<void> {}
 }
