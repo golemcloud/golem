@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::secret::SecretCommandHandler;
 use self::resource_definition::ResourceDefinitionCommandHandler;
 use self::retry_policy::RetryPolicyCommandHandler;
+use self::secret::SecretCommandHandler;
 use crate::command::agent_type::AgentTypeSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
@@ -55,7 +55,6 @@ use std::sync::Arc;
 use tracing::{Level, debug};
 
 mod account;
-mod secret;
 mod api;
 mod api_token;
 mod app;
@@ -70,6 +69,7 @@ mod profile;
 mod repl;
 mod resource_definition;
 mod retry_policy;
+mod secret;
 pub(crate) mod template;
 mod worker;
 
@@ -421,10 +421,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .await
                 }
                 GolemCliSubcommand::Secret { subcommand } => {
-                    self.ctx
-                        .secret_handler()
-                        .handle_command(subcommand)
-                        .await
+                    self.ctx.secret_handler().handle_command(subcommand).await
                 }
                 GolemCliSubcommand::RetryPolicy { subcommand } => {
                     self.ctx

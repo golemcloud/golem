@@ -22,8 +22,7 @@ use crate::log::log_error;
 use crate::model::GuestLanguage;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::secret::{
-    SecretCreateView, SecretDeleteView, SecretGetView, SecretListView,
-    SecretUpdateView,
+    SecretCreateView, SecretDeleteView, SecretGetView, SecretListView, SecretUpdateView,
 };
 use anyhow::bail;
 use golem_client::api::AgentSecretsClient;

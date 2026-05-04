@@ -14,7 +14,6 @@
 
 pub mod account;
 pub mod agent;
-pub mod secret;
 pub mod component;
 pub mod deployment;
 pub mod diff;
@@ -28,6 +27,7 @@ pub mod plugin;
 pub mod profile;
 pub mod resource_definition;
 pub mod retry_policy;
+pub mod secret;
 pub mod server;
 pub mod template;
 pub mod token;
