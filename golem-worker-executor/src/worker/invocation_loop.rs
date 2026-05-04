@@ -969,12 +969,36 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
         };
 
+        let invocation_context = InvocationContextStack::fresh();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+        if let Err(err) = self
+            .store
+            .data_mut()
+            .set_current_invocation_context(invocation_context)
+            .await
+        {
+            warn!("Failed to install invocation context for manual update save-snapshot: {err}");
+            return self
+                .fail_update(
+                    target_revision,
+                    format!("failed to install invocation context for save-snapshot: {err}"),
+                )
+                .await;
+        }
+
         self.store.data_mut().begin_call_snapshotting_function();
 
         let result =
             invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
                 .await;
         self.store.data_mut().end_call_snapshotting_function();
+
+        for span_id in local_span_ids {
+            let _ = self.store.data_mut().remove_span(&span_id);
+        }
+        for span_id in inherited_span_ids {
+            let _ = self.store.data_mut().remove_span(&span_id);
+        }
 
         match result {
             Ok(InvokeResult::Succeeded {
@@ -1174,12 +1198,31 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
         };
 
+        let invocation_context = InvocationContextStack::fresh();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+        if let Err(err) = self
+            .store
+            .data_mut()
+            .set_current_invocation_context(invocation_context)
+            .await
+        {
+            warn!("Failed to install invocation context for periodic save-snapshot: {err}");
+            return CommandOutcome::Continue;
+        }
+
         self.store.data_mut().begin_call_snapshotting_function();
 
         let result =
             invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
                 .await;
         self.store.data_mut().end_call_snapshotting_function();
+
+        for span_id in local_span_ids {
+            let _ = self.store.data_mut().remove_span(&span_id);
+        }
+        for span_id in inherited_span_ids {
+            let _ = self.store.data_mut().remove_span(&span_id);
+        }
 
         if let Some(outcome) = periodic_snapshot_failure_outcome(&result) {
             match &result {
