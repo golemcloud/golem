@@ -59,6 +59,21 @@ agents:
 | `account` | No | Account that owns the plugin (omit for built-in plugins) |
 | `parameters` | No | Key-value map of plugin-specific configuration |
 
+### Template Substitution in Plugin Parameters
+
+Plugin parameter values support **Jinja-style template substitution** using `{{ VAR_NAME }}`. At deploy time, these are resolved against the **host machine's environment variables**:
+
+```yaml
+plugins:
+  - name: golem-otlp-exporter
+    version: "1.1.5"
+    parameters:
+      endpoint: "{{ OTLP_ENDPOINT }}"
+      headers: "x-api-key={{ OTLP_API_KEY }}"
+```
+
+If a referenced variable is missing, deployment fails with the list of unresolved variables. See the `golem-add-env-vars` skill for full details on the substitution syntax.
+
 ### Using Templates
 
 Plugins can be defined in `componentTemplates` and inherited via the cascade system:
@@ -116,7 +131,7 @@ components:
             version: "1.1.5"
             parameters:
               endpoint: "https://otel.prod.example.com:4318"
-              headers: "x-api-key=${OTLP_API_KEY}"
+              headers: "x-api-key={{ OTLP_API_KEY }}"
               signals: "traces,logs,metrics"
 
 environments:
