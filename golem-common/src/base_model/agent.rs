@@ -273,6 +273,27 @@ pub enum AgentMode {
     Ephemeral = 1,
 }
 
+impl Display for AgentMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentMode::Durable => write!(f, "Durable"),
+            AgentMode::Ephemeral => write!(f, "Ephemeral"),
+        }
+    }
+}
+
+impl FromStr for AgentMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "durable" => Ok(AgentMode::Durable),
+            "ephemeral" => Ok(AgentMode::Ephemeral),
+            _ => Err(format!("Unknown agent mode: {s}")),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AgentInvocationMode {
     Await,
