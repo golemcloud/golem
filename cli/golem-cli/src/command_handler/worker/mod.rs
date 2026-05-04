@@ -49,8 +49,8 @@ use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
 use crate::model::worker::{
-    AgentMetadata, AgentMetadataView, AgentNameMatch, AgentUpdateMode, AgentsMetadataResponseView,
-    RawAgentId,
+    AgentListMode, AgentMetadata, AgentMetadataView, AgentNameMatch, AgentUpdateMode,
+    AgentsMetadataResponseView, RawAgentId,
 };
 use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
 use golem_client::model::ScanCursor;
@@ -144,6 +144,7 @@ impl WorkerCommandHandler {
                     agent_type_name,
                     component_name,
                     filter: filters,
+                    mode,
                     scan_cursor,
                     max_count,
                     precise,
@@ -153,6 +154,7 @@ impl WorkerCommandHandler {
                         agent_type_name,
                         component_name,
                         filters,
+                        mode,
                         scan_cursor,
                         max_count,
                         precise,
@@ -816,11 +818,13 @@ impl WorkerCommandHandler {
         agent_type_name: Option<AgentTypeName>,
         component_name: Option<ComponentName>,
         filters: Vec<String>,
+        mode: AgentListMode,
         scan_cursor: Option<ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
         refresh: Option<u64>,
     ) -> anyhow::Result<()> {
+        let filters = apply_list_mode_filter(filters, mode);
         let (components, filters) = self
             .resolve_list_components(agent_type_name, component_name, filters)
             .await?;
@@ -2580,6 +2584,31 @@ fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
     format!("{}/{}", cursor.layer, cursor.cursor)
 }
 
+/// Injects a `mode == ...` filter string at the front of `filters` based on
+/// the user-supplied `--mode` flag, unless the user already provided their own
+/// `mode ...` filter via `--filter`.
+///
+/// `AgentListMode::All` never injects a filter (the listing then includes both
+/// modes). For `Durable` / `Ephemeral`, the corresponding equality filter is
+/// prepended so the executor can use it to scan only the matching mode.
+fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<String> {
+    let user_set_mode = filters
+        .iter()
+        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()));
+    if user_set_mode {
+        return filters;
+    }
+    let mode_filter = match mode {
+        AgentListMode::All => return filters,
+        AgentListMode::Durable => "mode == durable",
+        AgentListMode::Ephemeral => "mode == ephemeral",
+    };
+    let mut out = Vec::with_capacity(filters.len() + 1);
+    out.push(mode_filter.to_string());
+    out.extend(filters);
+    out
+}
+
 fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
     let error: anyhow::Result<
         Option<golem_client::Error<golem_client::api::WorkerError>>,
@@ -2673,8 +2702,8 @@ fn normalize_public_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_repl_agent_id, extract_simple_method_name, normalize_public_agent_id,
-        split_agent_name,
+        AgentListMode, apply_list_mode_filter, build_repl_agent_id, extract_simple_method_name,
+        normalize_public_agent_id, split_agent_name,
     };
     use golem_common::model::Empty;
     use golem_common::model::agent::{
@@ -2684,6 +2713,52 @@ mod tests {
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
+
+    #[test]
+    fn apply_list_mode_filter_default_durable_with_no_filters_injects_durable() {
+        let result = apply_list_mode_filter(vec![], AgentListMode::Durable);
+        assert_eq!(result, vec!["mode == durable".to_string()]);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_default_durable_with_other_filters_prepends_durable() {
+        let result =
+            apply_list_mode_filter(vec!["status = Running".to_string()], AgentListMode::Durable);
+        assert_eq!(
+            result,
+            vec![
+                "mode == durable".to_string(),
+                "status = Running".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_list_mode_filter_ephemeral_injects_ephemeral() {
+        let result = apply_list_mode_filter(vec![], AgentListMode::Ephemeral);
+        assert_eq!(result, vec!["mode == ephemeral".to_string()]);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_all_does_not_inject() {
+        let input = vec!["status = Running".to_string()];
+        let result = apply_list_mode_filter(input.clone(), AgentListMode::All);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_does_not_override_user_supplied_mode_filter() {
+        let input = vec!["mode == ephemeral".to_string()];
+        let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_user_mode_filter_case_insensitive() {
+        let input = vec!["MODE == ephemeral".to_string()];
+        let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
+        assert_eq!(result, input);
+    }
 
     fn test_agent_type(mode: AgentMode) -> AgentType {
         AgentType {

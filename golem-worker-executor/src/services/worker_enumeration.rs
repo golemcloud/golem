@@ -7,12 +7,66 @@ use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorker
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::base_model::worker_filter::{AgentAndFilter, AgentModeFilter, FilterComparator};
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tracing::{Instrument, info};
+
+/// Derives the `modes` argument for `OplogService::scan_for_component` from the
+/// optional user-supplied `AgentFilter`.
+///
+/// The default behaviour is to scan only durable agents so that ephemeral
+/// agents from previous runs do not appear in the default agent listing.
+/// Callers can override this by including an explicit `mode == ...` filter.
+///
+/// Rules:
+/// - `None` → `Some(AgentMode::Durable)` (default)
+/// - `Some(Mode(Equal, m))` (top level) → `Some(m)`
+/// - `Some(And(filters))` containing exactly one top-level `Mode(Equal, m)`
+///   constraint → `Some(m)` (other filters in the AND do not affect the
+///   storage-level mode selection but are still applied post-scan)
+/// - `Some(And(filters))` with no `Mode` constraint at all → `Some(Durable)`
+///   (default still applies even when the user supplied other filters)
+/// - Anything else (Or, Not, NotEqual on Mode, multiple distinct Mode
+///   constraints, nested Mode constraints, ...) → `None` (scan both modes,
+///   the existing post-scan `filter.matches(&metadata)` trims results)
+pub(crate) fn modes_from_filter(filter: &Option<AgentFilter>) -> Option<AgentMode> {
+    match filter {
+        None => Some(AgentMode::Durable),
+        Some(AgentFilter::Mode(AgentModeFilter {
+            comparator: FilterComparator::Equal,
+            value,
+        })) => Some(*value),
+        Some(AgentFilter::And(AgentAndFilter { filters })) => {
+            let mut mode_eq: Option<AgentMode> = None;
+            let mut other_mode_constraint = false;
+            for f in filters {
+                if let AgentFilter::Mode(AgentModeFilter { comparator, value }) = f {
+                    if *comparator == FilterComparator::Equal {
+                        if mode_eq.is_some() {
+                            // Multiple top-level Mode(Equal, ..) constraints; let the
+                            // post-scan matcher decide.
+                            return None;
+                        }
+                        mode_eq = Some(*value);
+                    } else {
+                        other_mode_constraint = true;
+                    }
+                }
+            }
+            if other_mode_constraint {
+                None
+            } else {
+                Some(mode_eq.unwrap_or(AgentMode::Durable))
+            }
+        }
+        Some(_) => None,
+    }
+}
 
 #[async_trait]
 pub trait RunningWorkerEnumerationService: Send + Sync {
@@ -115,9 +169,10 @@ impl DefaultWorkerEnumerationService {
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError> {
         let mut workers: Vec<AgentMetadata> = vec![];
 
+        let modes = modes_from_filter(&filter);
         let (new_cursor, keys) = self
             .oplog_service
-            .scan_for_component(environment_id, component_id, None, cursor, count)
+            .scan_for_component(environment_id, component_id, modes, cursor, count)
             .instrument(tracing::info_span!("scan_for_component"))
             .await?;
 
@@ -230,5 +285,99 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         }
 
         Ok((new_cursor, workers))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::modes_from_filter;
+    use golem_common::base_model::worker_filter::{FilterComparator, StringFilterComparator};
+    use golem_common::model::AgentFilter;
+    use golem_common::model::agent::AgentMode;
+    use test_r::test;
+
+    #[test]
+    fn no_filter_defaults_to_durable() {
+        assert_eq!(modes_from_filter(&None), Some(AgentMode::Durable));
+    }
+
+    #[test]
+    fn top_level_mode_equal_durable() {
+        let f = AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable);
+        assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Durable));
+    }
+
+    #[test]
+    fn top_level_mode_equal_ephemeral() {
+        let f = AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral);
+        assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Ephemeral));
+    }
+
+    #[test]
+    fn top_level_mode_not_equal_returns_none() {
+        let f = AgentFilter::new_mode(FilterComparator::NotEqual, AgentMode::Durable);
+        assert_eq!(modes_from_filter(&Some(f)), None);
+    }
+
+    #[test]
+    fn and_with_no_mode_constraint_defaults_to_durable() {
+        let f = AgentFilter::new_and(vec![AgentFilter::new_name(
+            StringFilterComparator::Equal,
+            "x".to_string(),
+        )]);
+        assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Durable));
+    }
+
+    #[test]
+    fn and_with_single_mode_equal_uses_it() {
+        let f = AgentFilter::new_and(vec![
+            AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string()),
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
+        ]);
+        assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Ephemeral));
+    }
+
+    #[test]
+    fn and_with_two_distinct_mode_equal_returns_none() {
+        let f = AgentFilter::new_and(vec![
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
+        ]);
+        assert_eq!(modes_from_filter(&Some(f)), None);
+    }
+
+    #[test]
+    fn and_with_mode_not_equal_returns_none() {
+        let f = AgentFilter::new_and(vec![AgentFilter::new_mode(
+            FilterComparator::NotEqual,
+            AgentMode::Durable,
+        )]);
+        assert_eq!(modes_from_filter(&Some(f)), None);
+    }
+
+    #[test]
+    fn or_returns_none() {
+        let f = AgentFilter::new_or(vec![
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
+        ]);
+        assert_eq!(modes_from_filter(&Some(f)), None);
+    }
+
+    #[test]
+    fn not_returns_none() {
+        let f = AgentFilter::new_not(AgentFilter::new_mode(
+            FilterComparator::Equal,
+            AgentMode::Durable,
+        ));
+        assert_eq!(modes_from_filter(&Some(f)), None);
+    }
+
+    #[test]
+    fn name_only_filter_returns_none() {
+        // A non-And, non-Mode top-level filter (e.g. a single Name filter) does
+        // not allow us to narrow safely; let the post-scan matcher decide.
+        let f = AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string());
+        assert_eq!(modes_from_filter(&Some(f)), None);
     }
 }
