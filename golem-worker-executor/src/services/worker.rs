@@ -131,10 +131,7 @@ impl DefaultWorkerService {
 
     /// Reads the cached `AgentStatusRecord` for `owned_agent_id`, if any. Returns `None` if
     /// the cache key is missing or the stored value cannot be deserialized in the current format.
-    async fn read_cached_status(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> Option<AgentStatusRecord> {
+    async fn read_cached_status(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentStatusRecord> {
         let status_value: Option<Result<AgentStatusRecord, String>> = self
             .key_value_storage
             .with_entity("worker", "read_cached_status", "worker_status")
