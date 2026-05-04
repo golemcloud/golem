@@ -1198,7 +1198,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
         .await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered([
-        r#"LongAgentName(("1212",100))"#,
+        r#"LongAgentName({ oneField: "1212", anotherField: 100 })"#,
         r#"[{ oneField: "1212", anotherField: 100 }, { oneField: "1", anotherField: 2 }]"#,
     ]));
 
