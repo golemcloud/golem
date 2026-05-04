@@ -49,6 +49,8 @@ pub fn set_oplog_index(UInt64) -> Unit
 
 pub fn set_oplog_persistence_level(PersistenceLevel) -> Unit
 
+pub fn trap(String) -> Unit
+
 pub fn update_agent(@types.AgentId, UInt64, UpdateMode) -> Unit
 
 // Errors

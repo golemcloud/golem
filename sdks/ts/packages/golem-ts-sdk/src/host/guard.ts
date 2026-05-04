@@ -21,6 +21,7 @@ import {
   markEndOperation,
   setIdempotenceMode,
   setOplogPersistenceLevel,
+  trap,
 } from './hostapi';
 
 /**
@@ -119,10 +120,14 @@ export function markAtomicOperation(): AtomicOperationGuard {
  * Supports both sync and async callbacks.
  *
  * On success the atomic region is committed via `mark_end_operation`.
- * On failure the region is intentionally left open so the executor sees the
- * trap as occurring **inside** the atomic region and can retry from the
- * begin-operation marker (matching the Rust SDK behaviour where `Drop` is
- * never called on panic because WASM panics don't unwind).
+ * On failure the SDK calls the host `trap` function to terminate the worker
+ * invocation with an uncatchable wasm trap. This guarantees that the failure
+ * cannot be observed by user code: trying to `try/catch` around `atomically`
+ * is a no-op because the worker is recovered by the executor.
+ *
+ * The atomic region is intentionally left open at trap time so the existing
+ * replay-time fallback in `mark_begin_operation` deletes the partial inner
+ * side effects via a `Jump` and re-executes the block from the begin marker.
  *
  * @param f - The function to execute atomically (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
@@ -138,8 +143,10 @@ export function atomically<T>(f: () => T): T {
           return val;
         },
         (err) => {
-          // Do NOT drop the guard — leave the atomic region open so the
-          // executor retries from the begin marker.
+          // Trap before any user-observable continuation can run. The host
+          // `trap` call surfaces as an uncatchable wasm trap and never returns;
+          // the trailing throw is unreachable but keeps the type system happy.
+          trap(`atomic block failed: ${formatErrorForTrap(err)}`);
           throw err;
         },
       ) as T;
@@ -147,8 +154,21 @@ export function atomically<T>(f: () => T): T {
     guard.drop();
     return result;
   } catch (e) {
-    // Do NOT drop the guard — same reasoning as the async rejection path.
+    // Same reasoning as the async rejection path — force a trap so the user
+    // cannot catch and continue with an open atomic region.
+    trap(`atomic block failed: ${formatErrorForTrap(e)}`);
     throw e;
+  }
+}
+
+function formatErrorForTrap(err: unknown): string {
+  if (err instanceof Error) {
+    return err.stack ?? `${err.name}: ${err.message}`;
+  }
+  try {
+    return String(err);
+  } catch {
+    return '<unprintable error>';
   }
 }
 

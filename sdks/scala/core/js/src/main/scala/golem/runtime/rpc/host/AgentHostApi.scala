@@ -171,6 +171,9 @@ object AgentHostApi {
   def markEndOperation(begin: OplogIndex): Unit =
     HostModule.markEndOperation(begin)
 
+  def trap(reason: String): Unit =
+    HostModule.trap(reason)
+
   def oplogCommit(replicas: Int): Unit =
     HostModule.oplogCommit(replicas)
 
@@ -391,6 +394,8 @@ object AgentHostApi {
     def markBeginOperation(): OplogIndex = js.native
 
     def markEndOperation(begin: OplogIndex): Unit = js.native
+
+    def trap(reason: String): Unit = js.native
 
     def oplogCommit(replicas: Int): Unit = js.native
 
