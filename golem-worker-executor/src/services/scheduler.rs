@@ -515,18 +515,10 @@ mod tests {
             None
         }
 
-        async fn set_cached_agent_mode(
-            &self,
-            _owned_agent_id: &OwnedAgentId,
-            _agent_mode: AgentMode,
-        ) {
-        }
-
         async fn update_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
             _status_value: &AgentStatusRecord,
-            _agent_mode: AgentMode,
         ) {
         }
     }

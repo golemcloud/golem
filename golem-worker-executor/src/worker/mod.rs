@@ -1946,6 +1946,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .iter()
                         .map(|i| i.environment_plugin_grant_id)
                         .collect(),
+                    agent_mode,
                     ..Default::default()
                 };
 
@@ -2012,16 +2013,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 initial_status.write().await.oplog_idx = oplog.current_oplog_index().await;
 
-                // Persist the worker's `agent_mode` into the per-agent KV cache so that
-                // subsequent `WorkerService::get` / `remove` calls can recover the mode
-                // without needing to know it ahead of time. Mode is decided at create
-                // time and is immutable for the life of the worker.
                 this.worker_service()
-                    .set_cached_agent_mode(owned_agent_id, agent_mode)
-                    .await;
-
-                this.worker_service()
-                    .update_cached_status(owned_agent_id, &*initial_status.read().await, agent_mode)
+                    .update_cached_status(owned_agent_id, &*initial_status.read().await)
                     .await;
 
                 Ok(GetOrCreateWorkerResult {
@@ -2059,7 +2052,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             *self.last_known_status.write().await = worker_status.clone();
             self.worker_service()
-                .update_cached_status(&self.owned_agent_id, &worker_status, self.agent_mode())
+                .update_cached_status(&self.owned_agent_id, &worker_status)
                 .await;
 
             // ensure we hold mutex for the full duration
@@ -2093,11 +2086,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     *self.last_known_status.write().await = updated_status.clone();
                     // TODO: We should do this in the background on a timer instead of on every commit.
                     self.worker_service()
-                        .update_cached_status(
-                            &self.owned_agent_id,
-                            &updated_status,
-                            self.agent_mode(),
-                        )
+                        .update_cached_status(&self.owned_agent_id, &updated_status)
                         .await;
 
                     self.schedule_oplog_archive_if_needed(&old_status, &updated_status)

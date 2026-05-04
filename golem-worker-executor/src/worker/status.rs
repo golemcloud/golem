@@ -241,6 +241,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + HasComponentSer
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
+        agent_mode,
     };
 
     Some(result)
