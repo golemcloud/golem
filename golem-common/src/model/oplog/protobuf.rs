@@ -25,11 +25,16 @@ use super::{
     StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
+use crate::model::AgentInvocationResult;
 use crate::model::Empty;
 use crate::model::agent::DataValue;
+use crate::model::agent::UntypedDataValue;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::payload::OplogPayload;
+use crate::model::oplog::payload::host_functions::{
+    HostFunctionName, host_request_from_value_and_type, host_response_from_value_and_type,
+};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
@@ -2097,6 +2102,406 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicyState> for PublicR
         }
     }
 }
+
+/// Convert a `PublicOplogEntry` to a domain `OplogEntry`.
+///
+/// Some entry types (e.g. `AgentInvocationStarted`) cannot be losslessly
+/// round-tripped because the public representation discards internal detail.
+/// For those cases this conversion returns an error.
+impl TryFrom<PublicOplogEntry> for OplogEntry {
+    type Error = String;
+
+    fn try_from(value: PublicOplogEntry) -> Result<Self, String> {
+        match value {
+            PublicOplogEntry::Create(create) => Ok(OplogEntry::Create {
+                timestamp: create.timestamp,
+                agent_id: create.agent_id,
+                component_revision: create.component_revision,
+                env: create.env.into_iter().collect(),
+                environment_id: create.environment_id,
+                created_by: create.created_by,
+                local_agent_config: create.local_agent_config.into_iter().map(Into::into).collect(),
+                parent: create.parent,
+                component_size: create.component_size,
+                initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                initial_active_plugins: create
+                    .initial_active_plugins
+                    .into_iter()
+                    .map(|p| p.environment_plugin_grant_id)
+                    .collect(),
+                original_phantom_id: create.original_phantom_id,
+                instance_id: create.instance_id
+            }),
+            PublicOplogEntry::HostCall(host_call) => {
+                let durable_function_type = match host_call.durable_function_type {
+                    PublicDurableFunctionType::ReadLocal(_) => DurableFunctionType::ReadLocal,
+                    PublicDurableFunctionType::WriteLocal(_) => DurableFunctionType::WriteLocal,
+                    PublicDurableFunctionType::ReadRemote(_) => DurableFunctionType::ReadRemote,
+                    PublicDurableFunctionType::WriteRemote(_) => DurableFunctionType::WriteRemote,
+                    PublicDurableFunctionType::WriteRemoteBatched(params) => {
+                        DurableFunctionType::WriteRemoteBatched(params.index)
+                    }
+                    PublicDurableFunctionType::WriteRemoteTransaction(params) => {
+                        DurableFunctionType::WriteRemoteTransaction(params.index)
+                    }
+                };
+
+                let request = OplogPayload::Inline(Box::new(host_request_from_value_and_type(
+                    &host_call.function_name,
+                    host_call.request,
+                )?));
+                let response = OplogPayload::Inline(Box::new(host_response_from_value_and_type(
+                    &host_call.function_name,
+                    host_call.response,
+                )?));
+
+                Ok(OplogEntry::HostCall {
+                    timestamp: host_call.timestamp,
+                    function_name: HostFunctionName::from(host_call.function_name.as_str()),
+                    request,
+                    response,
+                    durable_function_type,
+                })
+            }
+            PublicOplogEntry::AgentInvocationStarted(_) => {
+                Err("Converting AgentInvocationStarted from public to raw oplog entry is not yet supported".to_string())
+            }
+            PublicOplogEntry::AgentInvocationFinished(finished) => {
+                let raw_result = public_agent_invocation_result_to_raw(finished.result)?;
+                Ok(OplogEntry::AgentInvocationFinished {
+                    timestamp: finished.timestamp,
+                    result: OplogPayload::Inline(Box::new(raw_result)),
+                    consumed_fuel: finished.consumed_fuel,
+                    component_revision: finished.component_revision,
+                })
+            }
+            PublicOplogEntry::Suspend(p) => Ok(OplogEntry::Suspend {
+                timestamp: p.timestamp,
+            }),
+            PublicOplogEntry::Error(error) => Ok(OplogEntry::Error {
+                timestamp: error.timestamp,
+                error: AgentError::Unknown(error.error),
+                retry_from: error.retry_from,
+                inside_atomic_region: error.inside_atomic_region,
+                retry_policy_state: error.retry_policy_state.map(Into::into),
+            }),
+            PublicOplogEntry::NoOp(p) => Ok(OplogEntry::NoOp {
+                timestamp: p.timestamp,
+            }),
+            PublicOplogEntry::Jump(jump) => Ok(OplogEntry::Jump {
+                timestamp: jump.timestamp,
+                jump: jump.jump,
+            }),
+            PublicOplogEntry::Interrupted(p) => Ok(OplogEntry::Interrupted {
+                timestamp: p.timestamp,
+            }),
+            PublicOplogEntry::Exited(p) => Ok(OplogEntry::Exited {
+                timestamp: p.timestamp,
+            }),
+            PublicOplogEntry::BeginAtomicRegion(_) => {
+                Err("Cannot convert BeginAtomicRegion from public to raw oplog entry".to_string())
+            }
+            PublicOplogEntry::EndAtomicRegion(_) => {
+                Err("Cannot convert EndAtomicRegion from public to raw oplog entry".to_string())
+            }
+            PublicOplogEntry::BeginRemoteWrite(_) => {
+                Err("Cannot convert BeginRemoteWrite from public to raw oplog entry".to_string())
+            }
+            PublicOplogEntry::EndRemoteWrite(_) => {
+                Err("Cannot convert EndRemoteWrite from public to raw oplog entry".to_string())
+            }
+            PublicOplogEntry::PendingAgentInvocation(_) => {
+                Err("Cannot convert PendingAgentInvocation from public to raw oplog entry".to_string())
+            }
+            PublicOplogEntry::PendingUpdate(_) => {
+                Err("Cannot convert PendingUpdate from public to raw oplog entry".to_string())
+            }
+            PublicOplogEntry::SuccessfulUpdate(p) => {
+                let new_active_plugins = p
+                    .new_active_plugins
+                    .iter()
+                    .map(|plugin| plugin.environment_plugin_grant_id)
+                    .collect();
+                Ok(OplogEntry::SuccessfulUpdate {
+                    timestamp: p.timestamp,
+                    target_revision: p.target_revision,
+                    new_component_size: p.new_component_size,
+                    new_active_plugins,
+                })
+            }
+            PublicOplogEntry::FailedUpdate(p) => Ok(OplogEntry::FailedUpdate {
+                timestamp: p.timestamp,
+                target_revision: p.target_revision,
+                details: p.details,
+            }),
+            PublicOplogEntry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
+                timestamp: p.timestamp,
+                delta: p.delta,
+            }),
+            PublicOplogEntry::FilesystemStorageUsageUpdate(p) => {
+                Ok(OplogEntry::FilesystemStorageUsageUpdate {
+                    timestamp: p.timestamp,
+                    delta: p.delta,
+                })
+            }
+            PublicOplogEntry::CreateResource(p) => Ok(OplogEntry::CreateResource {
+                timestamp: p.timestamp,
+                id: p.id,
+                resource_type_id: ResourceTypeId {
+                    owner: p.owner,
+                    name: p.name,
+                },
+            }),
+            PublicOplogEntry::DropResource(p) => Ok(OplogEntry::DropResource {
+                timestamp: p.timestamp,
+                id: p.id,
+                resource_type_id: ResourceTypeId {
+                    owner: p.owner,
+                    name: p.name,
+                },
+            }),
+            PublicOplogEntry::Log(p) => Ok(OplogEntry::Log {
+                timestamp: p.timestamp,
+                level: p.level,
+                context: p.context,
+                message: p.message,
+            }),
+            PublicOplogEntry::Restart(p) => Ok(OplogEntry::Restart {
+                timestamp: p.timestamp,
+            }),
+            PublicOplogEntry::ActivatePlugin(p) => Ok(OplogEntry::ActivatePlugin {
+                timestamp: p.timestamp,
+                plugin_grant_id: p.plugin.environment_plugin_grant_id,
+            }),
+            PublicOplogEntry::DeactivatePlugin(p) => Ok(OplogEntry::DeactivatePlugin {
+                timestamp: p.timestamp,
+                plugin_grant_id: p.plugin.environment_plugin_grant_id,
+            }),
+            PublicOplogEntry::Revert(p) => Ok(OplogEntry::Revert {
+                timestamp: p.timestamp,
+                dropped_region: p.dropped_region,
+            }),
+            PublicOplogEntry::CancelPendingInvocation(p) => {
+                Ok(OplogEntry::CancelPendingInvocation {
+                    timestamp: p.timestamp,
+                    idempotency_key: p.idempotency_key,
+                })
+            }
+            PublicOplogEntry::StartSpan(p) => Ok(OplogEntry::StartSpan {
+                timestamp: p.timestamp,
+                span_id: p.span_id,
+                parent: p.parent_id,
+                linked_context_id: p.linked_context,
+                attributes: p
+                    .attributes
+                    .into_iter()
+                    .map(|attr| (attr.key, attr.value.into()))
+                    .collect::<HashMap<_, _>>()
+                    .into(),
+            }),
+            PublicOplogEntry::FinishSpan(p) => Ok(OplogEntry::FinishSpan {
+                timestamp: p.timestamp,
+                span_id: p.span_id,
+            }),
+            PublicOplogEntry::SetSpanAttribute(p) => Ok(OplogEntry::SetSpanAttribute {
+                timestamp: p.timestamp,
+                span_id: p.span_id,
+                key: p.key,
+                value: p.value.into(),
+            }),
+            PublicOplogEntry::ChangePersistenceLevel(p) => {
+                Ok(OplogEntry::ChangePersistenceLevel {
+                    timestamp: p.timestamp,
+                    persistence_level: p.persistence_level,
+                })
+            }
+            PublicOplogEntry::BeginRemoteTransaction(_) => {
+                Err("Cannot convert BeginRemoteTransaction from public to raw oplog entry"
+                    .to_string())
+            }
+            PublicOplogEntry::PreCommitRemoteTransaction(p) => {
+                Ok(OplogEntry::PreCommitRemoteTransaction {
+                    timestamp: p.timestamp,
+                    begin_index: p.begin_index,
+                })
+            }
+            PublicOplogEntry::PreRollbackRemoteTransaction(p) => {
+                Ok(OplogEntry::PreRollbackRemoteTransaction {
+                    timestamp: p.timestamp,
+                    begin_index: p.begin_index,
+                })
+            }
+            PublicOplogEntry::CommittedRemoteTransaction(p) => {
+                Ok(OplogEntry::CommittedRemoteTransaction {
+                    timestamp: p.timestamp,
+                    begin_index: p.begin_index,
+                })
+            }
+            PublicOplogEntry::RolledBackRemoteTransaction(p) => {
+                Ok(OplogEntry::RolledBackRemoteTransaction {
+                    timestamp: p.timestamp,
+                    begin_index: p.begin_index,
+                })
+            }
+            PublicOplogEntry::Snapshot(p) => {
+                let (data, mime_type) = match p.data {
+                    PublicSnapshotData::Raw(raw) => (raw.data, raw.mime_type),
+                    PublicSnapshotData::Json(json) => (
+                        serde_json::to_vec(&json.data).map_err(|e| e.to_string())?,
+                        "application/json".to_string(),
+                    ),
+                    PublicSnapshotData::Multipart(multipart) => {
+                        use crate::base_model::oplog::multipart::extract_boundary;
+                        use super::MultipartPartData;
+
+                        let boundary = extract_boundary(&multipart.mime_type)
+                            .unwrap_or("boundary")
+                            .to_string();
+                        let mut output = Vec::new();
+                        for part in &multipart.parts {
+                            output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+                            output.extend_from_slice(
+                                format!("Content-Type: {}\r\n", part.content_type).as_bytes(),
+                            );
+                            output.extend_from_slice(
+                                format!(
+                                    "Content-Disposition: attachment; name=\"{}\"\r\n",
+                                    part.name
+                                )
+                                .as_bytes(),
+                            );
+                            output.extend_from_slice(b"\r\n");
+                            match &part.data {
+                                MultipartPartData::Json(json) => {
+                                    output.extend_from_slice(
+                                        serde_json::to_vec(&json.data)
+                                            .unwrap_or_default()
+                                            .as_slice(),
+                                    );
+                                }
+                                MultipartPartData::Raw(raw) => {
+                                    output.extend_from_slice(&raw.data);
+                                }
+                            }
+                            output.extend_from_slice(b"\r\n");
+                        }
+                        output.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+                        (output, multipart.mime_type)
+                    }
+                };
+                Ok(OplogEntry::Snapshot {
+                    timestamp: p.timestamp,
+                    data: OplogPayload::Inline(Box::new(data)),
+                    mime_type,
+                })
+            }
+            PublicOplogEntry::OplogProcessorCheckpoint(p) => {
+                Ok(OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: p.timestamp,
+                    plugin_grant_id: p.plugin.environment_plugin_grant_id,
+                    target_agent_id: p.target_agent_id,
+                    confirmed_up_to: p.confirmed_up_to,
+                    sending_up_to: p.sending_up_to,
+                    last_batch_start: p.last_batch_start,
+                })
+            }
+            PublicOplogEntry::SetRetryPolicy(p) => Ok(OplogEntry::SetRetryPolicy {
+                timestamp: p.timestamp,
+                policy: p.policy.into(),
+            }),
+            PublicOplogEntry::RemoveRetryPolicy(p) => Ok(OplogEntry::RemoveRetryPolicy {
+                timestamp: p.timestamp,
+                name: p.name,
+            }),
+        }
+    }
+}
+
+fn public_agent_invocation_result_to_raw(
+    result: PublicAgentInvocationResult,
+) -> Result<AgentInvocationResult, String> {
+    match result {
+        PublicAgentInvocationResult::AgentInitialization(_) => {
+            Ok(AgentInvocationResult::AgentInitialization)
+        }
+        PublicAgentInvocationResult::AgentMethod(_) => Ok(AgentInvocationResult::AgentMethod {
+            output: UntypedDataValue::Tuple(vec![]),
+        }),
+        PublicAgentInvocationResult::ManualUpdate(_) => Ok(AgentInvocationResult::ManualUpdate),
+        PublicAgentInvocationResult::LoadSnapshot(params) => {
+            Ok(AgentInvocationResult::LoadSnapshot {
+                error: params.error,
+            })
+        }
+        PublicAgentInvocationResult::SaveSnapshot(params) => {
+            let snapshot = match params.snapshot {
+                PublicSnapshotData::Raw(raw) => raw,
+                PublicSnapshotData::Json(json) => RawSnapshotData {
+                    data: serde_json::to_vec(&json.data).map_err(|e| e.to_string())?,
+                    mime_type: "application/json".to_string(),
+                },
+                PublicSnapshotData::Multipart(multipart) => {
+                    use super::MultipartPartData;
+                    use crate::base_model::oplog::multipart::extract_boundary;
+
+                    let boundary = extract_boundary(&multipart.mime_type)
+                        .unwrap_or("boundary")
+                        .to_string();
+                    let mut output = Vec::new();
+                    for part in &multipart.parts {
+                        output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+                        output.extend_from_slice(
+                            format!("Content-Type: {}\r\n", part.content_type).as_bytes(),
+                        );
+                        output.extend_from_slice(
+                            format!(
+                                "Content-Disposition: attachment; name=\"{}\"\r\n",
+                                part.name
+                            )
+                            .as_bytes(),
+                        );
+                        output.extend_from_slice(b"\r\n");
+                        match &part.data {
+                            MultipartPartData::Json(json) => {
+                                output.extend_from_slice(
+                                    serde_json::to_vec(&json.data)
+                                        .unwrap_or_default()
+                                        .as_slice(),
+                                );
+                            }
+                            MultipartPartData::Raw(raw) => {
+                                output.extend_from_slice(&raw.data);
+                            }
+                        }
+                        output.extend_from_slice(b"\r\n");
+                    }
+                    output.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+                    RawSnapshotData {
+                        data: output,
+                        mime_type: multipart.mime_type,
+                    }
+                }
+            };
+            Ok(AgentInvocationResult::SaveSnapshot { snapshot })
+        }
+        PublicAgentInvocationResult::ProcessOplogEntries(params) => {
+            Ok(AgentInvocationResult::ProcessOplogEntries {
+                error: params.error,
+            })
+        }
+    }
+}
+
+/// Chained conversion: proto → `PublicOplogEntry` → domain `OplogEntry`.
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for OplogEntry {
+    type Error = String;
+
+    fn try_from(value: golem_api_grpc::proto::golem::worker::OplogEntry) -> Result<Self, String> {
+        let public: PublicOplogEntry = value.try_into()?;
+        public.try_into()
+    }
+}
+
 // =============================================================================
 // Raw OplogEntry ↔ proto RawOplogEntry conversions
 // =============================================================================
@@ -2750,10 +3155,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     let proto_uuid: golem_api_grpc::proto::golem::common::Uuid = u;
                     uuid::Uuid::from(proto_uuid)
                 });
-                let instance_id: uuid::Uuid = p
-                    .instance_id
-                    .map(uuid::Uuid::from)
-                    .ok_or("Missing instance_id in Create entry")?;
+                let instance_id = p.instance_id.ok_or("Missing instance_id")?.into();
+
                 Ok(OplogEntry::Create {
                     timestamp,
                     agent_id,
