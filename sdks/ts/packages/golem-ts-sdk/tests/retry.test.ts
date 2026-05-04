@@ -247,7 +247,7 @@ describe('retry host helpers', () => {
     expect(trapMock).not.toHaveBeenCalled();
   });
 
-  it('withRetryPolicy calls trap on sync throw and does NOT restore the policy', async () => {
+  it('withRetryPolicy restores the policy on sync throw', async () => {
     getRetryPolicyByNameMock.mockReturnValue(undefined);
     const error = new Error('boom');
 
@@ -259,16 +259,12 @@ describe('retry host helpers', () => {
       }),
     ).toThrow(error);
 
-    // trap must have been called so the executor can retry with the policy active
-    expect(trapMock).toHaveBeenCalledOnce();
-    expect(trapMock.mock.calls[0][0]).toContain('withRetryPolicy');
-
-    // the policy must NOT have been removed — it stays active for the executor's retry
-    expect(removeRetryPolicyMock).not.toHaveBeenCalled();
-    expect(setRetryPolicyMock).toHaveBeenCalledTimes(1); // only the initial set, no restore
+    // policy is cleaned up (removed) on error — the old behaviour
+    expect(removeRetryPolicyMock).toHaveBeenCalledWith('temporary');
+    expect(trapMock).not.toHaveBeenCalled();
   });
 
-  it('withRetryPolicy calls trap on async rejection and does NOT restore the policy', async () => {
+  it('withRetryPolicy restores the policy on async rejection', async () => {
     getRetryPolicyByNameMock.mockReturnValue(undefined);
     const error = new Error('async-boom');
 
@@ -280,9 +276,7 @@ describe('retry host helpers', () => {
       }),
     ).rejects.toThrow(error);
 
-    expect(trapMock).toHaveBeenCalledOnce();
-    expect(trapMock.mock.calls[0][0]).toContain('withRetryPolicy');
-    expect(removeRetryPolicyMock).not.toHaveBeenCalled();
-    expect(setRetryPolicyMock).toHaveBeenCalledTimes(1);
+    expect(removeRetryPolicyMock).toHaveBeenCalledWith('temporary');
+    expect(trapMock).not.toHaveBeenCalled();
   });
 });
