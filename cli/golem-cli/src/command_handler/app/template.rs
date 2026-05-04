@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::app::build::check::{
-    ClaudePathState, ClaudeSkillsContext, ClaudeSkillsSyncMode, create_claude_symlink_if_needed,
-    map_embedded_skill_target_path, resolve_claude_skills_context, warn_claude_path_is_file,
-    SkillSyncTarget,
+    ClaudePathState, ClaudeSkillsContext, ClaudeSkillsSyncMode, SkillSyncTarget,
+    create_claude_symlink_if_needed, map_embedded_skill_target_path, resolve_claude_skills_context,
+    warn_claude_path_is_file,
 };
 use crate::app::context::{find_main_source_from, validated_to_anyhow};
 use crate::app::template::{
@@ -720,9 +720,13 @@ impl TemplateHandler {
                     warn_claude_path_is_file(application_path, claude_skills_ctx);
                     // NOP: `.claude` is a regular file. We skip Claude skill planning for this run.
                 }
-                ClaudePathState::Missing | ClaudePathState::Symlink | ClaudePathState::Directory => {
-                    let common_template_skill_files =
-                        collect_common_template_skill_files(self.ctx.app_template_repo()?, &template_inputs.common_templates)?;
+                ClaudePathState::Missing
+                | ClaudePathState::Symlink
+                | ClaudePathState::Directory => {
+                    let common_template_skill_files = collect_common_template_skill_files(
+                        self.ctx.app_template_repo()?,
+                        &template_inputs.common_templates,
+                    )?;
                     let claude_skill_files = rebase_common_template_skill_files(
                         application_path,
                         &common_template_skill_files,
@@ -1089,7 +1093,9 @@ fn collect_common_template_skill_files(
     let mut result = BTreeMap::new();
 
     for template_name in common_templates.keys() {
-        for (skill_path, content) in app_template_repo.common_template_skill_files(template_name.language())? {
+        for (skill_path, content) in
+            app_template_repo.common_template_skill_files(template_name.language())?
+        {
             result.insert(skill_path, content);
         }
     }

@@ -1713,7 +1713,8 @@ impl AppCommandHandler {
     }
 
     fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-        let claude_skills_ctx = resolve_claude_skills_context(build_ctx.application().app_root_dir())?;
+        let claude_skills_ctx =
+            resolve_claude_skills_context(build_ctx.application().app_root_dir())?;
         let plan = plan_dependency_fixes(build_ctx, &claude_skills_ctx)?;
 
         for warning in &plan.warnings {
@@ -1780,7 +1781,10 @@ impl AppCommandHandler {
             }
         }
 
-        create_claude_symlink_if_needed(build_ctx.application().app_root_dir(), &claude_skills_ctx)?;
+        create_claude_symlink_if_needed(
+            build_ctx.application().app_root_dir(),
+            &claude_skills_ctx,
+        )?;
 
         Ok(())
     }

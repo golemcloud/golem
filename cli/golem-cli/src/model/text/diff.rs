@@ -276,8 +276,7 @@ pub fn log_unified_diff_for_path(path: &Path, diff: &str) {
 }
 
 fn is_compact_diff_path(path: &Path) -> bool {
-    path
-        .extension()
+    path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("md"))
         .unwrap_or(false)

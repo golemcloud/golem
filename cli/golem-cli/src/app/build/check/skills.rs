@@ -65,7 +65,12 @@ pub(super) fn plan_skill_fix_steps(
     }
 
     let mut steps = Vec::new();
-    collect_skill_fix_steps_for_target(app_root, &expected_files, &mut steps, SkillSyncTarget::Agents)?;
+    collect_skill_fix_steps_for_target(
+        app_root,
+        &expected_files,
+        &mut steps,
+        SkillSyncTarget::Agents,
+    )?;
 
     match claude_skills_ctx.mode {
         ClaudeSkillsSyncMode::ClaudeSymlink => {
@@ -77,7 +82,9 @@ pub(super) fn plan_skill_fix_steps(
                     warn_claude_path_is_file(app_root, claude_skills_ctx);
                     // NOP: `.claude` is a regular file. We skip Claude syncing for this run.
                 }
-                ClaudePathState::Missing | ClaudePathState::Symlink | ClaudePathState::Directory => {
+                ClaudePathState::Missing
+                | ClaudePathState::Symlink
+                | ClaudePathState::Directory => {
                     collect_skill_fix_steps_for_target(
                         app_root,
                         &expected_files,
@@ -219,14 +226,22 @@ fn ensure_claude_symlink_or_warn(
 
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(".agents", &claude_link)
-            .with_context(|| format!("Failed to create Claude symlink at {}", claude_link.display()))?;
+        std::os::unix::fs::symlink(".agents", &claude_link).with_context(|| {
+            format!(
+                "Failed to create Claude symlink at {}",
+                claude_link.display()
+            )
+        })?;
     }
 
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_dir(".agents", &claude_link)
-            .with_context(|| format!("Failed to create Claude symlink at {}", claude_link.display()))?;
+        std::os::windows::fs::symlink_dir(".agents", &claude_link).with_context(|| {
+            format!(
+                "Failed to create Claude symlink at {}",
+                claude_link.display()
+            )
+        })?;
     }
 
     Ok(())
