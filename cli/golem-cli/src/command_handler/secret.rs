@@ -342,8 +342,6 @@ mod tests {
     use test_r::test;
 
     use super::*;
-    use crate::command::{GolemCliCommand, GolemCliSubcommand};
-    use clap::Parser;
     use golem_wasm::analysis::{
         NameTypePair, TypeBool, TypeF64, TypeList, TypeOption, TypeRecord, TypeS32, TypeStr,
         TypeU32,
