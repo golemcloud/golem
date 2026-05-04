@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::agent_secret::AgentSecretCommandHandler;
 use self::resource_definition::ResourceDefinitionCommandHandler;
 use self::retry_policy::RetryPolicyCommandHandler;
+use self::secret::SecretCommandHandler;
 use crate::command::agent_type::AgentTypeSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
@@ -55,7 +55,6 @@ use std::sync::Arc;
 use tracing::{Level, debug};
 
 mod account;
-mod agent_secret;
 mod api;
 mod api_token;
 mod app;
@@ -70,6 +69,7 @@ mod profile;
 mod repl;
 mod resource_definition;
 mod retry_policy;
+mod secret;
 pub(crate) mod template;
 mod worker;
 
@@ -420,11 +420,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handle_command(subcommand)
                         .await
                 }
-                GolemCliSubcommand::AgentSecret { subcommand } => {
-                    self.ctx
-                        .agent_secret_handler()
-                        .handle_command(subcommand)
-                        .await
+                GolemCliSubcommand::Secret { subcommand } => {
+                    self.ctx.secret_handler().handle_command(subcommand).await
                 }
                 GolemCliSubcommand::RetryPolicy { subcommand } => {
                     self.ctx
@@ -457,7 +454,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       if the need ever arises
 pub trait Handlers {
     fn account_handler(&self) -> AccountCommandHandler;
-    fn agent_secret_handler(&self) -> AgentSecretCommandHandler;
+    fn secret_handler(&self) -> SecretCommandHandler;
     fn retry_policy_handler(&self) -> RetryPolicyCommandHandler;
     fn resource_definition_handler(&self) -> ResourceDefinitionCommandHandler;
     fn api_domain_handler(&self) -> ApiDomainCommandHandler;
@@ -484,8 +481,8 @@ impl Handlers for Arc<Context> {
         AccountCommandHandler::new(self.clone())
     }
 
-    fn agent_secret_handler(&self) -> AgentSecretCommandHandler {
-        AgentSecretCommandHandler::new(self.clone())
+    fn secret_handler(&self) -> SecretCommandHandler {
+        SecretCommandHandler::new(self.clone())
     }
 
     fn retry_policy_handler(&self) -> RetryPolicyCommandHandler {
