@@ -371,8 +371,7 @@ mod tests {
     /// Generates an arbitrary record schema paired with a matching JSON object,
     /// with 1–5 fields of mixed simple types (String, U32, S32, F64, Bool).
     /// Uses hash_map to guarantee unique field names.
-    fn arb_record_schema_and_json(
-    ) -> impl Strategy<Value = (AnalysedType, serde_json::Value)> {
+    fn arb_record_schema_and_json() -> impl Strategy<Value = (AnalysedType, serde_json::Value)> {
         let arb_field_value = prop_oneof![
             any::<String>()
                 .prop_map(|s| (AnalysedType::Str(TypeStr), serde_json::Value::String(s))),
@@ -427,9 +426,8 @@ mod tests {
 
     /// Decimal numbers as a user would type them as a secret value: `3.14`, `-7.0`, `0.9999`.
     fn decimal_f64_input() -> impl Strategy<Value = String> {
-        (any::<i32>(), 0u32..=9999u32).prop_map(|(int_part, frac_part)| {
-            format!("{int_part}.{frac_part}")
-        })
+        (any::<i32>(), 0u32..=9999u32)
+            .prop_map(|(int_part, frac_part)| format!("{int_part}.{frac_part}"))
     }
 
     proptest! {
