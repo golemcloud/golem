@@ -111,9 +111,12 @@ object Transactions {
               // so we throw and catch below
               throw RetrySignal
             case other =>
-              // Do NOT drop — leave the atomic region open so the executor
-              // sees the trap inside the region and can retry from the begin marker.
-              throw other
+              // Force an uncatchable trap so user code cannot observe the
+              // failure with `recover`/`recoverWith`. The atomic region is
+              // intentionally left open; the existing replay-time fallback
+              // in `markBeginOperation` deletes the partial inner side
+              // effects and re-executes the block.
+              HostApi.trap(s"infallibleTransaction failed: ${formatErrorForTrap(other)}")
           }
         )
         .recoverWith { case RetrySignal =>
@@ -152,14 +155,22 @@ object Transactions {
             Left(failure)
           }
           .recover { case e =>
-            // Do NOT drop — leave the atomic region open so the executor
-            // sees the trap inside the region and can retry from the begin marker.
-            throw e
+            // Force an uncatchable trap. Note: this only fires for *thrown*
+            // errors, which are unexpected. Expected failures are returned
+            // via Left and processed by `tx.onFailure` above without trapping.
+            HostApi.trap(s"fallibleTransaction failed: ${formatErrorForTrap(e)}")
           }
     }.recover { case e =>
-      // Do NOT drop — leave the atomic region open for retry.
-      throw e
+      // Same reasoning as above — thrown errors are unexpected, trap.
+      HostApi.trap(s"fallibleTransaction failed: ${formatErrorForTrap(e)}")
     }
+  }
+
+  private def formatErrorForTrap(error: Throwable): String = {
+    val sw = new java.io.StringWriter
+    val pw = new java.io.PrintWriter(sw)
+    error.printStackTrace(pw)
+    sw.toString
   }
 
   /**

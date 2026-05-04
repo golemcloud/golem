@@ -64,6 +64,9 @@ fn wasmImportMarkBeginOperation() -> Int64 = "golem:api/host@1.5.0" "mark-begin-
 fn wasmImportMarkEndOperation(p0 : Int64) = "golem:api/host@1.5.0" "mark-end-operation"
 
 ///|
+fn wasmImportTrap(p0 : Int, p1 : Int) = "golem:api/host@1.5.0" "trap"
+
+///|
 fn wasmImportGetOplogPersistenceLevel() -> Int = "golem:api/host@1.5.0" "get-oplog-persistence-level"
 
 ///|

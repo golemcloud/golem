@@ -13,7 +13,7 @@ export default defineConfig([
     plugins: [
       typescript({
         tsconfig: './tsconfig.json',
-        useTsconfigDeclarationDir: true,
+        include: ['src/**/*'],
         tsconfigOverride: {
           compilerOptions: { declaration: false },
         },

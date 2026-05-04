@@ -61,10 +61,36 @@ pub fn mark_end_operation(begin : UInt64) -> Unit {
 }
 
 ///|
+/// Unconditionally traps the current invocation with the given reason.
+///
+/// This call never returns: it surfaces as an uncatchable wasm trap on the
+/// host side and the worker enters the standard trap-recovery flow. SDK
+/// guard helpers use this to guarantee that a failed atomic region always
+/// leads to a trap, regardless of whether the guest could otherwise catch
+/// the failure.
+pub fn trap(reason : String) -> Unit {
+  @raw.trap(reason)
+}
+
+///|
 /// Runs a function within an atomic operation region.
-/// The region is automatically committed when `f` returns, even if it raises.
-pub fn[T] with_atomic_operation(f : () -> T) -> T {
+///
+/// On success the atomic region is committed via `mark_end_operation`.
+/// On error the SDK calls the host `trap` function, which surfaces as an
+/// uncatchable wasm trap so the failure cannot be observed by user code.
+/// The atomic region is intentionally left open so the existing replay-time
+/// fallback in `mark_begin_operation` deletes the partial inner side
+/// effects via a `Jump` and re-executes the block.
+pub fn[T] with_atomic_operation(f : () -> T raise) -> T {
   let marker = @raw.mark_begin_operation()
-  defer @raw.mark_end_operation(marker)
-  f()
+  match (try? f()) {
+    Ok(result) => {
+      @raw.mark_end_operation(marker)
+      result
+    }
+    Err(e) => {
+      @raw.trap("atomic block failed: " + e.to_string())
+      panic() // unreachable — trap host call must not return
+    }
+  }
 }

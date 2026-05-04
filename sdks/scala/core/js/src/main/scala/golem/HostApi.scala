@@ -49,6 +49,23 @@ object HostApi {
   def markEndOperation(begin: OplogIndex): Unit =
     AgentHostApi.markEndOperation(toJsBigInt(begin))
 
+  /**
+   * Unconditionally traps the current invocation with the given reason.
+   *
+   * This call never returns: it surfaces as an uncatchable wasm trap on the
+   * host side and the worker enters the standard trap-recovery flow. SDK
+   * guard helpers use this to guarantee that a failed atomic region always
+   * leads to a trap, regardless of whether the guest language could
+   * otherwise catch the failure.
+   */
+  def trap(reason: String): Nothing = {
+    AgentHostApi.trap(reason)
+    // The host call must not return; if Scala.js reaches this point the host
+    // implementation is broken. Throw a fatal error so the worker terminates
+    // even in that pathological case.
+    throw new Error(s"trap host call returned unexpectedly: $reason")
+  }
+
   def oplogCommit(replicas: Int): Unit =
     AgentHostApi.oplogCommit(replicas)
 
