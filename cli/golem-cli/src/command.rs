@@ -16,7 +16,7 @@ use crate::app::template::AppTemplateName;
 use crate::command::account::AccountSubcommand;
 use crate::command::agent_type::AgentTypeSubcommand;
 use crate::command::api::ApiSubcommand;
-use crate::command::api::agent_secret::AgentSecretSubcommand;
+use crate::command::api::secret::SecretSubcommand;
 use crate::command::api_token::ApiTokenSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
@@ -769,10 +769,10 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ApiTokenSubcommand,
     },
-    /// Manage agent secrets
-    AgentSecret {
+    /// Manage secrets
+    Secret {
         #[clap(subcommand)]
-        subcommand: AgentSecretSubcommand,
+        subcommand: SecretSubcommand,
     },
     /// Manage retry policies
     RetryPolicy {
@@ -1343,17 +1343,17 @@ pub mod api {
         }
     }
 
-    pub mod agent_secret {
-        use crate::args::parse_agent_secret_path;
+    pub mod secret {
+        use crate::args::parse_secret_path;
         use clap::Subcommand;
         use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath};
 
         #[derive(Debug, Subcommand)]
-        pub enum AgentSecretSubcommand {
-            /// Create Agent Secret in the environment
+        pub enum SecretSubcommand {
+            /// Create Secret in the environment
             Create {
                 /// Path of the secret (dot-separated, e.g. "apiKey" or "db.password"). Casing is normalized during creation.
-                #[arg(value_parser = parse_agent_secret_path)]
+                #[arg(value_parser = parse_secret_path)]
                 path: AgentSecretPath,
                 /// Type of the secret, using the project's language syntax (e.g. "String" for Rust, "string" for TypeScript) or JSON format
                 #[arg(long)]
@@ -1363,20 +1363,20 @@ pub mod api {
                 secret_value: Option<String>,
             },
 
-            /// Get Agent Secret by path or ID
+            /// Get Secret by path or ID
             Get {
                 /// Path of the secret (dot-separated)
-                #[arg(value_parser = parse_agent_secret_path, required_unless_present = "id", conflicts_with = "id")]
+                #[arg(value_parser = parse_secret_path, required_unless_present = "id", conflicts_with = "id")]
                 path: Option<AgentSecretPath>,
                 /// ID of the secret (alternative to path)
                 #[arg(long, required_unless_present = "path", conflicts_with = "path")]
                 id: Option<AgentSecretId>,
             },
 
-            /// Update Agent Secret value
+            /// Update Secret value
             UpdateValue {
                 /// Path of the secret (dot-separated)
-                #[arg(value_parser = parse_agent_secret_path, required_unless_present = "id", conflicts_with = "id")]
+                #[arg(value_parser = parse_secret_path, required_unless_present = "id", conflicts_with = "id")]
                 path: Option<AgentSecretPath>,
                 /// ID of the secret (alternative to path)
                 #[arg(long, required_unless_present = "path", conflicts_with = "path")]
@@ -1386,17 +1386,17 @@ pub mod api {
                 secret_value: Option<String>,
             },
 
-            /// Delete Agent Secret
+            /// Delete Secret
             Delete {
                 /// Path of the secret (dot-separated)
-                #[arg(value_parser = parse_agent_secret_path, required_unless_present = "id", conflicts_with = "id")]
+                #[arg(value_parser = parse_secret_path, required_unless_present = "id", conflicts_with = "id")]
                 path: Option<AgentSecretPath>,
                 /// ID of the secret (alternative to path)
                 #[arg(long, required_unless_present = "path", conflicts_with = "path")]
                 id: Option<AgentSecretId>,
             },
 
-            /// List Agent Secrets
+            /// List Secrets
             List {
                 /// Include environment ID and secret ID columns in text output
                 #[arg(long)]

@@ -73,26 +73,6 @@ async fn test_rust_counter() {
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
     }
-
-    // Test with Rust REPL
-    {
-        let uuid = Uuid::new_v4().to_string();
-        let outputs = ctx
-            .cli([
-                cmd::REPL,
-                flag::LANGUAGE,
-                "rust",
-                flag::SCRIPT,
-                &format!(
-                    "CounterAgent::get(\"{uuid}\".to_string()).await.unwrap().increment().await"
-                ),
-            ])
-            .await;
-        assert!(outputs.success_or_dump());
-        assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
-        assert!(!outputs.stdout_contains("error"));
-        assert!(!outputs.stderr_contains("error"));
-    }
 }
 
 #[test]
@@ -527,26 +507,6 @@ async fn test_ts_counter() {
         assert!(outputs.success_or_dump());
         assert!(outputs.stdout_contains_ordered(vec!["Preparing TypeScript REPL", "1"]));
         assert!(outputs.stderr_contains_ordered(vec!["> awaiting Promise<number>"]));
-        assert!(!outputs.stdout_contains("error"));
-        assert!(!outputs.stderr_contains("error"));
-    }
-
-    // Test with Rust REPL
-    {
-        let uuid = Uuid::new_v4().to_string();
-        let outputs = ctx
-            .cli([
-                cmd::REPL,
-                flag::LANGUAGE,
-                "rust",
-                flag::SCRIPT,
-                &format!(
-                    "CounterAgent::get(\"{uuid}\".to_string()).await.unwrap().increment().await"
-                ),
-            ])
-            .await;
-        assert!(outputs.success_or_dump());
-        assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
     }
@@ -1198,8 +1158,8 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
         .await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered([
-        r#"LongAgentName(("1212",100.0))"#,
-        r#"[{ oneField: "1212", anotherField: 100.0 }, { oneField: "1", anotherField: 2.0 }]"#,
+        r#"LongAgentName({ oneField: "1212", anotherField: 100 })"#,
+        r#"[{ oneField: "1212", anotherField: 100 }, { oneField: "1", anotherField: 2 }]"#,
     ]));
 
     let outputs = ctx

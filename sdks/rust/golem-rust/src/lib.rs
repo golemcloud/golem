@@ -345,14 +345,21 @@ pub struct AtomicOperationGuard {
 
 impl Drop for AtomicOperationGuard {
     fn drop(&mut self) {
-        mark_end_operation(self.begin);
+        // If we're unwinding from a panic, leave the atomic region open so the
+        // worker recovery + replay-time fallback in `mark_begin_operation`
+        // re-executes the block from the begin marker. WASM panics are wasm
+        // traps, so the executor will recover the worker.
+        if !std::thread::panicking() {
+            mark_end_operation(self.begin);
+        }
     }
 }
 
 /// Marks a block as an atomic operation
 ///
-/// When the returned guard is dropped, the operation gets committed.
-/// In case of a failure, the whole operation will be re-executed during retry.
+/// When the returned guard is dropped, the operation gets committed —
+/// unless the current thread is panicking, in which case the region is left
+/// open so worker recovery re-executes the block.
 #[must_use]
 pub fn mark_atomic_operation() -> AtomicOperationGuard {
     let begin = mark_begin_operation();
@@ -361,7 +368,10 @@ pub fn mark_atomic_operation() -> AtomicOperationGuard {
 
 /// Executes the given function as an atomic operation.
 ///
-/// In case of a failure, the whole operation will be re-executed during retry.
+/// On panic the region is left open and the worker recovers + re-executes
+/// the block. Use [`atomically_result`] when the body returns a `Result` so
+/// that error returns also force a trap rather than silently committing the
+/// region.
 pub fn atomically<T>(f: impl FnOnce() -> T) -> T {
     let _guard = mark_atomic_operation();
     f()
@@ -369,8 +379,50 @@ pub fn atomically<T>(f: impl FnOnce() -> T) -> T {
 
 /// Executes the given async function as an atomic operation.
 ///
-/// In case of a failure, the whole operation will be re-executed during retry.
+/// On panic the region is left open and the worker recovers + re-executes
+/// the block.
 pub async fn atomically_async<T, F: Future<Output = T>>(f: impl FnOnce() -> F) -> T {
     let _guard = mark_atomic_operation();
     f().await
+}
+
+/// Executes the given fallible function as an atomic operation.
+///
+/// On `Ok` the region is committed.
+/// On `Err` the SDK calls the host `trap` function, which surfaces as an
+/// uncatchable wasm trap so the failure cannot be observed by user code.
+/// The atomic region is intentionally left open so the existing replay-time
+/// fallback in `mark_begin_operation` deletes the partial inner side effects
+/// and re-executes the block.
+pub fn atomically_result<T, E>(f: impl FnOnce() -> Result<T, E>) -> Result<T, E>
+where
+    E: core::fmt::Display,
+{
+    let guard = mark_atomic_operation();
+    match f() {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            // Skip the Drop closing the region — the trap is the terminator.
+            core::mem::forget(guard);
+            bindings::golem::api::host::trap(&format!("atomic block failed: {e}"));
+            unreachable!("trap host call must not return")
+        }
+    }
+}
+
+/// Async version of [`atomically_result`].
+pub async fn atomically_result_async<T, E, F>(f: impl FnOnce() -> F) -> Result<T, E>
+where
+    E: core::fmt::Display,
+    F: Future<Output = Result<T, E>>,
+{
+    let guard = mark_atomic_operation();
+    match f().await {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            core::mem::forget(guard);
+            bindings::golem::api::host::trap(&format!("atomic block failed: {e}"));
+            unreachable!("trap host call must not return")
+        }
+    }
 }

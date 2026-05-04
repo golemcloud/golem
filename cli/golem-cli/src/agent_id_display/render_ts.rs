@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::text_utils::{
-    write_json_escaped, write_json_escaped_char, write_with_decimal_point,
-};
+use golem_common::model::agent::text_utils::{write_json_escaped, write_json_escaped_char};
 use golem_common::model::agent::{
     BinaryReference, BinarySource, ComponentModelElementValue, DataValue, ElementValue,
     NamedElementValues, TextReference, TextSource, UnstructuredBinaryElementValue,
@@ -408,10 +406,9 @@ fn render_f32(buf: &mut String, v: f32) {
     } else if v == f32::NEG_INFINITY {
         buf.push_str("-Infinity");
     } else if v == 0.0 && v.is_sign_negative() {
-        buf.push_str("-0.0");
+        buf.push_str("-0");
     } else {
-        let s = format!("{v}");
-        write_with_decimal_point(buf, &s);
+        write!(buf, "{v}").unwrap();
     }
 }
 
@@ -423,9 +420,8 @@ fn render_f64(buf: &mut String, v: f64) {
     } else if v == f64::NEG_INFINITY {
         buf.push_str("-Infinity");
     } else if v == 0.0 && v.is_sign_negative() {
-        buf.push_str("-0.0");
+        buf.push_str("-0");
     } else {
-        let s = format!("{v}");
-        write_with_decimal_point(buf, &s);
+        write!(buf, "{v}").unwrap();
     }
 }
