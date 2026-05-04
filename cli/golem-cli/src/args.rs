@@ -45,7 +45,7 @@ pub fn parse_agent_config(s: &str) -> anyhow::Result<AgentConfigEntryDto> {
     })
 }
 
-pub fn parse_agent_secret_path(input: &str) -> anyhow::Result<AgentSecretPath> {
+pub fn parse_secret_path(input: &str) -> anyhow::Result<AgentSecretPath> {
     Ok(AgentSecretPath(parse_agent_config_path(input)?))
 }
 
