@@ -17,6 +17,7 @@ use crate::Tracing;
 use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
@@ -338,6 +339,13 @@ async fn create_oplog_entry_persists_durable_agent_mode(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
+        .with_agent_config(
+            "CounterAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["var1".to_string()],
+                value: serde_json::Value::String("value1".to_string()).into(),
+            }],
+        )
         .store()
         .await?;
     let agent_id = agent_id!("CounterAgent", "persistence-test");

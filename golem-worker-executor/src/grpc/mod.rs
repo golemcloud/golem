@@ -1079,17 +1079,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // agent type at the same `agent_mode` that the worker was created with. Changing the
         // mode would route subsequent oplog reads/writes to a different namespace and silently
         // lose the worker's history.
-        let target_component_metadata = self
+        //
+        // If the target revision cannot be resolved (e.g. it does not exist yet), we skip the
+        // check and let the update be queued; the worker's update loop is the canonical place
+        // that records a FailedUpdate for unknown revisions, and we must not bypass that path
+        // by failing synchronously here.
+        if let Ok(target_component_metadata) = self
             .component_service()
             .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
-            .await?;
-
-        if let Ok(agent_id) = ParsedAgentId::parse(
-            &owned_agent_id.agent_id.agent_id,
-            &target_component_metadata.metadata,
-        ) && let Some(target_agent_type) = target_component_metadata
-            .metadata
-            .find_agent_type_by_name(&agent_id.agent_type)
+            .await
+            && let Ok(agent_id) = ParsedAgentId::parse(
+                &owned_agent_id.agent_id.agent_id,
+                &target_component_metadata.metadata,
+            )
+            && let Some(target_agent_type) = target_component_metadata
+                .metadata
+                .find_agent_type_by_name(&agent_id.agent_type)
         {
             let persisted_mode = metadata.agent_mode;
             if target_agent_type.mode != persisted_mode {
