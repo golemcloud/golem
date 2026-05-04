@@ -2220,8 +2220,7 @@ pub(crate) fn try_recanonicalize_agent_name_with_parsed(
         new_id.push_str(phantom);
     }
 
-    let parsed =
-        ParsedAgentId::new(agent_type.type_name.clone(), data_value, phantom_uuid).ok();
+    let parsed = ParsedAgentId::new(agent_type.type_name.clone(), data_value, phantom_uuid).ok();
 
     (RawAgentId(new_id), parsed)
 }
