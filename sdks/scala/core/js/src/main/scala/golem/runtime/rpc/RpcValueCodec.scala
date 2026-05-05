@@ -84,9 +84,14 @@ private[rpc] object RpcValueCodec {
   def decodeResult[A](dataValue: JsDataValue)(implicit codec: GolemSchema[A]): Either[String, A] =
     dataValue.tag match {
       case "tuple" =>
+        val elements = dataValue.asInstanceOf[JsDataValueTuple].value
         codec.schema match {
+          case Tuple(Nil) =>
+            // Unit / empty-tuple result: the wire-level tuple wrapping the result value
+            // is also empty, so decode directly from an empty StructuredValue.Tuple.
+            if (elements.isEmpty) codec.decode(StructuredValue.Tuple(Nil))
+            else Left(s"Expected empty tuple result for Unit, found ${elements.length} elements")
           case StructuredSchema.Multimodal(_) =>
-            val elements = dataValue.asInstanceOf[JsDataValueTuple].value
             if (elements.length != 1)
               Left(s"Expected single-element tuple result, found ${elements.length} elements")
             else {
@@ -100,7 +105,6 @@ private[rpc] object RpcValueCodec {
               }
             }
           case _ =>
-            val elements = dataValue.asInstanceOf[JsDataValueTuple].value
             if (elements.length != 1)
               Left(s"Expected single-element tuple result, found ${elements.length} elements")
             else {
