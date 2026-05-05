@@ -162,6 +162,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn ensure_not_failed(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         metadata: &AgentMetadata,
     ) -> Result<(), WorkerExecutorError> {
         match &metadata.last_known_status.status {
@@ -169,6 +170,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     self,
                     owned_agent_id,
+                    agent_mode,
                     &metadata.last_known_status,
                 )
                 .await;
@@ -189,6 +191,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     self,
                     owned_agent_id,
+                    agent_mode,
                     &metadata.last_known_status,
                 )
                 .await;
@@ -742,7 +745,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_agent_id, &metadata).await?;
+        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
+            .await?;
 
         match &metadata.last_known_status.status {
             AgentStatus::Suspended | AgentStatus::Interrupted | AgentStatus::Idle => {
@@ -847,7 +851,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await;
 
         if let Some(metadata) = &metadata {
-            self.ensure_not_failed(&owned_agent_id, metadata).await?;
+            self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, metadata)
+                .await?;
         }
 
         let invocation_context = request
@@ -921,9 +926,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        let last_error_and_retry_count =
-            Ctx::get_last_error_and_retry_count(self, &owned_agent_id, &metadata.last_known_status)
-                .await;
+        let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
+            self,
+            &owned_agent_id,
+            metadata.agent_mode,
+            &metadata.last_known_status,
+        )
+        .await;
 
         Self::create_proto_metadata(metadata, last_error_and_retry_count)
     }
@@ -999,6 +1008,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
                 self,
                 &worker_metadata.owned_agent_id(),
+                worker_metadata.agent_mode,
                 &worker_metadata.last_known_status,
             )
             .await;
@@ -1065,6 +1075,43 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return Err(WorkerExecutorError::invalid_request(
                 "Ephemeral workers cannot be updated",
             ));
+        }
+
+        // Reject mode-changing updates: the target component revision must keep the worker's
+        // agent type at the same `agent_mode` that the worker was created with. Changing the
+        // mode would route subsequent oplog reads/writes to a different namespace and silently
+        // lose the worker's history.
+        //
+        // If the target revision cannot be resolved (e.g. it does not exist yet), we skip the
+        // check and let the update be queued; the worker's update loop is the canonical place
+        // that records a FailedUpdate for unknown revisions, and we must not bypass that path
+        // by failing synchronously here.
+        if let Ok(target_component_metadata) = self
+            .component_service()
+            .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
+            .await
+            && let Ok(agent_id) = ParsedAgentId::parse(
+                &owned_agent_id.agent_id.agent_id,
+                &target_component_metadata.metadata,
+            )
+            && let Some(target_agent_type) = target_component_metadata
+                .metadata
+                .find_agent_type_by_name(&agent_id.agent_type)
+        {
+            let persisted_mode = metadata.agent_mode;
+            if target_agent_type.mode != persisted_mode {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Cannot update worker {} from {:?} to component revision {}: the agent type \
+                     '{}' has mode {:?} in the target revision but the worker was created with \
+                     mode {:?}. Changing an agent type's mode across revisions is not supported.",
+                    owned_agent_id,
+                    persisted_mode,
+                    target_revision,
+                    agent_id.agent_type,
+                    target_agent_type.mode,
+                    persisted_mode,
+                )));
+            }
         }
 
         let disable_wakeup = request.disable_wakeup;
@@ -1199,7 +1246,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_agent_id, &metadata).await?;
+        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
+            .await?;
 
         if metadata.last_known_status.status != AgentStatus::Interrupted {
             let event_service = Worker::get_or_create_suspended(
@@ -1241,6 +1289,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name =
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
+        let component_service = self.component_service();
+        let agent_mode = self
+            .worker_service()
+            .get_agent_mode(&owned_agent_id)
+            .await
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "agent {owned_agent_id} does not exist"
+                ))
+            })?;
+
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1251,9 +1310,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     })?;
 
                 get_public_oplog_chunk(
-                    self.component_service(),
+                    component_service.clone(),
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1267,14 +1327,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             None => {
                 let start = OplogIndex::from_u64(request.from_oplog_index);
-                let initial_component_revision =
-                    find_component_revision_at(self.oplog_service(), &owned_agent_id, start)
-                        .await?;
-
-                get_public_oplog_chunk(
-                    self.component_service(),
+                let initial_component_revision = find_component_revision_at(
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
+                    start,
+                )
+                .await?;
+
+                get_public_oplog_chunk(
+                    component_service.clone(),
+                    self.oplog_service(),
+                    &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
@@ -1328,6 +1393,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name =
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
+        let component_service = self.component_service();
+        let agent_mode = self
+            .worker_service()
+            .get_agent_mode(&owned_agent_id)
+            .await
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "agent {owned_agent_id} does not exist"
+                ))
+            })?;
+
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1338,9 +1414,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     })?;
 
                 search_public_oplog(
-                    self.component_service(),
+                    component_service.clone(),
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1355,13 +1432,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             None => {
                 let start = OplogIndex::INITIAL;
-                let initial_component_revision =
-                    find_component_revision_at(self.oplog_service(), &owned_agent_id, start)
-                        .await?;
-                search_public_oplog(
-                    self.component_service(),
+                let initial_component_revision = find_component_revision_at(
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
+                    start,
+                )
+                .await?;
+                search_public_oplog(
+                    component_service.clone(),
+                    self.oplog_service(),
+                    &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,

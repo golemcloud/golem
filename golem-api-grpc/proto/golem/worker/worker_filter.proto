@@ -5,6 +5,7 @@ package golem.worker;
 import "golem/common/account_id.proto";
 import "golem/common/string_filter_comparator.proto";
 import "golem/common/filter_comparator.proto";
+import "golem/component/agent.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
 import "google/protobuf/timestamp.proto";
@@ -20,6 +21,7 @@ message AgentFilter {
     AgentOrFilter or = 7;
     AgentNotFilter not = 8;
     AgentConfigVarsFilter config = 9;
+    AgentModeFilter mode = 10;
   }
 }
 
@@ -65,4 +67,9 @@ message AgentConfigVarsFilter {
   string name = 1;
   golem.common.StringFilterComparator comparator = 2;
   string value = 3;
+}
+
+message AgentModeFilter {
+  golem.common.FilterComparator comparator = 1;
+  golem.component.AgentMode value = 2;
 }

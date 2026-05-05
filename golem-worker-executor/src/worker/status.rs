@@ -1,8 +1,9 @@
-use crate::services::{HasConfig, HasOplogService};
+use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use async_recursion::async_recursion;
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
@@ -22,12 +23,13 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 pub async fn calculate_last_known_status_for_existing_worker<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
 ) -> AgentStatusRecord
 where
-    T: HasOplogService + HasConfig + Sync,
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
-    calculate_last_known_status(this, owned_agent_id, last_known)
+    calculate_last_known_status(this, owned_agent_id, agent_mode, last_known)
         .await
         .expect("Failed to calculate oplog index for existing worker")
 }
@@ -37,14 +39,18 @@ where
 pub async fn calculate_last_known_status<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
 ) -> Option<AgentStatusRecord>
 where
-    T: HasOplogService + HasConfig + Sync,
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
     let last_known = last_known.unwrap_or_default();
 
-    let last_oplog_index = this.oplog_service().get_last_index(owned_agent_id).await;
+    let last_oplog_index = this
+        .oplog_service()
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
     assert!(last_oplog_index >= last_known.oplog_idx);
 
     if last_oplog_index == OplogIndex::NONE {
@@ -57,6 +63,7 @@ where
             .oplog_service()
             .read_range(
                 owned_agent_id,
+                agent_mode,
                 last_known.oplog_idx.next(),
                 last_oplog_index,
             )
@@ -65,6 +72,7 @@ where
         let final_status = update_status_with_new_entries(
             this,
             owned_agent_id,
+            agent_mode,
             last_known,
             new_entries,
             &this.config().retry,
@@ -74,15 +82,16 @@ where
         if let Some(final_status) = final_status {
             Some(final_status)
         } else {
-            calculate_last_known_status(this, owned_agent_id, None).await
+            calculate_last_known_status(this, owned_agent_id, agent_mode, None).await
         }
     }
 }
 
 // update a worker status with new entries. Returns None if the status cannot be calculated from the new entries alone and needs to be recalculated from the beginning.
-pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
+pub async fn update_status_with_new_entries<T: HasOplogService + HasComponentService + Sync>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     last_known: AgentStatusRecord,
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     // TODO: changing the retry policy will cause inconsistencies when reading existing oplogs.
@@ -144,6 +153,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
     let pending_invocations = calculate_pending_invocations(
         this,
         owned_agent_id,
+        agent_mode,
         last_known.pending_invocations,
         &new_entries,
     )
@@ -231,6 +241,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
+        agent_mode,
     };
 
     Some(result)
@@ -480,9 +491,10 @@ fn calculate_skipped_regions(
     new_skipped
 }
 
-async fn calculate_pending_invocations<T: HasOplogService + Sync>(
+async fn calculate_pending_invocations<T: HasOplogService + HasComponentService + Sync>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     initial: Vec<TimestampedAgentInvocation>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<TimestampedAgentInvocation> {
@@ -538,6 +550,7 @@ async fn calculate_pending_invocations<T: HasOplogService + Sync>(
                             .oplog_service()
                             .download_raw_payload(
                                 owned_agent_id,
+                                agent_mode,
                                 payload_id.clone(),
                                 md5_hash.clone(),
                             )
@@ -1041,9 +1054,10 @@ fn is_worker_error_retriable(
 #[cfg(test)]
 mod test {
     use crate::model::ExecutionStatus;
+    use crate::services::component::ComponentService;
     use crate::services::golem_config::GolemConfig;
     use crate::services::oplog::{Oplog, OplogService};
-    use crate::services::{HasConfig, HasOplogService};
+    use crate::services::{HasComponentService, HasConfig, HasOplogService};
     use crate::worker::status::{
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
         calculate_oplog_processor_checkpoints,
@@ -1052,7 +1066,8 @@ mod test {
     use golem_common::base_model::OplogIndex;
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{Principal, UntypedDataValue, UntypedElementValue};
+    use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
+    use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
@@ -1070,6 +1085,7 @@ mod test {
     };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::model::component::Component;
     use golem_wasm::{IntoValueAndType, Value};
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
@@ -1670,7 +1686,9 @@ mod test {
             entries: vec![],
         };
 
-        let result = calculate_last_known_status(&test_case, &owned_agent_id, None).await;
+        let result =
+            calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
+                .await;
         assert2::assert!(let None = result);
     }
 
@@ -1698,6 +1716,7 @@ mod test {
                 entries: vec![TestEntry {
                     oplog_entry: OplogEntry::create(
                         owned_agent_id.agent_id(),
+                        AgentMode::Durable,
                         component_revision,
                         vec![],
                         owned_agent_id.environment_id(),
@@ -2126,6 +2145,7 @@ mod test {
         async fn create(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
             _initial_entry: OplogEntry,
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -2137,6 +2157,7 @@ mod test {
         async fn open(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
             _last_oplog_index: Option<OplogIndex>,
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -2145,17 +2166,22 @@ mod test {
             unreachable!()
         }
 
-        async fn get_last_index(&self, _owned_agent_id: &OwnedAgentId) -> OplogIndex {
+        async fn get_last_index(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) -> OplogIndex {
             OplogIndex::from_u64(self.entries.len() as u64)
         }
 
-        async fn delete(&self, _owned_agent_id: &OwnedAgentId) {
+        async fn delete(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) {
             unreachable!()
         }
 
         async fn read(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
             idx: OplogIndex,
             n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -2169,7 +2195,7 @@ mod test {
             result
         }
 
-        async fn exists(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+        async fn exists(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
             unreachable!()
         }
 
@@ -2177,6 +2203,7 @@ mod test {
             &self,
             _environment_id: &EnvironmentId,
             _component_id: &ComponentId,
+            _modes: Option<AgentMode>,
             _cursor: ScanCursor,
             _count: u64,
         ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
@@ -2186,6 +2213,7 @@ mod test {
         async fn upload_raw_payload(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
             _data: Vec<u8>,
         ) -> Result<RawOplogPayload, String> {
             unreachable!()
@@ -2194,6 +2222,7 @@ mod test {
         async fn download_raw_payload(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
             _payload_id: PayloadId,
             _md5_hash: Vec<u8>,
         ) -> Result<Vec<u8>, String> {
@@ -2210,6 +2239,48 @@ mod test {
         }
     }
 
+    impl HasComponentService for TestCase {
+        fn component_service(&self) -> Arc<dyn ComponentService> {
+            Arc::new(self.clone())
+        }
+    }
+
+    #[async_trait]
+    impl ComponentService for TestCase {
+        async fn get(
+            &self,
+            _engine: &wasmtime::Engine,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn get_metadata(
+            &self,
+            _component_id: ComponentId,
+            _forced_revision: Option<ComponentRevision>,
+        ) -> Result<Component, WorkerExecutorError> {
+            Err(WorkerExecutorError::unknown(
+                "no component metadata available in worker status tests",
+            ))
+        }
+
+        async fn resolve_component(
+            &self,
+            _component_reference: String,
+            _resolving_environment: EnvironmentId,
+            _resolving_application: ApplicationId,
+            _resolving_account: AccountId,
+        ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<Component> {
+            Vec::new()
+        }
+    }
+
     async fn run_test_case(test_case: TestCase) {
         let final_expected_status = test_case.entries.last().unwrap().expected_status.clone();
 
@@ -2222,6 +2293,7 @@ mod test {
             let final_status = calculate_last_known_status_for_existing_worker(
                 &test_case,
                 &test_case.owned_agent_id,
+                AgentMode::Durable,
                 last_known_status,
             )
             .await;
@@ -2677,6 +2749,7 @@ mod test {
             OplogIndex::from_u64(idx),
             OplogEntry::create(
                 agent_id,
+                AgentMode::Durable,
                 ComponentRevision::INITIAL,
                 vec![],
                 EnvironmentId::new(),

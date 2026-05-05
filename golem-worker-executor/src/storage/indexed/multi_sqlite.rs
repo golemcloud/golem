@@ -112,12 +112,21 @@ impl MultiSqliteIndexedStorage {
 
     async fn namespace_to_db(&self, namespace: &IndexedStorageNamespace) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog { agent_id } => {
-                format!("oplog-{}.db", self.agent_id_hash(agent_id).await)
+            IndexedStorageNamespace::OpLog {
+                agent_id,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("{mode}-oplog-{}.db", self.agent_id_hash(agent_id).await)
             }
-            IndexedStorageNamespace::CompressedOpLog { agent_id, level } => {
+            IndexedStorageNamespace::CompressedOpLog {
+                agent_id,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
                 format!(
-                    "compressed-oplog-l{}-{}.db",
+                    "{mode}-compressed-oplog-l{}-{}.db",
                     level,
                     self.agent_id_hash(agent_id).await
                 )
@@ -194,9 +203,13 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         use std::fs;
 
         let db_prefix = match namespace {
-            IndexedStorageMetaNamespace::Oplog => "oplog-".to_string(),
-            IndexedStorageMetaNamespace::CompressedOplog { level } => {
-                format!("compressed-oplog-l{}-", level)
+            IndexedStorageMetaNamespace::Oplog { agent_mode } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-oplog-")
+            }
+            IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-compressed-oplog-l{}-", level)
             }
         };
 
