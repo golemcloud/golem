@@ -140,7 +140,8 @@ message RawCreateParameters {
   repeated golem.component.EnvironmentPluginGrantId initial_active_plugins = 9;
   repeated bytes local_agent_config = 10;
   optional golem.common.UUID original_phantom_id = 11;
-  golem.component.AgentMode agent_mode = 12;
+  optional golem.common.UUID instance_id = 12;
+  golem.component.AgentMode agent_mode = 13;
 }
 
 message RawHostCallParameters {

@@ -12,9 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::check::{
+    ClaudePathState, ClaudeSkillsContext, ClaudeSkillsSyncMode, SkillSyncTarget,
+    create_claude_symlink_if_needed, map_embedded_skill_target_path, resolve_claude_skills_context,
+    warn_claude_path_is_file,
+};
 use crate::app::context::{find_main_source_from, validated_to_anyhow};
 use crate::app::template::{
-    AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName,
+    AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName, InMemoryFs,
     MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
     SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, UnsafeTemplatePlan,
 };
@@ -130,11 +135,14 @@ impl TemplateHandler {
             &context.existing_components,
         )?;
 
+        let claude_skills_ctx = resolve_claude_skills_context(&context.application_path)?;
+
         let template_plan = self.plan_applying_new_template(
             &selections.application_name,
             &context.application_path,
             &template_mapping.template_to_component,
             &template_inputs,
+            &claude_skills_ctx,
         )?;
 
         let (safe_template_plan, unsafe_template_plan) = template_plan.partition();
@@ -152,7 +160,15 @@ impl TemplateHandler {
         }
 
         self.apply_new_template_plan(&safe_template_plan)?;
-        create_claude_symlink(&context.application_path)?;
+
+        match claude_skills_ctx.mode {
+            ClaudeSkillsSyncMode::ClaudeSymlink => {
+                create_claude_symlink_if_needed(&context.application_path, &claude_skills_ctx)?;
+            }
+            ClaudeSkillsSyncMode::SyncAll => {
+                // NOP: no symlink setup in sync-all mode.
+            }
+        }
 
         logln("");
         log_finished_ok("applying template(s)");
@@ -630,6 +646,7 @@ impl TemplateHandler {
         application_path: &Path,
         template_to_component: &BTreeMap<AppTemplateName, ComponentName>,
         template_inputs: &NewTemplateInputs,
+        claude_skills_ctx: &ClaudeSkillsContext,
     ) -> anyhow::Result<TemplatePlan> {
         let mut template_plan_builder = TemplatePlanBuilder::new();
 
@@ -692,6 +709,33 @@ impl TemplateHandler {
                     component_dir,
                 )?,
             );
+        }
+
+        match claude_skills_ctx.mode {
+            ClaudeSkillsSyncMode::ClaudeSymlink => {
+                // NOP: `.claude` points to `.agents`, so template updates only need generic target files.
+            }
+            ClaudeSkillsSyncMode::SyncAll => match claude_skills_ctx.path_state {
+                ClaudePathState::File => {
+                    warn_claude_path_is_file(application_path, claude_skills_ctx);
+                    // NOP: `.claude` is a regular file. We skip Claude skill planning for this run.
+                }
+                ClaudePathState::Missing
+                | ClaudePathState::Symlink
+                | ClaudePathState::Directory => {
+                    let common_template_skill_files = collect_common_template_skill_files(
+                        self.ctx.app_template_repo()?,
+                        &template_inputs.common_templates,
+                    )?;
+                    let claude_skill_files = rebase_common_template_skill_files(
+                        application_path,
+                        &common_template_skill_files,
+                        SkillSyncTarget::Claude,
+                    )?;
+                    let claude_skill_fs = InMemoryFs::from_files(claude_skill_files);
+                    template_plan_builder.add("claude-skills", &claude_skill_fs);
+                }
+            },
         }
 
         debug!("template plan steps: {:#?}", template_plan_builder);
@@ -1036,39 +1080,46 @@ impl TemplateHandler {
     }
 }
 
-/// Creates a `.claude` → `.agents` symlink in the application directory so that
-/// Claude Code can discover the same skills as Amp/Codex without duplicating files.
-pub(crate) fn create_claude_symlink(application_path: &Path) -> anyhow::Result<()> {
-    let agents_dir = application_path.join(".agents");
-    let claude_link = application_path.join(".claude");
-
-    if !agents_dir.exists() {
-        return Ok(());
-    }
-
-    if claude_link.exists() || claude_link.is_symlink() {
-        return Ok(());
-    }
-
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(".agents", &claude_link)?;
-    }
-
-    #[cfg(windows)]
-    {
-        std::os::windows::fs::symlink_dir(".agents", &claude_link)?;
-    }
-
-    Ok(())
-}
-
 fn is_non_empty_dir(path: &Path) -> anyhow::Result<bool> {
     if !path.exists() || !path.is_dir() {
         return Ok(false);
     }
 
     Ok(std::fs::read_dir(path)?.next().is_some())
+}
+
+fn rebase_common_template_skill_files(
+    application_path: &Path,
+    skill_files: &BTreeMap<PathBuf, String>,
+    target: SkillSyncTarget,
+) -> anyhow::Result<BTreeMap<PathBuf, String>> {
+    let mut result = BTreeMap::new();
+
+    for (skill_path, content) in skill_files {
+        result.insert(
+            map_embedded_skill_target_path(application_path, skill_path, target)?,
+            content.clone(),
+        );
+    }
+
+    Ok(result)
+}
+
+fn collect_common_template_skill_files(
+    app_template_repo: &crate::app::template::AppTemplateRepo,
+    common_templates: &BTreeMap<AppTemplateName, AppTemplateCommon>,
+) -> anyhow::Result<BTreeMap<PathBuf, String>> {
+    let mut result = BTreeMap::new();
+
+    for template_name in common_templates.keys() {
+        for (skill_path, content) in
+            app_template_repo.common_template_skill_files(template_name.language())?
+        {
+            result.insert(skill_path, content);
+        }
+    }
+
+    Ok(result)
 }
 
 fn should_switch_to_app_dir_hint(application_dir: &Path) -> anyhow::Result<bool> {

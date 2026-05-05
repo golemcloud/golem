@@ -1035,6 +1035,76 @@ async fn worker_recreation(
     Ok(())
 }
 
+/// When a worker is deleted and a new worker is created with the same agent ID, any
+/// scheduled invocations that targeted the original worker must NOT fire on the new instance.
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn stale_scheduled_invocation_dropped_after_worker_recreation(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .store()
+        .await?;
+
+    // Create the server worker that will be the target of the scheduled invocation.
+    let server_parsed = agent_id!("ScheduledInvocationServer", "stale-sched-server");
+    let server_agent_id = user
+        .start_agent(&component.id, server_parsed.clone())
+        .await?;
+
+    // Create the client worker that will *schedule* an invocation on the server via wasm-rpc.
+    // test1() schedules `inc_global_by(1)` on the given server 200ms in the future.
+    let client_parsed = agent_id!("ScheduledInvocationClient", "stale-sched-client");
+    user.start_agent(&component.id, client_parsed.clone())
+        .await?;
+
+    // Schedule the invocation. At this point `target_worker_fingerprint` is set to the
+    // server's UUID fingerprint inside the KV store.
+    user.invoke_and_await_agent(
+        &component,
+        &client_parsed,
+        "test1",
+        data_value!("stale-sched-server"),
+    )
+    .await?;
+
+    // Delete the original server worker immediately — before the 200ms fires.
+    user.delete_worker(&server_agent_id).await?;
+
+    // Recreate a brand-new worker with the same agent ID. It gets a fresh UUID fingerprint.
+    user.start_agent(&component.id, server_parsed.clone())
+        .await?;
+
+    // Wait well past the 200ms scheduled time so the scheduler has time to process the entry.
+    sleep(Duration::from_secs(5)).await;
+
+    // The new worker's counter must still be 0 — the stale invocation must have been dropped.
+    let result = user
+        .invoke_and_await_agent(
+            &component,
+            &server_parsed,
+            "get_global_value",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
+
+    assert_eq!(
+        result,
+        Value::U64(0),
+        "Stale scheduled invocation was unexpectedly delivered to the recreated worker"
+    );
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout(600000)]

@@ -31,9 +31,14 @@ pub enum ResponseBodyOpenApiSchema {
     NoBody,
 }
 
+pub struct ResponseHeaderSchema {
+    pub schema: Schema,
+    pub required: bool,
+}
+
 pub struct RouteResponseOpenApiSchema {
     pub body_and_status_codes: IndexMap<u16, ResponseBodyOpenApiSchema>,
-    pub headers: IndexMap<String, Schema>,
+    pub headers: IndexMap<String, ResponseHeaderSchema>,
 }
 
 pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpenApiSchema {
@@ -127,8 +132,55 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                                     },
                                 );
                             }
-                            _ => {
-                                responses.insert(200, ResponseBodyOpenApiSchema::Unknown);
+                            ElementSchema::UnstructuredText(text_descriptor) => {
+                                let schema = Schema {
+                                    schema_data: SchemaData::default(),
+                                    schema_kind: SchemaKind::Type(Type::String(StringType {
+                                        format: VariantOrUnknownOrEmpty::Empty,
+                                        pattern: None,
+                                        enumeration: Vec::new(),
+                                        min_length: None,
+                                        max_length: None,
+                                    })),
+                                };
+                                responses.insert(
+                                    200,
+                                    ResponseBodyOpenApiSchema::Known {
+                                        schema: Box::new(schema),
+                                        content_type: "text/plain".to_string(),
+                                    },
+                                );
+
+                                // Optional Content-Language response header
+                                let allowed_languages: Vec<Option<String>> = text_descriptor
+                                    .restrictions
+                                    .as_ref()
+                                    .map(|types| {
+                                        types
+                                            .iter()
+                                            .map(|tt| Some(tt.language_code.clone()))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+
+                                let lang_schema = Schema {
+                                    schema_data: SchemaData::default(),
+                                    schema_kind: SchemaKind::Type(Type::String(StringType {
+                                        format: VariantOrUnknownOrEmpty::Empty,
+                                        pattern: None,
+                                        enumeration: allowed_languages,
+                                        min_length: None,
+                                        max_length: None,
+                                    })),
+                                };
+
+                                headers.insert(
+                                    "Content-Language".to_string(),
+                                    ResponseHeaderSchema {
+                                        schema: lang_schema,
+                                        required: false,
+                                    },
+                                );
                             }
                         }
                     }
@@ -157,17 +209,26 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
 
             headers.insert(
                 "Access-Control-Allow-Origin".to_string(),
-                string_schema.clone(),
+                ResponseHeaderSchema {
+                    schema: string_schema.clone(),
+                    required: true,
+                },
             );
 
             headers.insert(
                 "Access-Control-Allow-Headers".to_string(),
-                string_schema.clone(),
+                ResponseHeaderSchema {
+                    schema: string_schema.clone(),
+                    required: true,
+                },
             );
 
             headers.insert(
                 "Access-Control-Allow-Credentials".to_string(),
-                string_schema.clone(),
+                ResponseHeaderSchema {
+                    schema: string_schema.clone(),
+                    required: true,
+                },
             );
 
             let allowed_methods: Vec<_> = cors_preflight_behaviour
@@ -196,15 +257,18 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
 
             headers.insert(
                 "Access-Control-Allow-Methods".to_string(),
-                Schema {
-                    schema_data: Default::default(),
-                    schema_kind: SchemaKind::Type(Type::String(StringType {
-                        format: VariantOrUnknownOrEmpty::Empty,
-                        pattern: None,
-                        enumeration: allowed_methods_enum,
-                        min_length: None,
-                        max_length: None,
-                    })),
+                ResponseHeaderSchema {
+                    schema: Schema {
+                        schema_data: Default::default(),
+                        schema_kind: SchemaKind::Type(Type::String(StringType {
+                            format: VariantOrUnknownOrEmpty::Empty,
+                            pattern: None,
+                            enumeration: allowed_methods_enum,
+                            min_length: None,
+                            max_length: None,
+                        })),
+                    },
+                    required: true,
                 },
             );
         }
@@ -250,8 +314,20 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                 })),
             };
 
-            headers.insert("Set-Cookie".to_string(), string_schema.clone());
-            headers.insert("Location".to_string(), string_schema);
+            headers.insert(
+                "Set-Cookie".to_string(),
+                ResponseHeaderSchema {
+                    schema: string_schema.clone(),
+                    required: true,
+                },
+            );
+            headers.insert(
+                "Location".to_string(),
+                ResponseHeaderSchema {
+                    schema: string_schema,
+                    required: true,
+                },
+            );
         }
     }
 

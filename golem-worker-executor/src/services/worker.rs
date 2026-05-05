@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, OwnedAgentId, ShardId,
+    AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, OwnedAgentId, ShardId,
 };
 use std::sync::Arc;
 use tracing::debug;
@@ -196,6 +196,7 @@ impl WorkerService for DefaultWorkerService {
                     initial_active_plugins,
                     local_agent_config,
                     original_phantom_id,
+                    instance_id,
                 },
             )) => {
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
@@ -237,6 +238,7 @@ impl WorkerService for DefaultWorkerService {
                         ..AgentStatusRecord::default()
                     },
                     original_phantom_id,
+                    fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
                 };
 

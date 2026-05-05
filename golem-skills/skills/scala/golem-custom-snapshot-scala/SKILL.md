@@ -1,11 +1,20 @@
 ---
 name: golem-custom-snapshot-scala
-description: "Implementing custom snapshot save/load functions for Scala agents. Use when adding manual update support, snapshot-based recovery, or custom state serialization for a Scala Golem agent."
+description: "Enabling snapshot-based recovery and implementing custom snapshot save/load functions for Scala agents. Use when adding manual update support, custom state serialization, or — equally importantly — when a long-running agent's oplog is growing large and recovery/replay is becoming slow (heartbeats, polling loops, recurring tasks, frequent state changes). Snapshotting compacts the oplog and lets recovery start from the latest snapshot instead of replaying full history."
 ---
 
 # Custom Snapshots in Scala
 
 Golem agents can implement snapshotting to support manual (snapshot-based) updates and snapshot-based recovery. The Scala SDK provides two approaches: automatic JSON-based snapshotting via `Snapshotted[S]` and custom binary hooks.
+
+## When to Use Snapshotting
+
+Snapshotting solves two distinct problems:
+
+1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions.
+2. **Fast recovery and oplog compaction** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, agents with frequent state changes). Without snapshotting, every recovery replays the full oplog from the beginning, which becomes increasingly expensive. With periodic snapshotting (`every(N)` or `periodic(...)`), recovery starts from the latest snapshot and replays only the entries after it.
+
+> **You cannot opt out of oplog writes for a durable agent.** If you are worried about oplog volume or replay cost, do *not* try to skip persistence — enable snapshot-based recovery here instead.
 
 ## Enabling Snapshotting
 

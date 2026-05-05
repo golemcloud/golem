@@ -63,6 +63,10 @@ impl InMemoryFs {
         Self::default()
     }
 
+    pub fn from_files(files: BTreeMap<PathBuf, String>) -> Self {
+        Self { files }
+    }
+
     pub fn files(&self) -> &BTreeMap<PathBuf, String> {
         &self.files
     }
@@ -465,8 +469,8 @@ fn transform(
                     sdk_overrides.moonbit_sdk_tools_bin_deps(),
                 );
                 replacements.insert(
-                    "GOLEM_MOONBIT_BUILD_TOOLS_PATH",
-                    sdk_overrides.moonbit_sdk_tools_build_path(),
+                    "GOLEM_MOONBIT_BUILD_TOOLS_CMD",
+                    sdk_overrides.moonbit_sdk_tools_cmd(),
                 );
                 replacements.insert(
                     "GOLEM_MOONBIT_BUILD_SDK_PATH",

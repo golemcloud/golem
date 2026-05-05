@@ -268,11 +268,18 @@ pub fn log_unified_diff(diff: &str) {
 }
 
 pub fn log_unified_diff_for_path(path: &Path, diff: &str) {
-    if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md") {
+    if is_compact_diff_path(path) {
         log_unified_diff_compact(diff);
     } else {
         log_unified_diff(diff);
     }
+}
+
+fn is_compact_diff_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("md"))
+        .unwrap_or(false)
 }
 
 fn log_unified_diff_compact(diff: &str) {

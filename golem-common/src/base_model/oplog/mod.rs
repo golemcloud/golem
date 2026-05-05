@@ -82,7 +82,9 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
             local_agent_config: Vec<UntypedAgentConfigEntry>,
-            original_phantom_id: Option<Uuid>
+            original_phantom_id: Option<Uuid>,
+            /// Per-instance fingerprint, unique across recreations of the same agent ID.
+            instance_id: Uuid
         }
         public {
             agent_id: AgentId,
@@ -96,7 +98,8 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             local_agent_config: Vec<TypedAgentConfigEntry>,
-            original_phantom_id: Option<Uuid>
+            original_phantom_id: Option<Uuid>,
+            instance_id: Uuid
         }
     },
     /// The agent invoked a host function

@@ -8,5 +8,6 @@ import {
 }
 
 options(
+  "bin-name": "golem-sdk-tools",
   "is-main": true,
 )

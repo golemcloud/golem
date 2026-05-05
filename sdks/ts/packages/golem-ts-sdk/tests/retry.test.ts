@@ -157,15 +157,18 @@ describe('retry host helpers', () => {
   let getRetryPolicyByNameMock: ReturnType<typeof vi.fn>;
   let setRetryPolicyMock: ReturnType<typeof vi.fn>;
   let removeRetryPolicyMock: ReturnType<typeof vi.fn>;
+  let trapMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     getRetryPolicyByNameMock = vi.fn();
     setRetryPolicyMock = vi.fn();
     removeRetryPolicyMock = vi.fn();
+    trapMock = vi.fn();
   });
 
   afterEach(() => {
     vi.doUnmock('golem:api/retry@1.5.0');
+    vi.doUnmock('golem:api/host@1.5.0');
     vi.resetModules();
   });
 
@@ -177,6 +180,15 @@ describe('retry host helpers', () => {
       resolveRetryPolicy: vi.fn(),
       setRetryPolicy: setRetryPolicyMock,
       removeRetryPolicy: removeRetryPolicyMock,
+    }));
+    vi.doMock('golem:api/host@1.5.0', () => ({
+      trap: trapMock,
+      getOplogPersistenceLevel: vi.fn(),
+      setOplogPersistenceLevel: vi.fn(),
+      getIdempotenceMode: vi.fn(),
+      setIdempotenceMode: vi.fn(),
+      markBeginOperation: vi.fn(),
+      markEndOperation: vi.fn(),
     }));
 
     return import('../src/host/retry');
@@ -232,5 +244,39 @@ describe('retry host helpers', () => {
 
     expect(result).toBe('ok');
     expect(removeRetryPolicyMock).toHaveBeenCalledWith('temporary');
+    expect(trapMock).not.toHaveBeenCalled();
+  });
+
+  it('withRetryPolicy restores the policy on sync throw', async () => {
+    getRetryPolicyByNameMock.mockReturnValue(undefined);
+    const error = new Error('boom');
+
+    const retry = await loadRetryModule();
+
+    expect(() =>
+      retry.withRetryPolicy(NamedPolicy.named('temporary', Policy.immediate()), () => {
+        throw error;
+      }),
+    ).toThrow(error);
+
+    // policy is cleaned up (removed) on error — the old behaviour
+    expect(removeRetryPolicyMock).toHaveBeenCalledWith('temporary');
+    expect(trapMock).not.toHaveBeenCalled();
+  });
+
+  it('withRetryPolicy restores the policy on async rejection', async () => {
+    getRetryPolicyByNameMock.mockReturnValue(undefined);
+    const error = new Error('async-boom');
+
+    const retry = await loadRetryModule();
+
+    await expect(
+      retry.withRetryPolicy(NamedPolicy.named('temporary', Policy.immediate()), async () => {
+        throw error;
+      }),
+    ).rejects.toThrow(error);
+
+    expect(removeRetryPolicyMock).toHaveBeenCalledWith('temporary');
+    expect(trapMock).not.toHaveBeenCalled();
   });
 });

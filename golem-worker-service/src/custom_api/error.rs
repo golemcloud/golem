@@ -42,6 +42,19 @@ pub enum RequestHandlerError {
         mime_type: String,
         allowed_mime_types: Vec<String>,
     },
+    #[error("Request body is not valid UTF-8: {error}")]
+    BodyIsNotValidUtf8 { error: String },
+    #[error("Language code {language_code} is not supported. Allowed language codes: [{formatted_languages}]", formatted_languages=.allowed_language_codes.join(","))]
+    UnsupportedLanguage {
+        language_code: String,
+        allowed_language_codes: Vec<String>,
+    },
+    #[error(
+        "Content type {content_type} is not supported for text body. Only text/plain (with optional UTF-8 charset) is allowed."
+    )]
+    UnsupportedTextContentType { content_type: String },
+    #[error("Multi-valued or comma-separated Content-Language header is not supported")]
+    MultiValuedContentLanguageHeader,
     #[error("Unknown OIDC state")]
     UnknownOidcState,
     #[error("OIDC token exchange failed")]
@@ -77,6 +90,10 @@ impl SafeDisplay for RequestHandlerError {
             Self::JsonBodyParsingFailed { .. } => self.to_string(),
             Self::AgentResponseTypeMismatch { .. } => self.to_string(),
             Self::UnsupportedMimeType { .. } => self.to_string(),
+            Self::BodyIsNotValidUtf8 { .. } => self.to_string(),
+            Self::UnsupportedLanguage { .. } => self.to_string(),
+            Self::UnsupportedTextContentType { .. } => self.to_string(),
+            Self::MultiValuedContentLanguageHeader => self.to_string(),
             Self::UnknownOidcState => self.to_string(),
             Self::OidcTokenExchangeFailed => self.to_string(),
             Self::OidcSchemeMismatch => self.to_string(),
