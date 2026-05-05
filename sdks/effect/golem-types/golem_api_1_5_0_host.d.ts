@@ -45,6 +45,14 @@ declare module 'golem:api/host@1.5.0' {
    */
   export function markEndOperation(begin: OplogIndex): void;
   /**
+   * Unconditionally traps the current invocation with the given reason.
+   * This call never returns: it surfaces as an uncatchable wasm trap on the host side
+   * and the worker enters the standard trap-recovery flow. SDK guard helpers use this
+   * to guarantee that a failed atomic region always leads to a trap, regardless of
+   * whether the guest language could otherwise catch the failure.
+   */
+  export function trap(reason: string): void;
+  /**
    * Gets the agent's current persistence level.
    */
   export function getOplogPersistenceLevel(): PersistenceLevel;
