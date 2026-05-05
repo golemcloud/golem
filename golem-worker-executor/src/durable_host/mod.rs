@@ -745,9 +745,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => RetryDecision::None,
             TrapType::Error {
                 error:
-                    AgentError::EphemeralSleepTooLong { .. }
-                    | AgentError::EphemeralFuelExhausted { .. }
-                    | AgentError::EphemeralCannotSuspend { .. },
+                    AgentError::EphemeralSleepTooLong(_)
+                    | AgentError::EphemeralFuelExhausted(_)
+                    | AgentError::EphemeralCannotSuspend(_),
                 ..
             } => RetryDecision::None,
             TrapType::Error {
@@ -832,9 +832,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::Unknown(_) => "unknown",
             AgentError::TransientError(_) => "transient-error",
             AgentError::AgentTerminatedByQuota(_) => "agent-terminated-by-quota",
-            AgentError::EphemeralSleepTooLong { .. } => "ephemeral-sleep-too-long",
-            AgentError::EphemeralFuelExhausted { .. } => "ephemeral-fuel-exhausted",
-            AgentError::EphemeralCannotSuspend { .. } => "ephemeral-cannot-suspend",
+            AgentError::EphemeralSleepTooLong(_) => "ephemeral-sleep-too-long",
+            AgentError::EphemeralFuelExhausted(_) => "ephemeral-fuel-exhausted",
+            AgentError::EphemeralCannotSuspend(_) => "ephemeral-cannot-suspend",
         }
     }
 
@@ -2244,13 +2244,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         if let TrapType::Error { error, .. } = trap_type {
             match error {
-                AgentError::EphemeralSleepTooLong { .. } => {
+                AgentError::EphemeralSleepTooLong(_) => {
                     record_non_suspending_failure("sleep-too-long")
                 }
-                AgentError::EphemeralFuelExhausted { .. } => {
+                AgentError::EphemeralFuelExhausted(_) => {
                     record_non_suspending_failure("fuel-exhausted")
                 }
-                AgentError::EphemeralCannotSuspend { .. } => {
+                AgentError::EphemeralCannotSuspend(_) => {
                     record_non_suspending_failure("cannot-suspend")
                 }
                 _ => {}

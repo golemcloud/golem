@@ -21,8 +21,8 @@ use futures::future::Either;
 use futures::pin_mut;
 use golem_common::model::Timestamp;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::oplog::AgentError;
 use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
+use golem_common::model::oplog::{AgentError, EphemeralSleepTooLongError};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
     HostResponsePollResult,
@@ -222,10 +222,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     let max = self.state.config.suspend.ephemeral_max_sleep;
                     Err(wasmtime::Error::from_anyhow(anyhow::anyhow!(
                         WorkerExecutorError::InvocationFailed {
-                            error: AgentError::EphemeralSleepTooLong {
+                            error: AgentError::EphemeralSleepTooLong(EphemeralSleepTooLongError {
                                 requested_nanos: duration_to_nanos(duration),
                                 max_nanos: std_duration_to_nanos(max),
-                            },
+                            }),
                             stderr: String::new(),
                         }
                     )))

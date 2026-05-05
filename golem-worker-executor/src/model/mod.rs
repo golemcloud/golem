@@ -22,7 +22,9 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
-use golem_common::model::oplog::{AgentError, AgentTerminatedByQuotaError, PersistenceLevel};
+use golem_common::model::oplog::{
+    AgentError, AgentTerminatedByQuotaError, EphemeralCannotSuspendError, PersistenceLevel,
+};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
@@ -326,9 +328,11 @@ impl TrapType {
                                     Timestamp::now_utc(),
                                 )),
                                 AgentMode::Ephemeral => TrapType::Error {
-                                    error: AgentError::EphemeralCannotSuspend {
-                                        reason: "monthly HTTP budget exhausted".to_string(),
-                                    },
+                                    error: AgentError::EphemeralCannotSuspend(
+                                        EphemeralCannotSuspendError {
+                                            reason: "monthly HTTP budget exhausted".to_string(),
+                                        },
+                                    ),
                                     retry_from,
                                 },
                             }
@@ -339,9 +343,11 @@ impl TrapType {
                                     Timestamp::now_utc(),
                                 )),
                                 AgentMode::Ephemeral => TrapType::Error {
-                                    error: AgentError::EphemeralCannotSuspend {
-                                        reason: "monthly RPC budget exhausted".to_string(),
-                                    },
+                                    error: AgentError::EphemeralCannotSuspend(
+                                        EphemeralCannotSuspendError {
+                                            reason: "monthly RPC budget exhausted".to_string(),
+                                        },
+                                    ),
                                     retry_from,
                                 },
                             }
@@ -365,9 +371,11 @@ impl TrapType {
                                 TrapType::Interrupt(InterruptKind::Suspend(*timestamp))
                             }
                             AgentMode::Ephemeral => TrapType::Error {
-                                error: AgentError::EphemeralCannotSuspend {
-                                    reason: "throttled by quota".to_string(),
-                                },
+                                error: AgentError::EphemeralCannotSuspend(
+                                    EphemeralCannotSuspendError {
+                                        reason: "throttled by quota".to_string(),
+                                    },
+                                ),
                                 retry_from,
                             },
                         },
@@ -837,7 +845,7 @@ mod tests {
         assert!(matches!(
             trap,
             TrapType::Error {
-                error: AgentError::EphemeralCannotSuspend { reason },
+                error: AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError { reason }),
                 ..
             } if reason == "monthly HTTP budget exhausted"
         ));

@@ -60,7 +60,10 @@ use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::{AgentError, TimestampedUpdateDescription};
+use golem_common::model::oplog::{
+    AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError,
+    TimestampedUpdateDescription,
+};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
     OwnedAgentId,
@@ -161,9 +164,11 @@ impl FuelTracker {
     ) -> Result<(), AgentError> {
         let next_prepaid = self.ephemeral_overdraft_prepaid.saturating_add(amount);
         if next_prepaid > self.ephemeral_overdraft_limit {
-            Err(AgentError::EphemeralFuelExhausted {
-                overdraft_limit: self.ephemeral_overdraft_limit,
-            })
+            Err(AgentError::EphemeralFuelExhausted(
+                EphemeralFuelExhaustedError {
+                    overdraft_limit: self.ephemeral_overdraft_limit,
+                },
+            ))
         } else {
             self.ephemeral_overdraft_prepaid = next_prepaid;
             self.on_borrow_success(current_gauge);
@@ -283,9 +288,11 @@ impl FuelManagement for Context {
             Ok(())
         } else if self.agent_mode() == AgentMode::Ephemeral {
             if !self.resource_limit_entry.has_effective_fuel() {
-                return Err(AgentError::EphemeralFuelExhausted {
-                    overdraft_limit: self.fuel_tracker.overdraft_limit(),
-                });
+                return Err(AgentError::EphemeralFuelExhausted(
+                    EphemeralFuelExhaustedError {
+                        overdraft_limit: self.fuel_tracker.overdraft_limit(),
+                    },
+                ));
             }
 
             self.fuel_tracker
@@ -297,9 +304,11 @@ impl FuelManagement for Context {
                     );
                 })
         } else {
-            Err(AgentError::EphemeralCannotSuspend {
-                reason: "fuel exhausted".to_string(),
-            })
+            Err(AgentError::EphemeralCannotSuspend(
+                EphemeralCannotSuspendError {
+                    reason: "fuel exhausted".to_string(),
+                },
+            ))
         }
     }
 

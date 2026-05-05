@@ -49,7 +49,8 @@ use crate::model::oplog::public_oplog_entry::{
     SnapshotParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
-    AgentTerminatedByQuotaError, DurableFunctionType, OplogEntry, PersistenceLevel,
+    AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
+    EphemeralFuelExhaustedError, EphemeralSleepTooLongError, OplogEntry, PersistenceLevel,
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
@@ -128,16 +129,22 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
                     resource_name: ResourceName(inner.resource_name),
                 }))
             }
-            Error::EphemeralSleepTooLong(inner) => Ok(Self::EphemeralSleepTooLong {
-                requested_nanos: inner.requested_nanos,
-                max_nanos: inner.max_nanos,
-            }),
-            Error::EphemeralFuelExhausted(inner) => Ok(Self::EphemeralFuelExhausted {
-                overdraft_limit: inner.overdraft_limit,
-            }),
-            Error::EphemeralCannotSuspend(inner) => Ok(Self::EphemeralCannotSuspend {
-                reason: inner.reason,
-            }),
+            Error::EphemeralSleepTooLong(inner) => {
+                Ok(Self::EphemeralSleepTooLong(EphemeralSleepTooLongError {
+                    requested_nanos: inner.requested_nanos,
+                    max_nanos: inner.max_nanos,
+                }))
+            }
+            Error::EphemeralFuelExhausted(inner) => {
+                Ok(Self::EphemeralFuelExhausted(EphemeralFuelExhaustedError {
+                    overdraft_limit: inner.overdraft_limit,
+                }))
+            }
+            Error::EphemeralCannotSuspend(inner) => {
+                Ok(Self::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                    reason: inner.reason,
+                }))
+            }
         }
     }
 }
@@ -193,19 +200,19 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
                     resource_name: details.resource_name.0,
                 })
             }
-            AgentError::EphemeralSleepTooLong {
+            AgentError::EphemeralSleepTooLong(EphemeralSleepTooLongError {
                 requested_nanos,
                 max_nanos,
-            } => Error::EphemeralSleepTooLong(grpc_worker::EphemeralSleepTooLong {
+            }) => Error::EphemeralSleepTooLong(grpc_worker::EphemeralSleepTooLong {
                 requested_nanos,
                 max_nanos,
             }),
-            AgentError::EphemeralFuelExhausted { overdraft_limit } => {
+            AgentError::EphemeralFuelExhausted(EphemeralFuelExhaustedError { overdraft_limit }) => {
                 Error::EphemeralFuelExhausted(grpc_worker::EphemeralFuelExhausted {
                     overdraft_limit,
                 })
             }
-            AgentError::EphemeralCannotSuspend { reason } => {
+            AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError { reason }) => {
                 Error::EphemeralCannotSuspend(grpc_worker::EphemeralCannotSuspend { reason })
             }
         };

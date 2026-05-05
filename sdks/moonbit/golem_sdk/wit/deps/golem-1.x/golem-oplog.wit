@@ -423,6 +423,19 @@ interface oplog {
         resource-name: string
     }
 
+    record ephemeral-sleep-too-long {
+        requested-nanos: u64,
+        max-nanos: u64
+    }
+
+    record ephemeral-fuel-exhausted {
+        overdraft-limit: u64
+    }
+
+    record ephemeral-cannot-suspend {
+        reason: string
+    }
+
     /// Describes the error that occurred in the agent
     variant worker-error {
         unknown(string),
@@ -439,7 +452,10 @@ interface oplog {
         exceeded-rpc-call-limit,
         node-out-of-filesystem-storage,
         agent-exceeded-filesystem-storage-limit,
-        agent-terminated-by-quota(agent-terminated-by-quota-error)
+        agent-terminated-by-quota(agent-terminated-by-quota-error),
+        ephemeral-sleep-too-long(ephemeral-sleep-too-long),
+        ephemeral-fuel-exhausted(ephemeral-fuel-exhausted),
+        ephemeral-cannot-suspend(ephemeral-cannot-suspend)
     }
 
     record raw-create-parameters {
