@@ -14022,6 +14022,9 @@ components:
         originalPhantomId:
           type: string
           format: uuid
+        instanceId:
+          type: string
+          format: uuid
       required:
       - timestamp
       - agentId
@@ -14033,6 +14036,7 @@ components:
       - initialTotalLinearMemorySize
       - initialActivePlugins
       - localAgentConfig
+      - instanceId
     r#CreateResourceParams:
       title: r#CreateResourceParams
       type: object

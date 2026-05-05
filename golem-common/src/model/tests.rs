@@ -17,7 +17,7 @@ use crate::model::environment::EnvironmentId;
 use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription, UpdateDescription};
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountId, AgentFilter, AgentId, AgentInvocation, AgentMetadata, AgentStatus,
+    AccountId, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata, AgentStatus,
     AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey, StringFilterComparator,
     Timestamp, TimestampedAgentInvocation,
 };
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::vec;
 use test_r::test;
-use uuid::uuid;
+use uuid::{Uuid, uuid};
 
 #[test]
 fn timestamp_conversion() {
@@ -228,6 +228,7 @@ fn worker_filter_matches() {
             ..AgentStatusRecord::default()
         },
         original_phantom_id: None,
+        fingerprint: AgentFingerprint(Uuid::now_v7()),
     };
 
     assert!(

@@ -62,8 +62,8 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, AgentMetadata,
-    AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
+    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
     TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
@@ -1944,6 +1944,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // cross-environment RPC the caller may pass its own account/environment,
                 // but the worker must belong to the component's owning account and
                 // environment for correct metric attribution and quota enforcement.
+
+                let instance_id = Uuid::now_v7();
+
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
                     env: worker_env,
@@ -1954,6 +1957,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     parent,
                     last_known_status: initial_status.clone(),
                     original_phantom_id: agent_id.as_ref().and_then(|id| id.phantom_id),
+                    fingerprint: AgentFingerprint(instance_id),
                 };
 
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
@@ -1981,6 +1985,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .map(Into::into)
                         .collect(),
                     initial_worker_metadata.original_phantom_id,
+                    instance_id,
                 );
 
                 let initial_status = Arc::new(tokio::sync::RwLock::new(initial_status));

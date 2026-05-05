@@ -6077,6 +6077,7 @@ components:
       - initialTotalLinearMemorySize
       - initialActivePlugins
       - localAgentConfig
+      - instanceId
       properties:
         timestamp:
           type: string
@@ -6113,6 +6114,9 @@ components:
           items:
             $ref: '#/components/schemas/TypedAgentConfigEntry'
         originalPhantomId:
+          type: string
+          format: uuid
+        instanceId:
           type: string
           format: uuid
     r#CreateResourceParams:

@@ -61,7 +61,7 @@ use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry};
 use golem_common::model::{
-    AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
+    AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
     OwnedAgentId, ScanCursor, ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation,
 };
@@ -295,7 +295,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<AgentFingerprint, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
@@ -352,6 +352,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .await?;
 
+        let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+
         let mut subscription = self.events().subscribe();
         Worker::start_if_needed(worker.clone()).await?;
         if worker.is_loading() {
@@ -366,7 +368,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 })
                 .await
             {
-                Ok(Ok(())) => Ok(()),
+                Ok(Ok(())) => Ok(fingerprint),
                 Ok(Err(e)) => Err(e),
                 Err(RecvError::Closed) => {
                     Err(WorkerExecutorError::unknown("Events subscription closed"))
@@ -376,7 +378,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 )),
             }
         } else {
-            Ok(())
+            Ok(fingerprint)
         }
     }
 
@@ -1772,6 +1774,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
                 match schedule_at {
                     Some(scheduled_time) => {
+                        let worker = self.get_or_create_pending(&request).await?;
+                        let target_worker_fingerprint =
+                            worker.get_initial_worker_metadata().fingerprint;
                         self.scheduler_service()
                             .schedule(
                                 scheduled_time,
@@ -1779,6 +1784,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     account_id,
                                     owned_agent_id,
                                     invocation: Box::new(invocation),
+                                    target_worker_fingerprint,
                                 },
                             )
                             .await;
@@ -2015,11 +2021,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await
         {
-            Ok(_) => record.succeed(Ok(Response::new(
+            Ok(fingerprint) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::v1::CreateWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::create_worker_response::Result::Success(
-                            golem::common::Empty {},
+                            golem::workerexecutor::v1::CreateWorkerSuccessResponse {
+                                instance_id: Some(fingerprint.0.into()),
+                            },
                         ),
                     ),
                 },

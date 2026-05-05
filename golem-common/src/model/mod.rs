@@ -335,10 +335,17 @@ pub enum ScheduledAction {
     },
     /// Invoke the given action on the worker. The invocation will only
     /// be persisted in the oplog when it's actually getting scheduled.
+    ///
+    /// `target_worker_fingerprint` guards against stale invocations: when `Some(fp)`, the
+    /// scheduler compares `fp` against the current worker's `fingerprint` before firing. A
+    /// mismatch means the original worker was deleted and a new one was created with the same
+    /// ID — the invocation is silently dropped. `None` means fire unconditionally (used for
+    /// legacy entries and non-wasm-rpc invocations).
     Invoke {
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
         invocation: Box<AgentInvocation>,
+        target_worker_fingerprint: AgentFingerprint,
     },
     /// Resume the agent
     Resume {
@@ -506,8 +513,7 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-#[desert(evolution())]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
     pub env: Vec<(String, String)>,
@@ -518,27 +524,10 @@ pub struct AgentMetadata {
     pub parent: Option<AgentId>,
     pub last_known_status: AgentStatusRecord,
     pub original_phantom_id: Option<Uuid>,
+    pub fingerprint: AgentFingerprint,
 }
 
 impl AgentMetadata {
-    pub fn default(
-        agent_id: AgentId,
-        created_by: AccountId,
-        environment_id: EnvironmentId,
-    ) -> AgentMetadata {
-        AgentMetadata {
-            agent_id,
-            env: vec![],
-            environment_id,
-            created_by,
-            config: Vec::new(),
-            created_at: Timestamp::now_utc(),
-            parent: None,
-            last_known_status: AgentStatusRecord::default(),
-            original_phantom_id: None,
-        }
-    }
-
     pub fn owned_agent_id(&self) -> OwnedAgentId {
         OwnedAgentId::new(self.environment_id, &self.agent_id)
     }

@@ -61,6 +61,7 @@ message LaunchNewWorkerResponse {
 message LaunchNewWorkerSuccessResponse {
   golem.worker.AgentId agentId = 1;
   uint64 component_version = 2;
+  golem.common.UUID instance_id = 3;
 }
 
 message CompletePromiseRequest {

@@ -244,6 +244,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             initial_total_linear_memory_size,
             initial_active_plugins,
             original_phantom_id,
+            instance_id,
         }) => Ok(OplogEntry::Create {
             timestamp,
             agent_id,
@@ -260,6 +261,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 .map(|x| x.environment_plugin_grant_id)
                 .collect(),
             original_phantom_id,
+            instance_id,
         }),
         PublicOplogEntry::HostCall(HostCallParams {
             timestamp,

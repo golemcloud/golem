@@ -385,7 +385,9 @@ mod tests {
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::regions::OplogRegion;
-    use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, Timestamp};
+    use golem_common::model::{
+        AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, Timestamp,
+    };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -395,6 +397,25 @@ mod tests {
     use uuid::Uuid;
 
     test_r::enable!();
+
+    fn make_agent_metadata(
+        agent_id: AgentId,
+        created_by: AccountId,
+        environment_id: EnvironmentId,
+    ) -> AgentMetadata {
+        AgentMetadata {
+            agent_id,
+            env: vec![],
+            environment_id,
+            created_by,
+            config: Vec::new(),
+            created_at: Timestamp::now_utc(),
+            parent: None,
+            last_known_status: AgentStatusRecord::default(),
+            original_phantom_id: None,
+            fingerprint: AgentFingerprint::new(),
+        }
+    }
 
     /// [`ResourceLimits`] stub that always returns the same pre-seeded entry
     /// regardless of account. Allows tests to inject a specific rate directly.
@@ -474,7 +495,7 @@ mod tests {
             .open(
                 &owned,
                 None,
-                AgentMetadata::default(agent_id, account_id, env_id),
+                make_agent_metadata(agent_id, account_id, env_id),
                 last_known_status,
                 execution_status,
             )
