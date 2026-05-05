@@ -79,6 +79,19 @@ object RpcValueCodecSpec extends ZIOSpecDefault {
       val multimodalData = JsDataValue.multimodal(js.Array[js.Tuple2[String, JsElementValue]]())
       val result         = RpcValueCodec.decodeResult[Point](multimodalData)
       assert(result)(isLeft)
+    },
+    test("decodeResult accepts empty tuple result for Unit") {
+      val emptyTuple = JsDataValue.tuple(js.Array[JsElementValue]())
+      val result     = RpcValueCodec.decodeResult[Unit](emptyTuple)
+      assert(result)(isRight(equalTo(())))
+    },
+    test("decodeResult rejects non-empty tuple result for Unit") {
+      // Build a single-element tuple holding an arbitrary component-model value.
+      val nonEmpty = RpcValueCodec
+        .encodeArgs(Point(1, 2))
+        .fold(err => throw new RuntimeException(err), identity)
+      val result = RpcValueCodec.decodeResult[Unit](nonEmpty)
+      assert(result)(isLeft)
     }
   ) @@ TestAspect.timeout(zio.Duration.fromSeconds(30))
 }
