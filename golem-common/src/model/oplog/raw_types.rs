@@ -381,6 +381,19 @@ pub enum AgentError {
     AgentExceededFilesystemStorageLimit,
     // The agent was terminated by a quota with the terminae enforcement action (permanent)
     AgentTerminatedByQuota(AgentTerminatedByQuotaError),
+    // Ephemeral agents cannot suspend and the requested sleep exceeded the configured maximum
+    EphemeralSleepTooLong {
+        requested_nanos: u64,
+        max_nanos: u64,
+    },
+    // Ephemeral agent exhausted its per-invocation fuel overdraft allowance
+    EphemeralFuelExhausted {
+        overdraft_limit: u64,
+    },
+    // Ephemeral agent reached a condition that would suspend a durable agent
+    EphemeralCannotSuspend {
+        reason: String,
+    },
 }
 
 impl AgentError {
@@ -401,6 +414,9 @@ impl AgentError {
             Self::NodeOutOfFilesystemStorage => "Out of storage space",
             Self::AgentExceededFilesystemStorageLimit => "Exceeded plan storage limit",
             Self::AgentTerminatedByQuota(_) => "Terminated by quota",
+            Self::EphemeralSleepTooLong { .. } => "Ephemeral sleep too long",
+            Self::EphemeralFuelExhausted { .. } => "Ephemeral fuel exhausted",
+            Self::EphemeralCannotSuspend { .. } => "Ephemeral agent cannot suspend",
         }
     }
 

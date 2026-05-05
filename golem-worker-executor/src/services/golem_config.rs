@@ -288,6 +288,7 @@ pub struct Limits {
     pub event_broadcast_capacity: usize,
     pub event_history_size: usize,
     pub fuel_to_borrow: u64,
+    pub ephemeral_fuel_overdraft_multiplier: u64,
     #[serde(with = "humantime_serde")]
     pub epoch_interval: Duration,
     pub epoch_ticks: u64,
@@ -324,6 +325,11 @@ impl SafeDisplay for Limits {
             self.event_history_size
         );
         let _ = writeln!(&mut result, "fuel to borrow: {}", self.fuel_to_borrow);
+        let _ = writeln!(
+            &mut result,
+            "ephemeral fuel overdraft multiplier: {}",
+            self.ephemeral_fuel_overdraft_multiplier
+        );
         let _ = writeln!(
             &mut result,
             "epoch interval: {}",
@@ -451,11 +457,16 @@ impl GolemConfig {
 pub struct SuspendConfig {
     #[serde(with = "humantime_serde")]
     pub suspend_after: Duration,
+    #[serde(with = "humantime_serde")]
+    pub ephemeral_max_sleep: Duration,
 }
 
 impl SafeDisplay for SuspendConfig {
     fn to_safe_string(&self) -> String {
-        format!("suspend after: {:?}", self.suspend_after)
+        format!(
+            "suspend after: {:?}, ephemeral max sleep: {:?}",
+            self.suspend_after, self.ephemeral_max_sleep
+        )
     }
 }
 
@@ -1339,6 +1350,7 @@ impl Default for Limits {
             event_broadcast_capacity: 1024,
             event_history_size: 128,
             fuel_to_borrow: 10000,
+            ephemeral_fuel_overdraft_multiplier: 100,
             epoch_interval: Duration::from_millis(10),
             epoch_ticks: 1,
             max_oplog_query_pages_size: 100,
@@ -1370,6 +1382,7 @@ impl Default for SuspendConfig {
     fn default() -> Self {
         Self {
             suspend_after: Duration::from_secs(10),
+            ephemeral_max_sleep: Duration::from_secs(60),
         }
     }
 }

@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
+use crate::metrics::resources::{
+    record_ephemeral_overdraft_fuel, record_fuel_borrow, record_fuel_return,
+};
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -243,6 +245,10 @@ impl AtomicResourceEntry {
         }
     }
 
+    pub fn has_effective_fuel(&self) -> bool {
+        self.effective_fuel() > 0
+    }
+
     pub fn return_fuel(&self, amount: u64) {
         let amt_i64 = amount.min(i64::MAX as u64) as i64;
         self.delta
@@ -251,6 +257,20 @@ impl AtomicResourceEntry {
             })
             .ok();
         record_fuel_return(amount);
+    }
+
+    pub fn record_overdraft_debt(&self, amount: u64) {
+        if amount == 0 {
+            return;
+        }
+
+        let amt_i64 = amount.min(i64::MAX as u64) as i64;
+        self.delta
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
+                Some(d.saturating_sub(amt_i64))
+            })
+            .ok();
+        record_ephemeral_overdraft_fuel(amount);
     }
 
     pub fn max_memory_limit(&self) -> usize {
@@ -809,6 +829,15 @@ mod tests {
         entry.delta.store(i64::MIN, Ordering::Release);
         entry.return_fuel(u64::MAX);
         let _ = entry.delta.load(Ordering::Acquire);
+    }
+
+    #[test]
+    fn record_overdraft_debt_decreases_delta_by_actual_consumed_amount() {
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX, u64::MAX);
+        entry.record_overdraft_debt(2000);
+
+        assert_eq!(entry.delta.load(Ordering::Acquire), -2000);
+        assert_eq!(entry.effective_fuel(), 0);
     }
 
     #[test]

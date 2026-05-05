@@ -2618,9 +2618,18 @@ impl RunningWorker {
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
             let data_mut = store.data_mut();
-            if !data_mut.ensure_fuel(current_level) {
-                warn!("Could not borrow more fuel, suspending");
-                return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
+            if let Err(error) = data_mut.ensure_fuel(current_level) {
+                if data_mut.agent_mode() == AgentMode::Ephemeral {
+                    warn!(error = ?error, "Could not borrow more fuel for ephemeral agent");
+                    return Err(WorkerExecutorError::InvocationFailed {
+                        error,
+                        stderr: String::new(),
+                    }
+                    .into());
+                } else {
+                    warn!("Could not borrow more fuel, suspending");
+                    return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
+                }
             }
 
             match data_mut.check_interrupt() {

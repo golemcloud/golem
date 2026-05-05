@@ -59,7 +59,7 @@ use golem_client::model::{
     UpdateWorkerRequest,
 };
 use golem_common::model::agent::{
-    AgentType, AgentTypeName, DataValue, ParsedAgentId, UntypedJsonDataValue,
+    AgentMode, AgentType, AgentTypeName, DataValue, ParsedAgentId, UntypedJsonDataValue,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -1125,6 +1125,20 @@ impl WorkerCommandHandler {
         let (component, agent_name) = self
             .component_by_agent_name_match(&agent_name_match)
             .await?;
+
+        if component
+            .metadata
+            .agent_types()
+            .iter()
+            .find(|agent_type| agent_type.type_name == agent_name_match.agent_type_name)
+            .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral)
+            && !self
+                .ctx
+                .interactive_handler()
+                .confirm_interrupt_ephemeral_agent()?
+        {
+            bail!(NonSuccessfulExit);
+        }
 
         log_action(
             "Interrupting",

@@ -16,8 +16,8 @@ use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use golem_common::model::agent::AgentError as AgentInvocationError;
-use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::agent::UntypedDataValue;
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::agent::{
     DataSchema, ElementSchema, NamedElementSchema, UntypedElementValue,
 };
@@ -347,11 +347,13 @@ async fn invoke<Ctx: WorkerCtx>(
         }
         Err(err) => {
             let retry_from = store.data().get_current_retry_point().await;
+            let agent_mode = store.data().agent_mode();
             let err: anyhow::Error = err.into();
             Ok(InvokeResult::from_error::<Ctx>(
                 consumed_fuel,
                 &err,
                 retry_from,
+                agent_mode,
             ))
         }
     }
@@ -411,11 +413,13 @@ async fn drop_resource<Ctx: WorkerCtx>(
             Ok(_) => wrap_output_as_agent_result(kind, None, consumed_fuel),
             Err(err) => {
                 let retry_from = store.data().get_current_retry_point().await;
+                let agent_mode = store.data().agent_mode();
                 let err: anyhow::Error = err.into();
                 Ok(InvokeResult::from_error::<Ctx>(
                     consumed_fuel,
                     &err,
                     retry_from,
+                    agent_mode,
                 ))
             }
         }
@@ -503,8 +507,9 @@ impl InvokeResult {
         consumed_fuel: u64,
         error: &anyhow::Error,
         retry_from: OplogIndex,
+        agent_mode: AgentMode,
     ) -> Self {
-        match TrapType::from_error::<Ctx>(error, retry_from) {
+        match TrapType::from_error::<Ctx>(error, retry_from, agent_mode) {
             TrapType::Interrupt(kind) => InvokeResult::Interrupted {
                 consumed_fuel,
                 interrupt_kind: kind,

@@ -251,7 +251,11 @@ pub enum TrapType {
 }
 
 impl TrapType {
-    pub fn from_error<Ctx: WorkerCtx>(error: &anyhow::Error, retry_from: OplogIndex) -> TrapType {
+    pub fn from_error<Ctx: WorkerCtx>(
+        error: &anyhow::Error,
+        retry_from: OplogIndex,
+        agent_mode: AgentMode,
+    ) -> TrapType {
         use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 
         match error.root_cause().downcast_ref::<InterruptKind>() {
@@ -316,14 +320,31 @@ impl TrapType {
                                 retry_from,
                             }
                         }
-                        // Monthly budget exhausted → suspend and retry when replenished.
-                        // Maps to TryStop which writes a Suspend oplog entry and transitions
-                        // the worker to Suspended status.
                         Some(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted) => {
-                            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()))
+                            match agent_mode {
+                                AgentMode::Durable => TrapType::Interrupt(InterruptKind::Suspend(
+                                    Timestamp::now_utc(),
+                                )),
+                                AgentMode::Ephemeral => TrapType::Error {
+                                    error: AgentError::EphemeralCannotSuspend {
+                                        reason: "monthly HTTP budget exhausted".to_string(),
+                                    },
+                                    retry_from,
+                                },
+                            }
                         }
                         Some(GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted) => {
-                            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()))
+                            match agent_mode {
+                                AgentMode::Durable => TrapType::Interrupt(InterruptKind::Suspend(
+                                    Timestamp::now_utc(),
+                                )),
+                                AgentMode::Ephemeral => TrapType::Error {
+                                    error: AgentError::EphemeralCannotSuspend {
+                                        reason: "monthly RPC budget exhausted".to_string(),
+                                    },
+                                    retry_from,
+                                },
+                            }
                         }
                         Some(GolemSpecificWasmTrap::AgentTerminatedByQuota {
                             environment_id,
@@ -339,7 +360,17 @@ impl TrapType {
                         },
                         Some(GolemSpecificWasmTrap::AgentThrottledByQuota {
                             timestamp, ..
-                        }) => TrapType::Interrupt(InterruptKind::Suspend(*timestamp)),
+                        }) => match agent_mode {
+                            AgentMode::Durable => {
+                                TrapType::Interrupt(InterruptKind::Suspend(*timestamp))
+                            }
+                            AgentMode::Ephemeral => TrapType::Error {
+                                error: AgentError::EphemeralCannotSuspend {
+                                    reason: "throttled by quota".to_string(),
+                                },
+                                retry_from,
+                            },
+                        },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error {
@@ -356,6 +387,12 @@ impl TrapType {
                             Some(WorkerExecutorError::ValueMismatch { details }) => {
                                 TrapType::Error {
                                     error: AgentError::InvalidRequest(details.clone()),
+                                    retry_from,
+                                }
+                            }
+                            Some(WorkerExecutorError::InvocationFailed { error, .. }) => {
+                                TrapType::Error {
+                                    error: error.clone(),
                                     retry_from,
                                 }
                             }
@@ -770,6 +807,41 @@ mod tests {
     use test_r::test;
     use tracing::info;
     use uuid::Uuid;
+
+    #[test]
+    fn monthly_http_budget_suspends_durable_agents() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::anyhow!(
+                golem_service_base::error::worker_executor::GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
+            ),
+            OplogIndex::INITIAL,
+            AgentMode::Durable,
+        );
+
+        assert!(matches!(
+            trap,
+            TrapType::Interrupt(InterruptKind::Suspend(_))
+        ));
+    }
+
+    #[test]
+    fn monthly_http_budget_fails_ephemeral_agents_without_suspend() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::anyhow!(
+                golem_service_base::error::worker_executor::GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
+            ),
+            OplogIndex::INITIAL,
+            AgentMode::Ephemeral,
+        );
+
+        assert!(matches!(
+            trap,
+            TrapType::Error {
+                error: AgentError::EphemeralCannotSuspend { reason },
+                ..
+            } if reason == "monthly HTTP budget exhausted"
+        ));
+    }
 
     fn example_trace_id_1() -> TraceId {
         TraceId::from_string("4bf92f3577b34da6a3ce929d0e0e4736").unwrap()

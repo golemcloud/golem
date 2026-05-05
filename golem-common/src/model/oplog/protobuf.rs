@@ -128,6 +128,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
                     resource_name: ResourceName(inner.resource_name),
                 }))
             }
+            Error::EphemeralSleepTooLong(inner) => Ok(Self::EphemeralSleepTooLong {
+                requested_nanos: inner.requested_nanos,
+                max_nanos: inner.max_nanos,
+            }),
+            Error::EphemeralFuelExhausted(inner) => Ok(Self::EphemeralFuelExhausted {
+                overdraft_limit: inner.overdraft_limit,
+            }),
+            Error::EphemeralCannotSuspend(inner) => Ok(Self::EphemeralCannotSuspend {
+                reason: inner.reason,
+            }),
         }
     }
 }
@@ -182,6 +192,21 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
                     environment_id: Some(details.environment_id.into()),
                     resource_name: details.resource_name.0,
                 })
+            }
+            AgentError::EphemeralSleepTooLong {
+                requested_nanos,
+                max_nanos,
+            } => Error::EphemeralSleepTooLong(grpc_worker::EphemeralSleepTooLong {
+                requested_nanos,
+                max_nanos,
+            }),
+            AgentError::EphemeralFuelExhausted { overdraft_limit } => {
+                Error::EphemeralFuelExhausted(grpc_worker::EphemeralFuelExhausted {
+                    overdraft_limit,
+                })
+            }
+            AgentError::EphemeralCannotSuspend { reason } => {
+                Error::EphemeralCannotSuspend(grpc_worker::EphemeralCannotSuspend { reason })
             }
         };
         Self { error: Some(error) }
