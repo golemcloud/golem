@@ -161,21 +161,16 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "get_id", &[]).await;
 
-    run_and_assert(&ctx, "FooAgent.{fun_string}", &["\"sample\""]).await;
+    run_and_assert(&ctx, "fun_string", &["\"sample\""]).await;
 
     // A char type
     run_and_assert(&ctx, "fun_char", &[r#"'a'"#]).await;
 
     // Testing trigger invocation
-    run_and_assert(
-        &ctx,
-        "FooAgent.{fun_string_fire_and_forget}",
-        &["\"sample\""],
-    )
-    .await;
+    run_and_assert(&ctx, "fun_string_fire_and_forget", &["\"sample\""]).await;
 
     // Testing scheduled invocation
-    run_and_assert(&ctx, "FooAgent.{fun_string_later}", &["\"sample\""]).await;
+    run_and_assert(&ctx, "fun_string_later", &["\"sample\""]).await;
 
     run_and_assert(&ctx, "fun_u8", &["42"]).await;
 
@@ -355,15 +350,14 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun_simple_enum", &["I64(-12345)"]).await;
 
-    // cli invoke gets confused with `fun-result` and `fun-result-unit-left` etc, and therefore fully qualified function name.
-    run_and_assert(&ctx, "FooAgent.{fun_result}", &["Ok(\"success\")"]).await;
-    run_and_assert(&ctx, "FooAgent.{fun_result}", &["Err(\"failed\")"]).await;
+    run_and_assert(&ctx, "fun_result", &["Ok(\"success\")"]).await;
+    run_and_assert(&ctx, "fun_result", &["Err(\"failed\")"]).await;
 
-    run_and_assert(&ctx, "FooAgent.{fun_result_unit_ok}", &["Ok(())"]).await;
+    run_and_assert(&ctx, "fun_result_unit_ok", &["Ok(())"]).await;
 
-    run_and_assert(&ctx, "FooAgent.{fun_result_unit_err}", &["Err(())"]).await;
+    run_and_assert(&ctx, "fun_result_unit_err", &["Err(())"]).await;
 
-    run_and_assert(&ctx, "FooAgent.{fun_result_unit_both}", &["Ok(())"]).await;
+    run_and_assert(&ctx, "fun_result_unit_both", &["Ok(())"]).await;
 
     let result_complex_arg = r#"
     Ok({
@@ -383,7 +377,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun_result_complex", &[result_complex_arg]).await;
 
-    run_and_assert(&ctx, "FooAgent.{fun_option}", &["Some(\"optional value\")"]).await;
+    run_and_assert(&ctx, "fun_option", &["Some(\"optional value\")"]).await;
 
     let option_complex_arg = r#"
     Some({
@@ -401,56 +395,56 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     })
     "#;
 
-    run_and_assert(&ctx, "FooAgent.{fun_option_complex}", &[option_complex_arg]).await;
+    run_and_assert(&ctx, "fun_option_complex", &[option_complex_arg]).await;
 
     run_and_assert(&ctx, "fun_enum_with_only_literals", &["A"]).await;
 
     // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
     // run_and_assert(
     //     &ctx,
-    //     "FooAgent.{fun_multi_modal}",
+    //     "fun_multi_modal",
     //     &[r#"[text("foo"), text("foo"), data({id: 1, name: "foo"})]"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "FooAgent.{fun_multi_modal_basic}",
+    //     "fun_multi_modal_basic",
     //     &[r#"[text(url("foo"))]"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "FooAgent.{fun_unstructured_text}",
+    //     "fun_unstructured_text",
     //     &[r#"url("foo")"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "FooAgent.{fun_unstructured_text}",
+    //     "fun_unstructured_text",
     //     &[r#"inline({data: "foo", text-type: none})"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "FooAgent.{fun_unstructured_text_lc}",
+    //     "fun_unstructured_text_lc",
     //     &[r#"url("foo")"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "FooAgent.{fun_unstructured_text_lc}",
+    //     "fun_unstructured_text_lc",
     //     &[r#"inline({data: "foo", text-type: some({language-code: "en"})})"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "FooAgent.{fun_unstructured_binary}",
+    //     "fun_unstructured_binary",
     //     &[r#"url("foo")"#],
     // )
     // .await;
@@ -612,7 +606,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // function optional (that has null, defined as union)
     run_and_assert(
         &ctx,
-        "FooAgent.{funOptional}",
+        "funOptional",
         &[
             r#"{tag: "case1", value: "foo"}"#,
             r#"{a: "foo"}"#,
@@ -677,14 +671,14 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // // Multimodal
     // run_and_assert(
     //     &ctx,
-    //     "FooAgent.{funMultimodal}",
+    //     "funMultimodal",
     //     &["[text(inline({data: \"data\", text-type: none}))]"],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "FooAgent.{funMultimodalAdvanced}",
+    //     "funMultimodalAdvanced",
     //     &["[text(\"foo\")]"],
     // )
     // .await;

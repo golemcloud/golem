@@ -454,23 +454,35 @@ impl std::fmt::Display for Column {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TablePreset {
+    Full,
+    FullCondensed,
+}
+
 /// Creates a comfy-table pre-configured with Dynamic arrangement, terminal width, and
 /// a preset chosen from the global colorize flag. Column constraints and alignment are
 /// applied from the `headers` descriptors.
 ///
 /// The terminal width is automatically reduced by the current log indent width so that
 /// tables render correctly when called inside an indented context.
-pub fn new_table(headers: Vec<Column>) -> ComfyTable {
-    use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
+pub fn new_table(preset: TablePreset, headers: Vec<Column>) -> ComfyTable {
+    use comfy_table::presets::{ASCII_FULL, ASCII_FULL_CONDENSED, UTF8_FULL, UTF8_FULL_CONDENSED};
     let colorize = SHOULD_COLORIZE.should_colorize();
     let indent_width = current_indent_width();
     let term_width = (terminal_width() as usize).saturating_sub(indent_width) as u16;
     let mut table = ComfyTable::new();
     table
         .load_preset(if colorize {
-            UTF8_FULL_CONDENSED
+            match preset {
+                TablePreset::Full => UTF8_FULL,
+                TablePreset::FullCondensed => UTF8_FULL_CONDENSED,
+            }
         } else {
-            ASCII_FULL_CONDENSED
+            match preset {
+                TablePreset::Full => ASCII_FULL,
+                TablePreset::FullCondensed => ASCII_FULL_CONDENSED,
+            }
         })
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_width(term_width)
@@ -495,6 +507,14 @@ pub fn new_table(headers: Vec<Column>) -> ComfyTable {
         }
     }
     table
+}
+
+pub fn new_table_full(headers: Vec<Column>) -> ComfyTable {
+    new_table(TablePreset::Full, headers)
+}
+
+pub fn new_table_full_condensed(headers: Vec<Column>) -> ComfyTable {
+    new_table(TablePreset::FullCondensed, headers)
 }
 
 pub fn log_text_view<View: TextView>(view: &View) {

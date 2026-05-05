@@ -45,7 +45,7 @@ pub struct HttpApiDomainListView(pub Vec<DomainRegistration>);
 
 impl TextView for HttpApiDomainListView {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Domain"),
             Column::new("ID").fixed(),
             Column::new("Environment ID").fixed(),

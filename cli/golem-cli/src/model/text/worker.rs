@@ -1209,7 +1209,7 @@ impl TextView for WorkerFilesView {
         if self.nodes.is_empty() {
             logln("No files found.");
         } else {
-            let mut table = new_table(vec![
+            let mut table = new_table_full_condensed(vec![
                 Column::new("Name"),
                 Column::new("Kind").fixed(),
                 Column::new("Permissions").fixed(),
