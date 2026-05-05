@@ -130,11 +130,13 @@ function validateEndpointVariables(
 ) {
   const principalParams = getPrincipalParams(parameterTypes);
   const unstructuredBinaryParams = getUnstructuredBinaryParams(parameterTypes);
+  const unstructuredTextParams = getUnstructuredTextParams(parameterTypes);
 
   function validateVariable(
     variableName: string,
     location: 'header' | 'query' | 'path',
     binaryError: string,
+    textError: string,
   ) {
     if (principalParams.has(variableName)) {
       throw new Error(
@@ -144,6 +146,10 @@ function validateEndpointVariables(
 
     if (unstructuredBinaryParams.has(variableName)) {
       throw new Error(binaryError);
+    }
+
+    if (unstructuredTextParams.has(variableName)) {
+      throw new Error(textError);
     }
 
     if (!methodVars.has(variableName)) {
@@ -158,6 +164,7 @@ function validateEndpointVariables(
       variableName,
       'header',
       `HTTP endpoint header variable '${variableName}' cannot be used for method parameters of type 'UnstructuredBinary'`,
+      `HTTP endpoint header variable '${variableName}' cannot be used for method parameters of type 'UnstructuredText'`,
     );
   }
 
@@ -166,6 +173,7 @@ function validateEndpointVariables(
       variableName,
       'query',
       `HTTP endpoint query variable '${variableName}' cannot be used when the method has a single 'UnstructuredBinary' parameter.`,
+      `HTTP endpoint query variable '${variableName}' cannot be used when the method has a single 'UnstructuredText' parameter.`,
     );
   }
 
@@ -177,6 +185,7 @@ function validateEndpointVariables(
         name,
         'path',
         `HTTP endpoint path variable "${name}" cannot be used when the method has a single 'UnstructuredBinary' parameter.`,
+        `HTTP endpoint path variable "${name}" cannot be used when the method has a single 'UnstructuredText' parameter.`,
       );
     }
   }
@@ -206,6 +215,18 @@ function getUnstructuredBinaryParams(parameterTypes: Map<string, TypeInfoInterna
   return methodVarsOfPrincipal;
 }
 
+function getUnstructuredTextParams(parameterTypes: Map<string, TypeInfoInternal>): Set<string> {
+  const methodVarsOfText = new Set<string>();
+
+  for (const [varName, typeInfo] of parameterTypes.entries()) {
+    if (typeInfo.tag === 'unstructured-text') {
+      methodVarsOfText.add(varName);
+    }
+  }
+
+  return methodVarsOfText;
+}
+
 function collectConstructorInputParameterNames(agentConstructor: AgentConstructor): Set<string> {
   return new Set(agentConstructor.inputSchema.val.map(([name]) => name));
 }
@@ -218,6 +239,11 @@ function validateConstructorParamsAreHttpSafe(
     if (paramSchema.tag === 'unstructured-binary') {
       throw new Error(
         `HTTP mount path variable '${paramName}' cannot be used for constructor parameters of type 'UnstructuredBinary'`,
+      );
+    }
+    if (paramSchema.tag === 'unstructured-text') {
+      throw new Error(
+        `HTTP mount path variable '${paramName}' cannot be used for constructor parameters of type 'UnstructuredText'`,
       );
     }
   }

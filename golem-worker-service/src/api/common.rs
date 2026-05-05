@@ -62,6 +62,8 @@ pub enum ApiEndpointError {
     Conflict(Json<ErrorBody>),
     #[oai(status = 413)]
     PayloadTooLarge(Json<ErrorBody>),
+    #[oai(status = 415)]
+    UnsupportedMediaType(Json<ErrorBody>),
     #[oai(status = 422)]
     LimitExceeded(Json<ErrorBody>),
     #[oai(status = 500)]
@@ -77,6 +79,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::NotFound(_) => "NotFound",
             Self::Conflict(_) => "Conflict",
             Self::PayloadTooLarge(_) => "PayloadTooLarge",
+            Self::UnsupportedMediaType(_) => "UnsupportedMediaType",
             Self::LimitExceeded(_) => "LimitExceeded",
             Self::InternalError(_) => "InternalError",
         }
@@ -88,6 +91,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::NotFound(_) => true,
             Self::Conflict(_) => true,
             Self::PayloadTooLarge(_) => true,
+            Self::UnsupportedMediaType(_) => true,
             Self::LimitExceeded(_) => true,
             Self::Forbidden(_) => true,
             Self::Unauthorized(_) => true,
@@ -103,6 +107,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::InternalError(_) => None,
             Self::Forbidden(inner) => inner.cause.take(),
             Self::PayloadTooLarge(inner) => inner.cause.take(),
+            Self::UnsupportedMediaType(inner) => inner.cause.take(),
             Self::LimitExceeded(inner) => inner.cause.take(),
             Self::Conflict(inner) => inner.cause.take(),
         }
@@ -184,6 +189,14 @@ impl ApiEndpointError {
 
     pub fn payload_too_large<T: SafeDisplay>(code: &str, error: T) -> Self {
         Self::PayloadTooLarge(Json(ErrorBody {
+            error: error.to_safe_string(),
+            code: code.to_string(),
+            cause: None,
+        }))
+    }
+
+    pub fn unsupported_media_type<T: SafeDisplay>(code: &str, error: T) -> Self {
+        Self::UnsupportedMediaType(Json(ErrorBody {
             error: error.to_safe_string(),
             code: code.to_string(),
             cause: None,
@@ -409,6 +422,20 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::UnsupportedMimeType { .. } => {
                 Self::bad_request(api::error_code::REQUEST_UNSUPPORTED_MIME_TYPE, value)
             }
+            RequestHandlerError::BodyIsNotValidUtf8 { .. } => {
+                Self::bad_request(api::error_code::REQUEST_BODY_INVALID_UTF8, value)
+            }
+            RequestHandlerError::UnsupportedLanguage { .. } => {
+                Self::unsupported_media_type(api::error_code::REQUEST_UNSUPPORTED_LANGUAGE, value)
+            }
+            RequestHandlerError::UnsupportedTextContentType { .. } => Self::unsupported_media_type(
+                api::error_code::REQUEST_UNSUPPORTED_TEXT_CONTENT_TYPE,
+                value,
+            ),
+            RequestHandlerError::MultiValuedContentLanguageHeader => Self::bad_request(
+                api::error_code::REQUEST_MULTI_VALUED_CONTENT_LANGUAGE,
+                value,
+            ),
             RequestHandlerError::ResolvingRouteFailed(
                 RouteResolverError::CouldNotGetDomainFromRequest(_),
             ) => Self::bad_request(api::error_code::REQUEST_DOMAIN_EXTRACTION_FAILED, value),

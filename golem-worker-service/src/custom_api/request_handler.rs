@@ -178,6 +178,23 @@ fn route_execution_result_to_response(
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
 
+        ResponseBody::UnstructuredTextBody { body } => {
+            let mut response_builder = response_builder.content_type("text/plain; charset=utf-8");
+            if let Some(text_type) = &body.text_type {
+                let trimmed = text_type.language_code.trim();
+                if !trimmed.is_empty()
+                    && !trimmed.contains(',')
+                    && trimmed
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                {
+                    response_builder =
+                        response_builder.header(http::header::CONTENT_LANGUAGE, trimmed);
+                }
+            }
+            Ok(response_builder.body(body.data))
+        }
+
         ResponseBody::OpenApiSchema { spec: body, format } => {
             let response = match format {
                 OpenApiSpecFormat::Json => {
