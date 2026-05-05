@@ -146,23 +146,6 @@ pub fn build_http_agent_method_parameters<E>(
     let body_schema =
         handle_body_parameters(elements, &consumed, &mut method_parameters, make_error)?;
 
-    // Compile-time conflict guard: Content-Language must not be bound as a Header
-    // when the body is UnstructuredText.
-    if matches!(
-        body_schema,
-        RequestBodySchema::UnrestrictedText | RequestBodySchema::RestrictedText { .. }
-    ) {
-        for hv in &endpoint.header_vars {
-            if hv.header_name.eq_ignore_ascii_case("content-language") {
-                return Err(make_error(
-                    "Cannot bind Content-Language as a header parameter when the body is \
-                     UnstructuredText: this header is reserved for declaring the body language."
-                        .into(),
-                ));
-            }
-        }
-    }
-
     Ok((body_schema, method_parameters))
 }
 
