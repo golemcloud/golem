@@ -23,10 +23,9 @@ use colored::Colorize;
 use comfy_table::{Cell, CellAlignment, Color as ComfyColor};
 use golem_client::model::ComponentDto;
 use golem_common::model::agent::{
-    AgentType, AgentTypeName, DeployedRegisteredAgentType, ParsedAgentId,
+    AgentType, AgentTypeName, DeployedRegisteredAgentType, ElementSchema, ParsedAgentId,
 };
 use golem_common::model::component::ComponentName;
-use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
 use std::path::PathBuf;
 
@@ -331,7 +330,7 @@ impl TextView for AvailableAgentConstructorsHelp {
 
 pub struct ArgumentError {
     pub argument_index: usize,
-    pub type_: Option<AnalysedType>,
+    pub parameter_type: Option<ElementSchema>,
     pub value: Option<String>,
     pub error: Option<String>,
     pub source_language: SourceLanguage,
@@ -354,9 +353,11 @@ impl TextView for ParameterErrorTableView {
             table.add_row(vec![
                 Cell::new(err.argument_index).set_alignment(CellAlignment::Right),
                 Cell::new(
-                    err.type_
+                    err.parameter_type
                         .as_ref()
-                        .map(|t| render_type_for_language(&err.source_language, t, true))
+                        .map(|parameter_type| {
+                            render_parameter_type_for_language(&err.source_language, parameter_type)
+                        })
                         .unwrap_or_default(),
                 ),
                 Cell::new(err.value.clone().unwrap_or_default()),
@@ -368,6 +369,47 @@ impl TextView for ParameterErrorTableView {
             ]);
         }
         log_table(table);
+    }
+}
+
+fn render_parameter_type_for_language(
+    source_language: &SourceLanguage,
+    parameter_type: &ElementSchema,
+) -> String {
+    match parameter_type {
+        ElementSchema::ComponentModel(cm) => {
+            render_type_for_language(source_language, &cm.element_type, true)
+        }
+        ElementSchema::UnstructuredText(text_descriptor) => {
+            let mut result = "text".to_string();
+            if let Some(restrictions) = &text_descriptor.restrictions {
+                result.push('[');
+                result.push_str(
+                    &restrictions
+                        .iter()
+                        .map(|restriction| restriction.language_code.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                result.push(']');
+            }
+            result
+        }
+        ElementSchema::UnstructuredBinary(binary_descriptor) => {
+            let mut result = "binary".to_string();
+            if let Some(restrictions) = &binary_descriptor.restrictions {
+                result.push('[');
+                result.push_str(
+                    &restrictions
+                        .iter()
+                        .map(|restriction| restriction.mime_type.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                result.push(']');
+            }
+            result
+        }
     }
 }
 

@@ -61,7 +61,8 @@ use golem_client::model::{
 };
 use golem_common::model::agent::{
     AgentType, AgentTypeName, ComponentModelElementValue, DataSchema, DataValue, ElementSchema,
-    ElementValue, ElementValues, ParsedAgentId, UntypedJsonDataValue,
+    ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, ParsedAgentId,
+    UntypedJsonDataValue,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -2665,39 +2666,23 @@ fn parse_method_parameters_with_error_table(
             .map(|(idx, pair)| match pair {
                 EitherOrBoth::Both(schema, value) => ArgumentError {
                     argument_index: idx + 1,
-                    type_: match &schema.schema {
-                        ElementSchema::ComponentModel(cm) => Some(cm.element_type.clone()),
-                        _ => None,
-                    },
+                    parameter_type: Some(schema.schema.clone()),
                     value: Some(value.clone()),
-                    error: match &schema.schema {
-                        ElementSchema::ComponentModel(cm) => match parse_method_argument_value(
-                            value,
-                            &cm.element_type,
-                            source_language,
-                        ) {
-                            Ok(_) => None,
-                            Err(err) => Some(err.message),
-                        },
-                        _ => Some(
-                            "Unsupported non-ComponentModel method parameter schema".to_string(),
-                        ),
-                    },
+                    error: parse_method_argument_element(value, &schema.schema, source_language)
+                        .err()
+                        .map(|err| err.message),
                     source_language: source_language.clone(),
                 },
                 EitherOrBoth::Left(schema) => ArgumentError {
                     argument_index: idx + 1,
-                    type_: match &schema.schema {
-                        ElementSchema::ComponentModel(cm) => Some(cm.element_type.clone()),
-                        _ => None,
-                    },
+                    parameter_type: Some(schema.schema.clone()),
                     value: None,
                     error: Some("missing argument".to_string()),
                     source_language: source_language.clone(),
                 },
                 EitherOrBoth::Right(value) => ArgumentError {
                     argument_index: idx + 1,
-                    type_: None,
+                    parameter_type: None,
                     value: Some(value.clone()),
                     error: Some("extra argument".to_string()),
                     source_language: source_language.clone(),
@@ -2715,42 +2700,24 @@ fn parse_method_parameters_with_error_table(
     let mut has_error = false;
 
     for (idx, (schema, value)) in element_schemas.iter().zip(arguments.iter()).enumerate() {
-        match &schema.schema {
-            ElementSchema::ComponentModel(cm) => {
-                match parse_method_argument_value(value, &cm.element_type, source_language) {
-                    Ok(parsed) => {
-                        values.push(ElementValue::ComponentModel(ComponentModelElementValue {
-                            value: parsed,
-                        }));
-                        rows.push(ArgumentError {
-                            argument_index: idx + 1,
-                            type_: Some(cm.element_type.clone()),
-                            value: Some(value.clone()),
-                            error: None,
-                            source_language: source_language.clone(),
-                        });
-                    }
-                    Err(err) => {
-                        has_error = true;
-                        rows.push(ArgumentError {
-                            argument_index: idx + 1,
-                            type_: Some(cm.element_type.clone()),
-                            value: Some(value.clone()),
-                            error: Some(err.message),
-                            source_language: source_language.clone(),
-                        });
-                    }
-                }
+        match parse_method_argument_element(value, &schema.schema, source_language) {
+            Ok(parsed) => {
+                values.push(parsed);
+                rows.push(ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: Some(schema.schema.clone()),
+                    value: Some(value.clone()),
+                    error: None,
+                    source_language: source_language.clone(),
+                });
             }
-            _ => {
+            Err(err) => {
                 has_error = true;
                 rows.push(ArgumentError {
                     argument_index: idx + 1,
-                    type_: None,
+                    parameter_type: Some(schema.schema.clone()),
                     value: Some(value.clone()),
-                    error: Some(
-                        "Unsupported non-ComponentModel method parameter schema".to_string(),
-                    ),
+                    error: Some(err.message),
                     source_language: source_language.clone(),
                 });
             }
@@ -2797,6 +2764,47 @@ fn parse_method_argument_value(
     }
 
     parsed
+}
+
+fn parse_method_argument_element(
+    value: &str,
+    element_schema: &ElementSchema,
+    source_language: &SourceLanguage,
+) -> Result<ElementValue, crate::agent_id_display::ParseError> {
+    match element_schema {
+        ElementSchema::ComponentModel(cm) => {
+            let value = parse_method_argument_value(value, &cm.element_type, source_language)?;
+            Ok(ElementValue::ComponentModel(ComponentModelElementValue {
+                value,
+            }))
+        }
+        ElementSchema::UnstructuredText(_) | ElementSchema::UnstructuredBinary(_) => {
+            let schema = DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "value".to_string(),
+                    schema: element_schema.clone(),
+                }],
+            });
+
+            let parsed =
+                crate::agent_id_display::parse_agent_id_params(value, &schema, source_language)?;
+
+            match parsed {
+                DataValue::Tuple(ElementValues { mut elements }) => {
+                    elements
+                        .pop()
+                        .ok_or_else(|| crate::agent_id_display::ParseError {
+                            position: 0,
+                            message: "expected a single parsed value".to_string(),
+                        })
+                }
+                DataValue::Multimodal(_) => Err(crate::agent_id_display::ParseError {
+                    position: 0,
+                    message: "expected tuple parsed value".to_string(),
+                }),
+            }
+        }
+    }
 }
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
@@ -2895,11 +2903,16 @@ fn normalize_public_agent_id(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_repl_agent_id, normalize_public_agent_id, split_agent_name};
+    use super::{
+        build_repl_agent_id, normalize_public_agent_id, parse_method_argument_element,
+        split_agent_name,
+    };
+    use crate::agent_id_display::SourceLanguage;
     use golem_common::model::Empty;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
-        ElementValues, NamedElementSchemas, ParsedAgentId, Snapshotting,
+        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryDescriptor,
+        DataSchema, ElementSchema, ElementValue, ElementValues, NamedElementSchemas, ParsedAgentId,
+        Snapshotting, TextDescriptor,
     };
     use pretty_assertions::assert_eq;
     use test_r::test;
@@ -2990,5 +3003,29 @@ mod tests {
             normalize_public_agent_id(&agent_id, &test_agent_type(AgentMode::Ephemeral)).unwrap();
 
         assert!(normalized.phantom_id.is_some());
+    }
+
+    #[test]
+    fn parse_method_argument_element_parses_unstructured_text() {
+        let parsed = parse_method_argument_element(
+            "UnstructuredText::Url(\"https://example.com\")",
+            &ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+
+        assert!(matches!(parsed, ElementValue::UnstructuredText(_)));
+    }
+
+    #[test]
+    fn parse_method_argument_element_parses_unstructured_binary() {
+        let parsed = parse_method_argument_element(
+            "UnstructuredBinary::from_url(\"https://example.com/file.bin\")",
+            &ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+
+        assert!(matches!(parsed, ElementValue::UnstructuredBinary(_)));
     }
 }
