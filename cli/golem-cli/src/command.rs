@@ -1055,7 +1055,7 @@ pub mod worker {
     use crate::command::shared_args::{
         AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
     };
-    use crate::model::worker::AgentUpdateMode;
+    use crate::model::worker::{AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
@@ -1134,6 +1134,11 @@ pub mod worker {
             /// Can be used multiple times (AND condition is applied between them)
             #[arg(long)]
             filter: Vec<String>,
+            /// Which agent modes to list. Defaults to `durable`; pass `ephemeral`
+            /// to list only ephemeral agents or `all` to include both modes.
+            /// Ignored if `--filter mode == ...` is provided explicitly.
+            #[arg(long, default_value_t = AgentListMode::Durable)]
+            mode: AgentListMode,
             /// Cursor position, if not provided, starts from the beginning.
             ///
             /// Cursor can be used to get the next page of results, use the cursor returned

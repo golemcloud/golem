@@ -847,6 +847,7 @@ pub async fn create_worker_executor_impl<
     let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
         worker_service.clone(),
         oplog_service.clone(),
+        component_service.clone(),
         golem_config.clone(),
     ));
 

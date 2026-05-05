@@ -251,12 +251,47 @@ impl RegistryInvalidationEvent {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(i32)]
+#[wit(name = "agent-mode", owner = "golem:api@1.5.0/oplog")]
 pub enum AgentMode {
     Durable = 0,
     Ephemeral = 1,
+}
+
+impl Display for AgentMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentMode::Durable => write!(f, "Durable"),
+            AgentMode::Ephemeral => write!(f, "Ephemeral"),
+        }
+    }
+}
+
+impl FromStr for AgentMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "durable" => Ok(AgentMode::Durable),
+            "ephemeral" => Ok(AgentMode::Ephemeral),
+            _ => Err(format!("Unknown agent mode: {s}")),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

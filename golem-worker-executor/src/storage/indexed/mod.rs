@@ -18,6 +18,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::AgentId;
+use golem_common::model::agent::AgentMode;
 use golem_common::serialization::{deserialize, serialize};
 
 pub mod memory;
@@ -661,13 +662,28 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 /// Various namespaces for indexed storage
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum IndexedStorageNamespace {
-    OpLog { agent_id: AgentId },
-    CompressedOpLog { agent_id: AgentId, level: usize },
+    OpLog {
+        agent_id: AgentId,
+        agent_mode: AgentMode,
+    },
+    CompressedOpLog {
+        agent_id: AgentId,
+        agent_mode: AgentMode,
+        level: usize,
+    },
 }
 
 /// Various namespaces for operations working on multiple indexed storage namespaces such as scan
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum IndexedStorageMetaNamespace {
-    Oplog,
-    CompressedOplog { level: usize },
+    Oplog { agent_mode: AgentMode },
+    CompressedOplog { agent_mode: AgentMode, level: usize },
+}
+
+/// Returns the symmetric per-mode prefix used by all indexed-storage backends.
+pub fn agent_mode_prefix(mode: AgentMode) -> &'static str {
+    match mode {
+        AgentMode::Durable => "durable",
+        AgentMode::Ephemeral => "ephemeral",
+    }
 }

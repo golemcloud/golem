@@ -125,15 +125,19 @@ impl S3BlobStorage {
             BlobStorageNamespace::OplogPayload {
                 environment_id,
                 agent_id,
+                agent_mode,
             } => {
                 let environment_id_string = environment_id.to_string();
                 let agent_id_string = agent_id.to_string();
+                let mode = super::agent_mode_prefix(*agent_mode);
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&environment_id_string)
+                    Path::new(mode)
+                        .join(environment_id_string)
                         .join(agent_id_string)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
+                        .join(mode)
                         .join(environment_id_string)
                         .join(agent_id_string)
                         .to_path_buf()
@@ -142,16 +146,20 @@ impl S3BlobStorage {
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
                 component_id,
+                agent_mode,
                 ..
             } => {
                 let environment_id_string = environment_id.to_string();
                 let component_id_string = component_id.to_string();
+                let mode = super::agent_mode_prefix(*agent_mode);
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&environment_id_string)
+                    Path::new(mode)
+                        .join(environment_id_string)
                         .join(component_id_string)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
+                        .join(mode)
                         .join(environment_id_string)
                         .join(component_id_string)
                         .to_path_buf()

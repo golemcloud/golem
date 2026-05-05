@@ -67,6 +67,7 @@ fn create_serialization_poem_serde_equivalence() {
             ),
             agent_id: "test1".to_string(),
         },
+        agent_mode: crate::base_model::agent::AgentMode::Durable,
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![("x".to_string(), "y".to_string())]
             .into_iter()

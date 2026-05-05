@@ -21,6 +21,7 @@ use aws_sdk_s3::config::Credentials;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::TryStreamExt;
 use futures::stream::BoxStream;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::widen_infallible;
@@ -432,6 +433,7 @@ fn compressed_oplog() -> BlobStorageNamespace {
             Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
         ),
         component_id: ComponentId(Uuid::new_v4()),
+        agent_mode: AgentMode::Durable,
         level: 0,
     }
 }
