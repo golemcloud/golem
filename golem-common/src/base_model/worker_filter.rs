@@ -90,7 +90,7 @@ impl AgentRevisionFilter {
 
 impl Display for AgentRevisionFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "version {} {}", self.comparator, self.value)
+        write!(f, "revision {} {}", self.comparator, self.value)
     }
 }
 
