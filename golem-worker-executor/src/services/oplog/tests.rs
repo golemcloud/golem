@@ -77,6 +77,7 @@ fn make_agent_metadata(
         last_known_status: AgentStatusRecord::default(),
         original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
+        agent_mode: AgentMode::Durable,
     }
 }
 
@@ -2776,6 +2777,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
         HashSet::new(),
         Vec::new(),
         None,
+        Uuid::now_v7(),
     )
     .rounded();
     let ephemeral_create = OplogEntry::create(
@@ -2791,6 +2793,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
         HashSet::new(),
         Vec::new(),
         None,
+        Uuid::now_v7(),
     )
     .rounded();
 
@@ -2799,7 +2802,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
             &owned_agent_id,
             AgentMode::Durable,
             durable_create.clone(),
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -2809,7 +2812,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
             &owned_agent_id,
             AgentMode::Ephemeral,
             ephemeral_create.clone(),
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -2899,6 +2902,7 @@ async fn make_workers(
             HashSet::new(),
             Vec::new(),
             None,
+            Uuid::now_v7(),
         );
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
         let oplog = oplog_service
@@ -2906,7 +2910,7 @@ async fn make_workers(
                 &owned_agent_id,
                 mode,
                 create_entry,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(mode),
             )

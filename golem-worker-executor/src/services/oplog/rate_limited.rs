@@ -429,6 +429,7 @@ mod tests {
             last_known_status: AgentStatusRecord::default(),
             original_phantom_id: None,
             fingerprint: AgentFingerprint::new(),
+            agent_mode: AgentMode::Durable,
         }
     }
 
