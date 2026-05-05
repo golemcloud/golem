@@ -1550,6 +1550,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             }
                         };
 
+                        let invocation_context = InvocationContextStack::fresh();
+                        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+                        if let Err(err) = store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
+                            .set_current_invocation_context(invocation_context)
+                            .await
+                        {
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .on_worker_update_failed(
+                                    target_revision,
+                                    Some(format!(
+                                        "Manual update failed to install invocation context: {err}"
+                                    )),
+                                )
+                                .await;
+                            return Some(RetryDecision::Immediate);
+                        }
+
                         store
                             .as_context_mut()
                             .data_mut()
@@ -1567,6 +1589,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .as_context_mut()
                             .data_mut()
                             .end_call_snapshotting_function();
+
+                        for span_id in local_span_ids {
+                            let _ = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .remove_span(&span_id);
+                        }
+                        for span_id in inherited_span_ids {
+                            let _ = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .remove_span(&span_id);
+                        }
 
                         let failed = match load_result {
                             Err(error) => {
@@ -1767,6 +1804,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         };
 
+        let invocation_context = InvocationContextStack::fresh();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+        if let Err(err) = store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_invocation_context(invocation_context)
+            .await
+        {
+            warn!("Snapshot recovery failed to install invocation context: {err}");
+            return SnapshotRecoveryResult::Failed;
+        }
+
         store
             .as_context_mut()
             .data_mut()
@@ -1779,6 +1829,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .as_context_mut()
             .data_mut()
             .end_call_snapshotting_function();
+
+        for span_id in local_span_ids {
+            let _ = store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .remove_span(&span_id);
+        }
+        for span_id in inherited_span_ids {
+            let _ = store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .remove_span(&span_id);
+        }
 
         let failed = match load_result {
             Err(error) => Some(format!(
@@ -2498,13 +2563,17 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
 
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if &self.state.current_span_id == span_id {
-            self.state.current_span_id = self
+            // Walk up to the parent if it still exists in the invocation context;
+            // otherwise fall back to the root.
+            let parent_id = self
                 .state
                 .invocation_context
                 .get(span_id)
-                .unwrap()
-                .parent()
-                .map(|p| p.span_id().clone())
+                .ok()
+                .and_then(|span| span.parent().map(|p| p.span_id().clone()));
+
+            self.state.current_span_id = parent_id
+                .filter(|id| self.state.invocation_context.get(id).is_ok())
                 .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
         }
         let _ = self

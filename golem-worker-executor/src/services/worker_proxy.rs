@@ -36,8 +36,8 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
-    AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, InvocationStatus,
-    OwnedAgentId, PromiseId,
+    AgentFingerprint, AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
+    InvocationStatus, OwnedAgentId, PromiseId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::GrpcClient;
@@ -61,7 +61,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_account_id: AccountId,
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
-    ) -> Result<(), WorkerProxyError>;
+    ) -> Result<AgentFingerprint, WorkerProxyError>;
 
     async fn invoke_agent(
         &self,
@@ -273,7 +273,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_account_id: AccountId,
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
-    ) -> Result<(), WorkerProxyError> {
+    ) -> Result<AgentFingerprint, WorkerProxyError> {
         debug!(owned_agent_id=%owned_agent_id, "Starting remote worker");
 
         let auth_ctx = self.get_auth_ctx(caller_account_id);
@@ -301,9 +301,16 @@ impl WorkerProxy for RemoteWorkerProxy {
             .into_inner();
 
         match response.result {
-            Some(launch_new_worker_response::Result::Success(_)) => Ok(()),
+            Some(launch_new_worker_response::Result::Success(success)) => {
+                let instance_id = success.instance_id.ok_or_else(|| {
+                    WorkerProxyError::InternalError(WorkerExecutorError::unknown(
+                        "Missing instance_id in LaunchNewWorker response",
+                    ))
+                })?;
+                Ok(AgentFingerprint(instance_id.into()))
+            }
             Some(launch_new_worker_response::Result::Error(error)) => match error.error {
-                Some(agent_error::Error::AlreadyExists(_)) => Ok(()),
+                Some(agent_error::Error::AlreadyExists(_)) => Ok(AgentFingerprint::new()),
                 _ => Err(error.into()),
             },
             None => Err(WorkerProxyError::InternalError(

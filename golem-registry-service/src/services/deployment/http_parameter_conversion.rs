@@ -207,17 +207,43 @@ fn handle_body_parameters<E>(
         && let ElementSchema::UnstructuredBinary(descriptor) = &leftovers[0].1.schema
     {
         out.push(MethodParameter::UnstructuredBinaryBody);
-        if let Some(binary_types) = &descriptor.restrictions {
-            let allowed_mime_types = binary_types.iter().map(|bd| bd.mime_type.clone()).collect();
-            return Ok(RequestBodySchema::RestrictedBinary { allowed_mime_types });
-        } else {
+        // Empty restrictions canonicalize to UnrestrictedBinary
+        let allowed_mime_types: Vec<String> = descriptor
+            .restrictions
+            .as_ref()
+            .map(|v| v.iter().map(|bt| bt.mime_type.clone()).collect())
+            .unwrap_or_default();
+        if allowed_mime_types.is_empty() {
             return Ok(RequestBodySchema::UnrestrictedBinary);
+        } else {
+            return Ok(RequestBodySchema::RestrictedBinary { allowed_mime_types });
+        }
+    }
+
+    // text body
+    if leftovers.len() == 1
+        && let ElementSchema::UnstructuredText(descriptor) = &leftovers[0].1.schema
+    {
+        out.push(MethodParameter::UnstructuredTextBody);
+        // Empty restrictions canonicalize to UnrestrictedText
+        let allowed_language_codes: Vec<String> = descriptor
+            .restrictions
+            .as_ref()
+            .map(|v| v.iter().map(|tt| tt.language_code.clone()).collect())
+            .unwrap_or_default();
+        if allowed_language_codes.is_empty() {
+            return Ok(RequestBodySchema::UnrestrictedText);
+        } else {
+            return Ok(RequestBodySchema::RestrictedText {
+                allowed_language_codes,
+            });
         }
     }
 
     Err(make_error(
         "Invalid body parameters: expected either no body, \
-         all ComponentModel parameters, or a single UnstructuredBinary parameter"
+         all ComponentModel parameters, a single UnstructuredBinary parameter, \
+         or a single UnstructuredText parameter"
             .into(),
     ))
 }
@@ -349,7 +375,7 @@ mod test {
         BinaryDescriptor, BinaryType, ComponentModelElementSchema, CorsOptions, DataSchema,
         ElementSchema, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
         LiteralSegment, NamedElementSchema, NamedElementSchemas, PathSegment, PathVariable,
-        QueryVariable,
+        QueryVariable, TextDescriptor, TextType,
     };
     use golem_wasm::analysis::{AnalysedType, analysed_type};
     use test_r::test;
@@ -1008,5 +1034,127 @@ mod test {
         }
 
         assert_eq!(params.len(), 2);
+    }
+
+    fn empty_mount() -> HttpMountDetails {
+        HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        }
+    }
+
+    fn empty_get_endpoint() -> HttpEndpointDetails {
+        HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![],
+            query_vars: vec![],
+            header_vars: vec![],
+        }
+    }
+
+    #[test]
+    fn method_accepts_unstructured_text_body_unrestricted() {
+        let mount = empty_mount();
+        let endpoint = empty_get_endpoint();
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "body".into(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            }],
+        });
+
+        let (body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        assert!(matches!(body, RequestBodySchema::UnrestrictedText));
+        assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
+    }
+
+    #[test]
+    fn method_accepts_unstructured_text_body_restricted() {
+        let mount = empty_mount();
+        let endpoint = empty_get_endpoint();
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "body".into(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor {
+                    restrictions: Some(vec![
+                        TextType {
+                            language_code: "en".into(),
+                        },
+                        TextType {
+                            language_code: "de".into(),
+                        },
+                    ]),
+                }),
+            }],
+        });
+
+        let (body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        {
+            let_assert!(
+                RequestBodySchema::RestrictedText {
+                    allowed_language_codes
+                } = body
+            );
+            assert!(allowed_language_codes == vec!["en".to_string(), "de".to_string()]);
+        }
+
+        assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
+    }
+
+    #[test]
+    fn method_canonicalizes_empty_text_restrictions_to_unrestricted() {
+        let mount = empty_mount();
+        let endpoint = empty_get_endpoint();
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "body".into(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor {
+                    restrictions: Some(vec![]),
+                }),
+            }],
+        });
+
+        let (body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        assert!(matches!(body, RequestBodySchema::UnrestrictedText));
+        assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
+    }
+
+    #[test]
+    fn method_canonicalizes_empty_binary_restrictions_to_unrestricted() {
+        let mount = empty_mount();
+        let endpoint = empty_get_endpoint();
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "body".into(),
+                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                    restrictions: Some(vec![]),
+                }),
+            }],
+        });
+
+        let (body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        assert!(matches!(body, RequestBodySchema::UnrestrictedBinary));
+        assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
     }
 }

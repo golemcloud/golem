@@ -60,7 +60,9 @@ pub fn generate_client_code(
       impls.push(build_client_method_invoke(agent, meth, client_name))
       impls.push(build_client_method_trigger(agent, meth, client_name))
       impls.push(build_client_method_schedule(agent, meth, client_name))
-      impls.push(build_client_method_schedule_cancelable(agent, meth, client_name))
+      impls.push(
+        build_client_method_schedule_cancelable(agent, meth, client_name),
+      )
     }
     // Generate _with_config variants for agents with non-secret config fields
     let resolved_ct = resolve_config_type(agent, config_types, agent_package)
@@ -91,7 +93,9 @@ pub fn generate_client_code(
           match agent.mode {
             Durable =>
               impls.push(
-                build_client_scoped_with_config(agent, client_name, override_name),
+                build_client_scoped_with_config(
+                  agent, client_name, override_name,
+                ),
               )
             Ephemeral => ()
           }
@@ -605,7 +609,9 @@ fn build_client_method_schedule_cancelable(
     Some(client_name),
     "schedule_cancelable_" + meth.name,
     params,
-    Some(make_qualified_parameterized_type("agentHost", "CancellationToken", [])),
+    Some(
+      make_qualified_parameterized_type("agentHost", "CancellationToken", []),
+    ),
     has_params,
     body,
   )

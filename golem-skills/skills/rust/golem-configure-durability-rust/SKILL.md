@@ -14,6 +14,8 @@ By default, all Golem agents are **durable**:
 - On failure, the agent is transparently recovered by replaying the oplog
 - No special code needed — durability is automatic
 
+> **You cannot opt out of oplog writes for a durable agent.** The oplog is how durability works — every side effect must be recorded. If you are worried about oplog volume or replay cost (long-running agents, heartbeats, polling, recurring tasks), do *not* try to skip persistence. Use **durable with periodic snapshots** instead (see below).
+
 A standard durable agent:
 
 ```rust
@@ -48,6 +50,20 @@ impl CounterAgent for CounterAgentImpl {
 }
 ```
 
+## Durable with Periodic Snapshots
+
+Same durability guarantees as the default durable mode, but recovery starts from the **latest snapshot** instead of replaying the full oplog from the beginning. Use this whenever the oplog grows unboundedly — long-running agents, high-frequency state changes, **heartbeats, polling loops, recurring tasks**.
+
+```rust
+#[agent_definition(snapshotting = "every(10)")]   // snapshot every 10 successful calls
+pub trait CounterAgent { ... }
+
+#[agent_definition(snapshotting = "periodic(30s)")]  // or at most once per interval
+pub trait HeartbeatAgent { ... }
+```
+
+See [`golem-custom-snapshot-rust`](../golem-custom-snapshot-rust/SKILL.md) for snapshotting modes and serde-based or custom `save_snapshot` / `load_snapshot` implementations.
+
 ## Ephemeral Agents
 
 Use **ephemeral** mode for stateless, per-invocation agents where persistence is not needed:
@@ -73,5 +89,7 @@ pub trait StatelessHandler {
 | Long-running saga or multi-step pipeline | **Durable** (default) |
 | Pure computation, no side effects worth persisting | **Ephemeral** |
 | Agent that calls external APIs with at-least-once semantics | **Durable** (default) |
+| Long-running agent with heartbeats, polling, or recurring tasks | **Durable + periodic snapshots** |
+| Any durable agent whose oplog grows so large that replay is slow | **Durable + periodic snapshots** |
 
-When in doubt, use the default (durable). Ephemeral mode is an optimization for agents that genuinely don't need persistence.
+When in doubt, use the default (durable). Ephemeral mode is an optimization for agents that genuinely don't need persistence. Add periodic snapshots whenever recovery time matters — see [`golem-custom-snapshot-rust`](../golem-custom-snapshot-rust/SKILL.md).

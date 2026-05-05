@@ -307,6 +307,31 @@ fn add_request_body(operation: &mut Operation, request_body_schema: &RequestBody
     if let Some(rb) = request_body {
         operation.request_body = Some(ReferenceOr::Item(rb));
     }
+
+    // For text bodies, add Content-Language as an optional header parameter
+    match request_body_schema {
+        RequestBodySchema::UnrestrictedText => {
+            let schema = plain_text_schema(&[]);
+            operation
+                .parameters
+                .push(ReferenceOr::Item(create_optional_header_parameter(
+                    "Content-Language",
+                    schema,
+                )));
+        }
+        RequestBodySchema::RestrictedText {
+            allowed_language_codes,
+        } => {
+            let schema = plain_text_schema(allowed_language_codes);
+            operation
+                .parameters
+                .push(ReferenceOr::Item(create_optional_header_parameter(
+                    "Content-Language",
+                    schema,
+                )));
+        }
+        _ => {}
+    }
 }
 
 fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<RequestBody> {
@@ -367,6 +392,78 @@ fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<Reques
                 extensions: Default::default(),
             })
         }
+
+        RequestBodySchema::UnrestrictedText => Some(RequestBody {
+            description: Some("Unrestricted text body".to_string()),
+            content: {
+                let mut content = IndexMap::new();
+                content.insert(
+                    "text/plain".to_string(),
+                    MediaType {
+                        schema: Some(ReferenceOr::Item(plain_text_schema(&[]))),
+                        ..Default::default()
+                    },
+                );
+                content
+            },
+            required: true,
+            extensions: Default::default(),
+        }),
+
+        RequestBodySchema::RestrictedText {
+            allowed_language_codes: _,
+        } => Some(RequestBody {
+            description: Some("Restricted text body".to_string()),
+            content: {
+                let mut content = IndexMap::new();
+                content.insert(
+                    "text/plain".to_string(),
+                    MediaType {
+                        schema: Some(ReferenceOr::Item(plain_text_schema(&[]))),
+                        ..Default::default()
+                    },
+                );
+                content
+            },
+            required: true,
+            extensions: Default::default(),
+        }),
+    }
+}
+
+fn plain_text_schema(allowed_language_codes: &[String]) -> Schema {
+    let enumeration: Vec<Option<String>> = allowed_language_codes
+        .iter()
+        .map(|s| Some(s.clone()))
+        .collect();
+
+    Schema {
+        schema_data: openapiv3::SchemaData::default(),
+        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(openapiv3::StringType {
+            format: openapiv3::VariantOrUnknownOrEmpty::Empty,
+            pattern: None,
+            enumeration,
+            min_length: None,
+            max_length: None,
+        })),
+    }
+}
+
+/// Create an optional header parameter (regardless of schema nullability).
+fn create_optional_header_parameter(name: &str, schema: Schema) -> Parameter {
+    Parameter::Header {
+        parameter_data: ParameterData {
+            name: name.to_string(),
+            description: Some(format!("Header parameter: {name}")),
+            required: false,
+            deprecated: None,
+            explode: Some(false),
+            format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema)),
+            example: None,
+            examples: Default::default(),
+            extensions: Default::default(),
+        },
+        style: HeaderStyle::Simple,
     }
 }
 
@@ -412,15 +509,17 @@ fn add_responses(operation: &mut Operation, route: &RichCompiledRoute) {
 
         let mut response_headers = IndexMap::new();
 
-        for (name, schema) in agent_response_schema.headers.iter() {
+        for (name, header_schema) in agent_response_schema.headers.iter() {
             let description = format!("Response header: {}", name);
             response_headers.insert(
                 name.clone(),
                 ReferenceOr::Item(Header {
                     description: Some(description),
-                    required: true,
+                    required: header_schema.required,
                     deprecated: None,
-                    format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema.clone())),
+                    format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(
+                        header_schema.schema.clone(),
+                    )),
                     example: None,
                     examples: Default::default(),
                     extensions: Default::default(),

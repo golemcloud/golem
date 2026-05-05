@@ -1676,7 +1676,6 @@ fn oplog_processor_idempotency_key(
 mod tests {
     use super::*;
     use golem_common::base_model::component_metadata::KnownExports;
-    use golem_common::model::Timestamp;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{
@@ -1688,6 +1687,7 @@ mod tests {
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::plugin_registration::PluginRegistrationId;
+    use golem_common::model::{AgentFingerprint, Timestamp};
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
     use test_r::test;
@@ -2102,6 +2102,7 @@ mod tests {
             parent: None,
             last_known_status: status.clone(),
             original_phantom_id: None,
+            fingerprint: AgentFingerprint::new(),
             agent_mode: AgentMode::Durable,
         };
 

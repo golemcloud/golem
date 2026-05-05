@@ -241,6 +241,59 @@ test "error: duplicate param binding in path and query" {
 }
 
 ///|
+test "error: UnstructuredText constructor param bound to mount path variable" {
+  let content =
+    #|#derive.agent
+    #|#derive.mount("/items/{body}")
+    #|pub(all) struct TextAgent {
+    #|  body : @types.UnstructuredText
+    #|}
+    #|
+    #|pub fn TextAgent::new(body : @types.UnstructuredText) -> TextAgent {
+    #|  { body }
+    #|}
+  let result : Result[_, _] = try? ({
+    let agents = @lib.parse_agents([("text.mbt", content)])
+    @lib.validate_http_routes(agents)
+  })
+  inspect(
+    result,
+    content=(
+      #|Err(AgentParseError("Constructor param 'body' of agent 'TextAgent' is UnstructuredText and cannot be a mount path variable"))
+    ),
+  )
+}
+
+///|
+test "error: endpoint variable binds to UnstructuredText param" {
+  let content =
+    #|#derive.agent
+    #|#derive.mount("/items/{name}")
+    #|pub(all) struct ItemAgent {
+    #|  name : String
+    #|}
+    #|
+    #|pub fn ItemAgent::new(name : String) -> ItemAgent {
+    #|  { name }
+    #|}
+    #|
+    #|#derive.endpoint(get="/by-text/{body}")
+    #|pub fn ItemAgent::get_by_text(self : Self, body : @types.UnstructuredText) -> String {
+    #|  self.name
+    #|}
+  let result : Result[_, _] = try? ({
+    let agents = @lib.parse_agents([("item.mbt", content)])
+    @lib.validate_http_routes(agents)
+  })
+  inspect(
+    result,
+    content=(
+      #|Err(AgentParseError("Endpoint variable 'body' in method 'get_by_text' on agent 'ItemAgent' binds to a UnstructuredText param which is not HTTP-safe"))
+    ),
+  )
+}
+
+///|
 test "valid: agent without any HTTP annotations" {
   let content =
     #|#derive.agent

@@ -100,15 +100,28 @@ export function useRetryPolicy(policy: NamedPolicyInput): RetryPolicyGuard {
   return new RetryPolicyGuard(previous, name);
 }
 
+export function withRetryPolicy<R>(policy: NamedPolicyInput, f: () => Promise<R>): Promise<R>;
+export function withRetryPolicy<R>(policy: NamedPolicyInput, f: () => R): R;
+
 /**
  * Executes a function with a named retry policy temporarily set.
  * Supports both sync and async callbacks.
- * The policy is restored (or removed) after the function completes.
- * @param policy - The named retry policy to set, either as a raw WIT shape or a high-level NamedPolicy.
+ *
+ * On success the named policy is restored to its previous value (or removed if
+ * it did not exist before). On failure the policy is also restored and the error
+ * propagates normally.
+ *
+ * To make errors inside `f` subject to executor-level retries, wrap the
+ * body with {@link atomically}.
+ *
+ * @param policy - The named retry policy to set.
  * @param f - The function to execute (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function withRetryPolicy<R>(policy: NamedPolicyInput, f: () => R): R {
+export function withRetryPolicy<R>(
+  policy: NamedPolicyInput,
+  f: () => R | Promise<R>,
+): R | Promise<R> {
   const guard = useRetryPolicy(policy);
   return executeWithDrop([guard], f);
 }

@@ -259,6 +259,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,
+                instance_id,
             } => {
                 let metadata = components
                     .get_metadata(
@@ -296,6 +297,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_active_plugins: initial_plugins,
                     local_agent_config,
                     original_phantom_id,
+                    instance_id,
                 }))
             }
             OplogEntry::HostCall {

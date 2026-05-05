@@ -271,6 +271,13 @@ test('Agent with with http mount variable bound to UnstructuredBinary is rejecte
   );
 });
 
+test('Agent with http mount variable bound to UnstructuredText is rejected at initialization', async () => {
+  await import('./agentWithInvalidHttpMount5');
+  expect(() => validateAgentByName('AgentWithInvalidHttpMount5')).toThrowError(
+    "HTTP mount path variable 'bar' cannot be used for constructor parameters of type 'UnstructuredText'",
+  );
+});
+
 test('Agent with with http mount variable with catch-all variable at initialization', async () => {
   await import('./agentWithInvalidHttpMount4');
   expect(() => validateAgentByName('AgentWithInvalidHttpMount4')).toThrowError(

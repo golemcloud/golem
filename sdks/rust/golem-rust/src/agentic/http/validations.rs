@@ -60,6 +60,7 @@ pub fn validate_http_endpoint(
     let principal_params = collect_principal_parameter_names(&agent_method.input_schema);
 
     let unstructured_binary_params = collect_unstructured_binary_params(&agent_method.input_schema);
+    let unstructured_text_params = collect_unstructured_text_params(&agent_method.input_schema);
 
     for endpoint in &agent_method.http_endpoint {
         validate_endpoint_variables(
@@ -67,6 +68,7 @@ pub fn validate_http_endpoint(
             &method_vars_without_auto_injected_variables,
             &principal_params,
             &unstructured_binary_params,
+            &unstructured_text_params,
         )?;
     }
 
@@ -113,6 +115,25 @@ fn collect_unstructured_binary_params(input_schema: &ExtendedDataSchema) -> Hash
     unstructured_binary_params
 }
 
+fn collect_unstructured_text_params(input_schema: &ExtendedDataSchema) -> HashSet<String> {
+    let mut unstructured_text_params = HashSet::new();
+
+    match input_schema {
+        ExtendedDataSchema::Tuple(name_and_schemas) => {
+            for (param_name, param_schema) in name_and_schemas {
+                if let EnrichedElementSchema::ElementSchema(ElementSchema::UnstructuredText(_)) =
+                    param_schema
+                {
+                    unstructured_text_params.insert(param_name.clone());
+                }
+            }
+        }
+        ExtendedDataSchema::Multimodal(_) => {}
+    }
+
+    unstructured_text_params
+}
+
 // Collects method input variable names, excluding auto-injected variables.
 fn collect_method_input_vars(input_schema: &ExtendedDataSchema) -> HashSet<String> {
     let mut param_names = HashSet::new();
@@ -137,14 +158,17 @@ fn validate_endpoint_variables(
     method_vars: &HashSet<String>,
     principal_params: &HashSet<String>,
     unstructured_binary_params: &HashSet<String>,
+    unstructured_text_params: &HashSet<String>,
 ) -> Result<(), String> {
     fn validate_variable(
         variable_name: &str,
         location: &str,
         principal_params: &HashSet<String>,
         unstructured_binary_params: &HashSet<String>,
+        unstructured_text_params: &HashSet<String>,
         method_vars: &HashSet<String>,
         binary_error: &str,
+        text_error: &str,
     ) -> Result<(), String> {
         if principal_params.contains(variable_name) {
             return Err(format!(
@@ -155,6 +179,10 @@ fn validate_endpoint_variables(
 
         if unstructured_binary_params.contains(variable_name) {
             return Err(binary_error.to_string());
+        }
+
+        if unstructured_text_params.contains(variable_name) {
+            return Err(text_error.to_string());
         }
 
         if !method_vars.contains(variable_name) {
@@ -173,9 +201,14 @@ fn validate_endpoint_variables(
             "header",
             principal_params,
             unstructured_binary_params,
+            unstructured_text_params,
             method_vars,
             &format!(
                 "HTTP endpoint header variable '{}' cannot be used for method parameters of type 'UnstructuredBinary'",
+                var.variable_name
+            ),
+            &format!(
+                "HTTP endpoint header variable '{}' cannot be used for method parameters of type 'UnstructuredText'",
                 var.variable_name
             ),
         )?;
@@ -187,9 +220,14 @@ fn validate_endpoint_variables(
             "query",
             principal_params,
             unstructured_binary_params,
+            unstructured_text_params,
             method_vars,
             &format!(
                 "HTTP endpoint query variable '{}' cannot be used when the method has a single 'UnstructuredBinary' parameter.",
+                var.variable_name
+            ),
+            &format!(
+                "HTTP endpoint query variable '{}' cannot be used when the method has a single 'UnstructuredText' parameter.",
                 var.variable_name
             ),
         )?;
@@ -205,9 +243,14 @@ fn validate_endpoint_variables(
                     "path",
                     principal_params,
                     unstructured_binary_params,
+                    unstructured_text_params,
                     method_vars,
                     &format!(
                         "HTTP endpoint path variable '{}' cannot be used when the method has a single 'UnstructuredBinary' parameter.",
+                        name
+                    ),
+                    &format!(
+                        "HTTP endpoint path variable '{}' cannot be used when the method has a single 'UnstructuredText' parameter.",
                         name
                     ),
                 )?;
@@ -315,6 +358,12 @@ fn validate_constructor_params_are_http_safe(
                         agent_class_name, param_name,
                     ));
                 }
+                if let ElementSchema::UnstructuredText(_) = param_schema {
+                    return Err(format!(
+                        "Agent '{}' constructor parameter '{}' cannot be of type 'UnstructuredText' when used with HTTP mount",
+                        agent_class_name, param_name,
+                    ));
+                }
             }
         }
 
@@ -396,10 +445,11 @@ mod tests {
     use crate::agentic::{Schema, StructuredSchema};
     use crate::golem_agentic::golem::agent::common::{
         AuthDetails, BinaryDescriptor, CorsOptions, HeaderVariable, HttpMethod, PathVariable,
-        QueryVariable,
+        QueryVariable, TextDescriptor,
     };
-    use golem_rust_macro::AllowedMimeTypes;
+    use golem_rust_macro::{AllowedLanguages, AllowedMimeTypes};
     use golem_wasm::agentic::unstructured_binary::UnstructuredBinary;
+    use golem_wasm::agentic::unstructured_text::UnstructuredText;
     use std::collections::HashSet;
 
     fn principal_params(names: &[&str]) -> HashSet<String> {
@@ -571,6 +621,15 @@ mod tests {
         principal_vars: Vec<&str>,
         unstructured_vars: Vec<&str>,
     ) -> ExtendedDataSchema {
+        make_schema_with_text(normal_vars, principal_vars, unstructured_vars, vec![])
+    }
+
+    fn make_schema_with_text(
+        normal_vars: Vec<&str>,
+        principal_vars: Vec<&str>,
+        unstructured_binary_vars: Vec<&str>,
+        unstructured_text_vars: Vec<&str>,
+    ) -> ExtendedDataSchema {
         let mut fields = vec![];
 
         for name in normal_vars {
@@ -589,11 +648,20 @@ mod tests {
             ));
         }
 
-        for name in unstructured_vars {
+        for name in unstructured_binary_vars {
             fields.push((
                 name.to_string(),
                 EnrichedElementSchema::ElementSchema(ElementSchema::UnstructuredBinary(
                     BinaryDescriptor { restrictions: None },
+                )),
+            ));
+        }
+
+        for name in unstructured_text_vars {
+            fields.push((
+                name.to_string(),
+                EnrichedElementSchema::ElementSchema(ElementSchema::UnstructuredText(
+                    TextDescriptor { restrictions: None },
                 )),
             ));
         }
@@ -757,5 +825,89 @@ mod tests {
         let mount = mount_with_segments(vec![path_var("foo")]);
         let err = validate_http_endpoint("AgentA", &agent_method, Some(&mount)).unwrap_err();
         assert!(err.contains("is not defined in method input parameters"));
+    }
+
+    #[derive(AllowedLanguages, Clone, Debug)]
+    enum Languages {
+        #[code("en")]
+        En,
+        #[code("de")]
+        De,
+    }
+
+    #[test]
+    fn fails_on_unstructured_text_constructor_param() {
+        let constructor =
+            constructor_with_params(vec![("body", UnstructuredText::<Languages>::get_type())]);
+
+        let mount = mount_with_segments(vec![path_var("body")]);
+
+        let err =
+            validate_http_mount("MyAgent", &mount, &constructor, &HashSet::new()).unwrap_err();
+
+        assert_eq!(
+            err,
+            "Agent 'MyAgent' constructor parameter 'body' cannot be of type 'UnstructuredText' when used with HTTP mount"
+        );
+    }
+
+    #[test]
+    fn test_header_unstructured_text_error() {
+        let endpoint = make_endpoint(
+            HttpMethod::Get,
+            vec![],
+            vec![("X-Test", "t")],
+            vec![],
+            Some(true),
+            vec![],
+        );
+        let agent_method = make_agent_method(
+            "foo",
+            make_schema_with_text(vec![], vec![], vec![], vec!["t"]),
+            vec![endpoint],
+        );
+        let mount = mount_with_segments(vec![path_var("foo")]);
+        let err = validate_http_endpoint("AgentA", &agent_method, Some(&mount)).unwrap_err();
+        assert!(err.contains("cannot be used for method parameters of type 'UnstructuredText'"));
+    }
+
+    #[test]
+    fn test_query_unstructured_text_error() {
+        let endpoint = make_endpoint(
+            HttpMethod::Get,
+            vec![],
+            vec![],
+            vec!["t"],
+            Some(true),
+            vec![],
+        );
+        let agent_method = make_agent_method(
+            "foo",
+            make_schema_with_text(vec![], vec![], vec![], vec!["t"]),
+            vec![endpoint],
+        );
+        let mount = mount_with_segments(vec![path_var("foo")]);
+        let err = validate_http_endpoint("AgentA", &agent_method, Some(&mount)).unwrap_err();
+        assert!(err.contains("'UnstructuredText'"));
+    }
+
+    #[test]
+    fn test_path_unstructured_text_error() {
+        let endpoint = make_endpoint(
+            HttpMethod::Get,
+            vec!["t"],
+            vec![],
+            vec![],
+            Some(true),
+            vec![],
+        );
+        let agent_method = make_agent_method(
+            "foo",
+            make_schema_with_text(vec![], vec![], vec![], vec!["t"]),
+            vec![endpoint],
+        );
+        let mount = mount_with_segments(vec![path_var("foo")]);
+        let err = validate_http_endpoint("AgentA", &agent_method, Some(&mount)).unwrap_err();
+        assert!(err.contains("'UnstructuredText'"));
     }
 }
