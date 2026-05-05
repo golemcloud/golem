@@ -58,6 +58,7 @@ impl Display for RawAgentId {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum AgentUpdateMode {
+    #[value(alias = "auto")]
     Automatic,
     Manual,
 }
