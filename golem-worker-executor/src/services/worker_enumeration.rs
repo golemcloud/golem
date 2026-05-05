@@ -39,42 +39,58 @@ fn contains_mode(filter: &AgentFilter) -> bool {
 ///
 /// The default behaviour is to scan only durable agents so that ephemeral
 /// agents from previous runs do not appear in the default agent listing.
-/// Callers can override this by including an explicit `mode == ...` filter.
+/// This default applies whenever the user-supplied filter does not constrain
+/// the agent mode in any way (including when no filter is supplied at all, or
+/// when the filter only constrains other properties such as name, status,
+/// env, etc.).
+///
+/// Callers can override the default by including an explicit `mode == ...`
+/// constraint.
 ///
 /// Rules:
 /// - `None` → `Some(AgentMode::Durable)` (default)
-/// - `Some(Mode(Equal, m))` (top level) → `Some(m)`
-/// - `Some(And(filters))` containing exactly one top-level `Mode(Equal, m)`
+/// - Filter contains no `Mode(...)` reference at any depth → `Some(Durable)`
+///   (default applies even when other constraints are present)
+/// - Top-level `Mode(Equal, m)` → `Some(m)`
+/// - `And(filters)` containing exactly one top-level `Mode(Equal, m)`
 ///   constraint, where no other top-level child contains any nested `Mode`
 ///   reference → `Some(m)` (other filters in the AND do not affect the
 ///   storage-level mode selection but are still applied post-scan)
-/// - `Some(And(filters))` with no `Mode` reference anywhere → `Some(Durable)`
-///   (default still applies even when the user supplied other filters)
 /// - Anything else (Or, Not, NotEqual on Mode, multiple distinct Mode
 ///   constraints, nested Mode constraints, ...) → `None` (scan both modes,
 ///   the existing post-scan `filter.matches(&metadata)` trims results)
 pub(crate) fn modes_from_filter(filter: &Option<AgentFilter>) -> Option<AgentMode> {
+    let Some(filter) = filter else {
+        return Some(AgentMode::Durable);
+    };
+
+    // If the filter doesn't reference Mode at all, the default applies even
+    // when other constraints (name, status, ...) are present.
+    if !contains_mode(filter) {
+        return Some(AgentMode::Durable);
+    }
+
     match filter {
-        None => Some(AgentMode::Durable),
-        Some(AgentFilter::Mode(AgentModeFilter {
+        AgentFilter::Mode(AgentModeFilter {
             comparator: FilterComparator::Equal,
             value,
-        })) => Some(*value),
-        Some(AgentFilter::And(AgentAndFilter { filters })) => {
+        }) => Some(*value),
+        AgentFilter::And(AgentAndFilter { filters }) => {
             let mut mode_eq: Option<AgentMode> = None;
             for f in filters {
                 match f {
                     AgentFilter::Mode(AgentModeFilter {
                         comparator: FilterComparator::Equal,
                         value,
-                    }) => {
-                        if mode_eq.is_some() {
-                            // Multiple top-level Mode(Equal, ..) constraints; let the
-                            // post-scan matcher decide.
+                    }) => match mode_eq {
+                        Some(prev) if prev != *value => {
+                            // Distinct top-level Mode(Equal, ..) constraints
+                            // contradict each other; let the post-scan matcher
+                            // decide (it will simply return no matches).
                             return None;
                         }
-                        mode_eq = Some(*value);
-                    }
+                        _ => mode_eq = Some(*value),
+                    },
                     // Any other top-level Mode comparator (e.g. NotEqual) cannot
                     // be safely narrowed.
                     AgentFilter::Mode(_) => return None,
@@ -87,9 +103,12 @@ pub(crate) fn modes_from_filter(filter: &Option<AgentFilter>) -> Option<AgentMod
                     }
                 }
             }
-            Some(mode_eq.unwrap_or(AgentMode::Durable))
+            // `contains_mode(filter)` was true above and every nested-Mode case
+            // has already short-circuited, so a top-level Mode(Equal, ..) must
+            // have been captured.
+            mode_eq.map(Some).unwrap_or(None)
         }
-        Some(_) => None,
+        _ => None,
     }
 }
 
@@ -363,6 +382,17 @@ mod tests {
     }
 
     #[test]
+    fn and_with_duplicate_identical_mode_equal_uses_it() {
+        // Two identical top-level Mode(Equal, ..) constraints are logically
+        // equivalent to a single one and can be narrowed safely.
+        let f = AgentFilter::new_and(vec![
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
+        ]);
+        assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Durable));
+    }
+
+    #[test]
     fn and_with_two_distinct_mode_equal_returns_none() {
         let f = AgentFilter::new_and(vec![
             AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
@@ -433,10 +463,28 @@ mod tests {
     }
 
     #[test]
-    fn name_only_filter_returns_none() {
-        // A non-And, non-Mode top-level filter (e.g. a single Name filter) does
-        // not allow us to narrow safely; let the post-scan matcher decide.
+    fn name_only_filter_defaults_to_durable() {
+        // A filter that doesn't reference Mode at all defaults to Durable,
+        // matching the no-filter behaviour.
         let f = AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string());
-        assert_eq!(modes_from_filter(&Some(f)), None);
+        assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Durable));
+    }
+
+    #[test]
+    fn or_without_mode_defaults_to_durable() {
+        let f = AgentFilter::new_or(vec![
+            AgentFilter::new_name(StringFilterComparator::Equal, "a".to_string()),
+            AgentFilter::new_name(StringFilterComparator::Equal, "b".to_string()),
+        ]);
+        assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Durable));
+    }
+
+    #[test]
+    fn not_without_mode_defaults_to_durable() {
+        let f = AgentFilter::new_not(AgentFilter::new_name(
+            StringFilterComparator::Equal,
+            "x".to_string(),
+        ));
+        assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Durable));
     }
 }
