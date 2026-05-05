@@ -59,7 +59,7 @@ use golem_client::model::{
     UpdateWorkerRequest,
 };
 use golem_common::model::agent::{
-    AgentType, AgentTypeName, DataValue, ParsedAgentId, UntypedJsonDataValue,
+    AgentMode, AgentType, AgentTypeName, DataValue, ParsedAgentId, UntypedJsonDataValue,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -70,7 +70,7 @@ use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
-use golem_common::model::{IdempotencyKey, OplogIndex};
+use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
@@ -1672,43 +1672,22 @@ impl WorkerCommandHandler {
         await_update: bool,
         disable_wakeup: bool,
     ) -> anyhow::Result<TryUpdateAllWorkersResult> {
-        let durable_filter = ["mode == durable".to_string()];
-        let (workers, _) = self
+        let agent_filters = [
+            // only consider durable agents
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable).to_string(),
+            // only consider agents in previous revisions that can be upgraded
+            AgentFilter::new_revision(FilterComparator::Less, target_revision).to_string(),
+        ];
+        let (workers_to_update, _) = self
             .list_component_workers(
                 component_name,
                 component_id,
-                Some(&durable_filter),
+                Some(&agent_filters),
                 None,
                 None,
                 false,
             )
             .await?;
-
-        if workers.is_empty() {
-            log_warn_action(
-                "Skipping",
-                format!("updating agents for component {component_name}, no agents found"),
-            );
-            return Ok(TryUpdateAllWorkersResult::default());
-        }
-
-        let workers_to_update: Vec<_> = workers
-            .iter()
-            .filter(|w| w.component_revision != target_revision)
-            .collect();
-
-        let skipped = workers.len() - workers_to_update.len();
-        if skipped > 0 {
-            log_warn_action(
-                "Skipping",
-                format!(
-                    "{} agent(s) for component {} already at revision {}",
-                    skipped.to_string().log_color_highlight(),
-                    component_name.0.blue().bold(),
-                    target_revision.to_string().log_color_highlight()
-                ),
-            );
-        }
 
         if workers_to_update.is_empty() {
             return Ok(TryUpdateAllWorkersResult::default());
