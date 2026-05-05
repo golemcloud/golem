@@ -7,7 +7,9 @@ use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorker
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::base_model::worker_filter::{AgentAndFilter, AgentModeFilter, FilterComparator};
+use golem_common::base_model::worker_filter::{
+    AgentAndFilter, AgentModeFilter, AgentNotFilter, AgentOrFilter, FilterComparator,
+};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -15,6 +17,22 @@ use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tracing::{Instrument, info};
+
+/// Returns `true` if `filter` contains any `Mode(...)` reference at any depth.
+fn contains_mode(filter: &AgentFilter) -> bool {
+    match filter {
+        AgentFilter::Mode(_) => true,
+        AgentFilter::And(AgentAndFilter { filters })
+        | AgentFilter::Or(AgentOrFilter { filters }) => filters.iter().any(contains_mode),
+        AgentFilter::Not(AgentNotFilter { filter }) => contains_mode(filter),
+        AgentFilter::Name(_)
+        | AgentFilter::Status(_)
+        | AgentFilter::Revision(_)
+        | AgentFilter::CreatedAt(_)
+        | AgentFilter::Env(_)
+        | AgentFilter::Config(_) => false,
+    }
+}
 
 /// Derives the `modes` argument for `OplogService::scan_for_component` from the
 /// optional user-supplied `AgentFilter`.
@@ -27,9 +45,10 @@ use tracing::{Instrument, info};
 /// - `None` → `Some(AgentMode::Durable)` (default)
 /// - `Some(Mode(Equal, m))` (top level) → `Some(m)`
 /// - `Some(And(filters))` containing exactly one top-level `Mode(Equal, m)`
-///   constraint → `Some(m)` (other filters in the AND do not affect the
+///   constraint, where no other top-level child contains any nested `Mode`
+///   reference → `Some(m)` (other filters in the AND do not affect the
 ///   storage-level mode selection but are still applied post-scan)
-/// - `Some(And(filters))` with no `Mode` constraint at all → `Some(Durable)`
+/// - `Some(And(filters))` with no `Mode` reference anywhere → `Some(Durable)`
 ///   (default still applies even when the user supplied other filters)
 /// - Anything else (Or, Not, NotEqual on Mode, multiple distinct Mode
 ///   constraints, nested Mode constraints, ...) → `None` (scan both modes,
@@ -43,26 +62,32 @@ pub(crate) fn modes_from_filter(filter: &Option<AgentFilter>) -> Option<AgentMod
         })) => Some(*value),
         Some(AgentFilter::And(AgentAndFilter { filters })) => {
             let mut mode_eq: Option<AgentMode> = None;
-            let mut other_mode_constraint = false;
             for f in filters {
-                if let AgentFilter::Mode(AgentModeFilter { comparator, value }) = f {
-                    if *comparator == FilterComparator::Equal {
+                match f {
+                    AgentFilter::Mode(AgentModeFilter {
+                        comparator: FilterComparator::Equal,
+                        value,
+                    }) => {
                         if mode_eq.is_some() {
                             // Multiple top-level Mode(Equal, ..) constraints; let the
                             // post-scan matcher decide.
                             return None;
                         }
                         mode_eq = Some(*value);
-                    } else {
-                        other_mode_constraint = true;
+                    }
+                    // Any other top-level Mode comparator (e.g. NotEqual) cannot
+                    // be safely narrowed.
+                    AgentFilter::Mode(_) => return None,
+                    // Non-Mode child: must not hide a Mode reference inside,
+                    // otherwise narrowing the scan could drop valid matches.
+                    other => {
+                        if contains_mode(other) {
+                            return None;
+                        }
                     }
                 }
             }
-            if other_mode_constraint {
-                None
-            } else {
-                Some(mode_eq.unwrap_or(AgentMode::Durable))
-            }
+            Some(mode_eq.unwrap_or(AgentMode::Durable))
         }
         Some(_) => None,
     }
@@ -370,6 +395,40 @@ mod tests {
             FilterComparator::Equal,
             AgentMode::Durable,
         ));
+        assert_eq!(modes_from_filter(&Some(f)), None);
+    }
+
+    #[test]
+    fn and_with_nested_or_containing_mode_returns_none() {
+        // And([ Or([ Mode(Equal, Ephemeral), Name(Equal, "x") ]) ])
+        // The Or can be satisfied by Ephemeral agents, so we must not narrow
+        // the scan to Durable just because there's no top-level Mode child.
+        let f = AgentFilter::new_and(vec![AgentFilter::new_or(vec![
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
+            AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string()),
+        ])]);
+        assert_eq!(modes_from_filter(&Some(f)), None);
+    }
+
+    #[test]
+    fn and_with_nested_not_containing_mode_returns_none() {
+        let f = AgentFilter::new_and(vec![AgentFilter::new_not(AgentFilter::new_mode(
+            FilterComparator::Equal,
+            AgentMode::Ephemeral,
+        ))]);
+        assert_eq!(modes_from_filter(&Some(f)), None);
+    }
+
+    #[test]
+    fn and_with_top_level_mode_eq_and_nested_mode_returns_none() {
+        // Top-level Mode(Equal, Durable) plus a sibling Or containing Mode.
+        let f = AgentFilter::new_and(vec![
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
+            AgentFilter::new_or(vec![
+                AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
+                AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string()),
+            ]),
+        ]);
         assert_eq!(modes_from_filter(&Some(f)), None);
     }
 
