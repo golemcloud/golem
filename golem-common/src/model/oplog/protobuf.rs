@@ -2198,17 +2198,23 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::Exited(p) => Ok(OplogEntry::Exited {
                 timestamp: p.timestamp,
             }),
-            PublicOplogEntry::BeginAtomicRegion(_) => {
-                Err("Cannot convert BeginAtomicRegion from public to raw oplog entry".to_string())
+            PublicOplogEntry::BeginAtomicRegion(p) => {
+                Ok(OplogEntry::BeginAtomicRegion { timestamp: p.timestamp })
             }
-            PublicOplogEntry::EndAtomicRegion(_) => {
-                Err("Cannot convert EndAtomicRegion from public to raw oplog entry".to_string())
+            PublicOplogEntry::EndAtomicRegion(p) => {
+                Ok(OplogEntry::EndAtomicRegion {
+                    timestamp: p.timestamp,
+                    begin_index: p.begin_index,
+                })
             }
-            PublicOplogEntry::BeginRemoteWrite(_) => {
-                Err("Cannot convert BeginRemoteWrite from public to raw oplog entry".to_string())
+            PublicOplogEntry::BeginRemoteWrite(p) => {
+                Ok(OplogEntry::BeginRemoteWrite { timestamp: p.timestamp })
             }
-            PublicOplogEntry::EndRemoteWrite(_) => {
-                Err("Cannot convert EndRemoteWrite from public to raw oplog entry".to_string())
+            PublicOplogEntry::EndRemoteWrite(p) => {
+                Ok(OplogEntry::EndRemoteWrite {
+                    timestamp: p.timestamp,
+                    begin_index: p.begin_index,
+                })
             }
             PublicOplogEntry::PendingAgentInvocation(_) => {
                 Err("Cannot convert PendingAgentInvocation from public to raw oplog entry".to_string())
