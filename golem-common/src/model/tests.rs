@@ -17,9 +17,9 @@ use crate::model::environment::EnvironmentId;
 use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription, UpdateDescription};
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountId, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata, AgentStatus,
-    AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey, StringFilterComparator,
-    Timestamp, TimestampedAgentInvocation,
+    AccountId, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata, AgentMode,
+    AgentStatus, AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey,
+    StringFilterComparator, Timestamp, TimestampedAgentInvocation,
 };
 use desert_rust::BinaryCodec;
 use golem_wasm::ValueAndType;
@@ -229,6 +229,7 @@ fn worker_filter_matches() {
         },
         original_phantom_id: None,
         fingerprint: AgentFingerprint(Uuid::now_v7()),
+        agent_mode: AgentMode::Durable,
     };
 
     assert!(
@@ -318,6 +319,42 @@ fn worker_filter_matches() {
             "value2".to_string(),
         )
         .matches(&worker_metadata)
+    );
+
+    assert!(
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable)
+            .matches(&worker_metadata)
+    );
+
+    assert!(
+        !AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral)
+            .matches(&worker_metadata)
+    );
+
+    let ephemeral_metadata = AgentMetadata {
+        agent_mode: AgentMode::Ephemeral,
+        ..worker_metadata.clone()
+    };
+
+    assert!(
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral)
+            .matches(&ephemeral_metadata)
+    );
+
+    assert!(
+        AgentFilter::new_mode(FilterComparator::NotEqual, AgentMode::Durable)
+            .matches(&ephemeral_metadata)
+    );
+
+    let parsed = AgentFilter::from_str("mode == ephemeral").unwrap();
+    assert_eq!(
+        parsed,
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral)
+    );
+    let parsed = AgentFilter::from_str("mode == Durable").unwrap();
+    assert_eq!(
+        parsed,
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable)
     );
 }
 
@@ -410,4 +447,27 @@ fn canonical_file_path_from_absolute() {
 fn canonical_file_path_from_relative_is_error() {
     let path = CanonicalFilePath::from_abs_str("a/b/c");
     assert!(path.is_err());
+}
+
+#[test]
+fn agent_filter_mode_protobuf_round_trip() {
+    use golem_api_grpc::proto::golem::worker::AgentFilter as ProtoAgentFilter;
+
+    let original_durable = AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable);
+    let proto: ProtoAgentFilter = original_durable.clone().into();
+    let recovered: AgentFilter = proto.try_into().unwrap();
+    assert_eq!(original_durable, recovered);
+
+    let original_ephemeral =
+        AgentFilter::new_mode(FilterComparator::NotEqual, AgentMode::Ephemeral);
+    let proto: ProtoAgentFilter = original_ephemeral.clone().into();
+    let recovered: AgentFilter = proto.try_into().unwrap();
+    assert_eq!(original_ephemeral, recovered);
+
+    let composite = AgentFilter::new_name(StringFilterComparator::Equal, "w1".to_string()).and(
+        AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
+    );
+    let proto: ProtoAgentFilter = composite.clone().into();
+    let recovered: AgentFilter = proto.try_into().unwrap();
+    assert_eq!(composite, recovered);
 }

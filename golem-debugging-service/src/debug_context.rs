@@ -128,11 +128,13 @@ impl ExternalOperations<Self> for DebugContext {
     async fn get_last_error_and_retry_count<This: HasAll<Self> + Send + Sync>(
         this: &This,
         agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError> {
         DurableWorkerCtx::<Self>::get_last_error_and_retry_count(
             this,
             agent_id,
+            agent_mode,
             latest_worker_status,
         )
         .await

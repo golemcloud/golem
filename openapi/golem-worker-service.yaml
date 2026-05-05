@@ -2095,6 +2095,7 @@ components:
       - $ref: '#/components/schemas/AgentFilter_AgentOrFilter'
       - $ref: '#/components/schemas/AgentFilter_AgentNotFilter'
       - $ref: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentModeFilter'
       discriminator:
         propertyName: type
         mapping:
@@ -2107,6 +2108,7 @@ components:
           Or: '#/components/schemas/AgentFilter_AgentOrFilter'
           Not: '#/components/schemas/AgentFilter_AgentNotFilter'
           Config: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+          Mode: '#/components/schemas/AgentFilter_AgentModeFilter'
     AgentFilter_AgentAndFilter:
       allOf:
       - type: object
@@ -2155,6 +2157,18 @@ components:
             - Env
             example: Env
       - $ref: '#/components/schemas/AgentEnvFilter'
+    AgentFilter_AgentModeFilter:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Mode
+            example: Mode
+      - $ref: '#/components/schemas/AgentModeFilter'
     AgentFilter_AgentNameFilter:
       allOf:
       - type: object
@@ -2433,6 +2447,22 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
+    AgentMode:
+      type: string
+      enum:
+      - Durable
+      - Ephemeral
+    AgentModeFilter:
+      type: object
+      title: AgentModeFilter
+      required:
+      - comparator
+      - value
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          $ref: '#/components/schemas/AgentMode'
     AgentNameFilter:
       type: object
       title: AgentNameFilter
@@ -6069,6 +6099,7 @@ components:
       required:
       - timestamp
       - agentId
+      - agentMode
       - componentRevision
       - env
       - createdBy
@@ -6084,6 +6115,8 @@ components:
           format: date-time
         agentId:
           $ref: '#/components/schemas/AgentId'
+        agentMode:
+          $ref: '#/components/schemas/AgentMode'
         componentRevision:
           type: integer
           format: uint64

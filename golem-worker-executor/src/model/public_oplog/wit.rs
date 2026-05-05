@@ -47,6 +47,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
             PublicOplogEntry::Create(CreateParams {
                 timestamp,
                 agent_id,
+                agent_mode,
                 component_revision,
                 env,
                 created_by,
@@ -61,6 +62,10 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: agent_id.into(),
+                agent_mode: match agent_mode {
+                    golem_common::model::agent::AgentMode::Durable => oplog::AgentMode::Durable,
+                    golem_common::model::agent::AgentMode::Ephemeral => oplog::AgentMode::Ephemeral,
+                },
                 component_revision: component_revision.into(),
                 env: env.into_iter().collect(),
                 created_by: created_by.into(),
@@ -812,6 +817,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::Create(params) => Ok(Self::Create {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 agent_id: golem_common::model::AgentId::from(params.agent_id),
+                agent_mode: match params.agent_mode {
+                    oplog::AgentMode::Durable => golem_common::model::agent::AgentMode::Durable,
+                    oplog::AgentMode::Ephemeral => golem_common::model::agent::AgentMode::Ephemeral,
+                },
                 component_revision: golem_common::model::component::ComponentRevision::try_from(
                     params.component_revision,
                 )

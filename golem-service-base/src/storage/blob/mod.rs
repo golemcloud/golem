@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use futures::stream::BoxStream;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, Timestamp};
@@ -372,15 +373,25 @@ pub enum BlobStorageNamespace {
     OplogPayload {
         environment_id: EnvironmentId,
         agent_id: AgentId,
+        agent_mode: AgentMode,
     },
     CompressedOplog {
         environment_id: EnvironmentId,
         component_id: ComponentId,
+        agent_mode: AgentMode,
         level: usize,
     },
     Components {
         environment_id: EnvironmentId,
     },
+}
+
+/// Returns the symmetric per-mode prefix used by all blob-storage backends for oplog data.
+pub fn agent_mode_prefix(mode: AgentMode) -> &'static str {
+    match mode {
+        AgentMode::Durable => "durable",
+        AgentMode::Ephemeral => "ephemeral",
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

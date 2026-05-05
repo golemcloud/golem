@@ -8,6 +8,14 @@ interface oplog {
     use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
 
+    /// Whether an agent is durable (persistent oplog) or ephemeral.
+    /// This mirrors the agent-mode enum in golem:agent/common@1.5.0; it is duplicated here to avoid
+    /// a circular WIT package dependency between golem:api and golem:agent.
+    enum agent-mode {
+        durable,
+        ephemeral
+    }
+
     use context.{attribute, attribute-value, span-id, trace-id};
     use retry.{retry-predicate, retry-policy, named-retry-policy};
 
@@ -97,6 +105,7 @@ interface oplog {
     record create-parameters {
         timestamp: datetime,
         agent-id: agent-id,
+        agent-mode: agent-mode,
         component-revision: component-revision,
         env: list<tuple<string, string>>,
         created-by: account-id,
@@ -461,6 +470,7 @@ interface oplog {
     record raw-create-parameters {
         timestamp: datetime,
         agent-id: agent-id,
+        agent-mode: agent-mode,
         component-revision: component-revision,
         env: list<tuple<string, string>>,
         environment-id: environment-id,

@@ -10014,6 +10014,7 @@ components:
           Or: '#/components/schemas/AgentFilter_AgentOrFilter'
           Not: '#/components/schemas/AgentFilter_AgentNotFilter'
           Config: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+          Mode: '#/components/schemas/AgentFilter_AgentModeFilter'
       type: object
       oneOf:
       - $ref: '#/components/schemas/AgentFilter_AgentNameFilter'
@@ -10025,6 +10026,7 @@ components:
       - $ref: '#/components/schemas/AgentFilter_AgentOrFilter'
       - $ref: '#/components/schemas/AgentFilter_AgentNotFilter'
       - $ref: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentModeFilter'
     AgentFilter_AgentAndFilter:
       allOf:
       - type: object
@@ -10073,6 +10075,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/AgentEnvFilter'
+    AgentFilter_AgentModeFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Mode
+            type: string
+            enum:
+            - Mode
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentModeFilter'
     AgentFilter_AgentNameFilter:
       allOf:
       - type: object
@@ -10351,6 +10365,22 @@ components:
       - traceId
       - traceStates
       - invocationContext
+    AgentMode:
+      type: string
+      enum:
+      - Durable
+      - Ephemeral
+    AgentModeFilter:
+      title: AgentModeFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          $ref: '#/components/schemas/AgentMode'
+      required:
+      - comparator
+      - value
     AgentNameFilter:
       title: AgentNameFilter
       type: object
@@ -13990,6 +14020,8 @@ components:
           format: date-time
         agentId:
           $ref: '#/components/schemas/AgentId'
+        agentMode:
+          $ref: '#/components/schemas/AgentMode'
         componentRevision:
           type: integer
           format: uint64
@@ -14028,6 +14060,7 @@ components:
       required:
       - timestamp
       - agentId
+      - agentMode
       - componentRevision
       - env
       - createdBy
@@ -14728,11 +14761,6 @@ components:
       - inputSchema
       - outputSchema
       - httpEndpoint
-    AgentMode:
-      type: string
-      enum:
-      - Durable
-      - Ephemeral
     AgentSecretCreation:
       title: AgentSecretCreation
       type: object

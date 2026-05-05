@@ -25,6 +25,7 @@ use super::{
     StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
+use crate::base_model::agent::AgentMode;
 use crate::model::AgentInvocationResult;
 use crate::model::Empty;
 use crate::model::agent::DataValue;
@@ -318,6 +319,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .agent_id
                     .ok_or("Missing agent_id field")?
                     .try_into()?,
+                agent_mode: golem_api_grpc::proto::golem::component::AgentMode::try_from(
+                    create.agent_mode,
+                )
+                .map_err(|e| format!("Invalid agent_mode: {e}"))?
+                .into(),
                 component_revision: create.component_revision.try_into()?,
                 env: create.env.into_iter().collect(),
                 local_agent_config: create
@@ -777,6 +783,10 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::CreateParameters {
                         timestamp: Some(create.timestamp.into()),
                         agent_id: Some(create.agent_id.into()),
+                        agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(
+                            create.agent_mode,
+                        )
+                            as i32,
                         component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
                         config: create
@@ -2148,6 +2158,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::Create(create) => Ok(OplogEntry::Create {
                 timestamp: create.timestamp,
                 agent_id: create.agent_id,
+                agent_mode: create.agent_mode,
                 component_revision: create.component_revision,
                 env: create.env.into_iter().collect(),
                 environment_id: create.environment_id,
@@ -2230,17 +2241,23 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::Exited(p) => Ok(OplogEntry::Exited {
                 timestamp: p.timestamp,
             }),
-            PublicOplogEntry::BeginAtomicRegion(_) => {
-                Err("Cannot convert BeginAtomicRegion from public to raw oplog entry".to_string())
+            PublicOplogEntry::BeginAtomicRegion(p) => {
+                Ok(OplogEntry::BeginAtomicRegion { timestamp: p.timestamp })
             }
-            PublicOplogEntry::EndAtomicRegion(_) => {
-                Err("Cannot convert EndAtomicRegion from public to raw oplog entry".to_string())
+            PublicOplogEntry::EndAtomicRegion(p) => {
+                Ok(OplogEntry::EndAtomicRegion {
+                    timestamp: p.timestamp,
+                    begin_index: p.begin_index,
+                })
             }
-            PublicOplogEntry::BeginRemoteWrite(_) => {
-                Err("Cannot convert BeginRemoteWrite from public to raw oplog entry".to_string())
+            PublicOplogEntry::BeginRemoteWrite(p) => {
+                Ok(OplogEntry::BeginRemoteWrite { timestamp: p.timestamp })
             }
-            PublicOplogEntry::EndRemoteWrite(_) => {
-                Err("Cannot convert EndRemoteWrite from public to raw oplog entry".to_string())
+            PublicOplogEntry::EndRemoteWrite(p) => {
+                Ok(OplogEntry::EndRemoteWrite {
+                    timestamp: p.timestamp,
+                    begin_index: p.begin_index,
+                })
             }
             PublicOplogEntry::PendingAgentInvocation(_) => {
                 Err("Cannot convert PendingAgentInvocation from public to raw oplog entry".to_string())
@@ -2823,6 +2840,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         let entry = match value {
             OplogEntry::Create {
                 agent_id,
+                agent_mode,
                 component_revision,
                 env,
                 environment_id,
@@ -2837,6 +2855,8 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 ..
             } => Entry::Create(RawCreateParameters {
                 agent_id: Some(agent_id.into()),
+                agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
+                    as i32,
                 component_revision: component_revision.into(),
                 env: env
                     .into_iter()
@@ -3163,6 +3183,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
         match value.entry.ok_or("Missing entry in RawOplogEntry")? {
             Entry::Create(p) => {
                 let agent_id = p.agent_id.ok_or("Missing agent_id")?.try_into()?;
+                let agent_mode: AgentMode =
+                    golem_api_grpc::proto::golem::component::AgentMode::try_from(p.agent_mode)
+                        .map_err(|e| format!("Invalid agent_mode: {e}"))?
+                        .into();
                 let component_revision: crate::model::component::ComponentRevision =
                     p.component_revision.try_into().map_err(|e: String| e)?;
                 let env: Vec<(String, String)> =
@@ -3192,6 +3216,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::Create {
                     timestamp,
                     agent_id,
+                    agent_mode,
                     component_revision,
                     env,
                     environment_id,

@@ -15,6 +15,7 @@
 use crate::debug_session::{DebugSessionId, DebugSessions};
 use crate::oplog::debug_oplog_constructor::CreateDebugOplogConstructor;
 use async_trait::async_trait;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
@@ -54,6 +55,7 @@ impl OplogService for DebugOplogService {
     async fn create(
         &self,
         _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
         _initial_entry: OplogEntry,
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -65,6 +67,7 @@ impl OplogService for DebugOplogService {
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -75,6 +78,7 @@ impl OplogService for DebugOplogService {
                 &owned_agent_id.agent_id,
                 CreateDebugOplogConstructor::new(
                     owned_agent_id.clone(),
+                    agent_mode,
                     None,
                     last_oplog_index,
                     self.inner.clone(),
@@ -87,7 +91,11 @@ impl OplogService for DebugOplogService {
             .await
     }
 
-    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
+    async fn get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogIndex {
         let debug_session_id = DebugSessionId::new(owned_agent_id.clone());
 
         let result = self
@@ -98,17 +106,18 @@ impl OplogService for DebugOplogService {
 
         match result {
             Some(index) => index,
-            None => self.inner.get_last_index(owned_agent_id).await,
+            None => self.inner.get_last_index(owned_agent_id, agent_mode).await,
         }
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId) {
-        self.inner.delete(owned_agent_id).await
+    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        self.inner.delete(owned_agent_id, agent_mode).await
     }
 
     async fn read(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -118,22 +127,23 @@ impl OplogService for DebugOplogService {
         self.debug_session
             .update_oplog_index(&debug_session_id, idx)
             .await;
-        self.inner.read(owned_agent_id, idx, n).await
+        self.inner.read(owned_agent_id, agent_mode, idx, n).await
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
-        self.inner.exists(owned_agent_id).await
+    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+        self.inner.exists(owned_agent_id, agent_mode).await
     }
 
     async fn scan_for_component(
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
+        modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, cursor, count)
+            .scan_for_component(environment_id, component_id, modes, cursor, count)
             .await
     }
 
@@ -141,6 +151,7 @@ impl OplogService for DebugOplogService {
     async fn upload_raw_payload(
         &self,
         _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String> {
         Ok(RawOplogPayload::SerializedInline(data))
@@ -149,11 +160,12 @@ impl OplogService for DebugOplogService {
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner
-            .download_raw_payload(owned_agent_id, payload_id, md5_hash)
+            .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
             .await
     }
 }

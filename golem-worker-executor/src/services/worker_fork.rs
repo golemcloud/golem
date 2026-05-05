@@ -536,6 +536,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),
             original_phantom_id: initial_source_worker_metadata.original_phantom_id,
             fingerprint: AgentFingerprint(instance_id),
+            agent_mode: source_worker_instance.agent_mode(),
         };
 
         let source_oplog = source_worker_instance.oplog();
@@ -553,6 +554,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .oplog_service
             .create(
                 &owned_target_agent_id,
+                source_worker_instance.agent_mode(),
                 target_initial_oplog_entry,
                 target_worker_metadata,
                 read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
@@ -664,6 +666,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         match entry {
             OplogEntry::Create {
                 timestamp,
+                agent_mode,
                 component_revision,
                 env,
                 environment_id,
@@ -679,6 +682,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             } => Some(OplogEntry::Create {
                 timestamp,
                 agent_id: agent_id.clone(),
+                agent_mode,
                 component_revision,
                 env,
                 environment_id,

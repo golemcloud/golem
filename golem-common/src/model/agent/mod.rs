@@ -52,7 +52,6 @@ use golem_wasm_derive::{FromValue, IntoValue};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::str::FromStr;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
@@ -66,28 +65,6 @@ impl TryFrom<i32> for AgentMode {
             0 => Ok(AgentMode::Durable),
             1 => Ok(AgentMode::Ephemeral),
             _ => Err(format!("Unknown AgentMode: {value}")),
-        }
-    }
-}
-
-impl Display for AgentMode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            AgentMode::Durable => "Durable",
-            AgentMode::Ephemeral => "Ephemeral",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl FromStr for AgentMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Durable" => Ok(AgentMode::Durable),
-            "Ephemeral" => Ok(AgentMode::Ephemeral),
-            _ => Err(format!("Unknown AgentMode: {s}")),
         }
     }
 }

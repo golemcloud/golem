@@ -49,8 +49,8 @@ use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
 use crate::model::worker::{
-    AgentMetadata, AgentMetadataView, AgentNameMatch, AgentUpdateMode, AgentsMetadataResponseView,
-    RawAgentId,
+    AgentListMode, AgentMetadata, AgentMetadataView, AgentNameMatch, AgentUpdateMode,
+    AgentsMetadataResponseView, RawAgentId,
 };
 use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
 use golem_client::model::ScanCursor;
@@ -70,7 +70,7 @@ use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
-use golem_common::model::{IdempotencyKey, OplogIndex};
+use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
@@ -144,6 +144,7 @@ impl WorkerCommandHandler {
                     agent_type_name,
                     component_name,
                     filter: filters,
+                    mode,
                     scan_cursor,
                     max_count,
                     precise,
@@ -153,6 +154,7 @@ impl WorkerCommandHandler {
                         agent_type_name,
                         component_name,
                         filters,
+                        mode,
                         scan_cursor,
                         max_count,
                         precise,
@@ -830,11 +832,13 @@ impl WorkerCommandHandler {
         agent_type_name: Option<AgentTypeName>,
         component_name: Option<ComponentName>,
         filters: Vec<String>,
+        mode: AgentListMode,
         scan_cursor: Option<ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
         refresh: Option<u64>,
     ) -> anyhow::Result<()> {
+        let filters = apply_list_mode_filter(filters, mode);
         let (components, filters) = self
             .resolve_list_components(agent_type_name, component_name, filters)
             .await?;
@@ -1682,15 +1686,24 @@ impl WorkerCommandHandler {
         await_update: bool,
         disable_wakeup: bool,
     ) -> anyhow::Result<TryUpdateAllWorkersResult> {
-        let (workers, _) = self
-            .list_component_workers(component_name, component_id, None, None, None, false)
+        let agent_filters = [
+            // only consider durable agents
+            AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable).to_string(),
+            // only consider agents in previous revisions that can be upgraded
+            AgentFilter::new_revision(FilterComparator::Less, target_revision).to_string(),
+        ];
+        let (workers_to_update, _) = self
+            .list_component_workers(
+                component_name,
+                component_id,
+                Some(&agent_filters),
+                None,
+                None,
+                false,
+            )
             .await?;
 
-        if workers.is_empty() {
-            log_warn_action(
-                "Skipping",
-                format!("updating agents for component {component_name}, no agents found"),
-            );
+        if workers_to_update.is_empty() {
             return Ok(TryUpdateAllWorkersResult::default());
         }
 
@@ -1698,7 +1711,7 @@ impl WorkerCommandHandler {
             "Updating",
             format!(
                 "all agents ({}) for component {} to revision {}",
-                workers.len().to_string().log_color_highlight(),
+                workers_to_update.len().to_string().log_color_highlight(),
                 component_name.0.blue().bold(),
                 target_revision.to_string().log_color_highlight()
             ),
@@ -1706,7 +1719,7 @@ impl WorkerCommandHandler {
         let _indent = LogIndent::new();
 
         let mut update_results = TryUpdateAllWorkersResult::default();
-        for worker in &workers {
+        for worker in &workers_to_update {
             let result = self
                 .update_worker(
                     component_name,
@@ -1740,7 +1753,7 @@ impl WorkerCommandHandler {
         }
 
         if await_update {
-            for worker in workers {
+            for worker in workers_to_update {
                 let _ = self
                     .await_update_result(
                         &worker.agent_id.component_id,
@@ -2648,6 +2661,31 @@ fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
     format!("{}/{}", cursor.layer, cursor.cursor)
 }
 
+/// Injects a `mode == ...` filter string at the front of `filters` based on
+/// the user-supplied `--mode` flag, unless the user already provided their own
+/// `mode ...` filter via `--filter`.
+///
+/// `AgentListMode::All` never injects a filter (the listing then includes both
+/// modes). For `Durable` / `Ephemeral`, the corresponding equality filter is
+/// prepended so the executor can use it to scan only the matching mode.
+fn apply_list_mode_filter(filters: Vec<String>, mode: AgentListMode) -> Vec<String> {
+    let user_set_mode = filters
+        .iter()
+        .any(|s| s.split_whitespace().next().map(str::to_ascii_lowercase) == Some("mode".into()));
+    if user_set_mode {
+        return filters;
+    }
+    let mode_filter = match mode {
+        AgentListMode::All => return filters,
+        AgentListMode::Durable => "mode == durable",
+        AgentListMode::Ephemeral => "mode == ephemeral",
+    };
+    let mut out = Vec::with_capacity(filters.len() + 1);
+    out.push(mode_filter.to_string());
+    out.extend(filters);
+    out
+}
+
 fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
     let error: anyhow::Result<
         Option<golem_client::Error<golem_client::api::WorkerError>>,
@@ -2741,8 +2779,8 @@ fn normalize_public_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_repl_agent_id, extract_simple_method_name, normalize_public_agent_id,
-        split_agent_name,
+        AgentListMode, apply_list_mode_filter, build_repl_agent_id, extract_simple_method_name,
+        normalize_public_agent_id, split_agent_name,
     };
     use golem_common::model::Empty;
     use golem_common::model::agent::{
@@ -2752,6 +2790,52 @@ mod tests {
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
+
+    #[test]
+    fn apply_list_mode_filter_default_durable_with_no_filters_injects_durable() {
+        let result = apply_list_mode_filter(vec![], AgentListMode::Durable);
+        assert_eq!(result, vec!["mode == durable".to_string()]);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_default_durable_with_other_filters_prepends_durable() {
+        let result =
+            apply_list_mode_filter(vec!["status = Running".to_string()], AgentListMode::Durable);
+        assert_eq!(
+            result,
+            vec![
+                "mode == durable".to_string(),
+                "status = Running".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_list_mode_filter_ephemeral_injects_ephemeral() {
+        let result = apply_list_mode_filter(vec![], AgentListMode::Ephemeral);
+        assert_eq!(result, vec!["mode == ephemeral".to_string()]);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_all_does_not_inject() {
+        let input = vec!["status = Running".to_string()];
+        let result = apply_list_mode_filter(input.clone(), AgentListMode::All);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_does_not_override_user_supplied_mode_filter() {
+        let input = vec!["mode == ephemeral".to_string()];
+        let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn apply_list_mode_filter_user_mode_filter_case_insensitive() {
+        let input = vec!["MODE == ephemeral".to_string()];
+        let result = apply_list_mode_filter(input.clone(), AgentListMode::Durable);
+        assert_eq!(result, input);
+    }
 
     fn test_agent_type(mode: AgentMode) -> AgentType {
         AgentType {

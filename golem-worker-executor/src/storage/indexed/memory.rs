@@ -49,15 +49,23 @@ impl InMemoryIndexedStorage {
                         component_id,
                         agent_id: agent_name,
                     },
-            } => format!("oplog/{component_id}/{agent_name}/{key}"),
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}/oplog/{component_id}/{agent_name}/{key}")
+            }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id:
                     AgentId {
                         component_id,
                         agent_id: agent_name,
                     },
+                agent_mode,
                 level,
-            } => format!("compressed-oplog/{level}/{component_id}/{agent_name}/{key}"),
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}/compressed-oplog/{level}/{component_id}/{agent_name}/{key}")
+            }
         }
     }
 
@@ -68,9 +76,12 @@ impl InMemoryIndexedStorage {
     ) -> Box<dyn Fn(&str) -> Option<String> + Send + Sync> {
         let prefix = prefix.unwrap_or("");
         match namespace {
-            IndexedStorageMetaNamespace::Oplog => {
-                let pattern: String =
-                    format!(r"^oplog/([^/]+)/([^/]+)/({}.*)$", regex::escape(prefix));
+            IndexedStorageMetaNamespace::Oplog { agent_mode } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                let pattern: String = format!(
+                    r"^{mode}/oplog/([^/]+)/([^/]+)/({}.*)$",
+                    regex::escape(prefix)
+                );
                 let regex = Regex::new(&pattern).unwrap();
 
                 Box::new(move |key| {
@@ -79,9 +90,10 @@ impl InMemoryIndexedStorage {
                         .map(|caps| caps.get(3).unwrap().as_str().to_string())
                 })
             }
-            IndexedStorageMetaNamespace::CompressedOplog { level } => {
+            IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
                 let pattern: String = format!(
-                    r"^compressed-oplog/{level}/([^/]+)/([^/]+)/({}.*)$",
+                    r"^{mode}/compressed-oplog/{level}/([^/]+)/([^/]+)/({}.*)$",
                     regex::escape(prefix)
                 );
                 let regex = Regex::new(&pattern).unwrap();
@@ -353,6 +365,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             1,
@@ -363,6 +376,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             2,
@@ -373,6 +387,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             3,
@@ -383,6 +398,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             4,
@@ -395,6 +411,7 @@ mod tests {
             .closest(
                 IndexedStorageNamespace::OpLog {
                     agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
                 },
                 key,
                 3,
@@ -414,6 +431,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             1,
@@ -424,6 +442,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             2,
@@ -434,6 +453,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             3,
@@ -444,6 +464,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             4,
@@ -456,6 +477,7 @@ mod tests {
             .closest(
                 IndexedStorageNamespace::OpLog {
                     agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
                 },
                 key,
                 5,
@@ -475,6 +497,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             10,
@@ -485,6 +508,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             20,
@@ -495,6 +519,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             30,
@@ -505,6 +530,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             40,
@@ -517,6 +543,7 @@ mod tests {
             .closest(
                 IndexedStorageNamespace::OpLog {
                     agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
                 },
                 key,
                 33,
@@ -536,6 +563,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             10,
@@ -546,6 +574,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             20,
@@ -556,6 +585,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             30,
@@ -566,6 +596,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             40,
@@ -578,6 +609,7 @@ mod tests {
             .read(
                 IndexedStorageNamespace::OpLog {
                     agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
                 },
                 key,
                 20,
@@ -598,6 +630,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             10,
@@ -608,6 +641,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             20,
@@ -618,6 +652,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             30,
@@ -628,6 +663,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             40,
@@ -640,6 +676,7 @@ mod tests {
             .read(
                 IndexedStorageNamespace::OpLog {
                     agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
                 },
                 key,
                 1,
@@ -660,6 +697,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             10,
@@ -670,6 +708,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             20,
@@ -682,6 +721,7 @@ mod tests {
             .first(
                 IndexedStorageNamespace::OpLog {
                     agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
                 },
                 key,
             )
@@ -700,6 +740,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             10,
@@ -710,6 +751,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             20,
@@ -722,6 +764,7 @@ mod tests {
             .last(
                 IndexedStorageNamespace::OpLog {
                     agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
                 },
                 key,
             )
@@ -740,6 +783,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             1,
@@ -750,6 +794,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             2,
@@ -760,6 +805,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             3,
@@ -770,6 +816,7 @@ mod tests {
         api.append(
             IndexedStorageNamespace::OpLog {
                 agent_id: test_agent_id(),
+                agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
             4,
@@ -783,6 +830,7 @@ mod tests {
             .drop_prefix(
                 IndexedStorageNamespace::OpLog {
                     agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
                 },
                 key,
                 2,
@@ -794,6 +842,7 @@ mod tests {
             .read(
                 IndexedStorageNamespace::OpLog {
                     agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
                 },
                 key,
                 1,
