@@ -111,6 +111,123 @@ import { Callout, Tabs } from "nextra/components"
 
     println!("Body: {:?}", data);
     ```
+
+    ### Generating clients from OpenAPI specs
+
+    For typed HTTP clients generated from an OpenAPI spec, use [`progenitor-wasi-http`](https://github.com/golemcloud/progenitor-wasi-http). It is a fork of [Oxide Computer's Progenitor](https://github.com/oxidecomputer/progenitor) that replaces `reqwest` with `wstd::http`, so the generated client works on top of `wasi:http` (and therefore inside Golem workers).
+
+    There are three ways to use it: via a procedural macro, a `build.rs` script, or by generating a standalone crate with the `cargo-progenitor` CLI.
+
+    #### Macro-based generation
+
+    Add the following dependencies to your `Cargo.toml`:
+
+    ```toml
+    [dependencies]
+    http = "1.4"
+    progenitor = { git = "https://github.com/golemcloud/progenitor-wasi-http" }
+    serde = { version = "1.0", features = ["derive"] }
+    wstd = "=0.6.5"
+    ```
+
+    Then expand the client directly into your source file:
+
+    ```rust
+    use progenitor::generate_api;
+
+    generate_api!("path/to/openapi.json");
+
+    async fn example() {
+        let client = Client::new("https://api.example.com");
+        // generated methods are now available on `client`
+    }
+    ```
+
+    The macro supports additional options such as `interface = Builder` for a builder-style API, extra `derives`, and pre/post request hooks (useful for injecting authentication headers):
+
+    ```rust
+    use progenitor::generate_api;
+    use wstd::http;
+
+    generate_api!(
+        spec = "openapi/my-api.json",
+        interface = Builder,
+        pre_hook_async = crate::add_auth_headers,
+    );
+
+    async fn add_auth_headers<B: http::Body>(
+        req: &mut http::Request<B>,
+    ) -> Result<(), http::error::InvalidHeaderValue> {
+        req.headers_mut().insert(
+            ::http::header::AUTHORIZATION,
+            ::http::header::HeaderValue::from_str("Bearer my-token")?,
+        );
+        Ok(())
+    }
+    ```
+
+    #### `build.rs`-based generation
+
+    If you prefer to inspect the generated code on disk, run the generator from a build script. Add the runtime client to `[dependencies]` and the generator to `[build-dependencies]`:
+
+    ```toml
+    [dependencies]
+    http = "1.4"
+    progenitor-client = { git = "https://github.com/golemcloud/progenitor-wasi-http" }
+    serde = { version = "1.0", features = ["derive"] }
+    wstd = "=0.6.5"
+
+    [build-dependencies]
+    prettyplease = "0.2"
+    progenitor = { git = "https://github.com/golemcloud/progenitor-wasi-http", default-features = false }
+    serde_json = "1.0"
+    syn = "2.0"
+    ```
+
+    A minimal `build.rs`:
+
+    ```rust
+    use std::{env, fs, fs::File, path::Path};
+
+    fn main() {
+        let src = "openapi/my-api.json";
+        println!("cargo:rerun-if-changed={}", src);
+
+        let file = File::open(src).unwrap();
+        let spec = serde_json::from_reader(file).unwrap();
+        let mut generator = progenitor::Generator::default();
+
+        let tokens = generator.generate_tokens(&spec).unwrap();
+        let ast = syn::parse2(tokens).unwrap();
+        let content = prettyplease::unparse(&ast);
+
+        let mut out_file = Path::new(&env::var("OUT_DIR").unwrap()).to_path_buf();
+        out_file.push("codegen.rs");
+        fs::write(out_file, content).unwrap();
+    }
+    ```
+
+    Include the generated module from your code:
+
+    ```rust
+    include!(concat!(env!("OUT_DIR"), "/codegen.rs"));
+
+    async fn example() {
+        let client = Client::new("https://api.example.com");
+        // generated methods are now available on `client`
+    }
+    ```
+
+    #### Standalone crate generation
+
+    To generate a self-contained client crate that can be committed and reused independently, use the `cargo-progenitor` CLI:
+
+    ```bash
+    cargo install cargo-progenitor
+    cargo progenitor -i openapi/my-api.json -o ./my-api-client -n my-api-client -v 0.1.0
+    ```
+
+    See the [`progenitor-wasi-http` README](https://github.com/golemcloud/progenitor-wasi-http) and the [`example-build`](https://github.com/golemcloud/progenitor-wasi-http/tree/main/example-build) and [`example-macro`](https://github.com/golemcloud/progenitor-wasi-http/tree/main/example-macro) directories for complete worked examples, including pagination and customizing the generated builder API.
 </Tabs.Tab>
 
 <Tabs.Tab>

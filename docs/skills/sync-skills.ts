@@ -225,6 +225,14 @@ function transformContent(skill: Skill, skillMap: Map<string, string>): string {
     content = content.replace(pattern, `[\`${name}\`](${path})`)
   })
 
+  // Convert relative markdown links to sibling skill SKILL.md files into doc links
+  // e.g. [`golem-custom-snapshot-ts`](../golem-custom-snapshot-ts/SKILL.md) -> doc path
+  Array.from(skillMap.entries()).forEach(([name, path]) => {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const pattern = new RegExp("\\(\\.\\.\\/" + escaped + "\\/SKILL\\.md\\)", "g")
+    content = content.replace(pattern, `(${path})`)
+  })
+
   // Clean up AI-agent language
   content = content.replace(/[Ll]oad the \[/g, "See the [")
   content = content.replace(/[Ll]oad the (`[^`]+`)/g, "See the $1")

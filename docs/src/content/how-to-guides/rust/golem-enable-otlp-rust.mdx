@@ -147,7 +147,7 @@ components:
             version: "1.5.0"
             parameters:
               endpoint: "https://otel.prod.example.com:4318"
-              headers: "x-api-key=${OTLP_API_KEY}"
+              headers: "x-api-key={{ OTLP_API_KEY }}"
               signals: "traces,logs,metrics"
 ```
 

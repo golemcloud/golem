@@ -72,7 +72,7 @@ pub(all) struct MyAgentConfig {
 Then manage it via the CLI:
 
 ```shell
-golem agent-secret create api_key --secret-type String --secret-value "sk-..."
+golem secret create api_key --secret-type String --secret-value "sk-..."
 ```
 
 Access in code with `self.config.value.api_key.get!()`.

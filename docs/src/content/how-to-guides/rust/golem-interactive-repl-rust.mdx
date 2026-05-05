@@ -2,22 +2,23 @@
 
 The `golem repl` command starts an interactive REPL for testing and scripting agents. It supports both an **interactive mode** and a **script execution mode**.
 
+**There is no Rust REPL language** in Golem. Use the **TypeScript REPL** (the default) to interact with your Rust agents — all agent types are available as TypeScript classes regardless of the agent's source language.
+
 ## Interactive Mode
 
 ```shell
-golem repl --language rust
+golem repl
 ```
 
-Starts a Rust REPL with all agent client types preconfigured in scope. You can get or create agent instances, invoke methods, and see logs streamed during invocations.
+Starts a TypeScript REPL with all agent client classes preconfigured in the global scope — including your Rust agents. You can get or create agent instances, invoke methods, and see logs streamed during invocations, all with full type safety.
 
-**Note:** The Rust REPL is slow interactively because it recompiles on each input. For quick interactive exploration, consider using the TypeScript REPL instead (`golem repl` without `--language`). For scripted test sequences, the Rust REPL works well.
+### Example: Invoking a Rust counter agent from the TypeScript REPL
 
-### Example: Invoking a counter agent
-
-```rust
-let c1 = CounterAgent::get("c1").await.unwrap();
-c1.increment().await;
-c1.increment().await;
+```typescript
+const c1 = await CounterAgent.get("c1")
+await c1.increment()
+await c1.increment()
+const value = await c1.getValue()
 ```
 
 ### Built-in Commands
@@ -28,41 +29,41 @@ The REPL provides built-in commands that mirror CLI functionality. Commands acce
 - `.deploy` / `:deploy` — deploy components
 - `.help` / `:help` — show available commands
 
+This lets you build, deploy, and test agents without leaving the REPL.
+
 ## Script Mode
 
-To run a Rust test script:
-
-1. **Create** the script file (e.g., `test.rs`) with Rust REPL syntax
-2. **Execute** it immediately with `golem repl`:
+Run a TypeScript file non-interactively:
 
 ```shell
-golem repl --script-file test.rs --language rust --yes
+golem repl --script-file test.ts --yes
 ```
 
-The `--yes` flag auto-confirms any prompts. The script has the same scope as the interactive REPL — all agent client types are available.
+The `--yes` flag auto-confirms any prompts. The script has the same global scope as the interactive REPL — all agent client classes are available, including Rust agents.
 
 Run the script after creating it, unless the user explicitly asked not to.
 
-### Example script (`test.rs`)
+### Example script (`test.ts`)
 
-```rust
-let c2 = CounterAgent::get("c2").await.unwrap();
-c2.increment().await;
-c2.increment().await;
+```typescript
+const c2 = await CounterAgent.get("c2")
+await c2.increment()
+await c2.increment()
 ```
 
-## Recommended REPL Language
+Run it:
 
-For Rust projects, the **Rust REPL** is available and lets you use the same language as your agents in scripts. However, the **TypeScript REPL** (`golem repl` without `--language`) is faster for interactive use because it doesn't need to recompile.
-
-Note: the REPL can interact with agents written in **any language** (Rust, TypeScript, Scala, MoonBit) — the REPL language is independent of the agent's implementation language. All agent types are available regardless of the agent's source language.
+```shell
+golem repl --script-file test.ts --yes
+```
 
 ## Available REPL Languages
 
 | Language | Flag | Interactive | Script | Notes |
 |----------|------|-------------|--------|-------|
-| TypeScript | (default) | ✅ | ✅ | Fast interactive, recommended for exploration |
-| Rust | `--language rust` | ✅ | ✅ | Slow interactive (recompiles); scripts are practical |
+| TypeScript | (default) | ✅ | ✅ | Recommended — works with all agent languages |
+
+No Rust REPL is available. The TypeScript REPL is recommended for interacting with Rust agents.
 
 ## Prerequisites
 

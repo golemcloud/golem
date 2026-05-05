@@ -59,16 +59,13 @@ golem repl --script-file test.ts --yes
 
 ## Recommended REPL Language
 
-The **TypeScript REPL** is the recommended choice for TypeScript projects. It uses the same language as your agents, so the syntax feels natural.
-
-Note: the REPL can interact with agents written in **any language** (Rust, Scala, MoonBit) — the REPL language is independent of the agent's implementation language. All agent types are available as TypeScript classes regardless of the agent's source language.
+The **TypeScript REPL** is the only REPL available. It works with TypeScript agents naturally and can also interact with agents written in **any language** (Rust, Scala, MoonBit) — the REPL language is independent of the agent's implementation language. All agent types are available as TypeScript classes regardless of the agent's source language.
 
 ## Available REPL Languages
 
 | Language | Flag | Interactive | Script | Notes |
 |----------|------|-------------|--------|-------|
-| TypeScript | (default) | ✅ | ✅ | Recommended — fast, type-safe |
-| Rust | `--language rust` | ✅ | ✅ | Slow interactive (recompiles); scripts are practical |
+| TypeScript | (default) | ✅ | ✅ | The only REPL — works with all agent languages |
 
 ## Prerequisites
 
