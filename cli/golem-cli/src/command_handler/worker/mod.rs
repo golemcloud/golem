@@ -1672,8 +1672,16 @@ impl WorkerCommandHandler {
         await_update: bool,
         disable_wakeup: bool,
     ) -> anyhow::Result<TryUpdateAllWorkersResult> {
+        let durable_filter = ["mode == durable".to_string()];
         let (workers, _) = self
-            .list_component_workers(component_name, component_id, None, None, None, false)
+            .list_component_workers(
+                component_name,
+                component_id,
+                Some(&durable_filter),
+                None,
+                None,
+                false,
+            )
             .await?;
 
         if workers.is_empty() {
@@ -1684,11 +1692,33 @@ impl WorkerCommandHandler {
             return Ok(TryUpdateAllWorkersResult::default());
         }
 
+        let workers_to_update: Vec<_> = workers
+            .iter()
+            .filter(|w| w.component_revision != target_revision)
+            .collect();
+
+        let skipped = workers.len() - workers_to_update.len();
+        if skipped > 0 {
+            log_warn_action(
+                "Skipping",
+                format!(
+                    "{} agent(s) for component {} already at revision {}",
+                    skipped.to_string().log_color_highlight(),
+                    component_name.0.blue().bold(),
+                    target_revision.to_string().log_color_highlight()
+                ),
+            );
+        }
+
+        if workers_to_update.is_empty() {
+            return Ok(TryUpdateAllWorkersResult::default());
+        }
+
         log_action(
             "Updating",
             format!(
                 "all agents ({}) for component {} to revision {}",
-                workers.len().to_string().log_color_highlight(),
+                workers_to_update.len().to_string().log_color_highlight(),
                 component_name.0.blue().bold(),
                 target_revision.to_string().log_color_highlight()
             ),
@@ -1696,7 +1726,7 @@ impl WorkerCommandHandler {
         let _indent = LogIndent::new();
 
         let mut update_results = TryUpdateAllWorkersResult::default();
-        for worker in &workers {
+        for worker in &workers_to_update {
             let result = self
                 .update_worker(
                     component_name,
@@ -1730,7 +1760,7 @@ impl WorkerCommandHandler {
         }
 
         if await_update {
-            for worker in workers {
+            for worker in workers_to_update {
                 let _ = self
                     .await_update_result(
                         &worker.agent_id.component_id,
