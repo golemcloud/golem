@@ -530,7 +530,9 @@ function serializeRpcConfigObject(
   const result: TypedAgentConfigValue[] = [];
 
   if (rpcValue === null || typeof rpcValue !== 'object') {
-    throw new Error('rpcValue must be an object');
+    throw new Error(
+      `Expected an object for config parameter \`${configProperties[0]?.path[0] ?? 'config'}\`, got ${typeof rpcValue}`,
+    );
   }
 
   for (const prop of configProperties) {
@@ -563,7 +565,10 @@ function serializeRpcConfigObject(
 
     const [witType, analysedType] = Either.getOrThrowWith(
       WitType.fromTsType(expectedType, undefined),
-      (err) => new Error(`Failed to construct analysed type for rpc agent config: ${err}`),
+      (err) =>
+        new Error(
+          `Failed to construct type for rpc config property \`${prop.path.join('.')}\`: ${err}`,
+        ),
     );
 
     const witValue = WitValue.fromTsValueDefault(current, analysedType);

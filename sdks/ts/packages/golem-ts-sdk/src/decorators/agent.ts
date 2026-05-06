@@ -298,7 +298,7 @@ export function agent(options?: AgentDecoratorOptions) {
 
     const agentConfigEntries = Either.getOrThrowWith(
       getAgentConfigEntries(classMetadata.constructorArgs),
-      (err) => new Error(`Failed to describe agent config: ${err}`),
+      (err) => new Error(`Failed to describe config for agent \`${agentTypeName.value}\`: ${err}`),
     );
 
     const agentType: AgentType = {
@@ -434,7 +434,9 @@ function getAgentConfigEntries(
         TypeScope.object(param.name, prop.path.at(-1)!, prop.type.optional),
       );
       if (Either.isLeft(witTypeEither)) {
-        return Either.left(`config property \`${prop.path.join('.')}\`: ${witTypeEither.val}`);
+        return Either.left(
+          `parameter \`${param.name}\`, config property \`${prop.path.join('.')}\`: ${witTypeEither.val}`,
+        );
       }
 
       const configSource: AgentConfigSource = prop.secret ? 'secret' : 'local';
