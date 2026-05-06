@@ -235,8 +235,8 @@ impl OAuth2GithubClient for OAuth2GithubClientDefault {
             .map(|email| email.email.clone());
 
         Ok(ExternalLogin {
-            external_id: details.login,
-            name: details.name,
+            external_id: details.id.to_string(),
+            name: details.name.or(Some(details.login)),
             email,
             verified_emails,
         })
@@ -461,6 +461,7 @@ impl serde::ser::Serialize for ErrorResponseKind {
 
 #[derive(Debug, serde::Deserialize)]
 struct GithubUserDetails {
+    id: u64,
     login: String,
     name: Option<String>,
 }

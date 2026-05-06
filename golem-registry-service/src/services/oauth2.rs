@@ -122,16 +122,28 @@ impl OAuth2Service {
             .map(TryInto::<OAuth2Token>::try_into)
             .transpose()?;
 
-        let account_id = match &existing_data {
-            Some(token) => token.account_id,
-            None => self.make_account(&external_login).await?,
-        };
-
-        let token = match existing_data.and_then(|token| token.token_id) {
-            Some(token_id) => self.token_service.get(token_id, &AuthCtx::system()).await?,
+        let token = match existing_data {
+            Some(OAuth2Token {
+                account_id,
+                token_id: Some(token_id),
+                ..
+            }) => match self.token_service.get(token_id, &AuthCtx::system()).await {
+                Ok(token) => token,
+                // The token was deleted; create a new one for the existing account.
+                Err(TokenError::TokenNotFound(_)) => {
+                    self.make_token(*provider, external_login, account_id)
+                        .await?
+                }
+                Err(e) => return Err(e.into()),
+            },
+            Some(OAuth2Token { account_id, .. }) => {
+                self.make_token(*provider, external_login, account_id)
+                    .await?
+            }
             None => {
-                // This will also link the external id to the account id, ensure that no additional
-                // accounts are created in the future.
+                let account_id = self.make_account(&external_login).await?;
+                // This will also link the external id to the account id, ensuring that no
+                // additional accounts are created in the future.
                 self.make_token(*provider, external_login, account_id)
                     .await?
             }
