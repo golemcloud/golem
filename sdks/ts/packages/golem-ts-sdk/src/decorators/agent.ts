@@ -431,11 +431,13 @@ function getAgentConfigEntries(
     for (const prop of param.type.properties) {
       const witTypeEither = fromTsType(
         prop.type,
-        TypeScope.object(param.name, prop.path[-1], prop.type.optional),
+        TypeScope.object(param.name, prop.path.at(-1)!, prop.type.optional),
       );
-      if (Either.isLeft(witTypeEither)) return witTypeEither;
+      if (Either.isLeft(witTypeEither)) {
+        return Either.left(`config property \`${prop.path.join('.')}\`: ${witTypeEither.val}`);
+      }
 
-      let configSource: AgentConfigSource = prop.secret ? 'secret' : 'local';
+      const configSource: AgentConfigSource = prop.secret ? 'secret' : 'local';
 
       entries.push({
         source: configSource,

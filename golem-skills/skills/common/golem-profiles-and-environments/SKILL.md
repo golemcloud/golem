@@ -183,15 +183,13 @@ mcp:
 
 secretDefaults:
   local:
-    - path: ["agents", "MyAgent", "config", "api_key"]
-      value: "test-key"
+    apiKey: "test-key"
   prod:
-    - path: ["agents", "MyAgent", "config", "api_key"]
-      value: "{{ PROD_API_KEY }}"
+    apiKey: "{{ PROD_API_KEY }}"
 
 retryPolicyDefaults:
   local:
-    - name: default-retry
+    default-retry:
       priority: 10
       predicate: "true"
       policy:
@@ -204,7 +202,7 @@ retryPolicyDefaults:
 
 resourceDefaults:
   local:
-    - name: api-calls
+    api-calls:
       limit: { type: Rate, value: 100, period: minute, max: 1000 }
       enforcementAction: reject
       unit: request

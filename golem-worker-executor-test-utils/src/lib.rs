@@ -508,6 +508,7 @@ fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
         grpc: GrpcApiConfig {
             port: 0,
             tls: GrpcServerTlsConfig::disabled(),
+            ..Default::default()
         },
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
@@ -605,7 +606,9 @@ async fn start_executor_with_config(
             let otel_channel = ServiceBuilder::new()
                 .layer(tonic_tracing_opentelemetry::middleware::client::OtelGrpcLayer)
                 .service(channel);
-            let client = WorkerExecutorClient::new(otel_channel);
+            let client = WorkerExecutorClient::new(otel_channel)
+                .max_decoding_message_size(32 * 1024 * 1024)
+                .max_encoding_message_size(32 * 1024 * 1024);
             break Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 _run_details: details,
@@ -760,11 +763,13 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
             this,
             owned_agent_id,
+            agent_mode,
             latest_worker_status,
         )
         .await
@@ -1612,7 +1617,9 @@ async fn run_production_context_bootstrap(
             let otel_channel = tower::ServiceBuilder::new()
                 .layer(tonic_tracing_opentelemetry::middleware::client::OtelGrpcLayer)
                 .service(channel);
-            let client = WorkerExecutorClient::new(otel_channel);
+            let client = WorkerExecutorClient::new(otel_channel)
+                .max_decoding_message_size(32 * 1024 * 1024)
+                .max_encoding_message_size(32 * 1024 * 1024);
             return Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 _run_details: details,

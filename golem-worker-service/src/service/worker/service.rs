@@ -41,7 +41,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
-use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
@@ -111,7 +111,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
-    ) -> WorkerResult<ComponentRevision> {
+    ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
         let component = self
             .component_service
             .get_latest_by_id_uncached(agent_id.component_id)
@@ -141,7 +141,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
-    ) -> WorkerResult<ComponentRevision> {
+    ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
         assert!(component.id == agent_id.component_id);
 
         let environment_auth_details = self
@@ -153,7 +153,8 @@ impl WorkerService {
             )
             .await?;
 
-        self.worker_client
+        let (_, fingerprint) = self
+            .worker_client
             .create(
                 agent_id,
                 environment_variables,
@@ -167,7 +168,7 @@ impl WorkerService {
             )
             .await?;
 
-        Ok(component.revision)
+        Ok((component.revision, fingerprint))
     }
 
     pub async fn connect(
@@ -850,7 +851,7 @@ impl WorkerService {
             )
             .await?;
 
-        let component_revision = self
+        let (component_revision, _created_at) = self
             .create_with_component(
                 &agent_id,
                 component,
@@ -1082,7 +1083,7 @@ mod tests {
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
-    use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
+    use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
     use golem_service_base::model::component::Component;
@@ -1400,12 +1401,12 @@ mod tests {
             _: AuthCtx,
             _: Option<InvocationContext>,
             _: Option<golem_api_grpc::proto::golem::component::Principal>,
-        ) -> WorkerResult<AgentId> {
+        ) -> WorkerResult<(AgentId, AgentFingerprint)> {
             self.created_agent_ids
                 .lock()
                 .unwrap()
                 .push(agent_id.clone());
-            Ok(agent_id.clone())
+            Ok((agent_id.clone(), AgentFingerprint::new()))
         }
 
         async fn connect(

@@ -117,7 +117,7 @@ impl WorkerApi {
             .normalize_agent_id_by_latest_version(component_id, &name)
             .await?;
 
-        let component_revision = self
+        let (component_revision, _created_at) = self
             .worker_service
             .create_with_component(
                 &agent_id,

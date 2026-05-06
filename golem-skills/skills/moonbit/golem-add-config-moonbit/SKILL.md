@@ -103,15 +103,15 @@ agents:
 ```yaml
 secretDefaults:
   local:
-    - path: [database, password]
-      value: "{{ DB_PASSWORD }}"
+    database:
+      password: "{{ DB_PASSWORD }}"
 ```
 
 ### Secrets via CLI
 
 ```shell
-golem agent-secret create database.password --secret-type string --secret-value "pwd"
-golem agent-secret update-value database.password --secret-value "new-pwd"
+golem secret create database.password --secret-type string --secret-value "pwd"
+golem secret update-value database.password --secret-value "new-pwd"
 ```
 
 ## 5. How It Works Under the Hood

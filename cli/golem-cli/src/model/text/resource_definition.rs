@@ -100,7 +100,7 @@ fn resource_definition_fields(r: &ResourceDefinition) -> Vec<(String, String)> {
 
 impl TextView for Vec<ResourceDefinition> {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Name"),
             Column::new("Revision").fixed_right(),
             Column::new("Limit").fixed_right(),

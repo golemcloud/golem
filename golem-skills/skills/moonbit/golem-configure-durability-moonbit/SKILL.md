@@ -14,6 +14,8 @@ By default, all Golem agents are **durable**:
 - On failure, the agent is transparently recovered by replaying the oplog
 - No special code needed — durability is automatic
 
+> **You cannot opt out of oplog writes for a durable agent.** The oplog is how durability works — every side effect must be recorded. If you are worried about oplog volume or replay cost (long-running agents, heartbeats, polling, recurring tasks), do *not* try to skip persistence. Use **durable with periodic snapshots** instead (see below).
+
 A standard durable agent:
 
 ```moonbit
@@ -36,6 +38,17 @@ pub fn CounterAgent::get_count(self: Self) -> UInt {
   self.count
 }
 ```
+
+## Durable with Periodic Snapshots
+
+Same durability guarantees as the default durable mode, but recovery starts from the **latest snapshot** instead of replaying the full oplog from the beginning. Use this whenever the oplog grows unboundedly — long-running agents, high-frequency state changes, **heartbeats, polling loops, recurring tasks**.
+
+```moonbit
+#derive.agent(snapshotting="every_n(10)")    // snapshot every 10 successful calls
+struct CounterAgent { ... }
+```
+
+See [`golem-custom-snapshot-moonbit`](../golem-custom-snapshot-moonbit/SKILL.md) for snapshotting modes and the `Snapshottable` trait.
 
 ## Ephemeral Agents
 
@@ -69,8 +82,10 @@ pub fn StatelessHandler::handle(self: Self, input: String) -> String {
 | Long-running saga or multi-step pipeline | **Durable** (default) |
 | Pure computation, no side effects worth persisting | **Ephemeral** |
 | Agent that calls external APIs with at-least-once semantics | **Durable** (default) |
+| Long-running agent with heartbeats, polling, or recurring tasks | **Durable + periodic snapshots** |
+| Any durable agent whose oplog grows so large that replay is slow | **Durable + periodic snapshots** |
 
-When in doubt, use the default (durable). Ephemeral mode is an optimization for agents that genuinely don't need persistence.
+When in doubt, use the default (durable). Ephemeral mode is an optimization for agents that genuinely don't need persistence. Add periodic snapshots whenever recovery time matters — see [`golem-custom-snapshot-moonbit`](../golem-custom-snapshot-moonbit/SKILL.md).
 
 ## Switching Between Modes
 

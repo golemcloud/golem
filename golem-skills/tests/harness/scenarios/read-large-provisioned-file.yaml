@@ -1,0 +1,160 @@
+name: "read-large-provisioned-file"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  # Generate a deterministic large file (200,000 bytes, all ASCII 'A').
+  # 200,000 > 65,536 = MAX_READ_SIZE_ALLOC (the wasmtime per-read cap),
+  # so reading the whole file forces the agent (or the SDK wrapper it
+  # uses) to issue multiple chunked reads. The expected checksum is:
+  #   size = 200000
+  #   sum  = 200000 * 65 ('A' = 0x41 = 65) = 13000000
+  # If the agent only reads the first 64 KiB chunk it will produce
+  # different (smaller) numbers, so a `stdout_contains` on the exact
+  # "size=200000,sum=13000000" string proves the entire file was read.
+  - id: "generate-large-file"
+    shell:
+      command: "bash"
+      args:
+        - "-c"
+        - "mkdir -p test-app/data && python3 -c \"open('test-app/data/large.bin', 'wb').write(b'A' * 200000)\""
+
+  - id: "verify-generated-file-size"
+    shell:
+      command: "wc"
+      args: ["-c", "test-app/data/large.bin"]
+    expect:
+      stdout_contains: "200000"
+
+  - id: "add-checksum-agent"
+    prompt:
+      rust: >
+        In the test-app project, do the following:
+
+        1. The file `test-app/data/large.bin` already exists — do NOT regenerate or modify it.
+           Provision it into the agent's filesystem at the target path `/data/large.bin` with
+           read-only permission.
+
+        2. Add a new durable agent type called `BigFileChecksum` identified by a single
+           constructor parameter for the instance name (a string).
+
+        3. `BigFileChecksum` must expose a method `file_stats` that takes no arguments,
+           reads the entire contents of `/data/large.bin`, and returns a single `String`
+           formatted EXACTLY as:
+
+               size=<N>,sum=<S>
+
+           where `<N>` is the total number of bytes read from the file and `<S>` is the
+           arithmetic sum of all byte values (treating each byte as an unsigned integer
+           in 0..255). Use a 64-bit accumulator for the sum so it does not overflow.
+
+        Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, do the following:
+
+        1. The file `test-app/data/large.bin` already exists — do NOT regenerate or modify it.
+           Provision it into the agent's filesystem at the target path `/data/large.bin` with
+           read-only permission.
+
+        2. Add a new durable agent type called `BigFileChecksum` identified by a single
+           constructor parameter for the instance name (a string).
+
+        3. `BigFileChecksum` must expose a method `fileStats` that takes no arguments,
+           reads the entire contents of `/data/large.bin`, and returns a single string
+           formatted EXACTLY as:
+
+               size=<N>,sum=<S>
+
+           where `<N>` is the total number of bytes read from the file and `<S>` is the
+           arithmetic sum of all byte values (treating each byte as an unsigned integer
+           in 0..255). Use a 64-bit accumulator (e.g. `bigint`) for the sum so it does not
+           overflow.
+
+        Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, do the following:
+
+        1. The file `test-app/data/large.bin` already exists — do NOT regenerate or modify it.
+           Provision it into the agent's filesystem at the target path `/data/large.bin` with
+           read-only permission.
+
+        2. Add a new durable agent type called `BigFileChecksum` identified by a single
+           constructor parameter for the instance name (a string).
+
+        3. `BigFileChecksum` must expose a method `fileStats` that takes no arguments,
+           reads the entire contents of `/data/large.bin`, and returns a single `String`
+           formatted EXACTLY as:
+
+               size=<N>,sum=<S>
+
+           where `<N>` is the total number of bytes read from the file and `<S>` is the
+           arithmetic sum of all byte values (treating each byte as an unsigned integer
+           in 0..255). Use a 64-bit accumulator (`Long`) for the sum so it does not
+           overflow.
+
+        Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, do the following:
+
+        1. The file `test-app/data/large.bin` already exists — do NOT regenerate or modify it.
+           Provision it into the agent's filesystem at the target path `/data/large.bin` with
+           read-only permission.
+
+        2. Add a new durable agent type called `BigFileChecksum` identified by a single
+           constructor parameter for the instance name (a `String`).
+
+        3. `BigFileChecksum` must expose a method `file_stats` that takes no arguments,
+           reads the entire contents of `/data/large.bin`, and returns a single `String`
+           formatted EXACTLY as:
+
+               size=<N>,sum=<S>
+
+           where `<N>` is the total number of bytes read from the file and `<S>` is the
+           arithmetic sum of all byte values (treating each byte as an unsigned integer
+           in 0..255). Use a 64-bit accumulator (`UInt64`) for the sum so it does not
+           overflow.
+
+        Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-initial-files"
+        - "golem-file-io-rust"
+      ts:
+        - "golem-add-initial-files"
+        - "golem-file-io-ts"
+      scala:
+        - "golem-add-initial-files"
+        - "golem-file-io-scala"
+      moonbit:
+        - "golem-add-initial-files"
+        - "golem-file-io-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-golem-yaml-files"
+    shell:
+      command: "cat"
+      args: ["test-app/golem.yaml"]
+    expect:
+      stdout_matches: "[\\s\\S]*files:[\\s\\S]*sourcePath:[\\s\\S]*large\\.bin[\\s\\S]*targetPath:[\\s\\S]*/data/large\\.bin[\\s\\S]*"
+
+  # The expected output is "size=200000,sum=13000000".
+  #   200000 bytes × 'A' (0x41 = 65) = 13,000,000.
+  # If the agent's file-read implementation truncates at the 64 KiB
+  # host cap it would return a smaller size and proportionally smaller
+  # sum, which would not match this assertion. Matching this exact
+  # string therefore proves the agent successfully read all 200 KB.
+  - id: "invoke-file-stats"
+    invoke:
+      agent: 'BigFileChecksum("c1")'
+      method:
+        rust: "file_stats"
+        ts: "fileStats"
+        scala: "fileStats"
+        moonbit: "file_stats"
+    expect:
+      stdout_contains: "size=200000,sum=13000000"

@@ -18,6 +18,7 @@ pub use blob::BlobOplogArchiveService;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
 use desert_rust::BinaryCodec;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -33,6 +34,7 @@ use golem_common::read_only_lock;
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
+pub use ephemeral::EphemeralOplog;
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
@@ -73,6 +75,7 @@ pub trait OplogService: Debug + Send + Sync {
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -91,19 +94,25 @@ pub trait OplogService: Debug + Send + Sync {
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog>;
 
-    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex;
+    async fn get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogIndex;
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId);
+    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode);
 
     async fn read(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
@@ -112,6 +121,7 @@ pub trait OplogService: Debug + Send + Sync {
     async fn read_range(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         start_idx: OplogIndex,
         last_idx: OplogIndex,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -122,6 +132,7 @@ pub trait OplogService: Debug + Send + Sync {
 
         self.read(
             owned_agent_id,
+            agent_mode,
             start_idx,
             Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1,
         )
@@ -131,22 +142,29 @@ pub trait OplogService: Debug + Send + Sync {
     async fn read_prefix(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         last_idx: OplogIndex,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.read_range(owned_agent_id, OplogIndex::INITIAL, last_idx)
+        self.read_range(owned_agent_id, agent_mode, OplogIndex::INITIAL, last_idx)
             .await
     }
 
     /// Checks whether the oplog exists in the oplog, without opening it
-    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool;
+    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
 
     /// Scans the oplog for all workers belonging to the given component, in a paginated way.
+    ///
+    /// `modes` selects which agent modes to scan. `Some(mode)` scans only that mode;
+    /// `None` scans both modes (durable and ephemeral). When scanning multiple modes the
+    /// active mode is encoded into the returned `ScanCursor` so the caller resumes the same
+    /// pagination correctly.
     ///
     /// Pages can be empty. This operation is slow and is not locking the oplog.
     async fn scan_for_component(
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
+        modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError>;
@@ -155,6 +173,7 @@ pub trait OplogService: Debug + Send + Sync {
     async fn upload_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String>;
 
@@ -162,6 +181,7 @@ pub trait OplogService: Debug + Send + Sync {
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String>;
@@ -174,6 +194,91 @@ pub enum CommitLevel {
     Always,
     /// Only commit immediately if the worker is durable
     DurableOnly,
+}
+
+/// High bit of `ScanCursor.cursor` used to encode the active `AgentMode` phase
+/// when `scan_for_component` is invoked with `modes = None` (scan both modes).
+///
+/// When the bit is `0`, the active phase scans `AgentMode::Durable`. When the
+/// bit is `1`, the active phase scans `AgentMode::Ephemeral`. The remaining
+/// 63 bits hold the actual storage cursor value, which is more than enough for
+/// any indexed-storage backend's cursor.
+///
+/// This bit is disjoint from `ScanCursor.layer`, which encodes the
+/// `MultiLayerOplogService` layer being scanned.
+pub(crate) const SCAN_CURSOR_EPHEMERAL_BIT: u64 = 1u64 << 63;
+pub(crate) const SCAN_CURSOR_VALUE_MASK: u64 = !SCAN_CURSOR_EPHEMERAL_BIT;
+
+/// Decodes a multi-mode scan cursor.
+///
+/// Returns `(active_mode, next_mode)` where:
+/// - `active_mode` is the mode that should be scanned in this call.
+/// - `next_mode` is `Some(mode)` if there is another phase to continue with
+///   when the active phase finishes (cursor reaches `0`), and `None` if there
+///   is nothing else to scan after this phase.
+///
+/// When `modes = Some(m)`, only that single mode is scanned (no phase
+/// transition). When `modes = None`, the durable mode is scanned first, then
+/// the ephemeral mode.
+pub(crate) fn scan_modes(
+    modes: Option<AgentMode>,
+    raw_cursor: u64,
+) -> (AgentMode, Option<AgentMode>) {
+    match modes {
+        Some(mode) => (mode, None),
+        None => {
+            if raw_cursor & SCAN_CURSOR_EPHEMERAL_BIT == 0 {
+                (AgentMode::Durable, Some(AgentMode::Ephemeral))
+            } else {
+                (AgentMode::Ephemeral, None)
+            }
+        }
+    }
+}
+
+/// Strips the mode-encoding high bit from a raw cursor and returns the actual
+/// storage cursor value to pass to the indexed storage backend.
+pub(crate) fn cursor_value(raw_cursor: u64) -> u64 {
+    raw_cursor & SCAN_CURSOR_VALUE_MASK
+}
+
+/// Builds the next `ScanCursor` to return from `scan_for_component`.
+///
+/// - `next_cursor_val` is the storage-level cursor returned by the backend
+///   (already free of mode-encoding bits).
+/// - `active_mode` is the mode that was just scanned.
+/// - `next_mode` is the mode to continue with after the active phase finishes
+///   (as returned by `scan_modes`).
+/// - `layer` is preserved from the input cursor.
+pub(crate) fn next_scan_cursor(
+    next_cursor_val: u64,
+    active_mode: AgentMode,
+    next_mode: Option<AgentMode>,
+    layer: usize,
+) -> ScanCursor {
+    let value = next_cursor_val & SCAN_CURSOR_VALUE_MASK;
+    if value == 0 {
+        // Active phase finished. If there is a next mode, switch to it; otherwise emit cursor 0.
+        match next_mode {
+            Some(AgentMode::Ephemeral) => ScanCursor {
+                cursor: SCAN_CURSOR_EPHEMERAL_BIT,
+                layer,
+            },
+            Some(AgentMode::Durable) => ScanCursor { cursor: 0, layer },
+            None => ScanCursor { cursor: 0, layer },
+        }
+    } else {
+        // Active phase still running. Re-encode the active mode so subsequent
+        // calls resume with the same active mode.
+        let bit = match active_mode {
+            AgentMode::Durable => 0,
+            AgentMode::Ephemeral => SCAN_CURSOR_EPHEMERAL_BIT,
+        };
+        ScanCursor {
+            cursor: value | bit,
+            layer,
+        }
+    }
 }
 
 /// An open oplog providing write access
@@ -405,10 +510,13 @@ pub trait OplogServiceOps: OplogService {
     async fn upload_payload<T: BinaryCodec + Debug + Clone + PartialEq + Sync>(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         data: &T,
     ) -> Result<OplogPayload<T>, String> {
         let bytes = serialize(&data)?;
-        let raw_payload = self.upload_raw_payload(owned_agent_id, bytes).await?;
+        let raw_payload = self
+            .upload_raw_payload(owned_agent_id, agent_mode, bytes)
+            .await?;
         let cached = Arc::new(data.clone());
         let payload = raw_payload.into_payload_with_cache(cached)?;
         Ok(payload)
@@ -418,6 +526,7 @@ pub trait OplogServiceOps: OplogService {
     async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync>(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         payload: OplogPayload<T>,
     ) -> Result<T, String> {
         match payload {
@@ -435,7 +544,7 @@ pub trait OplogServiceOps: OplogService {
                 ..
             } => {
                 let bytes = self
-                    .download_raw_payload(owned_agent_id, payload_id, md5_hash)
+                    .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
                     .await?;
                 deserialize(&bytes)
             }

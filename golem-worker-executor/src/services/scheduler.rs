@@ -15,7 +15,7 @@
 use crate::metrics::oplog::record_scheduled_archive;
 use crate::metrics::promises::record_scheduled_promise_completed;
 use crate::services::HasOplog;
-use crate::services::oplog::{MultiLayerOplog, Oplog, OplogService};
+use crate::services::oplog::{EphemeralOplog, MultiLayerOplog, Oplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
@@ -278,18 +278,26 @@ impl SchedulerServiceDefault {
                 ScheduledAction::ArchiveOplog {
                     account_id,
                     owned_agent_id,
+                    agent_mode,
                     last_oplog_index,
                     next_after,
                 } => {
-                    if self.oplog_service.exists(&owned_agent_id).await {
-                        let current_last_index =
-                            self.oplog_service.get_last_index(&owned_agent_id).await;
+                    if self.oplog_service.exists(&owned_agent_id, agent_mode).await {
+                        let current_last_index = self
+                            .oplog_service
+                            .get_last_index(&owned_agent_id, agent_mode)
+                            .await;
                         if current_last_index == last_oplog_index {
                             // Need to create the `Worker` instance to avoid race conditions
                             match self.worker_access.open_oplog(&owned_agent_id).await {
                                 Ok(oplog) => {
                                     let start = Instant::now();
-                                    if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
+                                    let archive_result =
+                                        match MultiLayerOplog::try_archive(&oplog).await {
+                                            Some(r) => Some(r),
+                                            None => EphemeralOplog::try_archive(&oplog).await,
+                                        };
+                                    if let Some(more) = archive_result {
                                         record_scheduled_archive(start.elapsed(), more);
                                         if more {
                                             self.schedule(
@@ -297,6 +305,7 @@ impl SchedulerServiceDefault {
                                                 ScheduledAction::ArchiveOplog {
                                                     account_id,
                                                     owned_agent_id,
+                                                    agent_mode,
                                                     last_oplog_index,
                                                     next_after,
                                                 },
@@ -330,20 +339,37 @@ impl SchedulerServiceDefault {
                     account_id: _,
                     owned_agent_id,
                     invocation,
+                    target_worker_fingerprint,
                 } => {
-                    // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
-                    // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
-                    let result = self
-                        .worker_access
-                        .enqueue_invocation(&owned_agent_id, *invocation)
-                        .await;
-
-                    if let Err(e) = result {
-                        error!(
-                            agent_id = owned_agent_id.to_string(),
-                            "Failed to invoke worker with scheduled invocation: {e}"
-                        );
+                    // A mismatch means the original worker was deleted and recreated — drop the stale
+                    // invocation silently.
+                    let stale = match self.worker_service.get(&owned_agent_id).await {
+                        Some(meta) => {
+                            meta.initial_worker_metadata.fingerprint != target_worker_fingerprint
+                        }
+                        None => true,
                     };
+
+                    if stale {
+                        info!(
+                            agent_id = owned_agent_id.to_string(),
+                            "Dropping stale scheduled invocation: target worker was deleted and recreated"
+                        );
+                    } else {
+                        // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
+                        // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
+                        let result = self
+                            .worker_access
+                            .enqueue_invocation(&owned_agent_id, *invocation)
+                            .await;
+
+                        if let Err(e) = result {
+                            error!(
+                                agent_id = owned_agent_id.to_string(),
+                                "Failed to invoke worker with scheduled invocation: {e}"
+                            );
+                        }
+                    }
                 }
                 ScheduledAction::Resume {
                     agent_created_by: _,
@@ -502,11 +528,14 @@ mod tests {
 
         async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
 
+        async fn get_agent_mode(&self, _owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
+            None
+        }
+
         async fn update_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
             _status_value: &AgentStatusRecord,
-            _agent_mode: AgentMode,
         ) {
         }
     }

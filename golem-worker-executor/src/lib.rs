@@ -847,6 +847,7 @@ pub async fn create_worker_executor_impl<
     let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
         worker_service.clone(),
         oplog_service.clone(),
+        component_service.clone(),
         golem_config.clone(),
     ));
 
@@ -1041,7 +1042,9 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
 
     let service = WorkerExecutorServer::new(worker_impl)
         .accept_compressed(CompressionEncoding::Gzip)
-        .send_compressed(CompressionEncoding::Gzip);
+        .send_compressed(CompressionEncoding::Gzip)
+        .max_decoding_message_size(golem_config.grpc.max_message_size)
+        .max_encoding_message_size(golem_config.grpc.max_message_size);
 
     join_set.spawn({
         let mut server = Server::builder();

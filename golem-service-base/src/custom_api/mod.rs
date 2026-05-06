@@ -196,6 +196,8 @@ pub enum RequestBodySchema {
     JsonBody { expected_type: AnalysedType },
     UnrestrictedBinary,
     RestrictedBinary { allowed_mime_types: Vec<String> },
+    UnrestrictedText,
+    RestrictedText { allowed_language_codes: Vec<String> },
 }
 
 #[derive(Debug, Clone, BinaryCodec)]
@@ -226,6 +228,7 @@ pub enum MethodParameter {
         field_index: SafeIndex,
     },
     UnstructuredBinaryBody,
+    UnstructuredTextBody,
 }
 
 #[derive(Debug)]
@@ -269,6 +272,8 @@ pub struct CallAgentBehaviour {
     pub method_name: String,
     pub method_parameters: Vec<MethodParameter>,
     pub expected_agent_response: DataSchema,
+    #[desert(default)]
+    pub method_description: Option<String>,
 }
 
 #[derive(Debug, BinaryCodec)]

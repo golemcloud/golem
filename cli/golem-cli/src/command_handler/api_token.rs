@@ -1,0 +1,90 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::command::api_token::ApiTokenSubcommand;
+use crate::command_handler::Handlers;
+use crate::context::Context;
+use crate::error::service::MapServiceError;
+use crate::log::{LogColorize, log_warn_action};
+use crate::model::text::token::{TokenListView, TokenNewView};
+use chrono::{DateTime, Utc};
+use golem_client::api::{AccountClient, TokenClient};
+use golem_client::model::TokenCreation;
+use golem_common::model::auth::TokenId;
+use std::sync::Arc;
+
+pub struct ApiTokenCommandHandler {
+    ctx: Arc<Context>,
+}
+
+impl ApiTokenCommandHandler {
+    pub fn new(ctx: Arc<Context>) -> Self {
+        Self { ctx }
+    }
+
+    pub async fn handle_command(&self, subcommand: ApiTokenSubcommand) -> anyhow::Result<()> {
+        match subcommand {
+            ApiTokenSubcommand::List => self.cmd_list().await,
+            ApiTokenSubcommand::New { expires_at } => self.cmd_new(expires_at).await,
+            ApiTokenSubcommand::Delete { token_id } => self.cmd_delete(token_id).await,
+        }
+    }
+
+    async fn cmd_list(&self) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
+        let tokens = clients
+            .account
+            .list_account_tokens(&clients.account_id().0)
+            .await
+            .map_service_error()?;
+
+        self.ctx
+            .log_handler()
+            .log_view(&TokenListView(tokens.values));
+
+        Ok(())
+    }
+
+    async fn cmd_new(&self, expires_at: DateTime<Utc>) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
+        let token = clients
+            .token
+            .create_token(&clients.account_id().0, &TokenCreation { expires_at })
+            .await
+            .map_service_error()?;
+
+        self.ctx.log_handler().log_view(&TokenNewView(token));
+
+        Ok(())
+    }
+
+    async fn cmd_delete(&self, token_id: TokenId) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
+        clients
+            .token
+            .delete_token(&token_id.0)
+            .await
+            .map_service_error()?;
+
+        log_warn_action(
+            "Deleted",
+            format!("token {}", token_id.0.to_string().log_color_highlight()),
+        );
+
+        Ok(())
+    }
+}

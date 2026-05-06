@@ -26,7 +26,7 @@ brew install rustup protobuf redis docker lnav nginx
 # latest **stable** rust compiler
 rustup update stable
 rustup default stable
-rustup target add wasm32-wasip1
+rustup target add wasm32-wasip2
 cargo install --force cargo-make
 ```
 

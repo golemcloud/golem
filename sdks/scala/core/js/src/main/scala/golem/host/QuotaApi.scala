@@ -22,6 +22,7 @@ import golem.Uuid
 import golem.EnvironmentId
 import zio.blocks.schema.Schema
 
+import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
 
@@ -141,6 +142,22 @@ object QuotaApi {
     def merge(other: QuotaToken): Unit =
       underlying.merge(other.underlying)
 
+    /**
+      * Reserve `amount` units, run `f`, then commit the actual usage returned
+      * by `f`.  Commits zero usage on failure and re-throws.
+      *
+      * {{{
+      *   val result = token.withReservation(BigInt(500)) { reservation =>
+      *     Future {
+      *       val data = callExternalApi()
+      *       (data.tokensUsed, data)
+      *     }
+      *   }
+      * }}}
+      */
+    def withReservation[T](amount: BigInt)(f: Reservation => Future[(BigInt, T)]): Future[Either[FailedReservation, T]] =
+      QuotaApi.withReservation(this, amount)(f)
+
     private[golem] def toRecord(): QuotaTokenRecord = {
       val raw = underlying.toRecord()
       val ts  = raw.lastCreditAt
@@ -220,6 +237,42 @@ object QuotaApi {
       }
     }
   }
+
+  private implicit val ec: ExecutionContext = ExecutionContext.global
+
+  /**
+    * Reserve `amount` units from `token`, run `f`, then commit the actual usage
+    * returned by `f`.  Commits zero usage on failure and re-throws, ensuring
+    * unused capacity is always returned to the pool.
+    *
+    * Returns `Future(Left(FailedReservation))` if the reservation could not be
+    * granted, or `Future(Right(value))` on success.
+    *
+    * {{{
+    *   val result = withReservation(token, BigInt(500)) { reservation =>
+    *     Future {
+    *       val data = callExternalApi()
+    *       (data.tokensUsed, data)
+    *     }
+    *   }
+    * }}}
+    */
+  def withReservation[T](token: QuotaToken, amount: BigInt)(
+    f: Reservation => Future[(BigInt, T)]
+  ): Future[Either[FailedReservation, T]] =
+    token.reserve(amount) match {
+      case Left(err) => Future.successful(Left(err))
+      case Right(reservation) =>
+        f(reservation)
+          .map { case (used, value) =>
+            reservation.commit(used)
+            Right(value)
+          }
+          .recoverWith { case e: Throwable =>
+            reservation.commit(BigInt(0))
+            Future.failed(e)
+          }
+    }
 
   @js.native
   @JSImport("golem:quota/types@1.5.0", "QuotaToken")

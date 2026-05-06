@@ -36,6 +36,10 @@ golem new --template <LANGUAGE> --yes <APPLICATION_PATH>
 | `--component-name <NAMESPACE:NAME>` | Set a specific component name. Must follow `namespace:name` format. Defaults to a name derived from the application name and language. |
 | `--preset <PRESET>` | Select a component preset. Generated projects come with `debug` and `release` presets by default (configured in `golem.yaml`). |
 
+## Agent skills installed by `golem new`
+
+Running `golem new` deploys a large number of agent skills into the new project's `.agents/skills/` and `.claude/skills/` directories. Coding agents may not pick up these new skills automatically — you may need to explicitly reload the agent's skill list (or restart the agent) before the newly installed skills become available.
+
 ## Supported languages
 
 | Language | Template value |

@@ -21,6 +21,7 @@ import {
   markEndOperation,
   setIdempotenceMode,
   setOplogPersistenceLevel,
+  trap,
 } from './hostapi';
 
 /**
@@ -46,6 +47,9 @@ export function usePersistenceLevel(level: PersistenceLevel) {
   return new PersistenceLevelGuard(originalLevel);
 }
 
+export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => Promise<R>): Promise<R>;
+export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => R): R;
+
 /**
  * Executes a function with a specific persistence level for the oplog.
  * Supports both sync and async callbacks.
@@ -53,7 +57,10 @@ export function usePersistenceLevel(level: PersistenceLevel) {
  * @param f - The function to execute (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => R): R {
+export function withPersistenceLevel<R>(
+  level: PersistenceLevel,
+  f: () => R | Promise<R>,
+): R | Promise<R> {
   const guard = usePersistenceLevel(level);
   return executeWithDrop([guard], f);
 }
@@ -81,6 +88,9 @@ export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
   return new IdempotenceModeGuard(original);
 }
 
+export function withIdempotenceMode<R>(mode: boolean, f: () => Promise<R>): Promise<R>;
+export function withIdempotenceMode<R>(mode: boolean, f: () => R): R;
+
 /**
  * Executes a function with a specific idempotence mode.
  * Supports both sync and async callbacks.
@@ -88,7 +98,7 @@ export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
  * @param f - The function to execute (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function withIdempotenceMode<R>(mode: boolean, f: () => R): R {
+export function withIdempotenceMode<R>(mode: boolean, f: () => R | Promise<R>): R | Promise<R> {
   const guard = useIdempotenceMode(mode);
   return executeWithDrop([guard], f);
 }
@@ -114,20 +124,22 @@ export function markAtomicOperation(): AtomicOperationGuard {
   return new AtomicOperationGuard(begin);
 }
 
+export function atomically<T>(f: () => Promise<T>): Promise<T>;
+export function atomically<T>(f: () => T): T;
+
 /**
  * Executes a function atomically.
  * Supports both sync and async callbacks.
  *
- * On success the atomic region is committed via `mark_end_operation`.
- * On failure the region is intentionally left open so the executor sees the
- * trap as occurring **inside** the atomic region and can retry from the
- * begin-operation marker (matching the Rust SDK behaviour where `Drop` is
- * never called on panic because WASM panics don't unwind).
+ * On success the atomic region is committed.
+ * On failure the worker is immediately terminated so the failed partial
+ * execution is rolled back and the block is retried from the beginning on
+ * recovery.
  *
  * @param f - The function to execute atomically (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function atomically<T>(f: () => T): T {
+export function atomically<T>(f: () => T | Promise<T>): T | Promise<T> {
   const guard = markAtomicOperation();
   try {
     const result = f();
@@ -138,8 +150,10 @@ export function atomically<T>(f: () => T): T {
           return val;
         },
         (err) => {
-          // Do NOT drop the guard — leave the atomic region open so the
-          // executor retries from the begin marker.
+          // Trap before any user-observable continuation can run. The host
+          // `trap` call surfaces as an uncatchable wasm trap and never returns;
+          // the trailing throw is unreachable but keeps the type system happy.
+          trap(`atomic block failed: ${formatErrorForTrap(err)}`);
           throw err;
         },
       ) as T;
@@ -147,14 +161,36 @@ export function atomically<T>(f: () => T): T {
     guard.drop();
     return result;
   } catch (e) {
-    // Do NOT drop the guard — same reasoning as the async rejection path.
+    // Same reasoning as the async rejection path — force a trap so the user
+    // cannot catch and continue with an open atomic region.
+    trap(`atomic block failed: ${formatErrorForTrap(e)}`);
     throw e;
   }
 }
 
-function isPromiseLike(value: unknown): value is Promise<unknown> {
+function formatErrorForTrap(err: unknown): string {
+  if (err instanceof Error) {
+    return err.stack ?? `${err.name}: ${err.message}`;
+  }
+  try {
+    return String(err);
+  } catch {
+    return '<unprintable error>';
+  }
+}
+
+export function isPromiseLike(value: unknown): value is Promise<unknown> {
   return value !== null && value !== undefined && typeof (value as any).then === 'function';
 }
+
+export function executeWithDrop<Resource extends { drop: () => void }, R>(
+  resources: [Resource],
+  fn: () => Promise<R>,
+): Promise<R>;
+export function executeWithDrop<Resource extends { drop: () => void }, R>(
+  resources: [Resource],
+  fn: () => R,
+): R;
 
 /**
  * Executes a function and automatically drops the provided resources after execution.
@@ -164,12 +200,10 @@ function isPromiseLike(value: unknown): value is Promise<unknown> {
  * @param fn - The function to execute (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function executeWithDrop<
-  Resource extends {
-    drop: () => void;
-  },
-  R,
->(resources: [Resource], fn: () => R): R {
+export function executeWithDrop<Resource extends { drop: () => void }, R>(
+  resources: [Resource],
+  fn: () => R | Promise<R>,
+): R | Promise<R> {
   try {
     const result = fn();
     if (isPromiseLike(result)) {

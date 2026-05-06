@@ -14,7 +14,7 @@
 
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id, log_table,
-    new_table,
+    new_table_full_condensed,
 };
 use golem_client::model::Deployment;
 use golem_common::model::application::ApplicationName;
@@ -59,7 +59,7 @@ impl MessageWithFields for DeploymentNewView {
 
 impl TextView for Vec<Deployment> {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Deployment Revision").fixed_right(),
             Column::new("Deployment Version").fixed_right(),
             Column::new("Hash"),

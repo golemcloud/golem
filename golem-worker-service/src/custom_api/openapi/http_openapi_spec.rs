@@ -18,6 +18,7 @@ use crate::custom_api::openapi::schema_mapping::{
     arbitrary_binary_schema, create_schema_from_analysed_type,
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
+use golem_common::model::domain_registration::Domain;
 use golem_service_base::custom_api::{
     PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema, SecuritySchemeDetails,
 };
@@ -26,7 +27,7 @@ use indexmap::IndexMap;
 use openapiv3::{
     Components, Header, HeaderStyle, Info, MediaType, OpenAPI, Operation, Parameter, ParameterData,
     ParameterSchemaOrContent, PathItem, PathStyle, QueryStyle, ReferenceOr, RequestBody, Response,
-    Schema, SecurityScheme, StatusCode,
+    Schema, SecurityScheme, Server, StatusCode,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -34,10 +35,10 @@ use std::sync::Arc;
 pub struct HttpApiOpenApiSpec(pub OpenAPI);
 
 impl HttpApiOpenApiSpec {
-    pub fn from_routes(routes: &[RichCompiledRoute]) -> Result<Self, String> {
+    pub fn from_routes(routes: &[RichCompiledRoute], domain: &Domain) -> Result<Self, String> {
         let security_scheme_details = get_security_scheme_details(routes);
 
-        let mut open_api = create_base_openapi(&security_scheme_details);
+        let mut open_api = create_base_openapi(&security_scheme_details, domain);
 
         let mut paths = BTreeMap::new();
 
@@ -68,7 +69,10 @@ fn get_security_scheme_details(
     schemes
 }
 
-fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> OpenAPI {
+fn create_base_openapi(
+    security_schemes: &Vec<Arc<SecuritySchemeDetails>>,
+    domain: &Domain,
+) -> OpenAPI {
     let mut open_api = OpenAPI {
         openapi: "3.0.0".to_string(),
         info: Info {
@@ -80,6 +84,20 @@ fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> Op
             version: "1.0.0".to_string(),
             extensions: Default::default(),
         },
+        servers: vec![
+            Server {
+                url: format!("https://{}", domain.0),
+                description: None,
+                variables: Default::default(),
+                extensions: Default::default(),
+            },
+            Server {
+                url: format!("http://{}", domain.0),
+                description: None,
+                variables: Default::default(),
+                extensions: Default::default(),
+            },
+        ],
         ..Default::default()
     };
 
@@ -134,6 +152,12 @@ fn add_route_to_paths(
 
     let path_item = paths.entry(path_str).or_default();
     let mut operation = Operation::default();
+
+    // Set operation_id and description for CallAgent routes
+    if let RichRouteBehaviour::CallAgent(inner) = &route.behavior {
+        operation.operation_id = Some(format!("{}-{}", inner.agent_type.0, inner.method_name));
+        operation.description = inner.method_description.clone();
+    }
 
     let path_params_raw = match &route.behavior {
         RichRouteBehaviour::CallAgent(inner) => call_agent::get_path_variables_and_types(
@@ -283,6 +307,31 @@ fn add_request_body(operation: &mut Operation, request_body_schema: &RequestBody
     if let Some(rb) = request_body {
         operation.request_body = Some(ReferenceOr::Item(rb));
     }
+
+    // For text bodies, add Content-Language as an optional header parameter
+    match request_body_schema {
+        RequestBodySchema::UnrestrictedText => {
+            let schema = plain_text_schema(&[]);
+            operation
+                .parameters
+                .push(ReferenceOr::Item(create_optional_header_parameter(
+                    "Content-Language",
+                    schema,
+                )));
+        }
+        RequestBodySchema::RestrictedText {
+            allowed_language_codes,
+        } => {
+            let schema = plain_text_schema(allowed_language_codes);
+            operation
+                .parameters
+                .push(ReferenceOr::Item(create_optional_header_parameter(
+                    "Content-Language",
+                    schema,
+                )));
+        }
+        _ => {}
+    }
 }
 
 fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<RequestBody> {
@@ -343,6 +392,78 @@ fn create_request_body(request_body_schema: &RequestBodySchema) -> Option<Reques
                 extensions: Default::default(),
             })
         }
+
+        RequestBodySchema::UnrestrictedText => Some(RequestBody {
+            description: Some("Unrestricted text body".to_string()),
+            content: {
+                let mut content = IndexMap::new();
+                content.insert(
+                    "text/plain".to_string(),
+                    MediaType {
+                        schema: Some(ReferenceOr::Item(plain_text_schema(&[]))),
+                        ..Default::default()
+                    },
+                );
+                content
+            },
+            required: true,
+            extensions: Default::default(),
+        }),
+
+        RequestBodySchema::RestrictedText {
+            allowed_language_codes: _,
+        } => Some(RequestBody {
+            description: Some("Restricted text body".to_string()),
+            content: {
+                let mut content = IndexMap::new();
+                content.insert(
+                    "text/plain".to_string(),
+                    MediaType {
+                        schema: Some(ReferenceOr::Item(plain_text_schema(&[]))),
+                        ..Default::default()
+                    },
+                );
+                content
+            },
+            required: true,
+            extensions: Default::default(),
+        }),
+    }
+}
+
+fn plain_text_schema(allowed_language_codes: &[String]) -> Schema {
+    let enumeration: Vec<Option<String>> = allowed_language_codes
+        .iter()
+        .map(|s| Some(s.clone()))
+        .collect();
+
+    Schema {
+        schema_data: openapiv3::SchemaData::default(),
+        schema_kind: openapiv3::SchemaKind::Type(openapiv3::Type::String(openapiv3::StringType {
+            format: openapiv3::VariantOrUnknownOrEmpty::Empty,
+            pattern: None,
+            enumeration,
+            min_length: None,
+            max_length: None,
+        })),
+    }
+}
+
+/// Create an optional header parameter (regardless of schema nullability).
+fn create_optional_header_parameter(name: &str, schema: Schema) -> Parameter {
+    Parameter::Header {
+        parameter_data: ParameterData {
+            name: name.to_string(),
+            description: Some(format!("Header parameter: {name}")),
+            required: false,
+            deprecated: None,
+            explode: Some(false),
+            format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema)),
+            example: None,
+            examples: Default::default(),
+            extensions: Default::default(),
+        },
+        style: HeaderStyle::Simple,
     }
 }
 
@@ -388,15 +509,17 @@ fn add_responses(operation: &mut Operation, route: &RichCompiledRoute) {
 
         let mut response_headers = IndexMap::new();
 
-        for (name, schema) in agent_response_schema.headers.iter() {
+        for (name, header_schema) in agent_response_schema.headers.iter() {
             let description = format!("Response header: {}", name);
             response_headers.insert(
                 name.clone(),
                 ReferenceOr::Item(Header {
                     description: Some(description),
-                    required: true,
+                    required: header_schema.required,
                     deprecated: None,
-                    format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(schema.clone())),
+                    format: ParameterSchemaOrContent::Schema(ReferenceOr::Item(
+                        header_schema.schema.clone(),
+                    )),
                     example: None,
                     examples: Default::default(),
                     extensions: Default::default(),

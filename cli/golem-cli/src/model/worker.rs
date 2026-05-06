@@ -23,7 +23,7 @@ use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
@@ -58,6 +58,7 @@ impl Display for RawAgentId {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum AgentUpdateMode {
+    #[value(alias = "auto")]
     Automatic,
     Manual,
 }
@@ -85,6 +86,30 @@ impl FromStr for AgentUpdateMode {
             _ => Err(format!(
                 "Unknown agent update mode: {s}. Expected one of \"auto\", \"manual\""
             )),
+        }
+    }
+}
+
+/// Mode selector for the `agent list` CLI command.
+///
+/// The default `Durable` excludes ephemeral agents from the listing so that
+/// short-lived ephemeral agents from previous runs do not clutter the default
+/// output. Use `Ephemeral` to list only ephemeral agents, or `All` to list
+/// agents in both modes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum AgentListMode {
+    Durable,
+    Ephemeral,
+    All,
+}
+
+impl Display for AgentListMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentListMode::Durable => write!(f, "durable"),
+            AgentListMode::Ephemeral => write!(f, "ephemeral"),
+            AgentListMode::All => write!(f, "all"),
         }
     }
 }
@@ -242,6 +267,7 @@ pub struct AgentNameMatch {
     pub agent_type_name: AgentTypeName,
     pub agent_name: RawAgentId,
     pub source_language: SourceLanguage,
+    pub parsed_agent_id: Option<ParsedAgentId>,
 }
 
 impl AgentNameMatch {
@@ -250,5 +276,18 @@ impl AgentNameMatch {
             ResolvedEnvironmentIdentitySource::Reference(reference) => Some(reference),
             ResolvedEnvironmentIdentitySource::DefaultFromManifest => None,
         }
+    }
+
+    /// Updates the canonical agent_name and the parsed form together. Use this
+    /// after re-canonicalizing or normalizing the agent id so that downstream
+    /// display code can use the language-specific renderer.
+    pub fn with_canonical_and_parsed(
+        mut self,
+        agent_name: RawAgentId,
+        parsed_agent_id: Option<ParsedAgentId>,
+    ) -> Self {
+        self.agent_name = agent_name;
+        self.parsed_agent_id = parsed_agent_id;
+        self
     }
 }

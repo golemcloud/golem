@@ -64,11 +64,11 @@ final class MyAgentImpl(input: String, config: Config[MyAppConfig]) extends MyAg
 Secret paths use camelCase, matching Scala field names:
 
 ```shell
-golem agent-secret create apiKey --secret-type String --secret-value "sk-abc123"
-golem agent-secret create db.password --secret-type String --secret-value "s3cret"
-golem agent-secret list
-golem agent-secret update-value apiKey --secret-value "new-value"
-golem agent-secret delete apiKey
+golem secret create apiKey --secret-type String --secret-value "sk-abc123"
+golem secret create db.password --secret-type String --secret-value "s3cret"
+golem secret list
+golem secret update-value apiKey --secret-value "new-value"
+golem secret delete apiKey
 ```
 
 > **Note:** For `update-value` and `delete`, you can also use `--id <uuid>` instead of the positional path.
@@ -80,10 +80,9 @@ Use `secretDefaults` for local development only — manage production secrets vi
 ```yaml
 secretDefaults:
   local:
-    - path: [apiKey]
-      value: "dev-key-123"
-    - path: [db, password]
-      value: "dev-password"
+    apiKey: "dev-key-123"
+    db:
+      password: "dev-password"
 ```
 
 ## Key Constraints

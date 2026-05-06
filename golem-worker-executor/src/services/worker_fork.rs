@@ -51,8 +51,8 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput, HostResponse,
     HostResponseGolemApiFork, OplogEntry, OplogIndex, OplogIndexRange,
 };
+use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
-use golem_common::model::{AgentMetadata, Timestamp};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -517,6 +517,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let initial_source_worker_metadata = source_worker_instance.get_initial_worker_metadata();
 
+        let instance_id = Uuid::new_v4();
+
         // Use the source worker's `created_by` (the component owner) rather
         // than `fork_account_id` (the fork caller). This ensures the forked
         // worker's metadata is consistent with its initial oplog entry (which
@@ -533,6 +535,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             parent: None,
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),
             original_phantom_id: initial_source_worker_metadata.original_phantom_id,
+            fingerprint: AgentFingerprint(instance_id),
+            agent_mode: source_worker_instance.agent_mode(),
         };
 
         let source_oplog = source_worker_instance.oplog();
@@ -541,7 +545,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         // Update the oplog initial entry with the new worker
         let target_initial_oplog_entry =
-            Self::update_agent_id(initial_oplog_entry, &target_agent_id).ok_or(
+            Self::update_agent_id(initial_oplog_entry, &target_agent_id, instance_id).ok_or(
                 WorkerExecutorError::unknown("Failed to update worker id in oplog entry"),
             )?;
 
@@ -550,6 +554,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .oplog_service
             .create(
                 &owned_target_agent_id,
+                source_worker_instance.agent_mode(),
                 target_initial_oplog_entry,
                 target_worker_metadata,
                 read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
@@ -653,10 +658,15 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         Ok(new_oplog)
     }
 
-    pub fn update_agent_id(entry: OplogEntry, agent_id: &AgentId) -> Option<OplogEntry> {
+    pub fn update_agent_id(
+        entry: OplogEntry,
+        agent_id: &AgentId,
+        instance_id: Uuid,
+    ) -> Option<OplogEntry> {
         match entry {
             OplogEntry::Create {
                 timestamp,
+                agent_mode,
                 component_revision,
                 env,
                 environment_id,
@@ -668,9 +678,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 local_agent_config,
                 agent_id: _,
                 original_phantom_id,
+                ..
             } => Some(OplogEntry::Create {
                 timestamp,
                 agent_id: agent_id.clone(),
+                agent_mode,
                 component_revision,
                 env,
                 environment_id,
@@ -681,6 +693,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,
+                instance_id,
             }),
             _ => None,
         }

@@ -1209,7 +1209,7 @@ impl TextView for WorkerFilesView {
         if self.nodes.is_empty() {
             logln("No files found.");
         } else {
-            let mut table = new_table(vec![
+            let mut table = new_table_full_condensed(vec![
                 Column::new("Name"),
                 Column::new("Kind").fixed(),
                 Column::new("Permissions").fixed(),
@@ -1240,6 +1240,13 @@ pub fn format_timestamp(timestamp: u64) -> String {
 }
 
 pub fn format_agent_name_match(agent_name_match: &AgentNameMatch) -> String {
+    let rendered_agent_name = match &agent_name_match.parsed_agent_id {
+        Some(parsed) if agent_name_match.source_language.is_known() => {
+            crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
+        }
+        _ => agent_name_match.agent_name.0.clone(),
+    };
+
     format!(
         "{}{}/{}",
         match &agent_name_match.environment_reference() {
@@ -1275,6 +1282,6 @@ pub fn format_agent_name_match(agent_name_match: &AgentNameMatch) -> String {
             None => "".to_string(),
         },
         agent_name_match.component_name.0.blue().bold(),
-        agent_name_match.agent_name.0.green().bold(),
+        rendered_agent_name.green().bold(),
     )
 }

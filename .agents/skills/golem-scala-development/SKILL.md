@@ -222,6 +222,39 @@ This copies all WIT packages from `wit/deps/` into `sdks/scala/wit/deps/`. The r
 ### TypeScript SDK Reference
 The TypeScript SDK at `sdks/ts/wit/` is the reference for correct WIT definitions when in doubt.
 
+## RPC Client Architecture
+
+The Scala SDK's remote agent call path uses `async-invoke-and-await` from the WIT `golem:agent/host@1.5.0` interface, matching the TypeScript SDK behavior:
+
+### Host functions used
+
+| WIT function | Scala SDK usage |
+|---|---|
+| `wasm-rpc.async-invoke-and-await` | Default `apply()` and `cancelable()` — returns `FutureInvokeResult`, polled via `subscribe()` → `pollable.promise()` → `get()` |
+| `wasm-rpc.invoke` | Fire-and-forget `trigger()` |
+| `wasm-rpc.invoke-and-await` | Kept for backward compatibility but not used by generated clients |
+| `wasm-rpc.schedule-invocation` | `scheduleAt()` |
+| `wasm-rpc.schedule-cancelable-invocation` | `scheduleCancelableAt()` |
+
+### Key files
+
+| File | Role |
+|---|---|
+| `core/js/.../host/WasmRpcApi.scala` | Scala.js `@JSImport` facades for `WasmRpc`, `FutureInvokeResult` (with `subscribe`/`get`/`cancel`) |
+| `core/js/.../rpc/RpcInvoker.scala` | Trait defining `invokeAndAwait`, `asyncInvokeAndAwait`, `cancelableAsyncInvokeAndAwait`, `invoke`, `schedule*` |
+| `core/js/.../rpc/RemoteAgentClient.scala` | `WasmRpcInvoker` — implements async polling via `pollable.promise()` → `FutureInterop.fromPromise` |
+| `core/js/.../rpc/AgentClientRuntime.scala` | `ResolvedAgent` — `runAwaitable` uses `asyncInvokeAndAwait`; `runCancelableAwaitable` returns `(Future, CancellationToken)` |
+| `core/js/.../rpc/AbstractRemoteMethod.scala` | Base class for generated per-method wrappers (`awaitWith`, `cancelableAwaitWith`, `triggerWith`, `scheduleWith`) |
+| `core/js/.../rpc/CancellationToken.scala` | Wraps a `() => Unit` cancel function (from `FutureInvokeResult.cancel()` or `RawCancellationToken`) |
+| `codegen/.../rpc/RpcCodegen.scala` | Generates `XClient` objects with `apply`, `cancelable`, `trigger`, `scheduleAt`, `scheduleCancelableAt` |
+
+### Async behavior
+
+- `apply()` returns a genuinely async `Future[Out]` — the WASM event loop is yielded while waiting
+- `cancelable()` returns `(Future[Out], CancellationToken)` — calling `token.cancel()` invokes `FutureInvokeResult.cancel()` (best-effort)
+- Multiple concurrent RPC calls are possible since each uses its own `FutureInvokeResult` resource
+- `trigger()`, `scheduleAt()`, `scheduleCancelableAt()` remain synchronous (wrapped in `Future`)
+
 ## Known Issue: Multi-Component App Scala.js Linking Error
 
 When a Scala component is part of a **multi-component** (mixed-language) app, the `build_mixed_language_app` CLI test fails with:

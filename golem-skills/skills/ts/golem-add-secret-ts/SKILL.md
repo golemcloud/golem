@@ -53,13 +53,13 @@ export class MyAgent extends BaseAgent {
 
 ```shell
 # Create secrets (--secret-type uses language-native type names)
-golem agent-secret create apiKey --secret-type string --secret-value "sk-abc123"
-golem agent-secret create db.password --secret-type string --secret-value "s3cret"
+golem secret create apiKey --secret-type string --secret-value "sk-abc123"
+golem secret create db.password --secret-type string --secret-value "s3cret"
 
 # List, update, and delete
-golem agent-secret list
-golem agent-secret update-value apiKey --secret-value "new-value"
-golem agent-secret delete apiKey
+golem secret list
+golem secret update-value apiKey --secret-value "new-value"
+golem secret delete apiKey
 ```
 
 > **Note:** For `update-value` and `delete`, you can also use `--id <uuid>` instead of the positional path.
@@ -71,10 +71,9 @@ For development environments, define secret defaults in `golem.yaml`. These are 
 ```yaml
 secretDefaults:
   local:
-    - path: [apiKey]
-      value: "dev-key-123"
-    - path: [db, password]
-      value: "dev-password"
+    apiKey: "dev-key-123"
+    db:
+      password: "dev-password"
 ```
 
 ## Key Points

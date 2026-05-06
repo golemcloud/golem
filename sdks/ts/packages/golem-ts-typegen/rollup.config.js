@@ -15,6 +15,7 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: './tsconfig.json',
+        include: ['src/**/*'],
         tsconfigOverride: {
           compilerOptions: { declaration: false },
         },

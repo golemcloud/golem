@@ -23,6 +23,7 @@ use std::sync::atomic::AtomicU16;
 use test_r::{sequential_suite, tag_suite, test_dep, timeout_suite};
 
 pub mod agent;
+pub mod agent_sdk_ts;
 pub mod api;
 pub mod blobstore;
 pub mod compatibility;
@@ -60,6 +61,7 @@ tag_suite!(http, group1);
 tag_suite!(websocket, group1);
 tag_suite!(rdbms, group1);
 tag_suite!(agent, group1);
+tag_suite!(agent_sdk_ts, group1);
 
 tag_suite!(hot_update, group2);
 tag_suite!(transactions, group2);

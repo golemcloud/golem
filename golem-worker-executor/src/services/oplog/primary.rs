@@ -18,7 +18,10 @@ use crate::metrics::storage::{
     record_storage_objects_written,
 };
 use crate::model::ExecutionStatus;
-use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
+use crate::services::oplog::{
+    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, cursor_value, next_scan_cursor,
+    scan_modes,
+};
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
     IndexedStorageNamespace,
@@ -27,6 +30,7 @@ use async_lock::Mutex;
 use async_trait::async_trait;
 use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
@@ -137,6 +141,7 @@ impl PrimaryOplogService {
     async fn get_last_index_from_storage(
         indexed_storage: &(dyn IndexedStorage + Send + Sync),
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         retry_config: &RetryConfig,
     ) -> OplogIndex {
         let key = Self::oplog_key(&owned_agent_id.agent_id);
@@ -145,6 +150,7 @@ impl PrimaryOplogService {
             retry_storage_op(retry_config, "get_last_index", &key, || {
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 async move {
@@ -176,6 +182,7 @@ impl PrimaryOplogService {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         max_payload_size: usize,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String> {
         if data.len() > max_payload_size {
@@ -189,6 +196,7 @@ impl PrimaryOplogService {
                     BlobStorageNamespace::OplogPayload {
                         environment_id: owned_agent_id.environment_id(),
                         agent_id: owned_agent_id.agent_id(),
+                        agent_mode,
                     },
                     Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
                     &data,
@@ -208,6 +216,7 @@ impl PrimaryOplogService {
     async fn download_raw_payload(
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
@@ -218,6 +227,7 @@ impl PrimaryOplogService {
                         BlobStorageNamespace::OplogPayload {
                             environment_id: owned_agent_id.environment_id(),
                             agent_id: owned_agent_id.agent_id(),
+                            agent_mode,
                         },
                         Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
                     )
@@ -232,6 +242,7 @@ impl OplogService for PrimaryOplogService {
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -248,6 +259,7 @@ impl OplogService for PrimaryOplogService {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 async move { is.with("oplog", "create").exists(ns, &key).await }
@@ -267,6 +279,7 @@ impl OplogService for PrimaryOplogService {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 let entry = initial_entry.clone();
@@ -281,6 +294,7 @@ impl OplogService for PrimaryOplogService {
 
         self.open(
             owned_agent_id,
+            agent_mode,
             Some(OplogIndex::INITIAL),
             initial_worker_metadata,
             last_known_status,
@@ -292,6 +306,7 @@ impl OplogService for PrimaryOplogService {
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -315,23 +330,29 @@ impl OplogService for PrimaryOplogService {
                     key,
                     last_oplog_index,
                     owned_agent_id.clone(),
+                    agent_mode,
                     initial_worker_metadata.created_by,
                 ),
             )
             .await
     }
 
-    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
+    async fn get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogIndex {
         record_oplog_call("get_last_index");
         Self::get_last_index_from_storage(
             &*self.indexed_storage,
             owned_agent_id,
+            agent_mode,
             &self.retry_config,
         )
         .await
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId) {
+    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
         record_oplog_call("delete");
 
         {
@@ -342,6 +363,7 @@ impl OplogService for PrimaryOplogService {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 async move { is.with("oplog", "delete").delete(ns, &key).await }
@@ -353,6 +375,7 @@ impl OplogService for PrimaryOplogService {
     async fn read(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -368,6 +391,7 @@ impl OplogService for PrimaryOplogService {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 async move {
@@ -383,7 +407,7 @@ impl OplogService for PrimaryOplogService {
         }
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
+    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
         record_oplog_call("exists");
 
         {
@@ -394,6 +418,7 @@ impl OplogService for PrimaryOplogService {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 async move { is.with("oplog", "exists").exists(ns, &key).await }
@@ -406,22 +431,27 @@ impl OplogService for PrimaryOplogService {
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
+        modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         record_oplog_call("scan");
 
-        let (cursor, keys) = {
+        let (active_mode, next_mode) = scan_modes(modes, cursor.cursor);
+        let cursor_val = cursor_value(cursor.cursor);
+
+        let (next_cursor_val, keys) = {
             let is = self.indexed_storage.clone();
             let prefix = Self::key_prefix(component_id);
-            let cursor_val = cursor.cursor;
             retry_storage_op(&self.retry_config, "scan", &prefix, || {
                 let is = is.clone();
                 let prefix = prefix.clone();
                 async move {
                     is.with("oplog", "scan")
                         .scan(
-                            IndexedStorageMetaNamespace::Oplog,
+                            IndexedStorageMetaNamespace::Oplog {
+                                agent_mode: active_mode,
+                            },
                             Some(&prefix),
                             cursor_val,
                             count,
@@ -432,26 +462,29 @@ impl OplogService for PrimaryOplogService {
             .await
         };
 
-        Ok((
-            ScanCursor { cursor, layer: 0 },
-            keys.into_iter()
-                .map(|key| OwnedAgentId {
-                    agent_id: Self::get_agent_id_from_key(&key, component_id),
-                    environment_id: *environment_id,
-                })
-                .collect(),
-        ))
+        let next_cursor = next_scan_cursor(next_cursor_val, active_mode, next_mode, cursor.layer);
+        let owned_agent_ids = keys
+            .into_iter()
+            .map(|key| OwnedAgentId {
+                agent_id: Self::get_agent_id_from_key(&key, component_id),
+                environment_id: *environment_id,
+            })
+            .collect();
+
+        Ok((next_cursor, owned_agent_ids))
     }
 
     async fn upload_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String> {
         Self::upload_raw_payload(
             self.blob_storage.clone(),
             self.max_payload_size,
             owned_agent_id,
+            agent_mode,
             data,
         )
         .await
@@ -460,12 +493,14 @@ impl OplogService for PrimaryOplogService {
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         Self::download_raw_payload(
             self.blob_storage.clone(),
             owned_agent_id,
+            agent_mode,
             payload_id,
             md5_hash,
         )
@@ -485,6 +520,7 @@ struct CreateOplogConstructor {
     key: String,
     last_oplog_idx: Option<OplogIndex>,
     owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
     account_id: AccountId,
 }
 
@@ -501,6 +537,7 @@ impl CreateOplogConstructor {
         key: String,
         last_oplog_idx: Option<OplogIndex>,
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         account_id: AccountId,
     ) -> Self {
         Self {
@@ -514,6 +551,7 @@ impl CreateOplogConstructor {
             key,
             last_oplog_idx,
             owned_agent_id,
+            agent_mode,
             account_id,
         }
     }
@@ -528,6 +566,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 PrimaryOplogService::get_last_index_from_storage(
                     &*self.indexed_storage,
                     &self.owned_agent_id,
+                    self.agent_mode,
                     &self.retry_config,
                 )
                 .await
@@ -544,6 +583,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.key,
             last_oplog_idx,
             self.owned_agent_id,
+            self.agent_mode,
             self.account_id,
             close,
         ))
@@ -577,6 +617,7 @@ impl PrimaryOplog {
         key: String,
         last_oplog_idx: OplogIndex,
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         account_id: AccountId,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
@@ -594,6 +635,7 @@ impl PrimaryOplog {
                 last_committed_idx: last_oplog_idx,
                 last_oplog_idx,
                 owned_agent_id,
+                agent_mode,
                 account_id,
                 last_added_non_hint_entry: None,
                 persistence_level: PersistenceLevel::Smart,
@@ -617,6 +659,7 @@ struct PrimaryOplogState {
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
     owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
     account_id: AccountId,
     last_added_non_hint_entry: Option<OplogIndex>,
     persistence_level: PersistenceLevel,
@@ -638,11 +681,13 @@ impl PrimaryOplogState {
         let bytes_written = {
             let is = self.indexed_storage.clone();
             let agent_id = self.owned_agent_id.agent_id();
+            let agent_mode = self.agent_mode;
             let key = self.key.clone();
             retry_storage_op(&self.retry_config, "append", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 let pairs_ref = &pairs_ref;
@@ -741,12 +786,14 @@ impl PrimaryOplogState {
         let entries: Vec<(u64, OplogEntry)> = {
             let is = self.indexed_storage.clone();
             let agent_id = self.owned_agent_id.agent_id();
+            let agent_mode = self.agent_mode;
             let key = self.key.clone();
             let idx: u64 = oplog_index.into();
             retry_storage_op(&self.retry_config, "read", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 async move {
@@ -777,6 +824,7 @@ impl PrimaryOplogState {
         let mut result: BTreeMap<OplogIndex, OplogEntry> = {
             let is = self.indexed_storage.clone();
             let agent_id = self.owned_agent_id.agent_id();
+            let agent_mode = self.agent_mode;
             let key = self.key.clone();
             let start: u64 = oplog_index.into();
             let end: u64 = last_idx.into();
@@ -784,6 +832,7 @@ impl PrimaryOplogState {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 async move {
@@ -824,12 +873,14 @@ impl PrimaryOplogState {
         {
             let is = self.indexed_storage.clone();
             let agent_id = self.owned_agent_id.agent_id();
+            let agent_mode = self.agent_mode;
             let key = self.key.clone();
             let dropped_id: u64 = last_dropped_id.into();
             retry_storage_op(&self.retry_config, "drop_prefix", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 async move {
@@ -848,11 +899,13 @@ impl PrimaryOplogState {
         {
             let is = self.indexed_storage.clone();
             let agent_id = self.owned_agent_id.agent_id();
+            let agent_mode = self.agent_mode;
             let key = self.key.clone();
             retry_storage_op(&self.retry_config, "length", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 async move { is.with("oplog", "length").length(ns, &key).await }
@@ -867,11 +920,13 @@ impl PrimaryOplogState {
         {
             let is = self.indexed_storage.clone();
             let agent_id = self.owned_agent_id.agent_id();
+            let agent_mode = self.agent_mode;
             let key = self.key.clone();
             retry_storage_op(&self.retry_config, "delete", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
+                    agent_mode,
                 };
                 let key = key.clone();
                 async move { is.with("oplog", "delete").delete(ns, &key).await }
@@ -957,11 +1012,12 @@ impl Oplog for PrimaryOplog {
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
-        let (blob_storage, owned_agent_id, account_id, max_length) = {
+        let (blob_storage, owned_agent_id, agent_mode, account_id, max_length) = {
             let state = self.state.lock().await;
             (
                 state.blob_storage.clone(),
                 state.owned_agent_id.clone(),
+                state.agent_mode,
                 state.account_id,
                 state.max_payload_size,
             )
@@ -971,6 +1027,7 @@ impl Oplog for PrimaryOplog {
             blob_storage,
             max_length,
             &owned_agent_id,
+            agent_mode,
             data,
         )
         .await;
@@ -991,13 +1048,18 @@ impl Oplog for PrimaryOplog {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
-        let (blob_storage, owned_agent_id) = {
+        let (blob_storage, owned_agent_id, agent_mode) = {
             let state = self.state.lock().await;
-            (state.blob_storage.clone(), state.owned_agent_id.clone())
+            (
+                state.blob_storage.clone(),
+                state.owned_agent_id.clone(),
+                state.agent_mode,
+            )
         };
         PrimaryOplogService::download_raw_payload(
             blob_storage,
             &owned_agent_id,
+            agent_mode,
             payload_id,
             md5_hash,
         )

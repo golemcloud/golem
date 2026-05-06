@@ -49,6 +49,7 @@ pub fn AgentClient::invoke_and_await(Self, String, @golemcloud/golem_sdk/interfa
 pub fn AgentClient::new_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Self raise @common.AgentError
 pub fn AgentClient::new_phantom_with_config(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue, Array[@common.TypedAgentConfigValue]) -> Self raise @common.AgentError
 pub fn AgentClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
+pub fn AgentClient::schedule_cancelable_invocation(Self, @wallClock.Datetime, String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> @host.CancellationToken
 pub fn AgentClient::schedule_invocation(Self, @wallClock.Datetime, String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Unit
 
 // Type aliases

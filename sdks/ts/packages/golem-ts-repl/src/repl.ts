@@ -262,8 +262,8 @@ export class Repl {
 
     replServer.defineCommand('reload', {
       help: 'Reload the REPL',
-      async action() {
-        await CliReplInterop.exitWithReloadCode();
+      action() {
+        void CliReplInterop.exitWithReloadCode();
       },
     });
 

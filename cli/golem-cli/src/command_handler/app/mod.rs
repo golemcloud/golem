@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::check::plan_dependency_fixes;
+use crate::app::build::check::{
+    create_claude_symlink_if_needed, plan_dependency_fixes, resolve_claude_skills_context,
+};
 use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
@@ -26,7 +28,7 @@ use crate::command_handler::app::deploy_diff::{
     DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
     RollbackEntityDetails, RollbackQuickDiff,
 };
-use crate::command_handler::app::template::{TemplateHandler, create_claude_symlink};
+use crate::command_handler::app::template::TemplateHandler;
 use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::error::{HintError, NonSuccessfulExit};
@@ -38,9 +40,12 @@ use crate::log::{
     logged_failed_to, logged_finished_or_failed_to, logln,
 };
 use crate::model::GuestLanguage;
+use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
+    WithSource,
 };
+use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult, PostDeploySummary, UpdateStagedComponentError};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
@@ -56,8 +61,9 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::schema_evolution::validate_schema_evolution;
+use golem_common::model::agent::{AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType};
+use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
@@ -68,8 +74,9 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_wasm::analysis::AnalysedType;
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -407,6 +414,31 @@ impl AppCommandHandler {
         let agent_types = self.list_agent_types(&environment).await?;
 
         self.ctx.log_handler().log_view(&agent_types);
+
+        Ok(())
+    }
+
+    pub async fn cmd_get_agent_type(&self, agent_type_name: AgentTypeName) -> anyhow::Result<()> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
+        let Some(agent_type) = self
+            .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
+            .await?
+        else {
+            log_error(format!(
+                "Agent type {} not found",
+                agent_type_name.0.log_color_highlight()
+            ));
+            bail!(NonSuccessfulExit);
+        };
+
+        self.ctx
+            .log_handler()
+            .log_view(&AgentTypeView::new(&agent_type, true));
 
         Ok(())
     }
@@ -1521,11 +1553,42 @@ impl AppCommandHandler {
     ) -> anyhow::Result<CurrentDeployment> {
         let app_ctx = self.ctx.app_context_lock().await;
 
-        let agent_secret_defaults = app_ctx
+        let raw_agent_secret_defaults = app_ctx
             .some_or_err()?
             .application()
-            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name)
-            .apply(resolve_secret_defaults)?;
+            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
+
+        let declared_secret_paths = collect_declared_agent_secret_paths(deploy_diff)?;
+
+        let (agent_secret_defaults, unused_secret_default_paths) =
+            materialize_agent_secret_defaults(
+                raw_agent_secret_defaults.as_ref(),
+                &declared_secret_paths,
+            );
+
+        if !unused_secret_default_paths.is_empty() {
+            let rendered_unused_secret_default_paths = unused_secret_default_paths
+                .iter()
+                .map(|path| path.join("."))
+                .collect::<Vec<_>>();
+
+            log_warn_action(
+                "Ignoring unused secret default paths",
+                rendered_unused_secret_default_paths.join(", "),
+            );
+
+            if !self
+                .ctx
+                .interactive_handler()
+                .confirm_ignore_unused_agent_secret_defaults(
+                    &rendered_unused_secret_default_paths,
+                )?
+            {
+                bail!(NonSuccessfulExit);
+            }
+        }
+
+        let agent_secret_defaults = agent_secret_defaults.apply(resolve_secret_defaults)?;
 
         let retry_policy_defaults = app_ctx
             .some_or_err()?
@@ -1795,7 +1858,9 @@ impl AppCommandHandler {
     }
 
     fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-        let plan = plan_dependency_fixes(build_ctx)?;
+        let claude_skills_ctx =
+            resolve_claude_skills_context(build_ctx.application().app_root_dir())?;
+        let plan = plan_dependency_fixes(build_ctx, &claude_skills_ctx)?;
 
         for warning in &plan.warnings {
             logln("");
@@ -1804,7 +1869,10 @@ impl AppCommandHandler {
         }
 
         if plan.is_empty() {
-            create_claude_symlink(build_ctx.application().app_root_dir())?;
+            create_claude_symlink_if_needed(
+                build_ctx.application().app_root_dir(),
+                &claude_skills_ctx,
+            )?;
             return Ok(());
         }
 
@@ -1858,7 +1926,10 @@ impl AppCommandHandler {
             }
         }
 
-        create_claude_symlink(build_ctx.application().app_root_dir())?;
+        create_claude_symlink_if_needed(
+            build_ctx.application().app_root_dir(),
+            &claude_skills_ctx,
+        )?;
 
         Ok(())
     }
@@ -2050,96 +2121,6 @@ impl AppCommandHandler {
         Ok(true)
     }
 
-    // TODO: FCL
-    /*
-    pub fn get_templates(
-        &self,
-        requested_template_name: &str,
-    ) -> anyhow::Result<(Option<&AppTemplateCommon>, &AppTemplateComponent)> {
-        let segments = requested_template_name.split("/").collect::<Vec<_>>();
-        let (language, template_name): (String, Option<String>) = match segments.len() {
-            1 => (segments[0].to_string(), None),
-            2 => (segments[0].to_string(), {
-                let template_name = segments[1].to_string();
-                if template_name.is_empty() {
-                    None
-                } else {
-                    Some(template_name)
-                }
-            }),
-            _ => {
-                log_error("Failed to parse template name");
-                self.log_templates_help(None, None)?;
-                bail!(NonSuccessfulExit);
-            }
-        };
-
-        let language = match GuestLanguage::from_string(language) {
-            Some(language) => language,
-            None => {
-                log_error("Failed to parse language part of the template!");
-                self.log_templates_help(None, None)?;
-                bail!(NonSuccessfulExit);
-            }
-        };
-
-        let template_name = template_name
-            .map(AppTemplateName::from)
-            .unwrap_or_else(|| AppTemplateName::from("default"));
-
-        let app_template_repo = self.ctx.app_template_repo()?;
-
-        let common_template = match app_template_repo.common_template(language) {
-            Ok(common_template) => common_template.as_ref(),
-            Err(err) => {
-                log_anyhow_error(&err);
-                self.log_templates_help(None, None)?;
-                bail!(NonSuccessfulExit);
-            }
-        };
-
-        let component_template =
-            match app_template_repo.component_template(language, &template_name) {
-                Ok(component_template) => component_template,
-                Err(err) => {
-                    log_anyhow_error(&err);
-                    self.log_templates_help(None, None)?;
-                    bail!(NonSuccessfulExit);
-                }
-            };
-
-        Ok((common_template, component_template))
-    }
-
-    pub fn generate_component(
-        &self,
-        template_apply_plan: &mut TemplateApplyPlan,
-        application_name: &ApplicationName,
-        component_name: &ComponentName,
-        app_dir: &Path,
-        template_name: &str,
-    ) -> anyhow::Result<()> {
-        let (common_template, component_template) = self.get_templates(template_name)?;
-
-        if let Some(common_template) = common_template {
-            template_apply_plan.add(
-                common_template.0.name.as_str(),
-                &common_template.generate(application_name, app_dir)?,
-            )?;
-        }
-
-        template_apply_plan.add(
-            component_template.0.name.as_str(),
-            &component_template.generate(
-                application_name,
-                component_name,
-                app_dir
-            )?,
-        )?;
-
-        Ok(())
-    }*/
-
     pub fn log_languages_help(&self) {
         logln(format!("\n{}", "Available languages:".underline().bold(),));
         for language in GuestLanguage::iter() {
@@ -2229,4 +2210,75 @@ fn resolve_secret_defaults(
             })
         })
         .collect()
+}
+
+fn collect_declared_agent_secret_paths(
+    deploy_diff: &DeployDiff,
+) -> anyhow::Result<BTreeSet<Vec<String>>> {
+    let mut declared_secret_types = BTreeMap::<Vec<String>, (AnalysedType, String)>::new();
+
+    for component in deploy_diff.deployable_components.values() {
+        for agent_type in &component.agent_types {
+            for config in &agent_type.config {
+                if config.source != AgentConfigSource::Secret {
+                    continue;
+                }
+
+                if let Some((existing_type, existing_agent_type)) =
+                    declared_secret_types.get(&config.path)
+                {
+                    if existing_type != &config.value_type {
+                        bail!(
+                            "Conflicting secret declaration for path '{}' across agents '{}' and '{}': declared types differ ({:?} vs {:?}).",
+                            config.path.join(".").log_color_error_highlight(),
+                            existing_agent_type.log_color_highlight(),
+                            agent_type.type_name.0.log_color_highlight(),
+                            existing_type,
+                            config.value_type,
+                        );
+                    }
+                } else {
+                    declared_secret_types.insert(
+                        config.path.clone(),
+                        (config.value_type.clone(), agent_type.type_name.0.clone()),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(declared_secret_types.into_keys().collect())
+}
+
+fn materialize_agent_secret_defaults(
+    raw_default: Option<&WithSource<serde_json::Value>>,
+    declared_secret_paths: &BTreeSet<Vec<String>>,
+) -> (Vec<DeploymentAgentSecretDefault>, Vec<Vec<String>>) {
+    let mut materialized_defaults = Vec::new();
+    let mut unused_paths = Vec::new();
+
+    if let Some(raw_default) = raw_default {
+        let mut consumed_paths = Vec::new();
+
+        for declared_path in declared_secret_paths {
+            if let Some(secret_value) = value_at_path(&raw_default.value, declared_path) {
+                materialized_defaults.push(DeploymentAgentSecretDefault {
+                    path: AgentSecretPath(declared_path.clone()),
+                    secret_value: secret_value.clone(),
+                });
+                consumed_paths.push(declared_path.clone());
+            }
+        }
+
+        unused_paths.extend(collect_unused_leaf_paths(&raw_default.value, |leaf_path| {
+            consumed_paths
+                .iter()
+                .any(|consumed_path| leaf_path.starts_with(consumed_path))
+        }));
+    }
+
+    unused_paths.sort();
+    unused_paths.dedup();
+
+    (materialized_defaults, unused_paths)
 }

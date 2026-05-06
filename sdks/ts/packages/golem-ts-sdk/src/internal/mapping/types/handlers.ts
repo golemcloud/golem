@@ -81,7 +81,7 @@ const handlers: { [K in TsType['kind']]: Handler<K> } = {
   others: handleOthers,
   'unresolved-type': handleUnresolved,
   array: handleArray,
-  config: unsupported('Config'),
+  config: unsupportedWithHint('Config', 'Use a plain type literal instead.'),
   principal: handlePrincipal,
   'quota-token': handleQuotaToken,
 };

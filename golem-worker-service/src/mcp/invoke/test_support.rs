@@ -37,7 +37,7 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
-use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
 use golem_service_base::model::component::Component;
@@ -332,7 +332,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: AuthCtx,
         _: Option<InvocationContext>,
         _: Option<golem_api_grpc::proto::golem::component::Principal>,
-    ) -> WorkerResult<AgentId> {
+    ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         unimplemented!()
     }
 

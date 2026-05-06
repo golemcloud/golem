@@ -116,7 +116,7 @@ steps:
           equals: []
 
   - id: "wait-for-scheduled-call"
-    sleep: 30
+    sleep: 45
 
   - id: "recorder-updated-after-deadline"
     invoke_json:

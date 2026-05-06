@@ -75,17 +75,17 @@ Secrets are environment-scoped — each deployment environment has its own set o
 
 ```shell
 # Create secrets in the current environment
-golem agent-secret create apiKey --secret-type String --secret-value "sk-abc123"
-golem agent-secret create db.password --secret-type String --secret-value "s3cret"
+golem secret create apiKey --secret-type String --secret-value "sk-abc123"
+golem secret create db.password --secret-type String --secret-value "s3cret"
 
 # List all secrets
-golem agent-secret list
+golem secret list
 
 # Update a secret value
-golem agent-secret update-value apiKey --secret-value "new-value"
+golem secret update-value apiKey --secret-value "new-value"
 
 # Delete a secret
-golem agent-secret delete apiKey
+golem secret delete apiKey
 ```
 
 > **Note:** For `update-value` and `delete`, you can also use `--id <uuid>` instead of the positional path.
@@ -97,17 +97,16 @@ For local development convenience, set defaults under `secretDefaults`. These ar
 ```yaml
 secretDefaults:
   local:
-    - path: [apiKey]
-      value: "dev-key-123"
-    - path: [db, password]
-      value: "dev-password"
+    apiKey: "dev-key-123"
+    db:
+      password: "dev-password"
 ```
 
 ## Key Points
 
 - Secrets use the same `@config.Config[T]` constructor injection mechanism as regular typed config
 - If the agent also needs non-secret typed config guidance, use `golem-add-config-moonbit` alongside this skill
-- Secret paths are **normalized to camelCase** by the platform — MoonBit `snake_case` field names like `api_key` become `apiKey` in the CLI and manifest (e.g., `golem agent-secret create apiKey ...`)
+- Secret paths are **normalized to camelCase** by the platform — MoonBit `snake_case` field names like `api_key` become `apiKey` in the CLI and manifest (e.g., `golem secret create apiKey ...`)
 - The `--secret-type` argument accepts type names using the project's language syntax (e.g., `String`, `UInt`, `Bool`) or JSON-encoded analysed types as a fallback
 - Secrets are stored **per-environment**, not per-agent-instance
 - Missing required secrets cause agent creation/deployment to fail

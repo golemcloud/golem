@@ -13,43 +13,71 @@ All helper functions (`atomically`, `withPersistenceLevel`, `withIdempotenceMode
 
 ## Atomic Operations
 
-Group side effects so they are retried together on failure:
+Group **external, observable side effects** (HTTP calls, calls to other agents, file/network I/O) so that on a crash the whole group is replayed together. If the agent fails partway through the block, recovery will re-execute the **entire** block from the start instead of resuming from the middle — so any external effects performed before the crash will be performed again.
+
+> **What this is NOT.** `atomically` is **not** an STM/transaction primitive and **not** for grouping in-memory state mutations. Golem agents are single-threaded, and in-memory state is automatically rebuilt by oplog replay on recovery, so wrapping plain in-memory updates in `atomically` does nothing useful. The terminology overlaps with Haskell STM, database transactions, and `synchronized` blocks, but the semantics are different: this is purely about how durable, externally-observable effects are re-executed across a crash boundary.
+>
+> **It is also NOT how you reduce oplog size or speed up recovery.** Despite the description's mention of "oplog management" and "persistence control", `atomically`/persistence-level/idempotency-mode APIs do not shrink the oplog or skip replay. If your concern is that the oplog is growing too large or recovery/replay is becoming slow (long-running agents, heartbeats, polling, recurring tasks), use **snapshot-based recovery** instead — see [`golem-custom-snapshot-ts`](../golem-custom-snapshot-ts/SKILL.md). You cannot opt out of oplog writes for a durable agent.
+>
+> Use it only when you have **two or more external side effects** that must not be left in a "first one happened, second one didn't" state across a recovery.
+
+Good use case — two external calls that must replay together:
 
 ```typescript
 import { atomically } from '@golemcloud/golem-ts-sdk';
 
+// Reserve inventory and charge the customer — if we crash between them,
+// we want recovery to re-run BOTH calls, not skip the reservation.
+
 // Sync
-const [a, b] = atomically(() => {
-    const a = sideEffect1();
-    const b = sideEffect2(a);
-    return [a, b];
+const order = atomically(() => {
+    const reservation = inventoryApi.reserve(itemId, qty);
+    const charge = paymentApi.charge(customer, price);
+    return { reservation, charge };
 });
 
 // Async
-const [a, b] = await atomically(async () => {
-    const a = await sideEffect1();
-    const b = await sideEffect2(a);
-    return [a, b];
+const order = await atomically(async () => {
+    const reservation = await inventoryApi.reserve(itemId, qty);
+    const charge = await paymentApi.charge(customer, price);
+    return { reservation, charge };
 });
 ```
 
-If the agent fails mid-block, the entire block is re-executed on recovery rather than resuming from the middle.
+Bad use case — pure in-memory updates that already replay deterministically:
+
+```typescript
+// DON'T do this. Wrapping in-memory mutations adds nothing — the oplog
+// already rebuilds `this.balance` and `this.lastTx` deterministically.
+atomically(() => {
+    this.balance -= amount;
+    this.lastTx = now;
+});
+```
 
 ## Persistence Level Control
 
-Temporarily disable oplog recording for performance-sensitive sections:
+Adjust how the oplog is interpreted for a section of code. Setting the level to `persist-nothing` does **not** disable oplog recording — entries are still written, but they are treated only as an observable log and are **not used for replay**. On recovery, the side effects are **not** re-executed and **not** replayed; if the block naively runs the same side effects during replay, recovery will fail.
+
+This is **not** a knob for application code. Its primary use case is **authoring Golem-specific libraries** that implement their own custom durability on top of raw side effects. Code inside such a block must:
+
+1. Explicitly check whether the agent is in live or replay mode (via the durability API).
+2. Skip the raw side effects during replay.
+3. Use the durability APIs to record/recover state in a custom way.
 
 ```typescript
 import { withPersistenceLevel } from '@golemcloud/golem-ts-sdk';
 
 // Sync
 withPersistenceLevel({ tag: 'persist-nothing' }, () => {
-    // No oplog entries — side effects will be replayed on recovery
+    // Oplog entries here are observable only, never used for replay.
+    // The block MUST check live vs replay mode and use custom durability
+    // primitives — naively running side effects will break recovery.
 });
 
 // Async
 await withPersistenceLevel({ tag: 'persist-nothing' }, async () => {
-    await someAsyncOperation();
+    // Same constraints as the sync version — custom durability required.
 });
 ```
 

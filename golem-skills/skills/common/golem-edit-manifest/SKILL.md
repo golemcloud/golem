@@ -47,13 +47,13 @@ clean:                             # Extra paths for `golem clean`
   - "path/to/clean"
 
 secretDefaults:                    # Secret defaults per environment
-  <env-name>: [...]
+  <env-name>: {...}
 
 retryPolicyDefaults:               # Retry policy defaults per environment
-  <env-name>: [...]
+  <env-name>: {...}
 
 resourceDefaults:                  # Quota resource defaults per environment
-  <env-name>: [...]
+  <env-name>: {...}
 ```
 
 ## Components
@@ -440,16 +440,14 @@ Missing host variables cause deployment failure.
 
 ## Secret Defaults
 
-Secret defaults per environment. Each entry specifies a JSON path and value:
+Secret defaults per environment use the same nested object style as `config`:
 
 ```yaml
 secretDefaults:
   local:
-    - path: ["agents", "MyAgent", "config", "api_key"]
-      value: "test-key-123"
+    apiKey: "test-key-123"
   prod:
-    - path: ["agents", "MyAgent", "config", "api_key"]
-      value: "{{ PROD_API_KEY }}"
+    apiKey: "{{ PROD_API_KEY }}"
 ```
 
 ## Retry Policy Defaults
@@ -459,7 +457,7 @@ Named retry policies created in the environment during deployment:
 ```yaml
 retryPolicyDefaults:
   local:
-    - name: default-retry
+    default-retry:
       priority: 10
       predicate: "true"                    # Always match
       policy:
@@ -518,7 +516,7 @@ Quota resource definitions created during deployment:
 ```yaml
 resourceDefaults:
   local:
-    - name: api-calls
+    api-calls:
       limit:
         type: Rate
         value: 100
@@ -527,7 +525,7 @@ resourceDefaults:
       enforcementAction: reject        # reject, throttle, or terminate
       unit: request
       units: requests
-    - name: storage
+    storage:
       limit:
         type: Capacity
         value: 1073741824              # 1 GB

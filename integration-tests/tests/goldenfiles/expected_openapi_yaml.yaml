@@ -2,9 +2,14 @@ openapi: 3.0.0
 info:
   title: Managed api provided by Golem
   version: 1.0.0
+servers:
+- url: https://<ENV_ID>.golem.cloud
+- url: http://<ENV_ID>.golem.cloud
 paths:
   /cors-agents/{agent-name}/inherited:
     get:
+      description: ''
+      operationId: CorsAgent-inherited
       parameters:
       - in: path
         name: agent-name
@@ -59,6 +64,8 @@ paths:
                 - GET
   /cors-agents/{agent-name}/preflight-required:
     post:
+      description: ''
+      operationId: CorsAgent-preflight
       parameters:
       - in: path
         name: agent-name
@@ -130,6 +137,8 @@ paths:
                 - POST
   /cors-agents/{agent-name}/wildcard:
     get:
+      description: ''
+      operationId: CorsAgent-wildcard
       parameters:
       - in: path
         name: agent-name
@@ -184,6 +193,8 @@ paths:
                 - GET
   /http-agents/{agent-name}/json-body/{id}:
     post:
+      description: Accepts JSON body parameters and returns a success response
+      operationId: HttpAgent-json_body
       parameters:
       - in: path
         name: agent-name
@@ -232,6 +243,8 @@ paths:
                 - ok
   /http-agents/{agent-name}/multi-path-vars/{first}/{second}:
     get:
+      description: Combines two path variables with a colon separator
+      operationId: HttpAgent-multi_path_vars
       parameters:
       - in: path
         name: agent-name
@@ -271,6 +284,8 @@ paths:
                 - joined
   /http-agents/{agent-name}/path-and-header/{resource-id}:
     get:
+      description: Combines a path variable with a header value in the response
+      operationId: HttpAgent-path_and_header
       parameters:
       - in: path
         name: agent-name
@@ -313,6 +328,8 @@ paths:
                 - request_id
   /http-agents/{agent-name}/path-and-query/{item-id}:
     get:
+      description: Combines a path variable with a query parameter in the response
+      operationId: HttpAgent-path_and_query
       parameters:
       - in: path
         name: agent-name
@@ -360,6 +377,8 @@ paths:
                 - limit
   /http-agents/{agent-name}/resource/{id}:
     patch:
+      description: Updates a resource using PATCH method with provided update data
+      operationId: HttpAgent-patch_resource
       parameters:
       - in: path
         name: agent-name
@@ -419,6 +438,8 @@ paths:
                 - method
   /http-agents/{agent-name}/resource/{id}/partial:
     patch:
+      description: Performs a partial update on a resource using PATCH method
+      operationId: HttpAgent-patch_partial
       parameters:
       - in: path
         name: agent-name
@@ -456,6 +477,8 @@ paths:
                 - method
   /http-agents/{agent-name}/resp/binary:
     get:
+      description: Returns binary data as an unstructured binary response
+      operationId: HttpAgent-binary_response
       parameters:
       - in: path
         name: agent-name
@@ -475,6 +498,8 @@ paths:
                 format: binary
   /http-agents/{agent-name}/resp/json:
     get:
+      description: Returns a JSON response with a value field
+      operationId: HttpAgent-json_response_func
       parameters:
       - in: path
         name: agent-name
@@ -498,6 +523,8 @@ paths:
                 - value
   /http-agents/{agent-name}/resp/no-content:
     get:
+      description: Returns a 204 No Content response
+      operationId: HttpAgent-no_content
       parameters:
       - in: path
         name: agent-name
@@ -512,6 +539,8 @@ paths:
           description: Response 204
   /http-agents/{agent-name}/resp/optional/{found}:
     get:
+      description: Returns an optional response based on the found parameter
+      operationId: HttpAgent-optional_response_func
       parameters:
       - in: path
         name: agent-name
@@ -545,6 +574,8 @@ paths:
           description: Response 404
   /http-agents/{agent-name}/resp/result-json-json/{ok}:
     get:
+      description: Returns either a success or error result based on the ok parameter
+      operationId: HttpAgent-result_ok_or_err
       parameters:
       - in: path
         name: agent-name
@@ -587,6 +618,8 @@ paths:
                 - error
   /http-agents/{agent-name}/resp/result-json-void:
     get:
+      description: Returns either a JSON success result or unit error
+      operationId: HttpAgent-result_json_void
       parameters:
       - in: path
         name: agent-name
@@ -617,6 +650,8 @@ paths:
                 format: binary
   /http-agents/{agent-name}/resp/result-void-json:
     post:
+      description: Returns either unit success or a JSON error result
+      operationId: HttpAgent-result_void_err
       parameters:
       - in: path
         name: agent-name
@@ -647,6 +682,8 @@ paths:
                 - error
   /http-agents/{agent-name}/rest/{tail}:
     get:
+      description: Returns the remaining path after the /rest prefix
+      operationId: HttpAgent-remaining_path
       parameters:
       - in: path
         name: agent-name
@@ -679,6 +716,8 @@ paths:
                 - tail
   /http-agents/{agent-name}/restricted-unstructured-binary/{bucket}:
     post:
+      description: Accepts restricted binary data (image/gif only) and returns the payload size
+      operationId: HttpAgent-restricted_unstructured_binary
       parameters:
       - in: path
         name: agent-name
@@ -714,6 +753,8 @@ paths:
                 format: int64
   /http-agents/{agent-name}/string-path-var/{path-var}:
     get:
+      description: Returns the provided path variable as a response
+      operationId: HttpAgent-string_path_var
       parameters:
       - in: path
         name: agent-name
@@ -745,6 +786,8 @@ paths:
                 - value
   /http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}:
     post:
+      description: Accepts unrestricted binary data and returns the payload size
+      operationId: HttpAgent-unrestricted_unstructured_binary
       parameters:
       - in: path
         name: agent-name
@@ -800,6 +843,8 @@ paths:
                 additionalProperties: true
   /webhook-agents/{agent-name}/set-test-server-url:
     post:
+      description: ''
+      operationId: WebhookAgent-set_test_server_url
       parameters:
       - in: path
         name: agent-name
@@ -826,6 +871,8 @@ paths:
           description: Response 204
   /webhook-agents/{agent-name}/test-webhook:
     post:
+      description: ''
+      operationId: WebhookAgent-test_webhook
       parameters:
       - in: path
         name: agent-name

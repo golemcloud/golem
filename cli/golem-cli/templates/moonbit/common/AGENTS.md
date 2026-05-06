@@ -49,12 +49,16 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-manage-plugins` | Managing Golem plugins — listing available plugins, installing and configuring plugins via golem.yaml or CLI, and understanding built-in plugins like the OTLP exporter |
 | `golem-add-config-moonbit` | Adding typed configuration to a MoonBit Golem agent |
 | `golem-add-secret-moonbit` | Adding secrets to MoonBit Golem agents |
+| `golem-quota-moonbit` | Adding resource quotas (rate limiting, capacity, concurrency) to MoonBit Golem agents using QuotaToken and reservations |
+| `golem-retry-policies-moonbit` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `with_named_policy!`, and live CLI management |
 | `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-moonbit` | Reading and writing files from agent code |
 | `golem-add-llm-moonbit` | Adding LLM and AI capabilities by calling provider APIs with WASI HTTP |
 | `golem-make-http-request-moonbit` | Making outgoing HTTP requests from agent code |
+| `golem-logging-moonbit` | Adding logging to a MoonBit Golem agent using the `@logging` module and `wasi:logging` |
+| `golem-enable-otlp-moonbit` | Enabling the OpenTelemetry (OTLP) plugin for a MoonBit agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the `@context` API |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
 | `golem-list-and-filter-agents` | Listing and querying agents with filters |
@@ -63,6 +67,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-undo-agent-state` | Reverting agent state by undoing operations |
 | `golem-interrupt-resume-agent` | Interrupting and resuming a Golem agent |
 | `golem-test-crash-recovery` | Simulating a crash on an agent for testing crash recovery |
+| `golem-integration-test-setup` | Setting up a dedicated Golem environment for integration testing — isolated local server, test environment in golem.yaml, dynamic port discovery, and non-interactive deploys |
 | `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
 | `golem-delete-agent` | Deleting an agent instance |
 | `golem-interactive-repl-moonbit` | Using the Golem REPL for interactive testing and scripting of agents |
@@ -85,6 +90,20 @@ Key concepts:
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see Agent-to-Agent Communication)
 - An agent is created implicitly on first invocation — no separate creation step needed
+- **Async handles cannot outlive invocations** — every WASI `pollable` or `future-*` resource (e.g. those returned by `@http.handle`) must be subscribed to / `get()`-ed within the same invocation; do not store unresolved pollables or futures in agent state to consume them from a later invocation
+
+## Durability & Automatic Retries
+
+Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `match` + retry patterns, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter, clamped to [100ms, 1s]) applies when no user-defined policy matches.
+
+The following are retried transparently:
+
+- **HTTP requests** to external services (via `wasi:http` and friends)
+- **RPC calls** between agents
+- **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
+- **Panics and unhandled errors** (raised via `raise` or propagated with `!`) escaping an agent method — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
+
+Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-moonbit` skill.
 
 ## Project Structure
 
@@ -110,7 +129,7 @@ golem-temp/                       # Build artifacts (gitignored)
 
 ## Name Mapping
 
-All MoonBit identifiers are used **as-is** (matching the source code) when used externally in CLI commands, Rib scripts, REPL, and agent IDs:
+All MoonBit identifiers are used **as-is** (matching the source code) when used externally in CLI commands, REPL, and agent IDs:
 
 - **Agent type names**: `CounterAgent` → `CounterAgent`, `TaskManager` → `TaskManager` (PascalCase)
 - **Method names**: `get_value` → `get_value`, `add_task` → `add_task` (snake_case)

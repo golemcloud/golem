@@ -65,6 +65,46 @@ class WeatherAgent extends BaseAgent {
 }
 ```
 
+## Returning Failures
+
+Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
+
+- **Uncaught errors** (thrown exceptions, rejected promises) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
+- **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's return type using the SDK's `Result<T, E>` type.
+
+```typescript
+import { BaseAgent, agent, Result } from '@golemcloud/golem-ts-sdk';
+
+type WithdrawError =
+    | { tag: 'insufficientFunds'; available: number }
+    | { tag: 'accountClosed' };
+
+@agent()
+class Wallet extends BaseAgent {
+    private readonly owner: string;
+    private balance: number = 0;
+    private closed: boolean = false;
+
+    constructor(owner: string) {
+        super();
+        this.owner = owner;
+    }
+
+    async withdraw(amount: number): Promise<Result<number, WithdrawError>> {
+        if (this.closed) {
+            return Result.err({ tag: 'accountClosed' });
+        }
+        if (amount > this.balance) {
+            return Result.err({ tag: 'insufficientFunds', available: this.balance });
+        }
+        this.balance -= amount;
+        return Result.ok(this.balance);
+    }
+}
+```
+
+Returning `Result.err(...)` completes the invocation successfully — the caller receives the error as a value. Throwing (e.g. `throw new Error(...)`) or returning a rejected promise will instead trigger a retry and eventually fail the whole agent.
+
 ## Related Skills
 
 - Load `golem-js-runtime` for details on the QuickJS runtime environment, available Web/Node.js APIs, and npm compatibility

@@ -98,7 +98,7 @@ fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)
 
 impl TextView for Vec<SecuritySchemeDto> {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Name").fixed(),
             Column::new("ID").fixed(),
             Column::new("Revision").fixed_right(),

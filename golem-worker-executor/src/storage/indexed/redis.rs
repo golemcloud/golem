@@ -37,18 +37,33 @@ impl RedisIndexedStorage {
 
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog { agent_id: _ } => format!("worker:oplog:{key}"),
-            IndexedStorageNamespace::CompressedOpLog { agent_id: _, level } => {
-                format!("worker:c{level}-oplog:{key}")
+            IndexedStorageNamespace::OpLog {
+                agent_id: _,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:oplog:{key}")
+            }
+            IndexedStorageNamespace::CompressedOpLog {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:c{level}-oplog:{key}")
             }
         }
     }
 
     fn composite_meta_key(namespace: IndexedStorageMetaNamespace, key: &str) -> String {
         match namespace {
-            IndexedStorageMetaNamespace::Oplog => format!("worker:oplog:{key}"),
-            IndexedStorageMetaNamespace::CompressedOplog { level } => {
-                format!("worker:c{level}-oplog:{key}")
+            IndexedStorageMetaNamespace::Oplog { agent_mode } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:oplog:{key}")
+            }
+            IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:c{level}-oplog:{key}")
             }
         }
     }
