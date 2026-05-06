@@ -28,7 +28,7 @@ use crate::command_handler::app::deploy_diff::{
 };
 use crate::command_handler::app::template::{TemplateHandler, create_claude_symlink};
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
@@ -41,10 +41,7 @@ use crate::model::GuestLanguage;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
 };
-use crate::model::deploy::{
-    DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
-    PostDeploySummary,
-};
+use crate::model::deploy::{DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult, PostDeploySummary, UpdateStagedComponentError};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
 use crate::model::text::diff::{log_unified_diff, log_unified_diff_for_path};
@@ -446,7 +443,8 @@ impl AppCommandHandler {
         environment
             .with_current_deployment_revision_or_default_warn(
                 |current_deployment_revision| async move {
-                    self.ctx
+                    Ok(self
+                        .ctx
                         .golem_clients()
                         .await?
                         .environment
@@ -456,7 +454,7 @@ impl AppCommandHandler {
                             agent_type_name,
                         )
                         .await
-                        .map_service_error_not_found_as_opt()
+                        .map_service_error_not_found_as_opt()?)
                 },
             )
             .await
@@ -490,7 +488,7 @@ impl AppCommandHandler {
             .list_deployments(&environment.environment_id.0, Some(&version))
             .await
             .map_service_error()
-            .map_err(DeployError::PrepareError)?
+            .map_err(|err| DeployError::PrepareError(err.into()))?
             .values;
 
         if deployments.is_empty() {
@@ -601,6 +599,10 @@ impl AppCommandHandler {
     }
 
     pub async fn deploy(&self, config: DeployConfig) -> DeployResult {
+        let allow_incompatible_changes_fallback = config
+            .post_deploy_args
+            .allow_incompatible_changes(self.ctx.deploy_args());
+
         let build_config = {
             let mut build_config = BuildConfig::new().with_skip_up_to_date_checks(
                 config
@@ -686,15 +688,19 @@ impl AppCommandHandler {
             .await
             .map_err(DeployError::EnvironmentCheckError)?;
 
-        self.apply_changes_to_stage(config.approve_staging_steps, &deploy_diff)
-            .await
-            .map_err(DeployError::StagingError)?;
+        self.apply_changes_to_stage(
+            config.approve_staging_steps,
+            allow_incompatible_changes_fallback,
+            &deploy_diff,
+        )
+        .await
+        .map_err(DeployError::StagingError)?;
         if config.stage {
             return Ok(DeploySummary::StagingOk);
         }
 
         let current_deployment = self
-            .apply_staged_changes_to_environment(&deploy_diff)
+            .apply_staged_changes_to_environment(&deploy_diff, allow_incompatible_changes_fallback)
             .await
             .map_err(DeployError::DeployError)?;
 
@@ -1317,6 +1323,7 @@ impl AppCommandHandler {
     async fn apply_changes_to_stage(
         &self,
         approve_staging_steps: bool,
+        allow_incompatible_changes_fallback: bool,
         deploy_diff: &DeployDiff,
     ) -> anyhow::Result<()> {
         let Some(diff_stage) = &deploy_diff.diff_stage else {
@@ -1362,14 +1369,51 @@ impl AppCommandHandler {
                         .await?
                 }
                 diff::BTreeMapDiffValue::Update(component_diff) => {
-                    component_handler
-                        .update_staged_component(
-                            &deploy_diff.environment,
-                            deploy_diff.staged_component_identity(&component_name),
-                            deploy_diff.deployable_manifest_component(&component_name),
-                            component_diff,
-                        )
-                        .await?
+                    let mut reset_fallback_applied = false;
+                    let mut allow_incompatible_config = false;
+
+                    loop {
+                        match component_handler
+                            .update_staged_component(
+                                &deploy_diff.environment,
+                                deploy_diff.staged_component_identity(&component_name),
+                                deploy_diff.deployable_manifest_component(&component_name),
+                                component_diff,
+                                allow_incompatible_config,
+                            )
+                            .await
+                        {
+                            Ok(()) => break,
+                            Err(UpdateStagedComponentError::Service(err))
+                                if allow_incompatible_changes_fallback
+                                    && !reset_fallback_applied
+                                    && err.is_reset_component_recreate_fallback_eligible() =>
+                            {
+                                if !interactive_handler
+                                    .confirm_reset_allow_incompatible_component_update(
+                                        &component_name,
+                                    )?
+                                {
+                                    bail!(NonSuccessfulExit);
+                                }
+
+                                log_warn_action(
+                                    "Reset fallback",
+                                    format!(
+                                        "retrying staged update with incompatible config checks disabled for {}",
+                                        component_name.0.log_color_highlight()
+                                    ),
+                                );
+                                reset_fallback_applied = true;
+                                allow_incompatible_config = true;
+                                continue;
+                            }
+                            Err(UpdateStagedComponentError::Service(err)) => {
+                                return Err(ServiceError::from(err).into());
+                            }
+                            Err(UpdateStagedComponentError::Other(err)) => return Err(err),
+                        }
+                    }
                 }
             }
         }
@@ -1473,6 +1517,7 @@ impl AppCommandHandler {
     async fn apply_staged_changes_to_environment(
         &self,
         deploy_diff: &DeployDiff,
+        allow_incompatible_changes_fallback: bool,
     ) -> anyhow::Result<CurrentDeployment> {
         let app_ctx = self.ctx.app_context_lock().await;
 
@@ -1496,21 +1541,58 @@ impl AppCommandHandler {
 
         log_action("Deploying", "staged changes to the environment");
 
-        let result = clients
-            .environment
-            .deploy_environment(
-                &deploy_diff.environment.environment_id.0,
-                &DeploymentCreation {
-                    current_revision: deploy_diff.current_deployment_revision(),
-                    expected_deployment_hash: deploy_diff.local_deployment_hash,
-                    version: DeploymentVersion("".to_string()), // TODO: atomic
-                    agent_secret_defaults,
-                    quota_resource_defaults,
-                    retry_policy_defaults,
-                },
-            )
-            .await
-            .map_service_error()?;
+        let mut reset_fallback_applied = false;
+        let mut replace_incompatible_agent_secrets = false;
+        let result = loop {
+            let deploy_result = clients
+                .environment
+                .deploy_environment(
+                    &deploy_diff.environment.environment_id.0,
+                    &DeploymentCreation {
+                        current_revision: deploy_diff.current_deployment_revision(),
+                        expected_deployment_hash: deploy_diff.local_deployment_hash,
+                        version: DeploymentVersion("".to_string()), // TODO: atomic
+                        agent_secret_defaults: agent_secret_defaults.clone(),
+                        quota_resource_defaults: quota_resource_defaults.clone(),
+                        retry_policy_defaults: retry_policy_defaults.clone(),
+                        replace_incompatible_agent_secrets,
+                    },
+                )
+                .await;
+
+            match deploy_result {
+                Ok(result) => break result,
+                Err(err) => {
+                    let service_err: ServiceError = err.into();
+
+                    if allow_incompatible_changes_fallback
+                        && !reset_fallback_applied
+                        && service_err.is_reset_secret_retry_fallback_eligible()
+                    {
+                        if !self
+                            .ctx
+                            .interactive_handler()
+                            .confirm_reset_replace_incompatible_agent_secrets(
+                                &deploy_diff.environment.environment_name,
+                            )?
+                        {
+                            bail!(NonSuccessfulExit);
+                        }
+
+                        log_warn_action(
+                            "Reset fallback",
+                            "retrying deployment with incompatible secret replacement enabled",
+                        );
+
+                        reset_fallback_applied = true;
+                        replace_incompatible_agent_secrets = true;
+                        continue;
+                    }
+
+                    return Err(service_err.into());
+                }
+            }
+        };
 
         log_action("Deployed", "all changes");
 
@@ -1590,13 +1672,13 @@ impl AppCommandHandler {
             .list_deployment_components(&environment_id.0, deployment_revision.into())
             .await
             .map_service_error()
-            .map_err(PostDeployError::PrepareError)?
+            .map_err(|err| PostDeployError::PrepareError(err.into()))?
             .values;
 
-        if let Some(update_mode) = &post_deploy_args.update_agents {
+        if let Some(update_mode) = post_deploy_args.update_agents_mode(env_deploy_args) {
             self.ctx
                 .component_handler()
-                .update_workers_by_components(&components, *update_mode, true, false)
+                .update_workers_by_components(&components, update_mode, true, false)
                 .await
                 .map(|()| PostDeploySummary::AgentUpdateOk)
                 .map_err(PostDeployError::AgentUpdateError)
@@ -1624,13 +1706,14 @@ impl AppCommandHandler {
         account_id: &AccountId,
         application_name: &ApplicationName,
     ) -> anyhow::Result<Option<golem_client::model::Application>> {
-        self.ctx
+        Ok(self
+            .ctx
             .golem_clients()
             .await?
             .application
             .get_account_application(&account_id.0, &application_name.0)
             .await
-            .map_service_error_not_found_as_opt()
+            .map_service_error_not_found_as_opt()?)
     }
 
     pub async fn get_server_application_or_err(

@@ -15,7 +15,7 @@
 use crate::command::cloud::token::TokenSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, log_warn_action};
 use crate::model::text::token::{TokenListView, TokenNewView};
 use chrono::{DateTime, Utc};

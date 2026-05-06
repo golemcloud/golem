@@ -17,7 +17,7 @@ use crate::command::api::agent_secret::AgentSecretSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::MapServiceError;
 use crate::log::log_error;
 use crate::model::GuestLanguage;
 use crate::model::environment::EnvironmentResolveMode;

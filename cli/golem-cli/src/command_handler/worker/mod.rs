@@ -23,7 +23,7 @@ use crate::command_handler::Handlers;
 use crate::command_handler::worker::stream::WorkerConnection;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::{AnyhowMapServiceError, ServiceError};
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
     LogColorize, LogIndent, log_action, log_error, log_error_action, log_failed_to, log_warn,
@@ -1300,7 +1300,7 @@ impl WorkerCommandHandler {
                         path.log_color_error_highlight()
                     ),
                 );
-                return Err(e);
+                return Err(e.into());
             }
         };
 
@@ -1375,7 +1375,7 @@ impl WorkerCommandHandler {
                         path.log_color_error_highlight()
                     ),
                 );
-                return Err(e);
+                return Err(e.into());
             }
         };
 
@@ -1604,7 +1604,9 @@ impl WorkerCommandHandler {
             )
             .await
             .map(|_| ())
-            .map_service_error()
+            .map_service_error()?;
+
+        Ok(())
     }
 
     pub async fn worker_metadata(
@@ -1631,7 +1633,9 @@ impl WorkerCommandHandler {
             .delete_worker(&component_id, agent_name)
             .await
             .map(|_| ())
-            .map_service_error()
+            .map_service_error()?;
+
+        Ok(())
     }
 
     pub async fn update_component_workers(

@@ -801,6 +801,40 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         })?;
                     }
 
+                    for (delete_revision, create_record) in
+                        deployment_creation.replaced_agent_secrets
+                    {
+                        DbAgentSecretRepo::<PostgresPool>::delete_within_transaction(
+                            tx,
+                            delete_revision,
+                        )
+                        .await
+                        .map_err(|err| match err {
+                            AgentSecretRepoError::ConcurrentModification => {
+                                DeployRepoError::ConcurrentModification
+                            }
+                            other => other.into(),
+                        })?;
+
+                        let agent_secret_path = create_record.path.0.clone();
+                        DbAgentSecretRepo::<PostgresPool>::create_within_transaction(
+                            tx,
+                            create_record,
+                        )
+                        .await
+                        .map_err(|err| match err {
+                            AgentSecretRepoError::SecretViolatesUniqueness => {
+                                DeployRepoError::AgentSecretConflict {
+                                    path: agent_secret_path,
+                                }
+                            }
+                            AgentSecretRepoError::ConcurrentModification => {
+                                DeployRepoError::ConcurrentModification
+                            }
+                            other => other.into(),
+                        })?;
+                    }
+
                     for resource_definition in deployment_creation.created_resource_definitions {
                         let resource_name = resource_definition.name.clone();
                         DbResourceDefinitionRepo::<PostgresPool>::create_within_transaction(

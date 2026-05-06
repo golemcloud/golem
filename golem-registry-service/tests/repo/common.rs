@@ -1259,6 +1259,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         registered_agent_types: vec![agent_type_record],
         created_agent_secrets: vec![],
         updated_agent_secrets: vec![],
+        replaced_agent_secrets: vec![],
         created_resource_definitions: vec![],
         created_retry_policies: vec![],
         user_account_id: owner_account_id,

@@ -29,3 +29,11 @@ pub struct DeploymentAgentSecretUpdate {
     pub current_revision: AgentSecretRevision,
     pub new_secret_value: golem_wasm::Value,
 }
+
+pub struct DeploymentAgentSecretReplacement {
+    pub agent_secret_id: AgentSecretId,
+    pub current_revision: AgentSecretRevision,
+    pub path: CanonicalAgentSecretPath,
+    pub secret_type: AnalysedType,
+    pub secret_value: Option<golem_wasm::Value>,
+}
