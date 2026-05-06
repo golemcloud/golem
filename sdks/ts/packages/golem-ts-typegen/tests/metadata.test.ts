@@ -191,7 +191,7 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     expect(param.type.optional).toBe(false);
     expect(param.type.kind).toBe('config');
     assert(param.type.kind === 'config');
-    expect(param.type.properties).toHaveLength(7);
+    expect(param.type.requiredMembers).toEqual([]);
     expect(param.type.properties).toEqual(
       expect.arrayContaining([
         { path: ['foo'], secret: false, type: { kind: 'number', optional: false } },
@@ -209,6 +209,48 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
           type: { kind: 'array', element: { kind: 'number', optional: false }, optional: false },
         },
         { path: ['aliasedNested', 'c'], secret: false, type: { kind: 'number', optional: false } },
+      ]),
+    );
+  });
+
+  it('correctly propagates requiredMembers for optional nested groups', () => {
+    const param = getConstructorParams('OptionalGroupConfigAgent')[0];
+    expect(param.type.kind).toBe('config');
+    assert(param.type.kind === 'config');
+    expect(param.type.requiredMembers).toEqual([{ path: ['optionalGroup'], requiredKeys: ['a'] }]);
+    expect(param.type.properties).toHaveLength(3);
+    expect(param.type.properties).toEqual(
+      expect.arrayContaining([
+        { path: ['required'], secret: false, type: { kind: 'string', optional: false } },
+        { path: ['optionalGroup', 'a'], secret: false, type: { kind: 'number', optional: true } },
+        { path: ['optionalGroup', 'b'], secret: false, type: { kind: 'string', optional: true } },
+      ]),
+    );
+  });
+
+  it('requiredMembers are ordered deepest-first for nested optional groups', () => {
+    const param = getConstructorParams('NestedOptionalGroupConfigAgent')[0];
+    expect(param.type.kind).toBe('config');
+    assert(param.type.kind === 'config');
+    // innerGroup is deeper than outerGroup, so it must appear first
+    expect(param.type.requiredMembers).toEqual([
+      { path: ['outerGroup', 'innerGroup'], requiredKeys: ['a'] },
+      { path: ['outerGroup'], requiredKeys: ['required'] },
+    ]);
+  });
+
+  it('correctly extracts optional secret config properties', () => {
+    const param = getConstructorParams('OptionalSecretConfigAgent')[0];
+    expect(param.name).toBe('config');
+    expect(param.type.kind).toBe('config');
+    assert(param.type.kind === 'config');
+    expect(param.type.requiredMembers).toEqual([]);
+    expect(param.type.properties).toHaveLength(3);
+    expect(param.type.properties).toEqual(
+      expect.arrayContaining([
+        { path: ['required'], secret: false, type: { kind: 'string', optional: false } },
+        { path: ['optionalSecret'], secret: true, type: { kind: 'string', optional: true } },
+        { path: ['optionalValue'], secret: false, type: { kind: 'number', optional: true } },
       ]),
     );
   });

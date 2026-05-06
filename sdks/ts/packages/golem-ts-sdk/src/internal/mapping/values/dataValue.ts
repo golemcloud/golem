@@ -285,7 +285,7 @@ export function deserializeDataValue(
 }
 
 function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config' }): Config<any> {
-  return new Config(typeInfoInternal.tsType.properties);
+  return new Config(typeInfoInternal.tsType.properties, typeInfoInternal.tsType.requiredMembers);
 }
 
 // Used to serialize the return type of a method back to DataValue

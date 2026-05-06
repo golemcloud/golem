@@ -201,3 +201,38 @@ type AgentConfig = {
 export class ConfigAgent {
   constructor(config: Config<AgentConfig>) {}
 }
+
+type OptionalGroupConfig = {
+  required: string;
+  optionalGroup?: {
+    a: number;
+    b?: string;
+  };
+};
+
+export class OptionalGroupConfigAgent {
+  constructor(config: Config<OptionalGroupConfig>) {}
+}
+
+type NestedOptionalGroupConfig = {
+  outerGroup?: {
+    required: string;
+    innerGroup?: {
+      a: number;
+    };
+  };
+};
+
+export class NestedOptionalGroupConfigAgent {
+  constructor(config: Config<NestedOptionalGroupConfig>) {}
+}
+
+type OptionalSecretConfig = {
+  required: string;
+  optionalSecret?: Secret<string>;
+  optionalValue?: number;
+};
+
+export class OptionalSecretConfigAgent {
+  constructor(config: Config<OptionalSecretConfig>) {}
+}

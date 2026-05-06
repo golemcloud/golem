@@ -15,6 +15,7 @@
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as WitValue from './internal/mapping/values/WitValue';
 import * as WitType from './internal/mapping/types/WitType';
+import { TypeScope } from './internal/mapping/types/scope';
 import { getConfigValue } from 'golem:agent/host@1.5.0';
 import * as Either from './newTypes/either';
 
@@ -34,7 +35,10 @@ export class Secret<T> {
 }
 
 export class Config<T> {
-  constructor(readonly properties: Type.ConfigProperty[]) {}
+  constructor(
+    readonly properties: Type.ConfigProperty[],
+    readonly requiredMembers: { path: string[]; requiredKeys: string[] }[],
+  ) {}
 
   get value(): T {
     return this.loadConfig();
@@ -48,22 +52,32 @@ export class Config<T> {
       if (path.length === 0) continue;
 
       let current = root;
-
       for (let i = 0; i < path.length - 1; i++) {
         const key = path[i];
         if (!(key in current)) current[key] = {};
         current = current[key];
       }
+      current[path.at(-1)!] = prop.secret
+        ? new Secret(path, prop.type)
+        : loadConfigKey(path, prop.type);
+    }
 
-      const leafKey = path[path.length - 1];
-      let leafValue;
-      if (prop.secret) {
-        leafValue = new Secret(path, prop.type);
-      } else {
-        leafValue = loadConfigKey(path, prop.type);
+    // Prune optional groups where any required child is absent.
+    // Already deepest-first from typegen so no sort needed.
+    for (const { path: groupPath, requiredKeys } of this.requiredMembers) {
+      let parent: Record<string, any> = root;
+      let group: Record<string, any> = root;
+      for (const key of groupPath) {
+        parent = group;
+        group = group[key];
+        if (typeof group !== 'object' || group === null) break;
       }
+      if (typeof group !== 'object' || group === null) continue;
 
-      current[leafKey] = leafValue;
+      const keysToCheck = requiredKeys.length > 0 ? requiredKeys : Object.keys(group);
+      if (keysToCheck.some((k) => group[k] === undefined)) {
+        parent[groupPath.at(-1)!] = undefined;
+      }
     }
 
     return root as T;
@@ -71,8 +85,9 @@ export class Config<T> {
 }
 
 function loadConfigKey(path: string[], type: Type.Type): any {
+  const scope = TypeScope.object('config', path.at(-1)!, type.optional);
   const [witType, analysedType] = Either.getOrThrowWith(
-    WitType.fromTsType(type, undefined),
+    WitType.fromTsType(type, scope),
     (err) => new Error(`Failed to analyse config type at path '${path.join('.')}': ${err}`),
   );
 

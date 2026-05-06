@@ -154,8 +154,8 @@ function getTypeFromTsMorphInternal(
     if (typeLiteral == null)
       throw `Config<T> type parameter must be a plain type literal (e.g. Config<{ key: string }>), got: ${innerType.getText()}`;
 
-    const properties = extractConfigPropertiesFromTypeLiteral(typeLiteral, [], wellKnownTypes);
-    if (properties == null)
+    const result = extractConfigPropertiesFromTypeLiteral(typeLiteral, [], wellKnownTypes);
+    if (result == null)
       throw 'Config<T> type literal must only contain property signatures. Method signatures and index signatures are not supported.';
 
     return {
@@ -163,7 +163,8 @@ function getTypeFromTsMorphInternal(
       name: aliasName,
       owner: getTypeOwner(type),
       optional: isOptional,
-      properties,
+      properties: result.properties,
+      requiredMembers: result.requiredMembers,
     };
   }
 
@@ -514,57 +515,81 @@ function extractConfigPropertiesFromTypeLiteral(
   node: TypeLiteralNode,
   path: string[],
   wellKnownTypes: WellKnownTypes,
-): Type.ConfigProperty[] | undefined {
+  // Optional ancestor groups accumulated so far, deepest-first.
+  requiredMembers: { path: string[]; requiredKeys: string[] }[] = [],
+):
+  | {
+      properties: Type.ConfigProperty[];
+      requiredMembers: { path: string[]; requiredKeys: string[] }[];
+    }
+  | undefined {
   const members = node.getMembers();
 
   if (!members.every(TsMorphNode.isPropertySignature)) {
     return undefined;
   }
 
-  const results: Type.ConfigProperty[] = [];
+  const properties: Type.ConfigProperty[] = [];
+  let accumulatedRequiredMembers = requiredMembers;
 
   for (const member of members) {
     const name = member.getName();
     const nextPath = [...path, name];
+    const memberOptional = member.hasQuestionToken();
+    const isOptional = memberOptional || accumulatedRequiredMembers.length > 0;
 
-    const propType = unwrapAlias(member.getType());
+    // For optional properties (`field?: T`), ts-morph returns `T | undefined`.
+    // Strip the `undefined` member so well-known-type checks work correctly.
+    const rawPropType = unwrapAlias(member.getType());
+    const propType =
+      memberOptional && rawPropType.isUnion()
+        ? (rawPropType.getUnionTypes().find((t) => !t.isUndefined()) ?? rawPropType)
+        : rawPropType;
 
     // 1. secret wrapper
     if (isExactly(propType, wellKnownTypes.sdk.secret)) {
-      results.push({
+      properties.push({
         path: nextPath,
         secret: true,
-        type: getTypeFromTsMorph(
-          propType.getTypeArguments()[0],
-          member.hasQuestionToken(),
-          wellKnownTypes,
-        ),
+        type: getTypeFromTsMorph(propType.getTypeArguments()[0], isOptional, wellKnownTypes),
       });
       continue;
     }
 
-    // 2. nested type literal
+    // 2. nested type literal — if optional, prepend it to requiredMembers
+    //    (deepest-first order) before recursing into its children.
     const nestedTypeLiteral = resolveStrictTypeLiteralNode(propType);
     if (nestedTypeLiteral != null) {
+      let nestedRequiredMembers = accumulatedRequiredMembers;
+      if (memberOptional) {
+        const requiredKeys = nestedTypeLiteral
+          .getMembers()
+          .filter(TsMorphNode.isPropertySignature)
+          .filter((m) => !m.hasQuestionToken())
+          .map((m) => m.getName());
+        nestedRequiredMembers = [{ path: nextPath, requiredKeys }, ...accumulatedRequiredMembers];
+      }
       const nested = extractConfigPropertiesFromTypeLiteral(
         nestedTypeLiteral,
         nextPath,
         wellKnownTypes,
+        nestedRequiredMembers,
       );
       if (nested == null) return undefined;
-      results.push(...nested);
+      properties.push(...nested.properties);
+      accumulatedRequiredMembers = nested.requiredMembers;
       continue;
     }
 
     // 3. leaf node
-    results.push({
+    properties.push({
       path: nextPath,
       secret: false,
-      type: getTypeFromTsMorph(propType, member.hasQuestionToken(), wellKnownTypes),
+      type: getTypeFromTsMorph(propType, isOptional, wellKnownTypes),
     });
   }
 
-  return results;
+  return { properties, requiredMembers: accumulatedRequiredMembers };
 }
 
 type RawName = string;

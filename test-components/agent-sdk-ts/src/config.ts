@@ -115,6 +115,31 @@ export class LocalCasingSharedConfigAgent extends BaseAgent {
   }
 }
 
+type OptionalGroupConfigAgentConfig = {
+  required: string;
+  optionalGroup?: {
+    a: number;
+    b?: string;
+  };
+};
+
+@agent()
+export class OptionalGroupConfigAgent extends BaseAgent {
+  constructor(_name: string, readonly config: Config<OptionalGroupConfigAgentConfig>) {
+    super();
+  }
+
+  echoLocalConfig(): string {
+    const config = this.config.value;
+    return JSON.stringify({
+      required: config.required,
+      optionalGroup: config.optionalGroup
+        ? { a: config.optionalGroup.a, b: config.optionalGroup.b }
+        : undefined,
+    });
+  }
+}
+
 type RpcLocalConfigAgentConfig = {
   foo: number;
   nested_a?: boolean,
