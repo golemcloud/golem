@@ -25,6 +25,7 @@ import { LanguageService } from './language-service';
 import pc from 'picocolors';
 import repl, { type REPLEval } from 'node:repl';
 import process from 'node:process';
+import util from 'node:util';
 import { AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
@@ -108,6 +109,7 @@ export class Repl {
       ignoreUndefined: true,
       prompt,
       breakEvalOnSigint: true,
+      writer: (value) => util.inspect(value, { depth: null, colors: pc.isColorSupported }),
     });
   }
 
@@ -461,7 +463,7 @@ function tryHandleColonCommand(
 
 function tryJsonStringify(value: unknown): string | undefined {
   try {
-    const json = JSON.stringify(value);
+    const json = JSON.stringify(value, null, 2);
     return json === undefined ? undefined : json;
   } catch {
     return undefined;
