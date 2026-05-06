@@ -1,0 +1,8 @@
+error[E0046]: not all trait items implemented, missing: `agent_implementation_annotation`
+  --> tests/ui/fail/aliased_import_plain_impl.rs:17:1
+   |
+ 6 |     #[agent_definition]
+   |     ------------------- `agent_implementation_annotation` from trait
+...
+17 | impl AgentAlias for AliasedAgentImpl {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `agent_implementation_annotation` in implementation
