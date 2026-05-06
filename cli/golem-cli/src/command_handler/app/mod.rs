@@ -1409,7 +1409,7 @@ impl AppCommandHandler {
                                 continue;
                             }
                             Err(UpdateStagedComponentError::Service(err)) => {
-                                return Err(ServiceError::from(err).into());
+                                return Err(err.into());
                             }
                             Err(UpdateStagedComponentError::Other(err)) => return Err(err),
                         }

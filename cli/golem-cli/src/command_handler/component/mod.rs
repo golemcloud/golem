@@ -22,7 +22,7 @@ use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::{MapServiceError, ServiceError};
+use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
 use crate::model::GuestLanguage;
 use crate::model::app::BuildConfig;
