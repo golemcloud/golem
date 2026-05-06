@@ -142,6 +142,27 @@ describe("compileConfig", () => {
     }),
   )
 
+  it.effect("Schema.Redacted(Schema.Struct(...)) — structured secret round-trip", () =>
+    Effect.gen(function* () {
+      // Mirrors `golem-ts-sdk` PR #3329: `Secret<T>` accepts structured
+      // record types, not just strings. Round-trips a redacted struct
+      // value through the host.
+      const InnerStruct = Schema.Struct({ foo: Schema.String, bar: Schema.Number })
+      const cc = yield* compile({ apiToken: Schema.Redacted(InnerStruct) })
+      const wv = yield* encode(InnerStruct, { foo: "abc", bar: 42 })
+      const stub = ConfigStub(() => wv)
+      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
+        apiToken: {
+          get: Effect.Effect<Redacted.Redacted<{ foo: string; bar: number }>, ConfigError>
+        }
+      }
+      const r = yield* shape.apiToken.get
+      const v = Redacted.value(r)
+      expect(v.foo).toBe("abc")
+      expect(v.bar).toBe(42)
+    }),
+  )
+
   it.effect("surfaces host traps as ConfigError(_, HostTrap)", () =>
     Effect.gen(function* () {
       const cc = yield* compile({ greeting: Schema.String })

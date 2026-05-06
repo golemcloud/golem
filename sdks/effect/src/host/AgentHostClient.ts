@@ -94,6 +94,15 @@ export interface AgentHostClientShape {
     filter: ApiHost.AgentAnyFilter | undefined,
     precise: boolean,
   ) => ApiHost.GetAgents
+  /**
+   * Mirrors `golem:api/host.trap`. Unconditionally surfaces as an
+   * uncatchable wasm trap on the host side; from JavaScript's
+   * perspective the call never returns and the surrounding fiber's
+   * frame is torn down by the runtime. Used by `Durability.atomically`
+   * and `Saga.{fallible,infallible}Transaction` to make a failure
+   * inside an atomic / transactional region uncatchable.
+   */
+  readonly trap: (reason: string) => never
 }
 
 export class AgentHostClient extends Context.Service<AgentHostClient, AgentHostClientShape>()(
@@ -115,5 +124,13 @@ export const AgentHostLive: Layer.Layer<AgentHostClient> = Layer.succeed(
     resolveAgentId: (r, n) => ApiHost.resolveAgentId(r, n),
     resolveAgentIdStrict: (r, n) => ApiHost.resolveAgentIdStrict(r, n),
     getAgentsCtor: (c, f, p) => new ApiHost.GetAgents(c, f, p),
+    trap: (reason) => {
+      ApiHost.trap(reason)
+      // The line above never returns at runtime (the host call is an
+      // uncatchable wasm trap). The throw keeps `never` happy on the
+      // type level for environments where the WIT binding is replaced
+      // by a no-op stub (tests).
+      throw new Error(`golem:api/host.trap returned (reason: ${reason})`)
+    },
   }),
 )

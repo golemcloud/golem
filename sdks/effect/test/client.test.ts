@@ -899,6 +899,40 @@ describe("AgentClient — typed errors", () => {
     }),
   )
 
+  it.effect("Schema.Void success + typed error: empty wire tuple is a wire-format violation", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      // Methods declared with `Schema.Void` AND a typed error always
+      // carry a 1-element `result<{}, E>` wrapper on the wire. A
+      // 0-element tuple in that case is malformed and must be
+      // rejected — even though void+no-error methods accept it.
+      yield* fake.setResponder(({ methodName }) => {
+        if (methodName === "cmd") {
+          return {
+            tag: "ok",
+            val: { tag: "tuple", val: [] } as any,
+          }
+        }
+        return { tag: "throw", error: new Error("unexpected method") }
+      })
+
+      const result = yield* Effect.provide(
+        Effect.result(
+          Effect.gen(function* () {
+            const remote = yield* Lookup.client.get({ realm: "users" })
+            return yield* remote.cmd({ fail: false })
+          }) as Effect.Effect<unknown, any, never>,
+        ),
+        layer,
+      )
+      expect(result._tag).toBe("Failure")
+      if (result._tag !== "Failure") return
+      const failure: any = result.failure
+      expect(failure._tag).toBe("RemoteResponseError")
+      expect(failure.reason).toMatch(/expected 1 element, got 0/)
+    }),
+  )
+
   it.effect("Schema.Void success + typed error: failure arm surfaces typed E", () =>
     Effect.gen(function* () {
       const { fake, layer } = yield* makeRpcRuntime

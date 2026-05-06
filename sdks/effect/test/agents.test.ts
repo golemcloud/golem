@@ -103,6 +103,9 @@ describe("Agents — metadata", () => {
         getAgentsCtor: (() => {
           throw new Error("not used by this test")
         }) as never,
+        trap: (() => {
+          throw new Error("not used by this test")
+        }) as never,
       }),
     )
     return Effect.gen(function* () {

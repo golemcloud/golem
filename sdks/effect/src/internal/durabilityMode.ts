@@ -34,6 +34,44 @@ import { OplogClient } from "../host/OplogClient.js"
 import { SelfAgentId } from "../SelfAgentId.js"
 
 // ---------------------------------------------------------------------------
+// trap reason formatter
+// ---------------------------------------------------------------------------
+
+/**
+ * Format an `Effect` failure (typed value, defect, or interruption) as
+ * the `reason` argument to {@link AgentHostClient.trap}. Mirrors the
+ * upstream `formatErrorForTrap` helper in
+ * `sdks/ts/packages/golem-ts-sdk/src/host/guard.ts`: prefer a stack,
+ * fall back to `name: message`, then `String(...)`.
+ *
+ * @internal
+ */
+export const formatCauseForTrap = <E>(cause: Cause.Cause<E>): string => {
+  for (const reason of cause.reasons) {
+    if (Cause.isFailReason(reason)) {
+      const e = reason.error as unknown
+      if (e instanceof Error) return e.stack ?? `${e.name}: ${e.message}`
+      try {
+        return String(e)
+      } catch {
+        return "<unprintable error>"
+      }
+    }
+    if (Cause.isDieReason(reason)) {
+      const e = reason.defect as unknown
+      if (e instanceof Error) return e.stack ?? `${e.name}: ${e.message}`
+      try {
+        return String(e)
+      } catch {
+        return "<unprintable defect>"
+      }
+    }
+    if (Cause.isInterruptReason(reason)) return "interrupted"
+  }
+  return Cause.pretty(cause)
+}
+
+// ---------------------------------------------------------------------------
 // Re-exported raw types
 // ---------------------------------------------------------------------------
 
@@ -231,8 +269,7 @@ export const oplogCommit = (
 /**
  * Mark the beginning of an atomic region. Returns the host's chosen
  * `OplogIndex` to be passed back into {@link endOperation}. Prefer
- * {@link atomically} or {@link markAtomicOperationScoped} unless you
- * really need imperative control.
+ * {@link atomically} unless you really need imperative control.
  *
  * @since 1.5.0
  * @category host bindings
@@ -355,33 +392,67 @@ export const withIdempotenceMode = <A, E, R>(
   Effect.scoped(useIdempotenceModeScoped(idempotent).pipe(Effect.andThen(effect)))
 
 /**
- * Open an atomic region scoped to the surrounding {@link Scope}. On
- * acquire calls `mark-begin-operation`; on release (success, failure,
- * or interruption) calls `mark-end-operation` with the captured begin
- * index. Returns the begin index for callers that need it.
+ * Skips `mark-end-operation` on a non-Success exit, leaving the
+ * atomic region open so the host's replay-time recovery rolls back
+ * the partial execution and re-runs the block from the begin marker.
+ * Mirrors the Rust `AtomicOperationGuard::drop` impl which guards
+ * `mark_end_operation` with `!std::thread::panicking()`.
  *
- * @since 1.5.0
- * @category combinators
+ * Used internally by {@link atomically}; not re-exported.
+ *
+ * @internal
  */
-export const markAtomicOperationScoped: Effect.Effect<
+const markAtomicOperationScopedTrapping: Effect.Effect<
   RawOplogIndex,
   DurabilityHostError,
   Scope.Scope | DurabilityModeClient
-> = Effect.acquireRelease(beginOperation, (begin) => endOperation(begin).pipe(Effect.ignore))
+> = Effect.acquireRelease(beginOperation, (begin, exit) =>
+  exit._tag === "Success" ? endOperation(begin).pipe(Effect.ignore) : Effect.void,
+)
 
 /**
- * Run `effect` inside an atomic region. Equivalent to
- * `Effect.scoped(markAtomicOperationScoped.pipe(Effect.andThen(effect)))`.
- * If `effect` fails or is interrupted, the host treats the region as
- * needing reexecution on the next replay.
+ * Run `effect` inside an atomic region.
+ *
+ * On success, the atomic region is committed via
+ * `mark-end-operation`. On **any** failure (typed `E`, defect via
+ * `Effect.die`, or interruption) the SDK calls
+ * `golem:api/host.trap(...)` — an uncatchable wasm trap — so user
+ * code outside `atomically` cannot observe the failure with
+ * `Effect.catchAll` / `Effect.either` and silently continue with an
+ * open atomic region. The atomic region is deliberately left open;
+ * the host's replay-time recovery rolls back the partial execution
+ * and retries the block from the begin marker.
+ *
+ * Mirrors `golem-ts-sdk@1.5.x` (`atomically` in
+ * `host/guard.ts`) and the Rust `atomically_result` helper.
  *
  * @since 1.5.0
  * @category combinators
  */
 export const atomically = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | DurabilityHostError, Exclude<R, Scope.Scope> | DurabilityModeClient> =>
-  Effect.scoped(markAtomicOperationScoped.pipe(Effect.andThen(effect)))
+): Effect.Effect<
+  A,
+  E | DurabilityHostError,
+  Exclude<R, Scope.Scope> | DurabilityModeClient | AgentHostClient
+> =>
+  Effect.scoped(
+    markAtomicOperationScopedTrapping.pipe(
+      Effect.andThen(
+        Effect.catchCause(effect, (cause) =>
+          Effect.gen(function* () {
+            const host = yield* AgentHostClient
+            // Calling `trap` is uncatchable in production (wasm trap).
+            // In test mocks the call throws a `TestTrapError`; either
+            // path leaves the surrounding scope to close with a
+            // non-Success exit, so `mark-end-operation` is skipped.
+            yield* Effect.sync(() => host.trap(`atomic block failed: ${formatCauseForTrap(cause)}`))
+            return yield* Effect.failCause(cause)
+          }),
+        ),
+      ),
+    ),
+  )
 
 // ---------------------------------------------------------------------------
 // unwrapOrRevert / checkpoint / compensable

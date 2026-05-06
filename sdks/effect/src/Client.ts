@@ -370,6 +370,9 @@ const decodeMethodOutput = (
       })
     }
     if (mc.outputElement === null) {
+      // Methods declared with `Schema.Void` success and NO typed error
+      // emit an empty tuple on the wire. Methods that DO declare a typed error
+      // always carry a 1-element `result<{}, E>` wrapper
       if (output.val.length !== 0) {
         return yield* Effect.fail<RemoteCallError>({
           _tag: "RemoteResponseError",

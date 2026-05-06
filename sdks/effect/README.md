@@ -117,12 +117,17 @@ Each top-level `defineAgent({...})` call auto-registers the agent with the dispa
 import { defineAgent, method, Schema } from "effect-golem"
 
 defineAgent({
-  name: "Greeter",                  // unique within this component
-  description: "Says hi",           // surfaced in agent metadata
-  mode: "durable" | "ephemeral",    // mirrors the WIT mode field
+  name: "Greeter", // unique within this component
+  description: "Says hi", // surfaced in agent metadata
+  mode: "durable" | "ephemeral", // mirrors the WIT mode field
   constructorParams: { name: Schema.String },
-  methods: { /* ... */ },
-  impl: ({ name }) => Effect.succeed({ /* method handlers */ }),
+  methods: {
+    /* ... */
+  },
+  impl: ({ name }) =>
+    Effect.succeed({
+      /* method handlers */
+    }),
 })
 ```
 
@@ -134,9 +139,9 @@ defineAgent({
 method({
   params: { id: Schema.String, count: Schema.Number },
   success: Schema.Number,
-  error: NotFoundError,            // optional typed E
+  error: NotFoundError, // optional typed E
   description: "Look up a record",
-  promptHint: "Read by id",        // surfaced to AI orchestrators
+  promptHint: "Read by id", // surfaced to AI orchestrators
   http: [Http.get("/lookup/{id}?count={count}")],
 })
 ```
@@ -152,10 +157,11 @@ fetch: method({
 })
 
 // In the caller:
-const lookup = yield* Lookup.client.get({ realm: "demo" })
-yield* lookup.fetch({ id: "missing" }).pipe(
-  Effect.catchTag("NotFoundError", (e) => Effect.succeed(`missing: ${e.resource}`)),
-)
+const lookup = yield * Lookup.client.get({ realm: "demo" })
+yield *
+  lookup
+    .fetch({ id: "missing" })
+    .pipe(Effect.catchTag("NotFoundError", (e) => Effect.succeed(`missing: ${e.resource}`)))
 ```
 
 ### defineConfig
@@ -168,8 +174,9 @@ import { Effect, Redacted, Schema } from "effect"
 
 export class CounterConfig extends defineConfig("Counter.Config", {
   greeting: Schema.String,
-  apiKey: Schema.Redacted(Schema.String),       // → secret leaf
-  database: Schema.Struct({                     // → nested struct
+  apiKey: Schema.Redacted(Schema.String), // → secret leaf
+  database: Schema.Struct({
+    // → nested struct
     host: Schema.String,
     port: Schema.Number,
   }),
@@ -182,9 +189,9 @@ defineAgent({
   impl: ({ name }) =>
     Effect.gen(function* () {
       const cfg = yield* CounterConfig
-      const greeting = yield* cfg.greeting               // Effect<string, ConfigError>
-      const apiKey   = yield* cfg.apiKey.get             // Effect<Redacted<string>, ConfigError>
-      const dbHost   = yield* cfg.database.host          // recurses into nested struct
+      const greeting = yield* cfg.greeting // Effect<string, ConfigError>
+      const apiKey = yield* cfg.apiKey.get // Effect<Redacted<string>, ConfigError>
+      const dbHost = yield* cfg.database.host // recurses into nested struct
 
       return {
         greet: () => Effect.succeed(`${greeting}, ${name}`),
@@ -206,8 +213,8 @@ defineAgent({
 import { Multimodal, Unstructured } from "effect-golem"
 
 const ChatTurn = Multimodal.multimodal({
-  text:   Unstructured.UnstructuredText({ languageCode: "en" }),
-  image:  Unstructured.UnstructuredBinary({ mimeType: "image/png" }),
+  text: Unstructured.UnstructuredText({ languageCode: "en" }),
+  image: Unstructured.UnstructuredBinary({ mimeType: "image/png" }),
   metadata: Schema.Struct({ author: Schema.String }),
 })
 
@@ -234,15 +241,15 @@ import { Schema } from "effect"
 import { WitTypes } from "effect-golem"
 
 const Pixel = Schema.Struct({
-  r: WitTypes.Uint8,                  // → WIT `u8`, range-checked
+  r: WitTypes.Uint8, // → WIT `u8`, range-checked
   g: WitTypes.Uint8,
   b: WitTypes.Uint8,
 })
 
 const Frame = Schema.Struct({
-  index:  WitTypes.Int32,             // → WIT `s32`
-  ts:     WitTypes.Uint64,            // → WIT `u64` (bigint-backed)
-  pixels: WitTypes.Uint8ArraySchema,  // → WIT `list<u8>` carried as Uint8Array
+  index: WitTypes.Int32, // → WIT `s32`
+  ts: WitTypes.Uint64, // → WIT `u64` (bigint-backed)
+  pixels: WitTypes.Uint8ArraySchema, // → WIT `list<u8>` carried as Uint8Array
 })
 ```
 
@@ -258,21 +265,21 @@ Every `defineAgent` call attaches a typed `client` namespace whose proxy methods
 import { Effect, Fiber } from "effect"
 
 // 1) Function-call shape — durable, fully interruptible.
-const counter = yield* Counter.client.get({ name: "alice" })
-const value   = yield* counter.value({})
+const counter = yield * Counter.client.get({ name: "alice" })
+const value = yield * counter.value({})
 
 // 2) Fork + interrupt: the SDK propagates fiber-interrupt to
 //    `future-invoke-result.cancel()` on the host.
-const fiber = yield* Effect.forkChild(counter.slowValue({ seconds: 60 }))
-yield* Effect.sleep("100 millis")
-yield* Fiber.interrupt(fiber)   // → host receives cancel
+const fiber = yield * Effect.forkChild(counter.slowValue({ seconds: 60 }))
+yield * Effect.sleep("100 millis")
+yield * Fiber.interrupt(fiber) // → host receives cancel
 
 // 3) Fire-and-forget:
-yield* counter.add.trigger({ by: 1 })
+yield * counter.add.trigger({ by: 1 })
 
 // 4) Scheduled (host returns a cancellation handle):
-const sched = yield* counter.add.schedule(Date.now() + 5_000, { by: 1 })
-yield* sched.cancel
+const sched = yield * counter.add.schedule(Date.now() + 5_000, { by: 1 })
+yield * sched.cancel
 ```
 
 Composes naturally with `Effect.race`, `Effect.timeout`, `Effect.retry`, etc.
@@ -294,16 +301,14 @@ defineAgent({
       params: { by: Schema.Number },
       success: Schema.Number,
       http: [
-        Http.post("/add"),                  // by ← JSON body
-        Http.get("/add?by={by}"),           // by ← query
+        Http.post("/add"), // by ← JSON body
+        Http.get("/add?by={by}"), // by ← query
       ],
     }),
     upload: method({
       params: { id: Schema.String, payload: Schema.String },
       success: Schema.Void,
-      http: [
-        Http.put("/items/{id}", { headers: { "X-Upload-Token": "payload" } }),
-      ],
+      http: [Http.put("/items/{id}", { headers: { "X-Upload-Token": "payload" } })],
     }),
   },
   // ...
@@ -342,13 +347,13 @@ import { Principal, SelfAgentId } from "effect-golem"
 
 impl: ({ name }) =>
   Effect.gen(function* () {
-    const owner = yield* Principal.Principal     // who created me
-    const self  = yield* SelfAgentId.SelfAgentId // my own AgentId
+    const owner = yield* Principal.Principal // who created me
+    const self = yield* SelfAgentId.SelfAgentId // my own AgentId
 
     return {
       caller: () =>
         Effect.gen(function* () {
-          const p = yield* Principal.Principal   // who's calling me right now
+          const p = yield* Principal.Principal // who's calling me right now
           return p.tag === "oidc" ? `oidc:${p.val.sub}` : p.tag
         }),
     }
@@ -370,13 +375,15 @@ defineAgent({
   constructorParams: { name: Schema.String },
   snapshot: Snapshot.define({
     schema: Schema.Struct({ count: Schema.Number }),
-    policy: Snapshot.policy.everyN(10),     // also: default / periodic("5 minutes")
+    policy: Snapshot.policy.everyN(10), // also: default / periodic("5 minutes")
   }),
   // ...
   impl: ({ name }, snap) =>
     Effect.gen(function* () {
       const state = yield* snap.init({ count: 0 })
-      return { /* handlers reading/writing `state` */ }
+      return {
+        /* handlers reading/writing `state` */
+      }
     }),
 })
 ```
@@ -415,7 +422,9 @@ impl: ({ name }, snap) =>
     yield* sql.exec(`CREATE TABLE IF NOT EXISTS counters (id TEXT PRIMARY KEY, count INTEGER)`)
     yield* sql`INSERT OR IGNORE INTO counters (id, count) VALUES (${name}, 0)`
     yield* snap.attachDatabase("counters", sql)
-    return { /* ... */ }
+    return {
+      /* ... */
+    }
   })
 ```
 
@@ -459,7 +468,7 @@ defineAgent({
             // error: SomeErrorSchema,
           },
           { symbol },
-          Effect.sync(() => fetchFromRemote(symbol)),  // body — runs once, replays from oplog
+          Effect.sync(() => fetchFromRemote(symbol)), // body — runs once, replays from oplog
         ),
     }),
 })
@@ -473,20 +482,20 @@ Durability.atomically(effect)
 
 // Persistence level (`persistNothing`, `persistRemoteSideEffects`, `smart`):
 Durability.withPersistenceLevel(Durability.PersistenceLevel.persistNothing, effect)
-Durability.getPersistenceLevel                         // Effect<PersistenceLevelValue>
-Durability.setPersistenceLevel(level)                  // imperative
+Durability.getPersistenceLevel // Effect<PersistenceLevelValue>
+Durability.setPersistenceLevel(level) // imperative
 
 // Idempotence mode (host treats every replay as the same logical call):
 Durability.withIdempotenceMode(true, effect)
 Durability.getIdempotenceMode / Durability.setIdempotenceMode
 
 // Replay introspection:
-Durability.isLive                                      // Effect<boolean> — false during replay
-Durability.currentDurableExecutionState                // { isLive, persistenceLevel }
-Durability.observeFunctionCall(iface, fn)              // recorded but no value persisted
+Durability.isLive // Effect<boolean> — false during replay
+Durability.currentDurableExecutionState // { isLive, persistenceLevel }
+Durability.observeFunctionCall(iface, fn) // recorded but no value persisted
 
 // Idempotency key generation (deterministic across replay):
-Durability.generateIdempotencyKey                      // Effect<UUID>
+Durability.generateIdempotencyKey // Effect<UUID>
 
 // Force the host to flush the oplog up to the current index:
 Durability.oplogCommit(level)
@@ -495,23 +504,24 @@ Durability.oplogCommit(level)
 For multi-step durable calls (batched writes, multi-RPC transactions) where `wrap` would over-constrain the lifecycle, drop down to the manual `begin → persist → end` triplet. This is what the host's `FunctionType.writeRemoteBatched(begin?)` and `writeRemoteTransaction(begin?)` variants are designed for:
 
 ```ts
-yield* Effect.gen(function* () {
-  const begin = yield* Durability.beginDurableFunction(
-    Durability.FunctionType.writeRemoteBatched(),
-  )
-  // …multiple host-side writes / RPC calls here…
-  if (yield* Durability.isLive) {
-    yield* Durability.persistDurableFunctionInvocation(
-      "myapp::batchedWrite",
-      requestVT,
-      responseVT,
-      Durability.FunctionType.writeRemoteBatched(begin),
+yield *
+  Effect.gen(function* () {
+    const begin = yield* Durability.beginDurableFunction(
+      Durability.FunctionType.writeRemoteBatched(),
     )
-  } else {
-    yield* Durability.readPersistedDurableFunctionInvocation
-  }
-  yield* Durability.endDurableFunction(begin)
-})
+    // …multiple host-side writes / RPC calls here…
+    if (yield* Durability.isLive) {
+      yield* Durability.persistDurableFunctionInvocation(
+        "myapp::batchedWrite",
+        requestVT,
+        responseVT,
+        Durability.FunctionType.writeRemoteBatched(begin),
+      )
+    } else {
+      yield* Durability.readPersistedDurableFunctionInvocation
+    }
+    yield* Durability.endDurableFunction(begin)
+  })
 ```
 
 ## Sagas / multi-step transactions
@@ -524,24 +534,26 @@ import { Effect } from "effect"
 
 // Reusable execute+compensate pair:
 const bookFlight = Saga.operation({
-  execute:    ({ flightId }: { flightId: string }) => Effect.succeed({ ref: `FLT-${flightId}` }),
+  execute: ({ flightId }: { flightId: string }) => Effect.succeed({ ref: `FLT-${flightId}` }),
   compensate: ({ flightId }, booking, _cause) => cancelFlight(booking.ref).pipe(Effect.ignore),
 })
 
 // Fallible: failure becomes a typed `Saga.TransactionFailure<E>` after rollback.
-const result = yield* Saga.fallibleTransaction(
-  Effect.gen(function* () {
-    const flight = yield* bookFlight({ flightId: "AA1" })
-    const hotel  = yield* bookHotel({ hotelId: "H7" })
-    return { flight, hotel }
-  }),
-)
+const result =
+  yield *
+  Saga.fallibleTransaction(
+    Effect.gen(function* () {
+      const flight = yield* bookFlight({ flightId: "AA1" })
+      const hotel = yield* bookHotel({ hotelId: "H7" })
+      return { flight, hotel }
+    }),
+  )
 // → Saga.TransactionFailure can be `FailedAndRolledBackCompletely`
 //   or `FailedAndRolledBackPartially` (with the compensation error).
 
 // Infallible: drains compensations + setOplogIndex(checkpoint) + Effect.never.
 //             The host preempts and replays from the checkpoint.
-yield* Saga.infallibleTransaction(body)   // body must be Effect<A, never, R>
+yield * Saga.infallibleTransaction(body) // body must be Effect<A, never, R>
 
 // Building blocks:
 Saga.withCompensation(eff, (value, cause) => Effect<void, never, R>)
@@ -585,8 +597,8 @@ defineAgent({
 The `WebhookHandle` also exposes a non-blocking `poll`:
 
 ```ts
-const ready = yield* hook.poll      // Effect<WebhookPayload | undefined>
-if (ready) yield* ready.decode(PaymentEvent)
+const ready = yield * hook.poll // Effect<WebhookPayload | undefined>
+if (ready) yield * ready.decode(PaymentEvent)
 ```
 
 ## WebSockets
@@ -596,24 +608,26 @@ if (ready) yield* ready.decode(PaymentEvent)
 ```ts
 import { Websocket } from "effect-golem"
 
-yield* Effect.scoped(
-  Effect.gen(function* () {
-    const sock  = yield* Websocket.connect("wss://echo.example.com")
-    const write = yield* sock.writer
-    yield* write("hello")
-    yield* sock.runString((line) => console.log("got:", line))
-  }),
-)
+yield *
+  Effect.scoped(
+    Effect.gen(function* () {
+      const sock = yield* Websocket.connect("wss://echo.example.com")
+      const write = yield* sock.writer
+      yield* write("hello")
+      yield* sock.runString((line) => console.log("got:", line))
+    }),
+  )
 ```
 
 `Websocket.connect` accepts a `ConnectOptions` for customising headers, subprotocols, and the close-code policy:
 
 ```ts
-yield* Websocket.connect("wss://api.example.com/v1/stream", {
-  headers: { Authorization: `Bearer ${token}` },
-  subprotocols: ["v1.json"],
-  closeCodeIsError: (code) => code !== 1000 && code !== 1001,
-})
+yield *
+  Websocket.connect("wss://api.example.com/v1/stream", {
+    headers: { Authorization: `Bearer ${token}` },
+    subprotocols: ["v1.json"],
+    closeCodeIsError: (code) => code !== 1000 && code !== 1001,
+  })
 ```
 
 For deeper integration, `Websocket.makeChannel(...)` returns the canonical Effect `Channel` (consumable as a duplex `Stream`), and `Websocket.fromConnection(handle, opts)` adapts an already-acquired host connection resource into a `Socket`.
@@ -637,10 +651,10 @@ defineAgent({
   impl: ({ name }) =>
     Effect.gen(function* () {
       const bucket = yield* KeyValue.openBucket(name)
-      const users  = bucket.forSchema(User)         // typed view
+      const users = bucket.forSchema(User) // typed view
       return {
         put: ({ id, name }) => users.set(id, { id, name }),
-        get: ({ id })       => users.get(id),
+        get: ({ id }) => users.get(id),
         // batch ops, raw bytes, etc. also available
       }
     }),
@@ -655,14 +669,14 @@ Wraps `wasi:blobstore/{blobstore,container,types}` — container CRUD, object I/
 import { Blobstore } from "effect-golem"
 import { Stream } from "effect"
 
-const photos = yield* Blobstore.getOrCreateContainer("photos")
-yield* photos.writeData("a.png", bytes)
-const back = yield* photos.getData("a.png")
-const list = yield* Stream.runCollect(photos.listObjects)
+const photos = yield * Blobstore.getOrCreateContainer("photos")
+yield * photos.writeData("a.png", bytes)
+const back = yield * photos.getData("a.png")
+const list = yield * Stream.runCollect(photos.listObjects)
 
 // typed view:
-const meta  = photos.forSchema(Schema.Struct({ filename: Schema.String, size: Schema.Number }))
-yield* meta.writeData("a.json", { filename: "a.png", size: bytes.length })
+const meta = photos.forSchema(Schema.Struct({ filename: Schema.String, size: Schema.Number }))
+yield * meta.writeData("a.json", { filename: "a.png", size: bytes.length })
 ```
 
 ## RDBMS adapters: Postgres / MySQL / Ignite
@@ -686,7 +700,7 @@ defineAgent({
   // empty schema purely to drive the snapshot oplog cadence:
   snapshot: Snapshot.define({ schema: Schema.Struct({}), policy: Snapshot.policy.everyN(10) }),
   methods: {
-    add:         method({ params: { by: Schema.Number }, success: Schema.Number }),
+    add: method({ params: { by: Schema.Number }, success: Schema.Number }),
     transferAdd: method({
       params: { from: Schema.String, by: Schema.Number },
       success: Schema.Number,
@@ -733,10 +747,10 @@ The `effect-golem/sqlite` adapter wraps Node's built-in `node:sqlite` (the only 
 ```ts
 import { SqliteClient } from "effect-golem/sqlite"
 
-const sql = yield* SqliteClient.make({ filename: ":memory:" })
-yield* sql.exec(`CREATE TABLE IF NOT EXISTS counters (id TEXT PRIMARY KEY, count INTEGER)`)
-yield* sql`INSERT OR IGNORE INTO counters (id, count) VALUES (${name}, 0)`
-const rows = yield* sql`SELECT count FROM counters WHERE id = ${name}`
+const sql = yield * SqliteClient.make({ filename: ":memory:" })
+yield * sql.exec(`CREATE TABLE IF NOT EXISTS counters (id TEXT PRIMARY KEY, count INTEGER)`)
+yield * sql`INSERT OR IGNORE INTO counters (id, count) VALUES (${name}, 0)`
+const rows = yield * sql`SELECT count FROM counters WHERE id = ${name}`
 ```
 
 Pair with `Snapshot.define({ databases: [...] })` (above) to capture the on-disk image into the snapshot envelope.
@@ -748,30 +762,33 @@ Effect-typed wrapper over `golem:quota/types@1.5.0` for resource reservations.
 ```ts
 import { Quota } from "effect-golem"
 
-const token = yield* Quota.acquireQuotaToken("api-calls", 1n)
+const token = yield * Quota.acquireQuotaToken("api-calls", 1n)
 
 // RAII — body returns { used, value }; on success commits `used`,
 // on failure / interrupt the surrounding scope commits 0 automatically:
-const response = yield* Quota.withReservation(token, 4000n, () =>
-  Effect.gen(function* () {
-    const r = yield* callLlm(prompt, { maxTokens: 4000 })
-    return { used: BigInt(r.tokensUsed), value: r }
-  }),
-)
+const response =
+  yield *
+  Quota.withReservation(token, 4000n, () =>
+    Effect.gen(function* () {
+      const r = yield* callLlm(prompt, { maxTokens: 4000 })
+      return { used: BigInt(r.tokensUsed), value: r }
+    }),
+  )
 
 // Manual reserve + commit (run inside Effect.scoped so drop ≡ commit(0)):
-yield* Effect.scoped(
-  Effect.gen(function* () {
-    const reservation = yield* Quota.reserve(token, 100n)
-    yield* doWork()
-    yield* Quota.commit(reservation, 73n)
-  }),
-)
+yield *
+  Effect.scoped(
+    Effect.gen(function* () {
+      const reservation = yield* Quota.reserve(token, 100n)
+      yield* doWork()
+      yield* Quota.commit(reservation, 73n)
+    }),
+  )
 
 // Split tokens across RPC peers, merge them back:
-const child = yield* Quota.split(token, 300n)
+const child = yield * Quota.split(token, 300n)
 // ...send `child` over RPC (auto-encoded via the QuotaToken schema codec)...
-yield* Quota.merge(token, child)
+yield * Quota.merge(token, child)
 ```
 
 `reject`-policy reservations surface as a typed `FailedReservationError` carrying `estimatedWaitNanos`; `throttle` / `terminate` policies are handled inside the host before `reserve` returns.
@@ -783,7 +800,7 @@ import { Quota } from "effect-golem"
 
 const TransferQuotaInput = Schema.Struct({
   worker: Schema.String,
-  token: Quota.QuotaToken,                 // schema codec; round-trips host handle ↔ wire record
+  token: Quota.QuotaToken, // schema codec; round-trips host handle ↔ wire record
 })
 
 // Lower-level: the plain wire record (no resource handle, just the fields):
@@ -813,10 +830,10 @@ const policy = Retry.NamedPolicy.named(
 ).priority(10)
 
 // Imperative, persisted to oplog:
-yield* Retry.setPolicy(policy)
+yield * Retry.setPolicy(policy)
 
 // Scoped: only active for the wrapped Effect's lifetime:
-yield* Retry.withPolicy(policy, doWork)
+yield * Retry.withPolicy(policy, doWork)
 ```
 
 The same policy can also be **converted to an Effect `Schedule`** via `Retry.toSchedule(policy)`. The result composes with `Effect.retry` / `Effect.repeat` and any other `Schedule.*` combinator — so a policy declared once can drive both host-side, oplog-persisted retries (`Retry.withPolicy`) and Effect-side, in-process retries (`Effect.retry`):
@@ -831,7 +848,7 @@ const schedule = Retry.toSchedule(policy, {
   properties: (err: HttpError) => ({ statusCode: err.status }),
 })
 
-yield* doWork.pipe(Effect.retry(schedule))
+yield * doWork.pipe(Effect.retry(schedule))
 ```
 
 Unlike `withPolicy`, the schedule runs entirely on the Effect side — the Golem host does NOT see retries as `RetryAttempt` oplog entries. Use `withPolicy` for host-driven retries that participate in the durability oplog (e.g. cross-`SUSPEND` survival); use `toSchedule` for fine-grained Effect-native retry behaviour.
@@ -844,21 +861,23 @@ Read and search the running agent's own oplog as a `Stream`:
 import { Oplog, SelfAgentId } from "effect-golem"
 import { Stream } from "effect"
 
-const idx  = yield* Oplog.currentIndex
-const self = yield* SelfAgentId.SelfAgentId
+const idx = yield * Oplog.currentIndex
+const self = yield * SelfAgentId.SelfAgentId
 
-const tags = yield* Stream.runCollect(
-  Oplog.read({ agentId: self, start: 0n }).pipe(
-    Stream.map((entry) => entry.tag),
-    Stream.take(50),
-  ),
-)
+const tags =
+  yield *
+  Stream.runCollect(
+    Oplog.read({ agentId: self, start: 0n }).pipe(
+      Stream.map((entry) => entry.tag),
+      Stream.take(50),
+    ),
+  )
 
 // Full-text search:
-yield* Stream.runCollect(Oplog.search({ agentId: self, text: "increment" }))
+yield * Stream.runCollect(Oplog.search({ agentId: self, text: "increment" }))
 
 // Force a checkpoint commit:
-yield* Oplog.commit
+yield * Oplog.commit
 ```
 
 ## Self-agent metadata, fork, promises
@@ -911,11 +930,12 @@ const ready  = yield* Agents.Promises.poll(id)             // non-blocking; unde
 - `Effect.withSpan(...)` calls `golem:api/context.startSpan(...)` and chain under the host's invocation root. `Effect.annotateCurrentSpan` / `attributes:` map to host `setAttribute`. Span errors record `error.message`.
 
 ```ts
-yield* Effect.logInfo("incremented").pipe(Effect.annotateLogs({ to: 7 }))
+yield * Effect.logInfo("incremented").pipe(Effect.annotateLogs({ to: 7 }))
 
-yield* Effect.gen(function* () {
-  // ...
-}).pipe(Effect.withSpan("Counter.add", { attributes: { by: 1 } }))
+yield *
+  Effect.gen(function* () {
+    // ...
+  }).pipe(Effect.withSpan("Counter.add", { attributes: { by: 1 } }))
 ```
 
 The `Logging` and `Tracing` namespaces are re-exported for users who want to replace / augment the default loggers, log imperatively, read `currentContext` (trace/span ids + W3C headers), or toggle outgoing trace-context forwarding.

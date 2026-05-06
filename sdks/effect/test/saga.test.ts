@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Fiber, Layer } from "effect"
+import { AgentHostLive } from "../src/host/AgentHostClient.js"
 import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import { OplogLive } from "../src/host/OplogClient.js"
 import * as Saga from "../src/Saga.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 
-const hostLayer = Layer.mergeAll(OplogLive, DurabilityModeLive)
+const hostLayer = Layer.mergeAll(OplogLive, DurabilityModeLive, AgentHostLive)
 
 beforeEach(() => {
   ApiHostMock.__resetAll()
@@ -257,7 +258,7 @@ describe("Saga.infallibleTransaction", () => {
     }).pipe(Effect.provide(hostLayer)),
   )
 
-  it.effect("propagates defects without rewinding", () =>
+  it.effect("traps on defects (and does NOT rewind)", () =>
     Effect.gen(function* () {
       ApiHostMock.__setOplogIndex(50n)
       const exit = yield* Effect.exit(
@@ -266,6 +267,80 @@ describe("Saga.infallibleTransaction", () => {
       expect(Exit.isFailure(exit)).toBe(true)
       // currentIndex bumped once on entry → 51n. setIndex was NOT called.
       expect(ApiHostMock.__getOplogIndex()).toBe(51n)
+      // ...and `golem:api/host.trap` was called naming the failure.
+      const traps = ApiHostMock.__getTrapReasons()
+      expect(traps.length).toBe(1)
+      expect(traps[0]).toMatch(/^infallibleTransaction failed:/)
+    }).pipe(Effect.provide(hostLayer)),
+  )
+})
+
+describe("Saga.fallibleTransaction — defect trap", () => {
+  it.effect("traps on defects in the body (does NOT compensate)", () =>
+    Effect.gen(function* () {
+      const trace: string[] = []
+      const okStep = (id: string) =>
+        Saga.withCompensation(
+          Effect.sync(() => {
+            trace.push(`exec:${id}`)
+            return id
+          }),
+          () =>
+            Effect.sync(() => {
+              trace.push(`comp:${id}`)
+            }),
+        )
+      const exit = yield* Effect.exit(
+        Saga.fallibleTransaction(
+          Effect.gen(function* () {
+            yield* okStep("a")
+            yield* Effect.die("kaboom")
+            return "unreachable"
+          }) as Effect.Effect<string, never, never>,
+        ),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      // No compensations on a defect.
+      expect(trace).toEqual(["exec:a"])
+      const traps = ApiHostMock.__getTrapReasons()
+      expect(traps.length).toBe(1)
+      expect(traps[0]).toMatch(/^fallibleTransaction failed:/)
+    }).pipe(Effect.provide(hostLayer)),
+  )
+
+  it.effect("does NOT trap on interrupt — compensates and propagates interrupt", () =>
+    Effect.gen(function* () {
+      // Interrupt is structured cancellation in Effect, NOT an
+      // unexpected throw. The saga should still drain compensations
+      // for already-completed steps, but it must NOT call the host's
+      // uncatchable `trap` — that would turn `Effect.timeout` /
+      // `race` / `Fiber.interrupt` into a worker-killing fault.
+      const trace: string[] = []
+      const okStep = (id: string) =>
+        Saga.withCompensation(
+          Effect.sync(() => {
+            trace.push(`exec:${id}`)
+            return id
+          }),
+          () =>
+            Effect.sync(() => {
+              trace.push(`comp:${id}`)
+            }),
+        )
+      const exit = yield* Effect.exit(
+        Saga.fallibleTransaction(
+          Effect.gen(function* () {
+            yield* okStep("a")
+            yield* Effect.interrupt
+            return "unreachable"
+          }),
+        ),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      // Compensations DID run (interrupt is a "should compensate" cause).
+      expect(trace).toEqual(["exec:a", "comp:a"])
+      // No trap was called.
+      expect(ApiHostMock.__getTrapReasons()).toEqual([])
     }).pipe(Effect.provide(hostLayer)),
   )
 })

@@ -166,6 +166,35 @@ export const __getAtomicMarks = (): ReadonlyArray<OplogIndex> => [..._atomicMark
 export const __getOplogCommits = (): ReadonlyArray<number> => [..._oplogCommits]
 
 // ---------------------------------------------------------------------------
+// trap
+// ---------------------------------------------------------------------------
+
+const _trapReasons: Array<string> = []
+
+/**
+ * Mirror of `golem:api/host.trap`. Real host call is an uncatchable
+ * wasm trap; the test mock instead records the reason and throws a
+ * marker `Error` so unit tests can observe the call without taking
+ * down the test process.
+ */
+export class TestTrapError extends Error {
+  readonly _tag = "TestTrapError"
+  constructor(public readonly reason: string) {
+    super(`golem:api/host.trap: ${reason}`)
+  }
+}
+
+export const trap = (reason: string): never => {
+  _trapReasons.push(reason)
+  throw new TestTrapError(reason)
+}
+
+export const __getTrapReasons = (): ReadonlyArray<string> => [..._trapReasons]
+export const __resetTraps = (): void => {
+  _trapReasons.length = 0
+}
+
+// ---------------------------------------------------------------------------
 // Self metadata + agent lifecycle
 // ---------------------------------------------------------------------------
 
@@ -419,6 +448,7 @@ export const __resetAll = (): void => {
   _strictAgentIdsByRef.clear()
   _agentsByComponent.clear()
   _promises.clear()
+  _trapReasons.length = 0
 }
 
 export const __reset = __resetAll

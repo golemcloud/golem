@@ -616,24 +616,26 @@ Combinators (re-exported from the package barrel as `Saga`):
 - `Saga.withCompensation(effect, (value, cause) => Effect<void, never, R>)` — primary, idiomatic combinator. Compensation cannot fail. Mirrors `@effect/workflow.Workflow.withCompensation` exactly.
 - `Saga.withFallibleCompensation(effect, (value, cause) => Effect<void, E, R>)` — Golem-specific extension. The first compensation failure surfaces as `TransactionFailure.FailedAndRolledBackPartially { error, compensationError }`. Subsequent compensations still run on a best-effort basis.
 - `Saga.operation({ execute, compensate })` — paired-step factory. Returns a function `(input) => Effect<…>`; internally uses `withCompensation`. Matches the `Operation` type from the official Golem SDKs.
-- `Saga.fallibleTransaction(body)` — entry point. Body returns `Effect<A, E, R>`; failure becomes `TransactionFailure<E>`. Defects propagate unchanged. Interruption propagates unchanged (compensations still run via the surrounding scope).
-- `Saga.infallibleTransaction(body)` — entry point. Body returns `Effect<A, never, R>`; on operation-level failure or interruption, drains compensations in reverse order, calls `setOplogIndex(checkpoint)`, and parks the fiber via `Effect.never` until the host preempts. Defects propagate unchanged.
+- `Saga.fallibleTransaction(body)` — entry point. Body returns `Effect<A, E, R>`; typed failure compensates and becomes `TransactionFailure<E>`. Interruption compensates and propagates interrupt. Defects bypass compensation AND call `golem:api/host.trap(...)` (uncatchable wasm trap) — see the failure-cause classification table below.
+- `Saga.infallibleTransaction(body)` — entry point. Body returns `Effect<A, never, R>`; typed failure (impossible since `E = never`) and interruption both drain compensations and `setOplogIndex(checkpoint) >> Effect.never`. Defects bypass compensation AND call `golem:api/host.trap(...)` (no rewind).
 
 Wire mechanics:
 
 - On entry the SDK captures `Oplog.currentIndex` as the checkpoint. NO outer atomic region is opened — each step runs in its own.
-- Each `Saga.operation` / `Saga.withCompensation` wraps the step body in `Durability.atomically(...)`, so the host oplog shows balanced `BeginAtomicRegion` / `EndAtomicRegion` markers per step.
+- Each `Saga.operation` / `Saga.withCompensation` wraps the step body in a private `stepAtomically` helper (not the public `Durability.atomically`, which traps on failure — per-step typed failures are part of the saga protocol and must NOT trap). The host oplog still shows balanced `BeginAtomicRegion` / `EndAtomicRegion` markers per step.
 - Compensations are registered via `Scope.addFinalizer(scope, …)`. The transaction wrapper signals "now drain" by stashing the failure cause in a fiber-local `CauseStoreRef`; the finalizers read this and gate themselves on `cause !== null`.
 - Reverse-order drain is guaranteed by Scope's LIFO finalizer semantics. Drains run sequentially, uninterruptibly (Scope close is uninterruptible).
 - Infallible failure path: after the drain, `setIndex(checkpoint) >> Effect.never`. The host preempts and replays from the checkpoint. The fiber's `R` channel is `Exclude<R, Scope>` — Scope is internal.
 
 Failure-cause classification:
 
-| Cause class             | Fallible saga                             | Infallible saga                          |
-| ----------------------- | ----------------------------------------- | ---------------------------------------- |
-| `Effect.fail` (typed E) | compensate reverse → `TransactionFailure` | compensate reverse → `setIndex >> never` |
-| `Effect.interrupt`      | propagate unchanged (comps still run)     | compensate reverse → `setIndex >> never` |
-| `Effect.die` (defect)   | propagate unchanged (NO comps)            | propagate unchanged (NO rewind)          |
+| Cause class             | Fallible saga                             | Infallible saga                                |
+| ----------------------- | ----------------------------------------- | ---------------------------------------------- |
+| `Effect.fail` (typed E) | compensate reverse → `TransactionFailure` | compensate reverse → `setIndex >> never`       |
+| `Effect.interrupt`      | compensate reverse → propagate interrupt  | compensate reverse → `setIndex >> never`       |
+| `Effect.die` (defect)   | NO comps → call `host.trap(reason)`       | NO comps, NO rewind → call `host.trap(reason)` |
+
+Defects intentionally call the host's uncatchable `trap` so user code outside the saga cannot observe the unexpected throw with `Effect.catchAll` and continue with a half-rolled-back state — mirrors the `catch (e) { trap(...); throw e }` pattern in `golem-ts-sdk`'s `host/transaction.ts`. Interrupts are deliberately NOT trapped — they are structured cancellation in Effect (`Effect.timeout`, `race`, parent-scope teardown), and trapping would make those patterns kill the worker.
 
 Errors: `Saga.NestedSagaError` (raised when a saga is started inside an already-active saga in the same fiber tree — the host's atomic-region bracketing and the in-fiber checkpoint stack are single-frame); `TransactionFailure<E>` is a tagged union (`FailedAndRolledBackCompletely { error }` / `FailedAndRolledBackPartially { error, compensationError }`). Both are exported from the package barrel.
 
@@ -920,7 +922,7 @@ Caveats (host-side, NOT fixable in the SDK):
 
 - **Backend divergence on `getData(name, range)`.** The WIT spec says `start..=end` is inclusive on both ends. Golem's in-memory + filesystem backends implement it as Rust-exclusive (`start..end`); the S3 backend follows the WIT spec (inclusive). Whole-object reads (`getData(name)` without a range) work around this by first trying inclusive end (`size - 1`) and replaying with `end = size` if the backend short-changed by one byte — so whole-object reads are portable. **Explicit ranged reads are not portable** until the host fixes the in-mem/fs implementations.
 - **`created-at` is actually `last-modified-at`.** The WIT field name is misleading: object storage backends (S3 `LastModified`, filesystem `mtime`) have no separate creation timestamp, and the Golem host populates `created-at` from `last-modified-at`. Both `ContainerMetadata.createdAt` and `ObjectMetadata.createdAt` reflect last-modified time.
-- **`container.clear()` on the filesystem backend.** Calling `clear()` on a filesystem-backed container deletes the underlying directory; subsequent `listObjects()` calls trap with "Backend error: No such file or directory". Upstream bug — workaround is to `deleteContainer + createContainer` instead. Not surfaced by the in-memory or S3 backends.
+- **`container.clear()` on the filesystem backend.** _Historic bug — fixed upstream in `golemcloud/golem` PR `e964fb2` (post-v1.5.0)._ Older Golem hosts deleted the underlying directory on `clear()`; subsequent `listObjects()` calls then trapped with "Backend error: No such file or directory". The fix calls `delete_dir` + `create_dir` so the container directory always exists after `clear()`. With current Golem hosts no workaround is needed; on hosts older than `e964fb2` you must `deleteContainer` + `createContainer` instead. Not surfaced by the in-memory or S3 backends.
 - `listObjects` is eager: the host fetches the full object name list at the moment `list-objects` is called and pins it to the oplog. The returned `Stream` only consumes from that in-memory snapshot. Order is undefined (host pops from the tail of its internal `Vec`). Page size: 256.
 - Method authors who use `forSchema` MUST handle the `Schema.SchemaError` typed channel — same caveat as `KeyValue.SchemaBucket`.
 

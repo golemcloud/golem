@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Effect, Exit, Layer } from "effect"
 import * as Durability from "../src/Durability.js"
+import { AgentHostLive } from "../src/host/AgentHostClient.js"
 import { DurabilityModeClient, DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
+
+/**
+ * Combined live layer for tests that exercise `Durability.atomically`
+ * (which calls `golem:api/host.trap` on failure via `AgentHostClient`).
+ */
+const AtomicallyLive = Layer.merge(DurabilityModeLive, AgentHostLive)
 
 beforeEach(() => {
   ApiHostMock.__resetAll()
@@ -106,17 +113,45 @@ describe("Durability — atomic region", () => {
         }),
       )
       expect(observed.length).toBe(1)
-      // After scope close the mark must be gone.
+      // After scope close the mark must be gone (success path calls
+      // mark-end-operation).
       expect(ApiHostMock.__getAtomicMarks()).toEqual([])
-    }).pipe(Effect.provide(DurabilityModeLive)),
+    }).pipe(Effect.provide(AtomicallyLive)),
   )
 
-  it.effect("clears the mark on failure", () =>
+  it.effect("calls trap and leaves the mark open on failure", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(Durability.atomically(Effect.fail("boom" as const)))
       expect(Exit.isFailure(exit)).toBe(true)
-      expect(ApiHostMock.__getAtomicMarks()).toEqual([])
-    }).pipe(Effect.provide(DurabilityModeLive)),
+      // The atomic region is intentionally left OPEN on failure so the
+      // host's replay-time recovery can roll back partial side effects
+      // and re-run the block — mirrors Rust's `AtomicOperationGuard`
+      // skipping `mark-end-operation` when panicking.
+      expect(ApiHostMock.__getAtomicMarks().length).toBe(1)
+      // ...and `golem:api/host.trap` was called with a reason naming
+      // the failure.
+      const traps = ApiHostMock.__getTrapReasons()
+      expect(traps.length).toBe(1)
+      expect(traps[0]).toMatch(/^atomic block failed:/)
+    }).pipe(Effect.provide(AtomicallyLive)),
+  )
+
+  it.effect("calls trap on defect failures too", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(Durability.atomically(Effect.die("kaboom")))
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(ApiHostMock.__getAtomicMarks().length).toBe(1)
+      expect(ApiHostMock.__getTrapReasons().length).toBe(1)
+    }).pipe(Effect.provide(AtomicallyLive)),
+  )
+
+  it.effect("calls trap on interrupt too", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(Durability.atomically(Effect.interrupt))
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(ApiHostMock.__getAtomicMarks().length).toBe(1)
+      expect(ApiHostMock.__getTrapReasons().length).toBe(1)
+    }).pipe(Effect.provide(AtomicallyLive)),
   )
 
   it.effect("supports manual begin/end", () =>

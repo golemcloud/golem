@@ -35,9 +35,23 @@
  * `Effect<void, E, R>`; the first such failure surfaces as
  * `FailedAndRolledBackPartially { error, compensationError }`.
  *
- * Defects (`Effect.die` / unexpected throws) are NOT routed through
- * the saga machinery — they propagate unchanged, matching the spirit
- * of `Durability.unwrapOrRevert` and `Durability.checkpoint`.
+ * **Failure-cause routing summary**
+ *
+ * | Cause class             | Fallible saga                              | Infallible saga                                       |
+ * | ----------------------- | ------------------------------------------ | ----------------------------------------------------- |
+ * | `Effect.fail` (typed E) | compensate (LIFO) → `TransactionFailure`   | compensate (LIFO) → `setOplogIndex(checkpoint) → never` |
+ * | `Effect.interrupt`      | compensate (LIFO) → propagate interrupt    | compensate (LIFO) → `setOplogIndex(checkpoint) → never` |
+ * | `Effect.die` (defect)   | NO compensation → call `host.trap(reason)` | NO compensation, NO rewind → call `host.trap(reason)` |
+ *
+ * Defects intentionally bypass the typed protocol AND call the
+ * host's uncatchable `trap` so user code outside the saga cannot
+ * observe the unexpected throw with `Effect.catchAll` and continue
+ * with a half-rolled-back state. This mirrors the
+ * `catch (e) { trap(...); throw e }` pattern in `golem-ts-sdk`'s
+ * `host/transaction.ts`. Interrupts are deliberately NOT trapped —
+ * they are structured cancellation in Effect (`Effect.timeout`,
+ * `race`, parent-scope teardown), and trapping would make those
+ * patterns kill the worker.
  *
  * Nested transactions on the same fiber tree are rejected with
  * {@link NestedSagaError}: the host's atomic-region bracketing and
@@ -48,10 +62,34 @@
  */
 
 import { Cause, Context, Effect, Ref, Scope } from "effect"
-import { atomically, DurabilityHostError } from "./internal/durabilityMode.js"
+import {
+  beginOperation,
+  DurabilityHostError,
+  endOperation,
+  formatCauseForTrap,
+} from "./internal/durabilityMode.js"
+import { AgentHostClient } from "./host/AgentHostClient.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { OplogClient } from "./host/OplogClient.js"
 import { currentIndex, OplogHostError, setIndex } from "./Oplog.js"
+
+/**
+ * Run `effect` inside a per-step atomic region. Equivalent to the
+ * pre-trap behaviour of `Durability.atomically`: begin and end the
+ * region around the body for **all** exit modes, no trap on failure.
+ * Per-saga-step typed failures are part of the saga protocol and
+ * trigger compensation drain rather than a wasm trap.
+ *
+ * @internal
+ */
+const stepAtomically = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | DurabilityHostError, Exclude<R, Scope.Scope> | DurabilityModeClient> =>
+  Effect.scoped(
+    Effect.acquireRelease(beginOperation, (begin) => endOperation(begin).pipe(Effect.ignore)).pipe(
+      Effect.andThen(effect),
+    ),
+  )
 
 // ---------------------------------------------------------------------------
 // Internal fiber-local references
@@ -212,7 +250,7 @@ const withCompensationImpl = <A, E, R, R2>(
 ): Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope | DurabilityModeClient> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      const value = yield* restore(atomically(effect))
+      const value = yield* restore(stepAtomically(effect))
       const store = yield* Effect.service(CauseStoreRef)
       const context = yield* Effect.context<R2 | DurabilityModeClient>()
       const scope = yield* Effect.service(Scope.Scope)
@@ -220,7 +258,7 @@ const withCompensationImpl = <A, E, R, R2>(
         scope,
         Effect.suspend(() => {
           if (store === null || store.cause === null) return Effect.void
-          return atomically(compensate(value, store.cause)).pipe(
+          return stepAtomically(compensate(value, store.cause)).pipe(
             Effect.provide(context),
             Effect.ignore,
           )
@@ -436,7 +474,7 @@ export const fallibleTransaction = <A, E, R>(
 ): Effect.Effect<
   A,
   TransactionFailure<E> | DurabilityHostError | OplogHostError | NestedSagaError,
-  Exclude<R, Scope.Scope> | DurabilityModeClient | OplogClient
+  Exclude<R, Scope.Scope> | DurabilityModeClient | OplogClient | AgentHostClient
 > =>
   Effect.gen(function* () {
     const existing = yield* Effect.service(InsideSagaRef)
@@ -457,6 +495,15 @@ export const fallibleTransaction = <A, E, R>(
         if (exit._tag === "Success") return exit.value
 
         if (!shouldCompensateCause(exit.cause)) {
+          // Defect path — call the host's uncatchable trap so user code
+          // outside the saga cannot observe the unexpected throw and
+          // continue with a half-rolled-back state. Mirrors the
+          // `catch (e) { trap(...); throw e }` pattern in
+          // `golem-ts-sdk` `host/transaction.ts`.
+          const host = yield* AgentHostClient
+          yield* Effect.sync(() =>
+            host.trap(`fallibleTransaction failed: ${formatCauseForTrap(exit.cause)}`),
+          )
           return yield* Effect.failCause(exit.cause)
         }
 
@@ -532,7 +579,7 @@ export const infallibleTransaction = <A, R>(
 ): Effect.Effect<
   A,
   DurabilityHostError | OplogHostError | NestedSagaError,
-  Exclude<R, Scope.Scope> | DurabilityModeClient | OplogClient
+  Exclude<R, Scope.Scope> | DurabilityModeClient | OplogClient | AgentHostClient
 > =>
   Effect.gen(function* () {
     const existing = yield* Effect.service(InsideSagaRef)
@@ -554,6 +601,11 @@ export const infallibleTransaction = <A, R>(
         if (exit._tag === "Success") return exit.value
 
         if (!shouldCompensateCause(exit.cause)) {
+          // Defect path — same trap protocol as `fallibleTransaction`.
+          const host = yield* AgentHostClient
+          yield* Effect.sync(() =>
+            host.trap(`infallibleTransaction failed: ${formatCauseForTrap(exit.cause)}`),
+          )
           return yield* Effect.failCause(exit.cause)
         }
 
@@ -566,5 +618,5 @@ export const infallibleTransaction = <A, R>(
   }) as Effect.Effect<
     A,
     DurabilityHostError | OplogHostError | NestedSagaError,
-    Exclude<R, Scope.Scope> | DurabilityModeClient | OplogClient
+    Exclude<R, Scope.Scope> | DurabilityModeClient | OplogClient | AgentHostClient
   >
