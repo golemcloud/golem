@@ -16,7 +16,7 @@ use crate::log::LogColorize;
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
-use crate::model::text::fmt::{Column, TextView, log_table, new_table};
+use crate::model::text::fmt::{Column, TextView, log_table, new_table_full_condensed};
 use golem_client::model::EnvironmentWithDetails;
 
 pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIdentity) -> String {
@@ -64,7 +64,7 @@ pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIde
 
 impl TextView for Vec<EnvironmentWithDetails> {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Application Name"),
             Column::new("Environment Name"),
             Column::new("Deployment Revision").fixed_right(),

@@ -14,15 +14,18 @@
 
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::log::{LogColorize, LogIndent, logln};
+use crate::model::component::show_exported_agent_constructors;
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextView, format_export,
-    log_table, new_table,
+    log_table, new_table_full,
 };
 use colored::Colorize;
+use comfy_table::{Cell, CellAlignment, Color as ComfyColor};
 use golem_client::model::ComponentDto;
-use golem_common::model::agent::{AgentType, ParsedAgentId};
+use golem_common::model::agent::{
+    AgentType, AgentTypeName, DeployedRegisteredAgentType, ElementSchema, ParsedAgentId,
+};
 use golem_common::model::component::ComponentName;
-use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
 use std::path::PathBuf;
 
@@ -30,7 +33,7 @@ pub struct AgentNameHelp;
 
 impl MessageWithFields for AgentNameHelp {
     fn message(&self) -> String {
-        "Accepted agent name formats:"
+        "Accepted agent ID formats:"
             .log_color_help_group()
             .to_string()
     }
@@ -43,7 +46,7 @@ impl MessageWithFields for AgentNameHelp {
             "<AGENT>",
             &indoc!(
                 "
-                    Standalone agent name.
+                    Standalone agent ID.
                     "
             ),
         );
@@ -51,7 +54,7 @@ impl MessageWithFields for AgentNameHelp {
             "<ENVIRONMENT>/<AGENT>",
             &indoc!(
                 "
-                        Environment specific agent name.
+                        Environment specific agent ID.
                     "
             ),
         );
@@ -59,7 +62,7 @@ impl MessageWithFields for AgentNameHelp {
             "<APPLICATION>/<ENVIRONMENT>/<AGENT>",
             &indoc!(
                 "
-                    Application, environment specific agent name.
+                    Application, environment specific agent ID.
                     "
             ),
         );
@@ -67,7 +70,7 @@ impl MessageWithFields for AgentNameHelp {
             "<ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/<AGENT>",
             &indoc!(
                 "
-                    Account, application, environment specific agent name.
+                    Account, application, environment specific agent ID.
 
                     Behaves the same as <APPLICATION>/<ENVIRONMENT>/<AGENT>, except it can
                     refer to any account.
@@ -255,33 +258,69 @@ impl TextView for AvailableFunctionNamesHelp {
 }
 
 pub struct AvailableAgentConstructorsHelp {
-    pub component_name: String,
+    pub heading: String,
+    pub empty_message: String,
     pub constructors: Vec<String>,
+}
+
+impl AvailableAgentConstructorsHelp {
+    pub fn for_component(
+        component: &ComponentDto,
+        target_agent_type: Option<&AgentTypeName>,
+    ) -> Self {
+        let constructors = if let Some(target_agent_type) = target_agent_type {
+            component
+                .metadata
+                .agent_types()
+                .iter()
+                .find(|agent_type| agent_type.type_name == *target_agent_type)
+                .map(|agent_type| {
+                    show_exported_agent_constructors(std::slice::from_ref(agent_type), true)
+                })
+                .unwrap_or_else(|| {
+                    show_exported_agent_constructors(component.metadata.agent_types(), true)
+                })
+        } else {
+            show_exported_agent_constructors(component.metadata.agent_types(), true)
+        };
+
+        let component_name = &component.component_name.0;
+
+        Self {
+            heading: format!("Available agent constructors for component {component_name}:"),
+            empty_message: format!(
+                "No agent constructors are available for component {}.",
+                component_name.log_color_highlight()
+            ),
+            constructors,
+        }
+    }
+
+    pub fn for_deployed_agent_types(agent_types: &[DeployedRegisteredAgentType]) -> Self {
+        let constructors = show_exported_agent_constructors(
+            &agent_types
+                .iter()
+                .map(|agent_type| agent_type.agent_type.clone())
+                .collect::<Vec<_>>(),
+            true,
+        );
+
+        Self {
+            heading: "Available deployed agent type constructors:".to_string(),
+            empty_message: "No deployed agent type constructors are available.".to_string(),
+            constructors,
+        }
+    }
 }
 
 impl TextView for AvailableAgentConstructorsHelp {
     fn log(&self) {
         if self.constructors.is_empty() {
-            logln(
-                format!(
-                    "No agent constructors are available for component {}.",
-                    self.component_name.log_color_highlight()
-                )
-                .log_color_warn()
-                .to_string(),
-            );
+            logln(self.empty_message.log_color_warn().to_string());
             return;
         }
 
-        logln(
-            format!(
-                "Available agent constructors for component {}:",
-                self.component_name
-            )
-            .bold()
-            .underline()
-            .to_string(),
-        );
+        logln(self.heading.bold().underline().to_string());
         for constructor in &self.constructors {
             logln(format!("  - {}", format_export(constructor)));
         }
@@ -290,7 +329,8 @@ impl TextView for AvailableAgentConstructorsHelp {
 }
 
 pub struct ArgumentError {
-    pub type_: Option<AnalysedType>,
+    pub argument_index: usize,
+    pub parameter_type: Option<ElementSchema>,
     pub value: Option<String>,
     pub error: Option<String>,
     pub source_language: SourceLanguage,
@@ -300,22 +340,76 @@ pub struct ParameterErrorTableView(pub Vec<ArgumentError>);
 
 impl TextView for ParameterErrorTableView {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full(vec![
+            Column::new("Arg #").fixed_right(),
             Column::new("Parameter type"),
             Column::new("Argument value"),
             Column::new("Error"),
         ]);
+
         for err in &self.0 {
+            let has_error = err.error.is_some();
+
             table.add_row(vec![
-                err.type_
-                    .as_ref()
-                    .map(|t| render_type_for_language(&err.source_language, t, true))
-                    .unwrap_or_default(),
-                err.value.clone().unwrap_or_default(),
-                err.error.clone().unwrap_or_default(),
+                Cell::new(err.argument_index).set_alignment(CellAlignment::Right),
+                Cell::new(
+                    err.parameter_type
+                        .as_ref()
+                        .map(|parameter_type| {
+                            render_parameter_type_for_language(&err.source_language, parameter_type)
+                        })
+                        .unwrap_or_default(),
+                ),
+                Cell::new(err.value.clone().unwrap_or_default()),
+                Cell::new(err.error.clone().unwrap_or_default()).fg(if has_error {
+                    ComfyColor::Red
+                } else {
+                    ComfyColor::Reset
+                }),
             ]);
         }
         log_table(table);
+    }
+}
+
+fn render_parameter_type_for_language(
+    source_language: &SourceLanguage,
+    parameter_type: &ElementSchema,
+) -> String {
+    match parameter_type {
+        ElementSchema::ComponentModel(cm) => {
+            render_type_for_language(source_language, &cm.element_type, true)
+        }
+        ElementSchema::UnstructuredText(text_descriptor) => {
+            let mut result = "text".to_string();
+            if let Some(restrictions) = &text_descriptor.restrictions {
+                result.push('[');
+                result.push_str(
+                    &restrictions
+                        .iter()
+                        .map(|restriction| restriction.language_code.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                result.push(']');
+            }
+            result
+        }
+        ElementSchema::UnstructuredBinary(binary_descriptor) => {
+            let mut result = "binary".to_string();
+            if let Some(restrictions) = &binary_descriptor.restrictions {
+                result.push('[');
+                result.push_str(
+                    &restrictions
+                        .iter()
+                        .map(|restriction| restriction.mime_type.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                result.push(']');
+            }
+            result
+        }
     }
 }
 

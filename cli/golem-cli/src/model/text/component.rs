@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 impl TextView for Vec<ComponentView> {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Name"),
             Column::new("Revision").fixed_right(),
             Column::new("Version").fixed_right(),

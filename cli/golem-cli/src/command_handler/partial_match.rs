@@ -23,9 +23,12 @@ use crate::log::Output::Stdout;
 use crate::log::{LogColorize, log_action, log_error, logln, set_log_output};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::ComponentNameMatchKind;
+use crate::model::environment::EnvironmentResolveMode;
 use crate::model::format::Format;
 use crate::model::text::fmt::{DecoratedIndent, log_text_view};
-use crate::model::text::help::{AgentNameHelp, AvailableFunctionNamesHelp, EnvironmentNameHelp};
+use crate::model::text::help::{
+    AgentNameHelp, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp, EnvironmentNameHelp,
+};
 use colored::Colorize;
 use indoc::indoc;
 use std::sync::Arc;
@@ -117,10 +120,7 @@ impl ErrorHandler {
                 logln("");
                 log_action(
                     "Checking",
-                    format!(
-                        "provided agent name: {}",
-                        agent_name.0.log_color_highlight()
-                    ),
+                    format!("provided agent ID: {}", agent_name.0.log_color_highlight()),
                 );
                 let agent_name_match = {
                     let _indent = DecoratedIndent::new_primary(Format::Text);
@@ -192,14 +192,18 @@ impl ErrorHandler {
                 logln("");
 
                 self.ctx.silence_app_context_init().await;
-                self.ctx
-                    .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
-                    .await?;
 
-                let app_ctx = self.ctx.app_context_lock().await;
-                if let Some(app_ctx) = app_ctx.opt()? {
-                    app_ctx.log_dynamic_help(&DynamicHelpSections::show_components())?
+                if let Ok(environment) = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .await
+                    && let Ok(agent_types) =
+                        self.ctx.app_handler().list_agent_types(&environment).await
+                {
+                    log_text_view(&AvailableAgentConstructorsHelp::for_deployed_agent_types(
+                        &agent_types,
+                    ));
                 }
 
                 Ok(())

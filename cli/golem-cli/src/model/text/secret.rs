@@ -152,7 +152,7 @@ pub struct SecretListView {
 
 impl SecretListView {
     fn table(&self) -> ComfyTable {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Environment").fixed(),
             Column::new("Path"),
             Column::new("Revision").fixed_right(),
