@@ -1422,7 +1422,7 @@ impl AppCommandHandler {
                             Err(UpdateStagedComponentError::Service(err))
                                 if allow_incompatible_changes_fallback
                                     && !reset_fallback_applied
-                                    && err.is_reset_component_recreate_fallback_eligible() =>
+                                    && err.is_agent_config_old_config_invalid() =>
                             {
                                 if !interactive_handler
                                     .confirm_reset_allow_incompatible_component_update(
@@ -1633,7 +1633,7 @@ impl AppCommandHandler {
 
                     if allow_incompatible_changes_fallback
                         && !reset_fallback_applied
-                        && service_err.is_reset_secret_retry_fallback_eligible()
+                        && service_err.is_agent_secret_not_compatible()
                     {
                         if !self
                             .ctx

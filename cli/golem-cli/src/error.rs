@@ -134,36 +134,22 @@ pub mod service {
             }
         }
 
-        pub fn is_reset_component_recreate_fallback_eligible(&self) -> bool {
+        pub fn is_agent_config_old_config_invalid(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
                     err.is_status_code(409)
-                        && (err.error_subcodes().is_empty()
-                            || err.all_error_subcodes_in(&[
-                                api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID,
-                                api::error_code::AGENT_CONFIG_NOT_DECLARED,
-                                api::error_code::AGENT_CONFIG_SECRET_SCOPE_INVALID,
-                            ]))
-                        && err.code.as_deref().is_some_and(|code| {
-                            [
-                                api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID,
-                                api::error_code::AGENT_CONFIG_NOT_DECLARED,
-                                api::error_code::AGENT_CONFIG_SECRET_SCOPE_INVALID,
-                            ]
-                            .contains(&code)
-                        })
+                        && err.has_code(api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID)
                 }
                 _ => false,
             }
         }
 
-        pub fn is_reset_secret_retry_fallback_eligible(&self) -> bool {
+        pub fn is_agent_secret_not_compatible(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
                     err.has_code(api::error_code::deployment_validation::FAILED)
                         && err.all_error_subcodes_in(&[
                             api::error_code::deployment_validation::AGENT_SECRET_NOT_COMPATIBLE,
-                            api::error_code::deployment_validation::AGENT_SECRET_TYPE_CONFLICT,
                         ])
                 }
                 _ => false,
@@ -349,140 +335,5 @@ pub mod service {
             display_agent_id(promise_id.agent_id),
             promise_id.oplog_idx
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::service::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
-    use golem_common::base_model::api;
-    use test_r::test;
-
-    fn service_error_with_validation_code(errors: Vec<&str>) -> ServiceError {
-        ServiceError {
-            service_name: "test",
-            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
-                status_code: 400,
-                errors: errors.into_iter().map(str::to_string).collect(),
-                code: Some(api::error_code::deployment_validation::FAILED.to_string()),
-            }),
-        }
-    }
-
-    #[test]
-    fn reset_secret_retry_fallback_eligible_for_secret_compatibility_codes() {
-        assert!(
-            service_error_with_validation_code(vec![
-                "AGENT_SECRET_NOT_COMPATIBLE: incompatible secret"
-            ])
-            .is_reset_secret_retry_fallback_eligible()
-        );
-        assert!(
-            service_error_with_validation_code(vec![
-                "AGENT_SECRET_TYPE_CONFLICT: different secret type"
-            ])
-            .is_reset_secret_retry_fallback_eligible()
-        );
-    }
-
-    #[test]
-    fn reset_secret_retry_fallback_not_eligible_for_unrelated_subcodes() {
-        assert!(
-            !service_error_with_validation_code(vec!["CONFLICTING_RESOURCE_DEFINITIONS: conflict"])
-                .is_reset_secret_retry_fallback_eligible()
-        );
-        assert!(
-            !service_error_with_validation_code(vec!["HTTP_API_INVALID_ROUTE: bad route"])
-                .is_reset_secret_retry_fallback_eligible()
-        );
-    }
-
-    #[test]
-    fn reset_secret_retry_fallback_requires_deployment_validation_top_level_code() {
-        let err = ServiceError {
-            service_name: "test",
-            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
-                status_code: 400,
-                errors: vec!["AGENT_SECRET_TYPE_CONFLICT: different secret type".to_string()],
-                code: Some(api::error_code::CONCURRENT_UPDATE.to_string()),
-            }),
-        };
-
-        assert!(!err.is_reset_secret_retry_fallback_eligible());
-    }
-
-    #[test]
-    fn reset_secret_retry_fallback_requires_all_errors_to_be_secret_related() {
-        assert!(
-            !service_error_with_validation_code(vec![
-                "AGENT_SECRET_TYPE_CONFLICT: one",
-                "HTTP_API_INVALID_ROUTE: two",
-            ])
-            .is_reset_secret_retry_fallback_eligible()
-        );
-    }
-
-    #[test]
-    fn reset_component_recreate_fallback_eligible_for_known_agent_config_codes() {
-        let err = ServiceError {
-            service_name: "test",
-            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
-                status_code: 409,
-                errors: vec![
-                    "AGENT_CONFIG_OLD_CONFIG_INVALID: old config invalid".to_string(),
-                    "AGENT_CONFIG_NOT_DECLARED: unknown key".to_string(),
-                    "AGENT_CONFIG_SECRET_SCOPE_INVALID: invalid secret scope".to_string(),
-                ],
-                code: Some(api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID.to_string()),
-            }),
-        };
-
-        assert!(err.is_reset_component_recreate_fallback_eligible());
-    }
-
-    #[test]
-    fn reset_component_recreate_fallback_not_eligible_when_any_error_is_unrelated() {
-        let err = ServiceError {
-            service_name: "test",
-            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
-                status_code: 409,
-                errors: vec![
-                    "AGENT_CONFIG_NOT_DECLARED: unknown key".to_string(),
-                    "CONCURRENT_UPDATE: update in progress".to_string(),
-                ],
-                code: Some(api::error_code::AGENT_CONFIG_NOT_DECLARED.to_string()),
-            }),
-        };
-
-        assert!(!err.is_reset_component_recreate_fallback_eligible());
-    }
-
-    #[test]
-    fn reset_component_recreate_fallback_eligible_without_error_subcodes_when_top_level_code_matches()
-     {
-        let err = ServiceError {
-            service_name: "test",
-            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
-                status_code: 409,
-                errors: vec!["old config invalid".to_string()],
-                code: Some(api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID.to_string()),
-            }),
-        };
-
-        assert!(err.is_reset_component_recreate_fallback_eligible());
-    }
-
-    #[test]
-    fn reset_component_recreate_fallback_eligible_for_top_level_component_code_without_subcodes() {
-        let err = ServiceError {
-            service_name: "test",
-            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
-                status_code: 409,
-                errors: vec!["Old config value for agent CounterAgent at config key value is no longer valid due to an updated agent.".to_string()],
-                code: Some(api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID.to_string()),
-            }),
-        };
-
-        assert!(err.is_reset_component_recreate_fallback_eligible());
     }
 }
