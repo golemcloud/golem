@@ -655,6 +655,292 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 }
 
 #[test]
+async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "test-app-reset-incompatible";
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+    ctx.start_server().await;
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
+        indoc! {
+            r#"
+            import {
+                agent,
+                BaseAgent,
+                prompt,
+                description,
+                Config,
+                Secret,
+            } from '@golemcloud/golem-ts-sdk';
+
+            type CounterAgentConfigV1 = {
+                value: number;
+            };
+
+            @agent()
+            class CounterAgent extends BaseAgent {
+                count = 0;
+
+                constructor(name: string, readonly config: Config<CounterAgentConfigV1>) {
+                    super();
+                }
+
+                @prompt("Increase the count by the configured amount")
+                @description("Increases the count and returns the new value")
+                async increment(): Promise<number> {
+                    this.count += this.config.value.value;
+                    return this.count;
+                }
+            }
+
+            export { CounterAgent };
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {
+            r#"
+            manifestVersion: 1.5.0
+
+            app: test-app-reset-incompatible
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-reset-incompatible:ts-main:
+                templates: ts
+
+            agents:
+              CounterAgent:
+                config:
+                  value: 1
+            "#
+        },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
+        indoc! {
+            r#"
+            import {
+                agent,
+                BaseAgent,
+                prompt,
+                description,
+                Config,
+                Secret,
+            } from '@golemcloud/golem-ts-sdk';
+
+            type CounterAgentConfigV2 = {
+                value: boolean;
+            };
+
+            @agent()
+            class CounterAgent extends BaseAgent {
+                count = 0;
+
+                constructor(name: string, readonly config: Config<CounterAgentConfigV2>) {
+                    super();
+                }
+
+                @prompt("Increase the count based on the configured boolean")
+                @description("Increases the count and returns the new value")
+                async increment(): Promise<number> {
+                    this.count += this.config.value.value ? 1 : 0;
+                    return this.count;
+                }
+            }
+
+            export { CounterAgent };
+            "#
+        },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(!outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains("AGENT_CONFIG_OLD_CONFIG_INVALID")
+            || outputs.stdout_contains("Old config value")
+    );
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES, flag::RESET]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("Reset fallback"));
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {
+            r#"
+            manifestVersion: 1.5.0
+
+            app: test-app-reset-incompatible
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-reset-incompatible:ts-main:
+                templates: ts
+
+            agents:
+              CounterAgent:
+                config:
+                  value: true
+            secretDefaults:
+              local:
+                secret: first
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
+        indoc! {
+            r#"
+            import {
+                agent,
+                BaseAgent,
+                prompt,
+                description,
+                Config,
+                Secret,
+            } from '@golemcloud/golem-ts-sdk';
+
+            type CounterAgentConfigV3 = {
+                value: boolean;
+                secret: Secret<string>;
+            };
+
+            @agent()
+            class CounterAgent extends BaseAgent {
+                count = 0;
+
+                constructor(name: string, readonly config: Config<CounterAgentConfigV3>) {
+                    super();
+                }
+
+                @prompt("Increase the count using the configured secret")
+                @description("Increases the count and returns the new value")
+                async increment(): Promise<number> {
+                    const config = this.config.value;
+                    this.count += config.value ? config.secret.get().length : 0;
+                    return this.count;
+                }
+            }
+
+            export { CounterAgent };
+            "#
+        },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {
+            r#"
+            manifestVersion: 1.5.0
+
+            app: test-app-reset-incompatible
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-reset-incompatible:ts-main:
+                templates: ts
+
+            agents:
+              CounterAgent:
+                config:
+                  value: true
+            secretDefaults:
+              local:
+                secret: 42
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
+        indoc! {
+            r#"
+            import {
+                agent,
+                BaseAgent,
+                prompt,
+                description,
+                Config,
+                Secret,
+            } from '@golemcloud/golem-ts-sdk';
+
+            type CounterAgentConfigV4 = {
+                value: boolean;
+                secret: Secret<number>;
+            };
+
+            @agent()
+            class CounterAgent extends BaseAgent {
+                count = 0;
+
+                constructor(name: string, readonly config: Config<CounterAgentConfigV4>) {
+                    super();
+                }
+
+                @prompt("Increase the count using the configured numeric secret")
+                @description("Increases the count and returns the new value")
+                async increment(): Promise<number> {
+                    const config = this.config.value;
+                    this.count += config.value ? config.secret.get() : 0;
+                    return this.count;
+                }
+            }
+
+            export { CounterAgent };
+            "#
+        },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(!outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains("AGENT_SECRET_NOT_COMPATIBLE")
+            || outputs.stdout_contains("DEPLOYMENT_VALIDATION_FAILED")
+    );
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES, flag::RESET]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("Reset fallback"));
+}
+
+#[test]
 async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-component-level-ifs";

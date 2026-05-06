@@ -138,11 +138,20 @@ pub mod service {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
                     err.is_status_code(409)
-                        && err.all_error_subcodes_in(&[
-                            api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID,
-                            api::error_code::AGENT_CONFIG_NOT_DECLARED,
-                            api::error_code::AGENT_CONFIG_SECRET_SCOPE_INVALID,
-                        ])
+                        && (err.error_subcodes().is_empty()
+                            || err.all_error_subcodes_in(&[
+                                api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID,
+                                api::error_code::AGENT_CONFIG_NOT_DECLARED,
+                                api::error_code::AGENT_CONFIG_SECRET_SCOPE_INVALID,
+                            ]))
+                        && err.code.as_deref().is_some_and(|code| {
+                            [
+                                api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID,
+                                api::error_code::AGENT_CONFIG_NOT_DECLARED,
+                                api::error_code::AGENT_CONFIG_SECRET_SCOPE_INVALID,
+                            ]
+                            .contains(&code)
+                        })
                 }
                 _ => false,
             }
@@ -449,7 +458,8 @@ mod tests {
     }
 
     #[test]
-    fn reset_component_recreate_fallback_not_eligible_without_error_subcodes() {
+    fn reset_component_recreate_fallback_eligible_without_error_subcodes_when_top_level_code_matches()
+     {
         let err = ServiceError {
             service_name: "test",
             kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
@@ -459,6 +469,20 @@ mod tests {
             }),
         };
 
-        assert!(!err.is_reset_component_recreate_fallback_eligible());
+        assert!(err.is_reset_component_recreate_fallback_eligible());
+    }
+
+    #[test]
+    fn reset_component_recreate_fallback_eligible_for_top_level_component_code_without_subcodes() {
+        let err = ServiceError {
+            service_name: "test",
+            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
+                status_code: 409,
+                errors: vec!["Old config value for agent CounterAgent at config key value is no longer valid due to an updated agent.".to_string()],
+                code: Some(api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID.to_string()),
+            }),
+        };
+
+        assert!(err.is_reset_component_recreate_fallback_eligible());
     }
 }

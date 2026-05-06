@@ -46,7 +46,10 @@ use crate::model::app::{
     WithSource,
 };
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
-use crate::model::deploy::{DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult, PostDeploySummary, UpdateStagedComponentError};
+use crate::model::deploy::{
+    DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
+    PostDeploySummary, UpdateStagedComponentError,
+};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
 use crate::model::text::diff::{log_unified_diff, log_unified_diff_for_path};
