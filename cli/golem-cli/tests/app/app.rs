@@ -776,10 +776,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(!outputs.success_or_dump());
-    assert!(
-        outputs.stdout_contains("AGENT_CONFIG_OLD_CONFIG_INVALID")
-            || outputs.stdout_contains("Old config value")
-    );
+    assert!(outputs.stdout_contains("Old config value for agent CounterAgent at config key value is no longer valid due to an updated agent."));
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES, flag::RESET]).await;
     assert!(outputs.success_or_dump());
@@ -930,10 +927,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(!outputs.success_or_dump());
-    assert!(
-        outputs.stdout_contains("AGENT_SECRET_NOT_COMPATIBLE")
-            || outputs.stdout_contains("DEPLOYMENT_VALIDATION_FAILED")
-    );
+    assert!(outputs.stdout_contains("AGENT_SECRET_NOT_COMPATIBLE: Agent secret at path secret is not compatible with existing secret in the environment."));
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES, flag::RESET]).await;
     assert!(outputs.success_or_dump());
