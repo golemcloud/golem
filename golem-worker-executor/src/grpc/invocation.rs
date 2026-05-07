@@ -63,7 +63,9 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 
         AgentId::validate_length(&agent_id.name).map_err(WorkerExecutorError::invalid_request)?;
 
-        agent_id.try_into().map_err(WorkerExecutorError::invalid_request)
+        agent_id
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)
     }
 
     fn env(&self) -> Option<Vec<(String, String)>> {
