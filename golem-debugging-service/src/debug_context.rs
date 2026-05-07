@@ -25,7 +25,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::TimestampedUpdateDescription;
+use golem_common::model::oplog::{AgentError, TimestampedUpdateDescription};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
     OwnedAgentId, Timestamp,
@@ -98,8 +98,8 @@ impl DurableWorkerCtxView<DebugContext> for DebugContext {
 
 #[async_trait]
 impl FuelManagement for DebugContext {
-    fn ensure_fuel(&mut self, _current_level: u64) -> bool {
-        true
+    fn ensure_fuel(&mut self, _current_level: u64) -> Result<(), AgentError> {
+        Ok(())
     }
 
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
@@ -128,11 +128,13 @@ impl ExternalOperations<Self> for DebugContext {
     async fn get_last_error_and_retry_count<This: HasAll<Self> + Send + Sync>(
         this: &This,
         agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError> {
         DurableWorkerCtx::<Self>::get_last_error_and_retry_count(
             this,
             agent_id,
+            agent_mode,
             latest_worker_status,
         )
         .await

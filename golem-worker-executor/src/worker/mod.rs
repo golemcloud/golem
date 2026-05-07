@@ -62,8 +62,8 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, AgentMetadata,
-    AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
+    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
     TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
@@ -221,6 +221,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let last_known_status = calculate_last_known_status(
                 deps,
                 owned_agent_id,
+                initial_worker_metadata.agent_mode,
                 last_known_status,
             )
             .await
@@ -1487,7 +1488,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let status = self.last_known_status.read().await.clone();
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
-            result.cache(&self.owned_agent_id, self).await;
+            result
+                .cache(&self.owned_agent_id, self.agent_mode(), self)
+                .await;
             lookup_result_from_cached_result(&status, key, result)
         } else {
             let is_pending = status
@@ -1803,6 +1806,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let current_status = calculate_last_known_status_for_existing_worker(
                     this,
                     owned_agent_id,
+                    initial_worker_metadata.agent_mode,
                     last_known_status,
                 )
                 .await;
@@ -1830,9 +1834,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     None
                 };
 
+                // For an existing worker, the authoritative `agent_mode` was decided at create
+                // time and is persisted in the `Create` oplog entry; we do not re-resolve it
+                // from the (possibly newer) component metadata to avoid silently routing the
+                // worker to a different oplog namespace if the agent type's mode was changed
+                // in a later component revision.
+                let agent_mode = initial_worker_metadata.agent_mode;
                 let ResolvedAgentProperties {
-                    agent_mode,
-                    snapshot_policy,
+                    snapshot_policy, ..
                 } = resolve_agent_properties(this, agent_id.as_ref(), &initial_component.metadata);
 
                 let execution_status =
@@ -1845,6 +1854,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog_service()
                     .open(
                         owned_agent_id,
+                        agent_mode,
                         None,
                         initial_worker_metadata.clone(),
                         read_only_lock::tokio::ReadOnlyLock::new(current_status.clone()),
@@ -1936,6 +1946,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .iter()
                         .map(|i| i.environment_plugin_grant_id)
                         .collect(),
+                    agent_mode,
                     ..Default::default()
                 };
 
@@ -1944,6 +1955,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // cross-environment RPC the caller may pass its own account/environment,
                 // but the worker must belong to the component's owning account and
                 // environment for correct metric attribution and quota enforcement.
+
+                let instance_id = Uuid::now_v7();
+
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
                     env: worker_env,
@@ -1954,6 +1968,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     parent,
                     last_known_status: initial_status.clone(),
                     original_phantom_id: agent_id.as_ref().and_then(|id| id.phantom_id),
+                    fingerprint: AgentFingerprint(instance_id),
+                    agent_mode,
                 };
 
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
@@ -1961,6 +1977,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_oplog_entry = OplogEntry::create(
                     initial_worker_metadata.agent_id.clone(),
+                    initial_worker_metadata.agent_mode,
                     initial_worker_metadata.last_known_status.component_revision,
                     initial_worker_metadata.env.clone(),
                     initial_worker_metadata.environment_id,
@@ -1981,6 +1998,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .map(Into::into)
                         .collect(),
                     initial_worker_metadata.original_phantom_id,
+                    instance_id,
                 );
 
                 let initial_status = Arc::new(tokio::sync::RwLock::new(initial_status));
@@ -1990,6 +2008,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog_service()
                     .create(
                         owned_agent_id,
+                        agent_mode,
                         initial_oplog_entry,
                         initial_worker_metadata.clone(),
                         read_only_lock::tokio::ReadOnlyLock::new(initial_status.clone()),
@@ -2000,7 +2019,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 initial_status.write().await.oplog_idx = oplog.current_oplog_index().await;
 
                 this.worker_service()
-                    .update_cached_status(owned_agent_id, &*initial_status.read().await, agent_mode)
+                    .update_cached_status(owned_agent_id, &*initial_status.read().await)
                     .await;
 
                 Ok(GetOrCreateWorkerResult {
@@ -2028,13 +2047,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             debug!("Worker status was detached from oplog, reloading it from scratch");
 
             // reload status from scratch
-            let worker_status =
-                calculate_last_known_status_for_existing_worker(self, &self.owned_agent_id, None)
-                    .await;
+            let worker_status = calculate_last_known_status_for_existing_worker(
+                self,
+                &self.owned_agent_id,
+                self.agent_mode(),
+                None,
+            )
+            .await;
 
             *self.last_known_status.write().await = worker_status.clone();
             self.worker_service()
-                .update_cached_status(&self.owned_agent_id, &worker_status, self.agent_mode())
+                .update_cached_status(&self.owned_agent_id, &worker_status)
                 .await;
 
             // ensure we hold mutex for the full duration
@@ -2056,6 +2079,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let updated_status = update_status_with_new_entries(
                 self,
                 &self.owned_agent_id,
+                self.agent_mode(),
                 old_status.clone(),
                 new_entries,
                 &self.config().retry,
@@ -2067,11 +2091,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     *self.last_known_status.write().await = updated_status.clone();
                     // TODO: We should do this in the background on a timer instead of on every commit.
                     self.worker_service()
-                        .update_cached_status(
-                            &self.owned_agent_id,
-                            &updated_status,
-                            self.agent_mode(),
-                        )
+                        .update_cached_status(&self.owned_agent_id, &updated_status)
                         .await;
 
                     self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
@@ -2121,6 +2141,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ScheduledAction::ArchiveOplog {
                         account_id,
                         owned_agent_id: self.owned_agent_id.clone(),
+                        agent_mode: self.agent_mode(),
                         last_oplog_index,
                         next_after: archive_interval,
                     },
@@ -2613,9 +2634,18 @@ impl RunningWorker {
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
             let data_mut = store.data_mut();
-            if !data_mut.ensure_fuel(current_level) {
-                warn!("Could not borrow more fuel, suspending");
-                return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
+            if let Err(error) = data_mut.ensure_fuel(current_level) {
+                if data_mut.agent_mode() == AgentMode::Ephemeral {
+                    warn!(error = ?error, "Could not borrow more fuel for ephemeral agent");
+                    return Err(WorkerExecutorError::InvocationFailed {
+                        error,
+                        stderr: String::new(),
+                    }
+                    .into());
+                } else {
+                    warn!("Could not borrow more fuel, suspending");
+                    return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
+                }
             }
 
             match data_mut.check_interrupt() {
@@ -2756,9 +2786,10 @@ enum InvocationResult {
 }
 
 impl InvocationResult {
-    pub async fn cache<T: HasOplog + HasOplogService + HasConfig>(
+    pub async fn cache<T: HasOplog + HasOplogService + HasConfig + HasComponentService>(
         &mut self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         services: &T,
     ) {
         if let Self::Lazy { oplog_idx } = self {
@@ -2787,7 +2818,8 @@ impl InvocationResult {
                 OplogEntry::Error {
                     error, retry_from, ..
                 } => {
-                    let stderr = recover_stderr_logs(services, owned_agent_id, oplog_idx).await;
+                    let stderr =
+                        recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
                     Err(FailedInvocationResult {
                         trap_type: TrapType::Error { error, retry_from },
                         stderr,

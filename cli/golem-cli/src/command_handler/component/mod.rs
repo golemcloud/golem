@@ -22,7 +22,7 @@ use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
 use crate::model::GuestLanguage;
 use crate::model::app::BuildConfig;
@@ -33,7 +33,10 @@ use crate::model::component::{
     ComponentRevisionSelection, ComponentView, SelectedComponents,
 };
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
-use crate::model::deploy::{DeployConfig, TryUpdateAllWorkersResult};
+use crate::model::deploy::{
+    DeployConfig, TryUpdateAllWorkersResult, UpdateStagedComponentError,
+    UpdateStagedComponentResult,
+};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
@@ -1147,7 +1150,8 @@ impl ComponentCommandHandler {
         component: &DeploymentPlanComponentEntry,
         component_deploy_properties: &ComponentDeployProperties,
         diff: &diff::DiffForHashOf<diff::Component>,
-    ) -> anyhow::Result<()> {
+        allow_incompatible_config: bool,
+    ) -> UpdateStagedComponentResult<()> {
         log_action(
             "Updating",
             format!("component {}", component.name.0.log_color_highlight()),
@@ -1160,20 +1164,28 @@ impl ComponentCommandHandler {
             self.ctx
                 .environment_handler()
                 .plugin_grants(environment)
-                .await?,
+                .await
+                .map_err(UpdateStagedComponentError::Other)?,
             Some(diff),
         );
 
-        let wasm = component_stager.open_wasm_if_changed().await?;
+        let wasm = component_stager
+            .open_wasm_if_changed()
+            .await
+            .map_err(UpdateStagedComponentError::Other)?;
         let agent_types = component_stager.agent_types_if_changed().cloned();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
-        let changed_files = component_stager.changed_files().await?;
+        let changed_files = component_stager
+            .changed_files()
+            .await
+            .map_err(UpdateStagedComponentError::Other)?;
 
         let component = self
             .ctx
             .golem_clients()
-            .await?
+            .await
+            .map_err(UpdateStagedComponentError::Other)?
             .component
             .update_component(
                 &component.id.0,
@@ -1181,13 +1193,18 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     agent_types,
                     agent_type_provision_config_updates: component_stager
-                        .agent_type_provision_config_updates(&changed_files)?,
+                        .agent_type_provision_config_updates(&changed_files)
+                        .map_err(UpdateStagedComponentError::Other)?,
+                    allow_incompatible_config,
                 },
                 wasm,
-                changed_files.open_archive().await?,
+                changed_files
+                    .open_archive()
+                    .await
+                    .map_err(UpdateStagedComponentError::Other)?,
             )
             .await
-            .map_service_error()?;
+            .map_err(|err| UpdateStagedComponentError::Service(err.into()))?;
 
         log_action(
             "Created",
@@ -1209,7 +1226,8 @@ impl ComponentCommandHandler {
         environment
             .with_current_deployment_revision_or_default_warn(
                 |current_deployment_revision| async move {
-                    self.ctx
+                    Ok(self
+                        .ctx
                         .golem_clients()
                         .await?
                         .component
@@ -1219,7 +1237,7 @@ impl ComponentCommandHandler {
                             component_name.0.as_str(),
                         )
                         .await
-                        .map_service_error_not_found_as_opt()
+                        .map_service_error_not_found_as_opt()?)
                 },
             )
             .await
@@ -1242,7 +1260,7 @@ impl ComponentCommandHandler {
                         .get_component_revision(&component_id.0, revision.into())
                         .await
                         .map_service_error()
-                        .map_err(Arc::new)
+                        .map_err(|err| Arc::new(err.into()))
                 }
             })
             .await

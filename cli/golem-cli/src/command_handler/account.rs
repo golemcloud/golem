@@ -16,7 +16,7 @@ use crate::command::account::AccountSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::MapServiceError;
 use crate::log::log_error;
 use crate::log::log_warn_action;
 use crate::model::text::account::{AccountGetView, AccountNewView};
@@ -138,13 +138,14 @@ impl AccountCommandHandler {
     }
 
     async fn get(&self, account_id: Option<AccountId>) -> anyhow::Result<Account> {
-        self.ctx
+        Ok(self
+            .ctx
             .golem_clients()
             .await?
             .account
             .get_account(&self.select_account_id_or_err(account_id).await?.0)
             .await
-            .map_service_error()
+            .map_service_error()?)
     }
 
     pub async fn account_id_or_err(&self) -> anyhow::Result<AccountId> {

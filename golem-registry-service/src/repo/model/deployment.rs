@@ -19,7 +19,9 @@ use super::agent_secrets::{
 use super::audit::DeletableRevisionAuditFields;
 use super::resource_definition::{ResourceDefinitionCreationArgs, ResourceDefinitionRepoError};
 use super::retry_policy::{RetryPolicyCreationRecord, RetryPolicyRepoError};
-use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
+use crate::model::agent_secret::{
+    DeploymentAgentSecretCreation, DeploymentAgentSecretReplacement, DeploymentAgentSecretUpdate,
+};
 use crate::model::api_definition::{BoundCompiledRoute, UnboundCompiledRoute};
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
@@ -462,6 +464,7 @@ pub struct DeploymentRevisionCreationRecord {
 
     pub created_agent_secrets: Vec<AgentSecretCreationRecord>,
     pub updated_agent_secrets: Vec<AgentSecretRevisionRecord>,
+    pub replaced_agent_secrets: Vec<(AgentSecretRevisionRecord, AgentSecretCreationRecord)>,
 
     pub created_resource_definitions: Vec<ResourceDefinitionCreationArgs>,
     pub created_retry_policies: Vec<RetryPolicyCreationRecord>,
@@ -483,6 +486,7 @@ impl DeploymentRevisionCreationRecord {
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
         created_agent_secrets: Vec<DeploymentAgentSecretCreation>,
         updated_agent_secrets: Vec<DeploymentAgentSecretUpdate>,
+        replaced_agent_secrets: Vec<DeploymentAgentSecretReplacement>,
         created_resource_definitions: Vec<ResourceDefinitionCreation>,
         created_retry_policies: Vec<RetryPolicyCreationRecord>,
         actor: AccountId,
@@ -571,6 +575,27 @@ impl DeploymentRevisionCreationRecord {
                         }),
                         audit: DeletableRevisionAuditFields::new(actor.0),
                     })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            replaced_agent_secrets: replaced_agent_secrets
+                .into_iter()
+                .map(|r| {
+                    let delete_revision = AgentSecretRevisionRecord::delete(
+                        r.agent_secret_id,
+                        r.current_revision,
+                        actor,
+                    )?;
+
+                    let create_record = AgentSecretCreationRecord::new(
+                        AgentSecretId::new(),
+                        environment_id,
+                        r.path,
+                        r.secret_type,
+                        r.secret_value,
+                        actor,
+                    );
+
+                    Ok::<_, anyhow::Error>((delete_revision, create_record))
                 })
                 .collect::<Result<Vec<_>, _>>()?,
             created_resource_definitions: created_resource_definitions

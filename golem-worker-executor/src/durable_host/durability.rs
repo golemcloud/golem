@@ -715,7 +715,8 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
 
         let retry_config = self.state.config.retry.clone();
         let in_atomic_region = !self.state.active_atomic_regions.is_empty();
-        let trap_type = TrapType::from_error::<Ctx>(&failure, current_retry_point);
+        let trap_type =
+            TrapType::from_error::<Ctx>(&failure, current_retry_point, self.agent_mode());
 
         // Try semantic policy resolution first
         let policies = self.state.named_retry_policies().await;

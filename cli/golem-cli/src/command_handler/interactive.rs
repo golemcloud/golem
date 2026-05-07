@@ -228,6 +228,42 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_interrupt_ephemeral_agent(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            "The target agent is ephemeral. Interrupting it will stop the current invocation and it cannot be resumed. Continue?",
+            None,
+        )
+    }
+
+    pub fn confirm_reset_allow_incompatible_component_update(
+        &self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "Reset fallback detected an incompatible staged component update for {}. Retry with incompatible config checks disabled?",
+                component_name.0.log_color_highlight()
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_reset_replace_incompatible_agent_secrets(
+        &self,
+        environment_name: &EnvironmentName,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "Reset fallback detected incompatible agent secret types while deploying to {}. Retry deployment with incompatible secret replacement enabled?",
+                environment_name.0.log_color_highlight()
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,

@@ -16,7 +16,7 @@ use super::{OidcSession, ParsedRequestBody};
 
 use super::error::RequestHandlerError;
 use anyhow::anyhow;
-use golem_common::model::agent::{BinarySource, BinaryType};
+use golem_common::model::agent::{BinarySource, BinaryType, TextSource, TextType};
 use golem_common::model::invocation_context::{
     InvocationContextSpan, InvocationContextStack, TraceId,
 };
@@ -155,7 +155,98 @@ impl RichRequest {
             RequestBodySchema::RestrictedBinary { allowed_mime_types } => {
                 self.parse_binary_body(Some(allowed_mime_types)).await
             }
+
+            RequestBodySchema::UnrestrictedText => self.parse_text_body(None).await,
+            RequestBodySchema::RestrictedText {
+                allowed_language_codes,
+            } => self.parse_text_body(Some(allowed_language_codes)).await,
         }
+    }
+
+    async fn parse_text_body(
+        &mut self,
+        allowed_language_codes: Option<&Vec<String>>,
+    ) -> Result<ParsedRequestBody, RequestHandlerError> {
+        // 1. Validate Content-Type
+        let content_type_header_name = http::header::CONTENT_TYPE.to_string();
+        let content_type = self
+            .headers()
+            .get(content_type_header_name.clone())
+            .map(|value| value.to_str())
+            .transpose()
+            .map_err(|_| RequestHandlerError::HeaderIsNotAscii {
+                header_name: content_type_header_name,
+            })?;
+
+        if let Some(ct) = content_type {
+            validate_text_content_type(ct)?;
+        }
+
+        // 2. Read raw body and decode UTF-8
+        let data = self
+            .underlying
+            .take_body()
+            .into_vec()
+            .await
+            .map_err(|err| anyhow!("Failed reading raw body: {err}"))?;
+
+        let text =
+            String::from_utf8(data).map_err(|err| RequestHandlerError::BodyIsNotValidUtf8 {
+                error: err.to_string(),
+            })?;
+
+        // 3. Validate Content-Language (must be a single value, no commas)
+        let cl_header_name = http::header::CONTENT_LANGUAGE.to_string();
+        let all_cl_values: Vec<&str> = self
+            .headers()
+            .get_all(http::header::CONTENT_LANGUAGE)
+            .iter()
+            .map(|h| {
+                h.to_str()
+                    .map_err(|_| RequestHandlerError::HeaderIsNotAscii {
+                        header_name: cl_header_name.clone(),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if all_cl_values.len() > 1 {
+            return Err(RequestHandlerError::MultiValuedContentLanguageHeader);
+        }
+
+        let language_code: Option<String> = match all_cl_values.first() {
+            None => None,
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    None
+                } else if trimmed.contains(',') {
+                    return Err(RequestHandlerError::MultiValuedContentLanguageHeader);
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+        };
+
+        // 4. Validate against allowed_language_codes if specified
+        if let Some(allowed) = allowed_language_codes
+            && !allowed.is_empty()
+            && let Some(lc) = &language_code
+            && !allowed
+                .iter()
+                .any(|allowed_lc| allowed_lc.eq_ignore_ascii_case(lc))
+        {
+            return Err(RequestHandlerError::UnsupportedLanguage {
+                language_code: lc.clone(),
+                allowed_language_codes: allowed.clone(),
+            });
+        }
+
+        let text_source = TextSource {
+            data: text,
+            text_type: language_code.map(|language_code| TextType { language_code }),
+        };
+
+        Ok(ParsedRequestBody::UnstructuredText(Some(text_source)))
     }
 
     async fn parse_binary_body(
@@ -236,6 +327,48 @@ impl RichRequest {
             }
         }
     }
+}
+
+/// Validate Content-Type for text bodies.
+///
+/// Accept only `text/plain` (with no parameters) or `text/plain; charset=utf-8` (charset case-insensitive).
+fn validate_text_content_type(content_type: &str) -> Result<(), RequestHandlerError> {
+    let mut parts = content_type.split(';');
+    let media_type = parts.next().unwrap_or("").trim();
+
+    if !media_type.eq_ignore_ascii_case("text/plain") {
+        return Err(RequestHandlerError::UnsupportedTextContentType {
+            content_type: content_type.to_string(),
+        });
+    }
+
+    for param in parts {
+        let param = param.trim();
+        if param.is_empty() {
+            continue;
+        }
+
+        let mut kv = param.splitn(2, '=');
+        let key = kv.next().unwrap_or("").trim();
+        let value = kv.next().unwrap_or("").trim();
+        // strip optional quotes
+        let value = value.trim_matches('"');
+
+        if key.eq_ignore_ascii_case("charset") {
+            if !value.eq_ignore_ascii_case("utf-8") {
+                return Err(RequestHandlerError::UnsupportedTextContentType {
+                    content_type: content_type.to_string(),
+                });
+            }
+        } else {
+            // unknown parameter -> reject
+            return Err(RequestHandlerError::UnsupportedTextContentType {
+                content_type: content_type.to_string(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn extract_request_attributes(
@@ -427,5 +560,215 @@ mod request_body_tests {
         );
 
         assert!(binary_type.mime_type == "application/weird");
+    }
+
+    fn text_request(
+        bytes: &'static [u8],
+        content_type: Option<&'static str>,
+        content_languages: &[&'static str],
+    ) -> RichRequest {
+        let mut builder = Request::builder().method(Method::POST);
+        if let Some(ct) = content_type {
+            builder = builder.header(http::header::CONTENT_TYPE, ct);
+        }
+        for cl in content_languages {
+            builder = builder.header(http::header::CONTENT_LANGUAGE, *cl);
+        }
+        let req = builder.body(Body::from(bytes));
+        RichRequest::new(req)
+    }
+
+    #[test]
+    async fn unrestricted_text_body_without_content_language_is_parsed() {
+        let mut request = text_request(b"hello world", Some("text/plain"), &[]);
+
+        let result = request
+            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .await
+            .unwrap();
+
+        let_assert!(ParsedRequestBody::UnstructuredText(Some(text_source)) = result);
+        assert!(text_source.data == "hello world");
+        assert!(text_source.text_type.is_none());
+    }
+
+    #[test]
+    async fn unrestricted_text_body_without_content_type_is_accepted() {
+        let mut request = text_request(b"hello world", None, &[]);
+
+        let result = request
+            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .await
+            .unwrap();
+
+        let_assert!(ParsedRequestBody::UnstructuredText(Some(text_source)) = result);
+        assert!(text_source.data == "hello world");
+        assert!(text_source.text_type.is_none());
+    }
+
+    #[test]
+    async fn text_body_accepts_text_plain_with_utf8_charset() {
+        let mut request = text_request(b"hello", Some("text/plain; charset=utf-8"), &[]);
+
+        let result = request
+            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .await
+            .unwrap();
+
+        let_assert!(ParsedRequestBody::UnstructuredText(Some(text_source)) = result);
+        assert!(text_source.data == "hello");
+    }
+
+    #[test]
+    async fn text_body_accepts_text_plain_with_utf8_charset_case_insensitive() {
+        let mut request = text_request(b"hello", Some("Text/Plain; Charset=UTF-8"), &[]);
+
+        let result = request
+            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .await
+            .unwrap();
+
+        let_assert!(ParsedRequestBody::UnstructuredText(Some(_)) = result);
+    }
+
+    #[test]
+    async fn text_body_rejects_non_text_content_type() {
+        let mut request = text_request(b"hello", Some("application/json"), &[]);
+
+        let err = request
+            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .await
+            .unwrap_err();
+
+        let_assert!(RequestHandlerError::UnsupportedTextContentType { content_type } = err);
+        assert!(content_type == "application/json");
+    }
+
+    #[test]
+    async fn text_body_rejects_non_utf8_charset() {
+        let mut request = text_request(b"hello", Some("text/plain; charset=iso-8859-1"), &[]);
+
+        let err = request
+            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .await
+            .unwrap_err();
+
+        assert!(let RequestHandlerError::UnsupportedTextContentType { .. } = err);
+    }
+
+    #[test]
+    async fn text_body_rejects_invalid_utf8() {
+        // Invalid UTF-8 byte sequence
+        let mut request = text_request(b"\xff\xfe\xfd", Some("text/plain"), &[]);
+
+        let err = request
+            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .await
+            .unwrap_err();
+
+        assert!(let RequestHandlerError::BodyIsNotValidUtf8 { .. } = err);
+    }
+
+    #[test]
+    async fn text_body_with_content_language_is_captured() {
+        let mut request = text_request(b"bonjour", Some("text/plain"), &["fr"]);
+
+        let result = request
+            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .await
+            .unwrap();
+
+        let_assert!(ParsedRequestBody::UnstructuredText(Some(text_source)) = result);
+        let text_type = text_source.text_type.unwrap();
+        assert!(text_type.language_code == "fr");
+    }
+
+    #[test]
+    async fn text_body_rejects_multi_valued_content_language_header() {
+        let mut request = text_request(b"hello", Some("text/plain"), &["en", "fr"]);
+
+        let err = request
+            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .await
+            .unwrap_err();
+
+        assert!(let RequestHandlerError::MultiValuedContentLanguageHeader = err);
+    }
+
+    #[test]
+    async fn text_body_rejects_comma_separated_content_language_value() {
+        let mut request = text_request(b"hello", Some("text/plain"), &["en, fr"]);
+
+        let err = request
+            .parse_request_body(&RequestBodySchema::UnrestrictedText)
+            .await
+            .unwrap_err();
+
+        assert!(let RequestHandlerError::MultiValuedContentLanguageHeader = err);
+    }
+
+    #[test]
+    async fn restricted_text_body_accepts_allowed_language() {
+        let mut request = text_request(b"hello", Some("text/plain"), &["en"]);
+
+        let schema = RequestBodySchema::RestrictedText {
+            allowed_language_codes: vec!["en".to_string(), "de".to_string()],
+        };
+
+        let result = request.parse_request_body(&schema).await.unwrap();
+
+        let_assert!(ParsedRequestBody::UnstructuredText(Some(text_source)) = result);
+        let text_type = text_source.text_type.unwrap();
+        assert!(text_type.language_code == "en");
+    }
+
+    #[test]
+    async fn restricted_text_body_accepts_allowed_language_case_insensitive() {
+        let mut request = text_request(b"hello", Some("text/plain"), &["EN"]);
+
+        let schema = RequestBodySchema::RestrictedText {
+            allowed_language_codes: vec!["en".to_string()],
+        };
+
+        let result = request.parse_request_body(&schema).await.unwrap();
+
+        let_assert!(ParsedRequestBody::UnstructuredText(Some(text_source)) = result);
+        let text_type = text_source.text_type.unwrap();
+        assert!(text_type.language_code == "EN");
+    }
+
+    #[test]
+    async fn restricted_text_body_rejects_disallowed_language() {
+        let mut request = text_request(b"hello", Some("text/plain"), &["fr"]);
+
+        let schema = RequestBodySchema::RestrictedText {
+            allowed_language_codes: vec!["en".to_string(), "de".to_string()],
+        };
+
+        let err = request.parse_request_body(&schema).await.unwrap_err();
+
+        let_assert!(
+            RequestHandlerError::UnsupportedLanguage {
+                language_code,
+                allowed_language_codes,
+            } = err
+        );
+        assert!(language_code == "fr");
+        assert!(allowed_language_codes == vec!["en".to_string(), "de".to_string()]);
+    }
+
+    #[test]
+    async fn restricted_text_body_without_content_language_is_accepted() {
+        // Content-Language is optional even when restrictions exist
+        let mut request = text_request(b"hello", Some("text/plain"), &[]);
+
+        let schema = RequestBodySchema::RestrictedText {
+            allowed_language_codes: vec!["en".to_string()],
+        };
+
+        let result = request.parse_request_body(&schema).await.unwrap();
+
+        let_assert!(ParsedRequestBody::UnstructuredText(Some(text_source)) = result);
+        assert!(text_source.text_type.is_none());
     }
 }

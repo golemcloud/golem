@@ -47,6 +47,9 @@ export function usePersistenceLevel(level: PersistenceLevel) {
   return new PersistenceLevelGuard(originalLevel);
 }
 
+export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => Promise<R>): Promise<R>;
+export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => R): R;
+
 /**
  * Executes a function with a specific persistence level for the oplog.
  * Supports both sync and async callbacks.
@@ -54,7 +57,10 @@ export function usePersistenceLevel(level: PersistenceLevel) {
  * @param f - The function to execute (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => R): R {
+export function withPersistenceLevel<R>(
+  level: PersistenceLevel,
+  f: () => R | Promise<R>,
+): R | Promise<R> {
   const guard = usePersistenceLevel(level);
   return executeWithDrop([guard], f);
 }
@@ -82,6 +88,9 @@ export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
   return new IdempotenceModeGuard(original);
 }
 
+export function withIdempotenceMode<R>(mode: boolean, f: () => Promise<R>): Promise<R>;
+export function withIdempotenceMode<R>(mode: boolean, f: () => R): R;
+
 /**
  * Executes a function with a specific idempotence mode.
  * Supports both sync and async callbacks.
@@ -89,7 +98,7 @@ export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
  * @param f - The function to execute (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function withIdempotenceMode<R>(mode: boolean, f: () => R): R {
+export function withIdempotenceMode<R>(mode: boolean, f: () => R | Promise<R>): R | Promise<R> {
   const guard = useIdempotenceMode(mode);
   return executeWithDrop([guard], f);
 }
@@ -115,24 +124,22 @@ export function markAtomicOperation(): AtomicOperationGuard {
   return new AtomicOperationGuard(begin);
 }
 
+export function atomically<T>(f: () => Promise<T>): Promise<T>;
+export function atomically<T>(f: () => T): T;
+
 /**
  * Executes a function atomically.
  * Supports both sync and async callbacks.
  *
- * On success the atomic region is committed via `mark_end_operation`.
- * On failure the SDK calls the host `trap` function to terminate the worker
- * invocation with an uncatchable wasm trap. This guarantees that the failure
- * cannot be observed by user code: trying to `try/catch` around `atomically`
- * is a no-op because the worker is recovered by the executor.
- *
- * The atomic region is intentionally left open at trap time so the existing
- * replay-time fallback in `mark_begin_operation` deletes the partial inner
- * side effects via a `Jump` and re-executes the block from the begin marker.
+ * On success the atomic region is committed.
+ * On failure the worker is immediately terminated so the failed partial
+ * execution is rolled back and the block is retried from the beginning on
+ * recovery.
  *
  * @param f - The function to execute atomically (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function atomically<T>(f: () => T): T {
+export function atomically<T>(f: () => T | Promise<T>): T | Promise<T> {
   const guard = markAtomicOperation();
   try {
     const result = f();
@@ -176,6 +183,15 @@ export function isPromiseLike(value: unknown): value is Promise<unknown> {
   return value !== null && value !== undefined && typeof (value as any).then === 'function';
 }
 
+export function executeWithDrop<Resource extends { drop: () => void }, R>(
+  resources: [Resource],
+  fn: () => Promise<R>,
+): Promise<R>;
+export function executeWithDrop<Resource extends { drop: () => void }, R>(
+  resources: [Resource],
+  fn: () => R,
+): R;
+
 /**
  * Executes a function and automatically drops the provided resources after execution.
  * Supports both sync and async callbacks — if the callback returns a Promise,
@@ -184,12 +200,10 @@ export function isPromiseLike(value: unknown): value is Promise<unknown> {
  * @param fn - The function to execute (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function executeWithDrop<
-  Resource extends {
-    drop: () => void;
-  },
-  R,
->(resources: [Resource], fn: () => R): R {
+export function executeWithDrop<Resource extends { drop: () => void }, R>(
+  resources: [Resource],
+  fn: () => R | Promise<R>,
+): R | Promise<R> {
   try {
     const result = fn();
     if (isPromiseLike(result)) {

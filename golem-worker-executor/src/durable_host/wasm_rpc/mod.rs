@@ -50,8 +50,8 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex, OwnedAgentId,
-    PredicateValue, RetryContext, RetryProperties, ScheduledAction,
+    AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
+    OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
 
@@ -573,6 +573,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let entry = self.table().get(&this)?;
             let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
             let remote_agent_id = payload.remote_agent_id.clone();
+            let target_worker_fingerprint = payload.target_fingerprint;
 
             let input_untyped: UntypedDataValue = input.into();
 
@@ -611,6 +612,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     invocation_context: stack,
                     principal: Principal::anonymous(),
                 }),
+                target_worker_fingerprint,
             };
 
             let result = self
@@ -1177,11 +1179,13 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             config,
         )
         .await?;
+    let target_fingerprint = demand.fingerprint();
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
             demand,
             remote_agent_id,
             span_id: span.span_id().clone(),
+            target_fingerprint,
         }),
     })?;
     Ok(entry)
@@ -1443,6 +1447,7 @@ pub struct WasmRpcEntryPayload {
     pub demand: Box<dyn RpcDemand>,
     pub remote_agent_id: OwnedAgentId,
     pub span_id: SpanId,
+    pub target_fingerprint: AgentFingerprint,
 }
 
 impl Debug for WasmRpcEntryPayload {

@@ -17,7 +17,7 @@ use crate::command::api::secret::SecretSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::MapServiceError;
 use crate::log::log_error;
 use crate::model::GuestLanguage;
 use crate::model::environment::EnvironmentResolveMode;
@@ -275,17 +275,10 @@ impl SecretCommandHandler {
         secret_type: &AnalysedType,
         source_language: &SourceLanguage,
     ) -> anyhow::Result<serde_json::Value> {
-        // Try language-specific parser first
-        if let Ok(vat) = parse_value_for_language(input, secret_type, source_language)
-            && let Ok(json) = vat.to_json_value()
-        {
-            return Ok(json);
-        }
-        // Fall back to raw JSON
-        match serde_json::from_str(input) {
+        match parse_secret_value_to_json(input, secret_type, source_language) {
             Ok(json) => Ok(json),
-            Err(err) => {
-                log_error(format!("Secret value is not valid: {err}"));
+            Err(msg) => {
+                log_error(msg);
                 bail!(NonSuccessfulExit);
             }
         }
@@ -315,5 +308,201 @@ impl SecretCommandHandler {
         });
 
         Ok(())
+    }
+}
+
+fn parse_secret_value_to_json(
+    input: &str,
+    secret_type: &AnalysedType,
+    source_language: &SourceLanguage,
+) -> Result<serde_json::Value, String> {
+    // Try language-specific parser first
+    if let Ok(vat) = parse_value_for_language(input, secret_type, source_language)
+        && let Ok(json) = vat.to_json_value()
+    {
+        return Ok(json);
+    }
+    // Fall back to raw JSON
+    match serde_json::from_str(input) {
+        Ok(json) => Ok(json),
+        Err(err) => {
+            // If the expected type is a plain string and the input is not valid JSON,
+            // treat the raw input as the string value (ergonomic fallback).
+            if matches!(secret_type, AnalysedType::Str(_)) {
+                Ok(serde_json::Value::String(input.to_string()))
+            } else {
+                Err(format!("Secret value is not valid: {err}"))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::*;
+    use golem_wasm::analysis::{
+        NameTypePair, TypeBool, TypeF64, TypeList, TypeOption, TypeRecord, TypeS32, TypeStr,
+        TypeU32,
+    };
+    use proptest::prelude::*;
+
+    fn other_lang() -> SourceLanguage {
+        SourceLanguage::Other(String::new())
+    }
+
+    fn option_u32_type() -> AnalysedType {
+        AnalysedType::Option(TypeOption {
+            name: None,
+            owner: None,
+            inner: Box::new(AnalysedType::U32(TypeU32)),
+        })
+    }
+
+    fn list_u32_type() -> AnalysedType {
+        AnalysedType::List(TypeList {
+            name: None,
+            owner: None,
+            inner: Box::new(AnalysedType::U32(TypeU32)),
+        })
+    }
+
+    /// Generates an arbitrary record schema paired with a matching JSON object,
+    /// with 1–5 fields of mixed simple types (String, U32, S32, F64, Bool).
+    /// Uses hash_map to guarantee unique field names.
+    fn arb_record_schema_and_json() -> impl Strategy<Value = (AnalysedType, serde_json::Value)> {
+        let arb_field_value = prop_oneof![
+            any::<String>()
+                .prop_map(|s| (AnalysedType::Str(TypeStr), serde_json::Value::String(s))),
+            any::<u32>().prop_map(|n| (AnalysedType::U32(TypeU32), serde_json::json!(n))),
+            any::<i32>().prop_map(|n| (AnalysedType::S32(TypeS32), serde_json::json!(n))),
+            decimal_f64_input().prop_map(|s| {
+                let v = serde_json::from_str::<serde_json::Value>(&s).unwrap();
+                (AnalysedType::F64(TypeF64), v)
+            }),
+            any::<bool>().prop_map(|b| (AnalysedType::Bool(TypeBool), serde_json::json!(b))),
+        ];
+        proptest::collection::hash_map("[a-z][a-zA-Z0-9]{0,8}", arb_field_value, 1..=5).prop_map(
+            |fields| {
+                let mut json_map = serde_json::Map::new();
+                let type_fields: Vec<NameTypePair> = fields
+                    .into_iter()
+                    .map(|(name, (typ, val))| {
+                        json_map.insert(name.clone(), val);
+                        NameTypePair { name, typ }
+                    })
+                    .collect();
+                (
+                    AnalysedType::Record(TypeRecord {
+                        name: None,
+                        owner: None,
+                        fields: type_fields,
+                    }),
+                    serde_json::Value::Object(json_map),
+                )
+            },
+        )
+    }
+
+    /// Identifiers, API keys, paths — strings whose first character cannot
+    /// start any JSON value (keywords t/f/n, digits, `-`, `"`, `[`, `{`),
+    /// so they are structurally guaranteed to not parse as JSON.
+    /// Covers:
+    /// 1. API keys: sk-abc123, Bearer token123
+    /// 2. Connection strings: postgres://user:pass@localhost/db
+    /// 3. Bare identifiers: mySecretKey
+    /// 4. Paths: path/to/neverland
+    fn bare_secret_value() -> impl Strategy<Value = String> {
+        "[a-eg-mo-su-zA-Z][a-zA-Z0-9_./@: -]*"
+    }
+
+    /// Generates valid JSON string literals by serializing arbitrary Rust strings
+    /// through serde_json, guaranteeing the output is always a properly quoted
+    /// and escaped JSON value (e.g. `"hello"`, `"line\nbreak"`, `"has \"quotes\""`)
+    fn json_encoded_string() -> impl Strategy<Value = String> {
+        any::<String>().prop_map(|s| serde_json::to_string(&s).unwrap())
+    }
+
+    /// Decimal numbers as a user would type them as a secret value: `3.14`, `-7.0`, `0.9999`.
+    fn decimal_f64_input() -> impl Strategy<Value = String> {
+        (any::<i32>(), 0u32..=9999u32)
+            .prop_map(|(int_part, frac_part)| format!("{int_part}.{frac_part}"))
+    }
+
+    proptest! {
+        #[test]
+        fn non_json_str_returned_as_is(input in bare_secret_value()) {
+            let result = parse_secret_value_to_json(&input, &AnalysedType::Str(TypeStr), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::Value::String(input)));
+        }
+
+        #[test]
+        fn json_encoded_str_is_decoded(json_input in json_encoded_string()) {
+            let expected: String = serde_json::from_str(&json_input).unwrap();
+            let result = parse_secret_value_to_json(&json_input, &AnalysedType::Str(TypeStr), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::Value::String(expected)));
+        }
+
+        #[test]
+        fn decimal_string_accepted_for_u32_type(n in any::<u32>()) {
+            let result = parse_secret_value_to_json(&n.to_string(), &AnalysedType::U32(TypeU32), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::json!(n)));
+        }
+
+        #[test]
+        fn decimal_string_accepted_for_s32_type(n in any::<i32>()) {
+            let result = parse_secret_value_to_json(&n.to_string(), &AnalysedType::S32(TypeS32), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::json!(n)));
+        }
+
+        #[test]
+        fn decimal_string_accepted_for_f64_type(input in decimal_f64_input()) {
+            let result = parse_secret_value_to_json(&input, &AnalysedType::F64(TypeF64), &other_lang());
+            let expected = serde_json::from_str::<serde_json::Value>(&input).unwrap();
+            prop_assert_eq!(result, Ok(expected));
+        }
+
+        #[test]
+        fn bool_literal_accepted_for_bool_type(b in any::<bool>()) {
+            let result = parse_secret_value_to_json(&b.to_string(), &AnalysedType::Bool(TypeBool), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::json!(b)));
+        }
+
+        #[test]
+        fn json_array_accepted_for_list_type(values in proptest::collection::vec(any::<u32>(), 0..=20)) {
+            let json_str = serde_json::to_string(&values).unwrap();
+            let result = parse_secret_value_to_json(&json_str, &list_u32_type(), &other_lang());
+            let expected: serde_json::Value = serde_json::to_value(&values).unwrap();
+            prop_assert_eq!(result, Ok(expected));
+        }
+
+        #[test]
+        fn json_object_accepted_for_record_type((rec_type, json) in arb_record_schema_and_json()) {
+            let result = parse_secret_value_to_json(&json.to_string(), &rec_type, &other_lang());
+            prop_assert_eq!(result, Ok(json));
+        }
+
+        #[test]
+        fn non_numeric_input_rejected_for_numeric_type(
+            input in bare_secret_value(),
+            typ in prop_oneof![
+                Just(AnalysedType::U32(TypeU32)),
+                Just(AnalysedType::S32(TypeS32)),
+                Just(AnalysedType::F64(TypeF64)),
+            ],
+        ) {
+            let result = parse_secret_value_to_json(&input, &typ, &other_lang());
+            prop_assert!(result.is_err());
+            prop_assert!(result.unwrap_err().contains("Secret value is not valid"));
+        }
+    }
+
+    #[test]
+    fn option_null_accepted() {
+        assert_eq!(
+            parse_secret_value_to_json("null", &option_u32_type(), &other_lang()),
+            Ok(serde_json::json!(null))
+        );
     }
 }

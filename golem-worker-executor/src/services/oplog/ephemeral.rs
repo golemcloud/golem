@@ -20,6 +20,7 @@ use crate::services::oplog::{CommitLevel, Oplog, OplogService, downcast_oplog};
 use async_lock::Mutex;
 use async_trait::async_trait;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
@@ -35,6 +36,7 @@ use tracing::{Instrument, Level, Span, debug, info, span, warn};
 
 pub struct EphemeralOplog {
     owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
     primary_service: Arc<dyn OplogService>,
     state: Arc<Mutex<EphemeralOplogState>>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
@@ -84,8 +86,10 @@ impl EphemeralOplogState {
 }
 
 impl EphemeralOplog {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         last_oplog_idx: OplogIndex,
         max_operations_before_commit: u64,
         primary_service: Arc<dyn OplogService>,
@@ -97,6 +101,7 @@ impl EphemeralOplog {
         let target = lower.first().clone();
         Self {
             owned_agent_id,
+            agent_mode,
             primary_service,
             state: Arc::new(Mutex::new(EphemeralOplogState {
                 buffer: VecDeque::new(),
@@ -271,6 +276,7 @@ impl EphemeralOplog {
     pub async fn build_lower_layers(
         lower_services: &NEVec<Arc<dyn super::multilayer::OplogArchiveService>>,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         account_id: golem_common::model::account::AccountId,
         entry_count_limit: u64,
         transfer_tx: &UnboundedSender<BackgroundTransferMessage>,
@@ -278,7 +284,7 @@ impl EphemeralOplog {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in lower_services.iter().enumerate() {
             if i != (lower_services.len().get() - 1) {
-                let raw = layer.open(owned_agent_id).await;
+                let raw = layer.open(owned_agent_id, agent_mode).await;
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -294,7 +300,7 @@ impl EphemeralOplog {
                     .await,
                 ));
             } else {
-                let raw = layer.open(owned_agent_id).await;
+                let raw = layer.open(owned_agent_id, agent_mode).await;
                 lower.push(Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -468,7 +474,7 @@ impl Oplog for EphemeralOplog {
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
         self.primary_service
-            .upload_raw_payload(&self.owned_agent_id, data)
+            .upload_raw_payload(&self.owned_agent_id, self.agent_mode, data)
             .await
     }
 
@@ -478,7 +484,7 @@ impl Oplog for EphemeralOplog {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.primary_service
-            .download_raw_payload(&self.owned_agent_id, payload_id, md5_hash)
+            .download_raw_payload(&self.owned_agent_id, self.agent_mode, payload_id, md5_hash)
             .await
     }
 }

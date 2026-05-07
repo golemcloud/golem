@@ -58,6 +58,7 @@ impl Display for RawAgentId {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum AgentUpdateMode {
+    #[value(alias = "auto")]
     Automatic,
     Manual,
 }
@@ -85,6 +86,30 @@ impl FromStr for AgentUpdateMode {
             _ => Err(format!(
                 "Unknown agent update mode: {s}. Expected one of \"auto\", \"manual\""
             )),
+        }
+    }
+}
+
+/// Mode selector for the `agent list` CLI command.
+///
+/// The default `Durable` excludes ephemeral agents from the listing so that
+/// short-lived ephemeral agents from previous runs do not clutter the default
+/// output. Use `Ephemeral` to list only ephemeral agents, or `All` to list
+/// agents in both modes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum AgentListMode {
+    Durable,
+    Ephemeral,
+    All,
+}
+
+impl Display for AgentListMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentListMode::Durable => write!(f, "durable"),
+            AgentListMode::Ephemeral => write!(f, "ephemeral"),
+            AgentListMode::All => write!(f, "all"),
         }
     }
 }

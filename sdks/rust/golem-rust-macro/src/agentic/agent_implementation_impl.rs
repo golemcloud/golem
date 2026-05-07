@@ -18,7 +18,7 @@ use syn::ItemImpl;
 
 use crate::agentic::helpers::{
     AgentConfigAttrRemover, Asyncness, FunctionOutputInfo, get_asyncness, has_agent_config_attr,
-    has_async_trait_attr, is_constructor_method, is_static_method, trim_type_parameter,
+    has_async_trait_attr, is_constructor_method, is_static_method,
 };
 use syn::visit_mut::VisitMut;
 
@@ -43,10 +43,12 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let self_ty = &impl_block.self_ty;
 
-    let (trait_name_ident, trait_name_str_raw) = extract_trait_name(&impl_block);
+    let (trait_name_ident, trait_path) = extract_trait(&impl_block);
+    let agent_type_name = quote! {
+        <#self_ty as #trait_path>::__golem_agent_type_name()
+    };
 
-    let (match_arms, constructor_method) =
-        build_match_arms(&impl_block, trait_name_str_raw.to_string());
+    let (match_arms, constructor_method) = build_match_arms(&impl_block, agent_type_name.clone());
 
     let constructor_method = match constructor_method {
         Some(m) => m,
@@ -98,7 +100,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let base_agent_impl = generate_base_agent_impl(
         &impl_block,
         &match_arms,
-        &trait_name_str_raw,
+        agent_type_name.clone(),
         &impl_generics,
         &ty_generics,
         where_clause,
@@ -133,7 +135,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let constructor_param_extraction = generate_constructor_extraction(
         &ctor_param_idents_and_types,
-        &trait_name_str_raw,
+        agent_type_name.clone(),
         constructor_param_extraction_call_back,
     );
 
@@ -142,10 +144,17 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let base_initiator_impl =
         generate_initiator_impl(&initiator_ident, &constructor_param_extraction);
 
-    let register_initiator_fn =
-        generate_register_initiator_fn(&impl_block.self_ty, &trait_name_ident, &initiator_ident);
+    let register_initiator_fn = generate_register_initiator_fn(
+        &impl_block.self_ty,
+        &trait_path,
+        &trait_name_ident,
+        &initiator_ident,
+    );
 
     AgentConfigAttrRemover.visit_item_impl_mut(&mut impl_block);
+    impl_block
+        .items
+        .push(get_agent_implementation_annotation_item());
 
     quote! {
         #impl_block
@@ -160,15 +169,22 @@ fn parse_impl_block(item: &TokenStream) -> syn::Result<ItemImpl> {
     syn::parse::<ItemImpl>(item.clone())
 }
 
-fn extract_trait_name(impl_block: &syn::ItemImpl) -> (syn::Ident, String) {
-    let trait_name = if let Some((_bang, path, _for_token)) = &impl_block.trait_ {
-        path.segments.last().unwrap().ident.clone()
+fn get_agent_implementation_annotation_item() -> syn::ImplItem {
+    syn::parse_quote! {
+        #[doc(hidden)]
+        fn agent_implementation_annotation() where Self: Sized {}
+    }
+}
+
+fn extract_trait(impl_block: &syn::ItemImpl) -> (syn::Ident, syn::Path) {
+    let trait_path = if let Some((_bang, path, _for_token)) = &impl_block.trait_ {
+        path.clone()
     } else {
         panic!("Expected trait implementation, found none");
     };
 
-    let trait_name_str_raw = trait_name.to_string();
-    (trait_name, trait_name_str_raw)
+    let trait_name = trait_path.segments.last().unwrap().ident.clone();
+    (trait_name, trait_path)
 }
 
 // This will include all auto injected parameters too
@@ -193,7 +209,7 @@ fn extract_param_idents(method: &syn::ImplItemFn) -> Vec<(syn::Ident, syn::PatTy
 
 fn build_match_arms(
     impl_block: &ItemImpl,
-    agent_type_name: String,
+    agent_type_name: proc_macro2::TokenStream,
 ) -> (Vec<proc_macro2::TokenStream>, Option<&syn::ImplItemFn>) {
     let mut match_arms = Vec::new();
     let mut constructor_method = None;
@@ -317,7 +333,7 @@ fn build_match_arms(
 
         let method_param_extraction = generate_method_param_extraction(
             param_idents,
-            &agent_type_name,
+            agent_type_name.clone(),
             method_name.as_str(),
             sorted_method_index,
             post_method_param_extraction_logic,
@@ -335,21 +351,22 @@ fn build_match_arms(
 
 fn generate_method_param_extraction(
     param_idents: &[syn::Ident],
-    agent_type_name: &str,
+    agent_type_name: proc_macro2::TokenStream,
     method_name: &str,
     sorted_method_index: usize,
     post_method_param_extraction_logic: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let input_param_index_init = quote! {
       let mut input_param_index: usize = 0;
-      let __agent_type_name = golem_rust::agentic::AgentTypeName(#agent_type_name.to_string());
+      let __agent_type_name_raw = #agent_type_name;
+      let __agent_type_name = golem_rust::agentic::AgentTypeName(__agent_type_name_raw.to_string());
       let __param_schemas = golem_rust::agentic::get_method_parameter_types_by_index(
           &__agent_type_name,
           #sorted_method_index
       ).ok_or_else(|| {
           golem_rust::agentic::custom_error(format!(
               "Internal Error: Parameter schemas not found for agent: {}, method index: {}",
-              #agent_type_name, #sorted_method_index
+              __agent_type_name_raw, #sorted_method_index
           ))
       })?;
     };
@@ -364,7 +381,7 @@ fn generate_method_param_extraction(
                         .ok_or_else(|| {
                             golem_rust::agentic::custom_error(format!(
                                 "Internal Error: Parameter schema not found for agent: {}, method: {}, parameter index: {}",
-                                #agent_type_name, #method_name, #original_method_param_idx
+                                __agent_type_name_raw, #method_name, #original_method_param_idx
                             ))
                         })?;
 
@@ -434,7 +451,7 @@ fn generate_method_param_extraction(
 fn generate_base_agent_impl(
     impl_block: &syn::ItemImpl,
     match_arms: &[proc_macro2::TokenStream],
-    trait_name_str: &str,
+    agent_type_name: proc_macro2::TokenStream,
     impl_generics: &syn::ImplGenerics<'_>,
     ty_generics: &syn::TypeGenerics<'_>,
     where_clause: Option<&syn::WhereClause>,
@@ -489,7 +506,8 @@ fn generate_base_agent_impl(
 
             fn get_definition(&self)
                 -> golem_rust::golem_agentic::golem::agent::common::AgentType {
-                golem_rust::agentic::get_agent_type_by_name(&golem_rust::agentic::AgentTypeName(#trait_name_str.to_string()))
+                let __agent_type_name = #agent_type_name;
+                golem_rust::agentic::get_agent_type_by_name(&golem_rust::agentic::AgentTypeName(__agent_type_name.to_string()))
                     .expect("Agent definition not found")
             }
 
@@ -500,7 +518,7 @@ fn generate_base_agent_impl(
 
 fn generate_constructor_extraction(
     ctor_params: &[(syn::Ident, syn::PatType)],
-    agent_type_name: &str,
+    agent_type_name: proc_macro2::TokenStream,
     call_back: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let mut config_extractions = Vec::new();
@@ -527,7 +545,7 @@ fn generate_constructor_extraction(
                         .ok_or_else(|| {
                             golem_rust::agentic::internal_error(format!(
                                 "Constructor parameter schema not found for agent: {}, parameter index: {}",
-                                #agent_type_name, #idx
+                                __agent_type_name_raw, #idx
                             ))
                         })?;
 
@@ -545,10 +563,10 @@ fn generate_constructor_extraction(
                         golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema) => {
                             let element_value = if input_param_index < values.len() {
                                 values[input_param_index].take().ok_or_else(|| {
-                                    golem_rust::agentic::invalid_input_error(format!("Constructor argument already consumed for agent {}", #agent_type_name))
+                                    golem_rust::agentic::invalid_input_error(format!("Constructor argument already consumed for agent {}", __agent_type_name_raw))
                                 })?
                             } else {
-                                return Err(golem_rust::agentic::invalid_input_error(format!("Missing constructor arguments for agent {}", #agent_type_name)));
+                                return Err(golem_rust::agentic::invalid_input_error(format!("Missing constructor arguments for agent {}", __agent_type_name_raw)));
                             };
 
                             input_param_index += 1;
@@ -565,7 +583,8 @@ fn generate_constructor_extraction(
     }
 
     quote! {
-        let __agent_type_name = golem_rust::agentic::AgentTypeName(#agent_type_name.to_string());
+        let __agent_type_name_raw = #agent_type_name;
+        let __agent_type_name = golem_rust::agentic::AgentTypeName(__agent_type_name_raw.to_string());
 
         #(#config_extractions)*
         #(#predecls)*
@@ -580,7 +599,7 @@ fn generate_constructor_extraction(
                 ).ok_or_else(|| {
                     golem_rust::agentic::internal_error(format!(
                         "Constructor parameter schemas not found for agent: {}",
-                        #agent_type_name
+                        __agent_type_name_raw
                     ))
                 })?;
 
@@ -614,13 +633,10 @@ fn generate_initiator_impl(
 
 fn generate_register_initiator_fn(
     self_ty: &syn::Type,
+    agent_trait_path: &syn::Path,
     agent_trait_ident: &syn::Ident,
     initiator_ident: &syn::Ident,
 ) -> proc_macro2::TokenStream {
-    let agent_impl_type_trimmed = trim_type_parameter(self_ty);
-    let agent_impl_type_trimmed_ident = format_ident!("{}", agent_impl_type_trimmed);
-    let agent_trait_name = agent_trait_ident.to_string();
-
     let register_initiator_fn_name = format_ident!(
         "__register_agent_initiator_{}",
         agent_trait_ident.to_string().to_lowercase()
@@ -632,10 +648,10 @@ fn generate_register_initiator_fn(
     quote! {
         ::golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_initiator_fn_name() {
-                #agent_impl_type_trimmed_ident::__register_agent_type();
+                <#self_ty as #agent_trait_path>::__register_agent_type();
 
                 golem_rust::agentic::register_agent_initiator(
-                    &#agent_trait_name,
+                    <#self_ty as #agent_trait_path>::__golem_agent_type_name(),
                     std::sync::Arc::new(#initiator_ident)
                 );
             }

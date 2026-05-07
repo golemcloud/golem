@@ -44,6 +44,12 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RetryPolicy = golemApi150Retry.RetryPolicy;
   export type NamedRetryPolicy = golemApi150Retry.NamedRetryPolicy;
   /**
+   * Whether an agent is durable (persistent oplog) or ephemeral.
+   * This mirrors the agent-mode enum in golem:agent/common@1.5.0; it is duplicated here to avoid
+   * a circular WIT package dependency between golem:api and golem:agent.
+   */
+  export type AgentMode = "durable" | "ephemeral";
+  /**
    * Index into a retry-policy-state's node list
    */
   export type StateNodeIndex = number;
@@ -154,6 +160,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    agentMode: AgentMode;
     componentRevision: ComponentRevision;
     env: [string, string][];
     createdBy: AccountId;
@@ -164,6 +171,7 @@ declare module 'golem:api/oplog@1.5.0' {
     initialActivePlugins: PluginInstallationDescription[];
     localAgentConfig: LocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
+    instanceId: Uuid;
   };
   export type HostCallParameters = {
     timestamp: Datetime;
@@ -468,6 +476,16 @@ declare module 'golem:api/oplog@1.5.0' {
     environmentId: EnvironmentId;
     resourceName: string;
   };
+  export type EphemeralSleepTooLong = {
+    requestedNanos: bigint;
+    maxNanos: bigint;
+  };
+  export type EphemeralFuelExhausted = {
+    overdraftLimit: bigint;
+  };
+  export type EphemeralCannotSuspend = {
+    reason: string;
+  };
   /**
    * Describes the error that occurred in the agent
    */
@@ -523,10 +541,23 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-terminated-by-quota'
     val: AgentTerminatedByQuotaError
+  } |
+  {
+    tag: 'ephemeral-sleep-too-long'
+    val: EphemeralSleepTooLong
+  } |
+  {
+    tag: 'ephemeral-fuel-exhausted'
+    val: EphemeralFuelExhausted
+  } |
+  {
+    tag: 'ephemeral-cannot-suspend'
+    val: EphemeralCannotSuspend
   };
   export type RawCreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    agentMode: AgentMode;
     componentRevision: ComponentRevision;
     env: [string, string][];
     environmentId: EnvironmentId;
@@ -537,6 +568,7 @@ declare module 'golem:api/oplog@1.5.0' {
     initialActivePlugins: EnvironmentPluginGrantId[];
     localAgentConfig: RawLocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
+    instanceId: Uuid;
   };
   export type RawHostCallParameters = {
     timestamp: Datetime;

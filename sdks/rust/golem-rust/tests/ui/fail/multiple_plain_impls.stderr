@@ -1,0 +1,17 @@
+error[E0046]: not all trait items implemented, missing: `agent_implementation_annotation`
+  --> tests/ui/fail/multiple_plain_impls.rs:12:1
+   |
+ 3 | #[agent_definition]
+   | ------------------- `agent_implementation_annotation` from trait
+...
+12 | impl MultiAgent for FirstImpl {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `agent_implementation_annotation` in implementation
+
+error[E0046]: not all trait items implemented, missing: `agent_implementation_annotation`
+  --> tests/ui/fail/multiple_plain_impls.rs:22:1
+   |
+ 3 | #[agent_definition]
+   | ------------------- `agent_implementation_annotation` from trait
+...
+22 | impl MultiAgent for SecondImpl {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `agent_implementation_annotation` in implementation

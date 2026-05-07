@@ -14,7 +14,7 @@
 
 use super::component::ComponentService;
 use super::golem_config::GolemConfig;
-use super::{HasConfig, HasOplogService};
+use super::{HasComponentService, HasConfig, HasOplogService};
 use crate::metrics::workers::record_worker_call;
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, OwnedAgentId, ShardId,
+    AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, OwnedAgentId, ShardId,
 };
 use std::sync::Arc;
 use tracing::debug;
@@ -50,11 +50,25 @@ pub trait WorkerService: Send + Sync {
 
     async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId);
 
+    /// Returns the persisted [`AgentMode`] for the worker, if it exists.
+    ///
+    /// The mode is decided at worker create time and persisted in the `Create` oplog entry,
+    /// and is also kept on the cached [`AgentStatusRecord`]. This method first consults the
+    /// cached status record (which exists for active durable workers) and, on cache miss,
+    /// probes both oplog namespaces (durable and ephemeral). Returns `None` if no oplog
+    /// exists in either namespace.
+    async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode>;
+
+    /// Updates the cached status for the worker.
+    ///
+    /// The `AgentMode` is read from `status_value.agent_mode`. Cached status is only
+    /// written for durable workers; for ephemeral workers this is a no-op (their oplog
+    /// only exists while they are running, and they keep the status in memory on the
+    /// owning executor).
     async fn update_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
         status_value: &AgentStatusRecord,
-        agent_mode: AgentMode,
     );
 }
 
@@ -115,6 +129,31 @@ impl DefaultWorkerService {
         format!("worker:running_in_shard:{shard_id}")
     }
 
+    /// Reads the cached `AgentStatusRecord` for `owned_agent_id`, if any. Returns `None` if
+    /// the cache key is missing or the stored value cannot be deserialized in the current format.
+    async fn read_cached_status(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentStatusRecord> {
+        let status_value: Option<Result<AgentStatusRecord, String>> = self
+            .key_value_storage
+            .with_entity("worker", "read_cached_status", "worker_status")
+            .get_attempt_deserialize(
+                KeyValueStorageNamespace::Worker {
+                    agent_id: owned_agent_id.agent_id(),
+                },
+                &Self::status_key(&owned_agent_id.agent_id),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to get worker status for {owned_agent_id} from KV storage: {err}")
+            });
+
+        match status_value {
+            Some(Ok(status)) => Some(status),
+            // Stored in a previous, no-longer-valid format; treat as cache miss.
+            Some(Err(_)) => None,
+            None => None,
+        }
+    }
+
     fn should_track_for_assignment_recovery(status: &AgentStatusRecord) -> bool {
         matches!(
             status.status,
@@ -128,13 +167,11 @@ impl WorkerService for DefaultWorkerService {
     async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         record_worker_call("get");
 
-        if !self.oplog_service.exists(owned_agent_id).await {
-            return None;
-        }
+        let agent_mode = self.get_agent_mode(owned_agent_id).await?;
 
         let initial_oplog_entry = self
             .oplog_service
-            .read(owned_agent_id, OplogIndex::INITIAL, 1)
+            .read(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
             .await
             .into_iter()
             .next();
@@ -147,6 +184,7 @@ impl WorkerService for DefaultWorkerService {
                 _,
                 OplogEntry::Create {
                     agent_id,
+                    agent_mode: persisted_agent_mode,
                     component_revision,
                     env,
                     environment_id,
@@ -158,8 +196,11 @@ impl WorkerService for DefaultWorkerService {
                     initial_active_plugins,
                     local_agent_config,
                     original_phantom_id,
+                    instance_id,
                 },
             )) => {
+                debug_assert_eq!(persisted_agent_mode, agent_mode);
+                let agent_mode = persisted_agent_mode;
                 let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
                 let component_metadata = self
                     .component_service
@@ -193,44 +234,32 @@ impl WorkerService for DefaultWorkerService {
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
                         active_plugins: initial_active_plugins,
+                        agent_mode,
                         ..AgentStatusRecord::default()
                     },
                     original_phantom_id,
+                    fingerprint: AgentFingerprint(instance_id),
+                    agent_mode,
                 };
 
-                let status_value: Option<Result<AgentStatusRecord, String>> = self
-                    .key_value_storage
-                    .with_entity("worker", "get", "worker_status")
-                    .get_attempt_deserialize(
-                        KeyValueStorageNamespace::Worker { agent_id: owned_agent_id.agent_id.clone() },
-                        &Self::status_key(&owned_agent_id.agent_id),
-                    )
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!("failed to get worker status for {owned_agent_id} from KV storage: {err}")
-                    });
-
-                let last_known_status = match status_value {
-                    Some(Ok(status)) => Some(status),
-                    // We had a status, but it was written in a previous format and is no longer valid -> recompute
-                    Some(Err(_)) => {
+                let last_known_status = match self.read_cached_status(owned_agent_id).await {
+                    Some(status) => Some(status),
+                    // No cached status (cache miss, missing for ephemeral workers, or stale
+                    // format) -> recompute from oplog.
+                    None => {
                         let last_known_status = calculate_last_known_status_for_existing_worker(
                             self,
                             owned_agent_id,
+                            agent_mode,
                             None,
                         )
                         .await;
 
-                        self.update_cached_status(
-                            owned_agent_id,
-                            &last_known_status,
-                            AgentMode::Durable,
-                        )
-                        .await;
+                        self.update_cached_status(owned_agent_id, &last_known_status)
+                            .await;
 
                         Some(last_known_status)
                     }
-                    None => None,
                 };
 
                 Some(GetWorkerMetadataResult {
@@ -258,7 +287,9 @@ impl WorkerService for DefaultWorkerService {
     async fn remove(&self, owned_agent_id: &OwnedAgentId) {
         record_worker_call("remove");
 
-        self.oplog_service.delete(owned_agent_id).await;
+        if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await {
+            self.oplog_service.delete(owned_agent_id, agent_mode).await;
+        }
         self.remove_cached_status(owned_agent_id).await;
 
         let shard_assignment = self
@@ -297,15 +328,41 @@ impl WorkerService for DefaultWorkerService {
             });
     }
 
+    async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
+        record_worker_call("get_agent_mode");
+
+        // Fast path: cached `AgentStatusRecord` (only present for durable workers).
+        if let Some(status) = self.read_cached_status(owned_agent_id).await {
+            return Some(status.agent_mode);
+        }
+
+        // Cache miss (e.g. ephemeral worker, or freshly-created durable worker before its
+        // first status write): probe both oplog namespaces. Constant-time existence checks.
+        if self
+            .oplog_service
+            .exists(owned_agent_id, AgentMode::Durable)
+            .await
+        {
+            Some(AgentMode::Durable)
+        } else if self
+            .oplog_service
+            .exists(owned_agent_id, AgentMode::Ephemeral)
+            .await
+        {
+            Some(AgentMode::Ephemeral)
+        } else {
+            None
+        }
+    }
+
     async fn update_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
         status_value: &AgentStatusRecord,
-        agent_mode: AgentMode,
     ) {
         record_worker_call("update_status");
 
-        if agent_mode != AgentMode::Ephemeral {
+        if status_value.agent_mode != AgentMode::Ephemeral {
             debug!("Updating cached worker status for {owned_agent_id} to {status_value:?}");
 
             self.key_value_storage
@@ -368,6 +425,12 @@ impl HasOplogService for DefaultWorkerService {
 impl HasConfig for DefaultWorkerService {
     fn config(&self) -> Arc<GolemConfig> {
         self.config.clone()
+    }
+}
+
+impl HasComponentService for DefaultWorkerService {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
+        self.component_service.clone()
     }
 }
 

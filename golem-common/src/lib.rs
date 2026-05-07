@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// The oplog_entry! macro expands to large enums processed by serde/poem_openapi
+// which require an increased recursion limit.
+#![recursion_limit = "256"]
+
 use http::Uri;
 use shadow_rs::shadow;
 use std::convert::Infallible;

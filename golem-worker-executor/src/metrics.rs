@@ -347,6 +347,11 @@ pub mod resources {
             register_counter!("fuel_borrow_total", "Total amount of fuel borrowed").unwrap();
         static ref FUEL_RETURN_TOTAL: Counter =
             register_counter!("fuel_return_total", "Total amount of fuel returned").unwrap();
+        static ref EPHEMERAL_OVERDRAFT_FUEL_TOTAL: Counter = register_counter!(
+            "ephemeral_overdraft_fuel_total",
+            "Total amount of ephemeral overdraft fuel consumed"
+        )
+        .unwrap();
     }
 
     pub fn record_fuel_borrow(amount: u64) {
@@ -355,6 +360,43 @@ pub mod resources {
 
     pub fn record_fuel_return(amount: u64) {
         FUEL_RETURN_TOTAL.inc_by(amount as f64);
+    }
+
+    pub fn record_ephemeral_overdraft_fuel(amount: u64) {
+        EPHEMERAL_OVERDRAFT_FUEL_TOTAL.inc_by(amount as f64);
+    }
+}
+
+pub mod ephemeral {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    lazy_static! {
+        static ref EPHEMERAL_PROMISE_WAITING: Gauge = register_gauge!(
+            "ephemeral_promise_waiting",
+            "Number of ephemeral agents currently waiting on promises"
+        )
+        .unwrap();
+        static ref EPHEMERAL_NON_SUSPENDING_FAILURE_TOTAL: CounterVec = register_counter_vec!(
+            "ephemeral_non_suspending_failure_total",
+            "Number of ephemeral failures that replace suspension",
+            &["reason"]
+        )
+        .unwrap();
+    }
+
+    pub fn inc_promise_waiting() {
+        EPHEMERAL_PROMISE_WAITING.inc();
+    }
+
+    pub fn dec_promise_waiting() {
+        EPHEMERAL_PROMISE_WAITING.dec();
+    }
+
+    pub fn record_non_suspending_failure(reason: &'static str) {
+        EPHEMERAL_NON_SUSPENDING_FAILURE_TOTAL
+            .with_label_values(&[reason])
+            .inc();
     }
 }
 

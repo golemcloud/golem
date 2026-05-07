@@ -38,6 +38,7 @@ use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
+use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::storage::{
     STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
 };
@@ -46,7 +47,6 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
-use crate::services::HasOplogService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -68,6 +68,7 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
+use crate::services::{HasComponentService, HasOplogService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
@@ -336,6 +337,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
         let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
+        let suspend_threshold = match execution_status.read().unwrap().agent_mode() {
+            AgentMode::Durable => config.suspend.suspend_after,
+            AgentMode::Ephemeral => config.suspend.ephemeral_max_sleep,
+        };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
             worker_dir.path().to_path_buf(),
@@ -343,7 +348,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             stdout,
             stderr,
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
-            config.suspend.suspend_after,
+            suspend_threshold,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
         let mut wasi_http = WasiHttpCtx::new();
@@ -739,6 +744,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => RetryDecision::None,
             TrapType::Error {
+                error:
+                    AgentError::EphemeralSleepTooLong(_)
+                    | AgentError::EphemeralFuelExhausted(_)
+                    | AgentError::EphemeralCannotSuspend(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
                 error: AgentError::InternalError(_),
                 ..
             } => RetryDecision::None,
@@ -820,6 +832,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::Unknown(_) => "unknown",
             AgentError::TransientError(_) => "transient-error",
             AgentError::AgentTerminatedByQuota(_) => "agent-terminated-by-quota",
+            AgentError::EphemeralSleepTooLong(_) => "ephemeral-sleep-too-long",
+            AgentError::EphemeralFuelExhausted(_) => "ephemeral-fuel-exhausted",
+            AgentError::EphemeralCannotSuspend(_) => "ephemeral-cannot-suspend",
         }
     }
 
@@ -2227,6 +2242,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
+        if let TrapType::Error { error, .. } = trap_type {
+            match error {
+                AgentError::EphemeralSleepTooLong(_) => {
+                    record_non_suspending_failure("sleep-too-long")
+                }
+                AgentError::EphemeralFuelExhausted(_) => {
+                    record_non_suspending_failure("fuel-exhausted")
+                }
+                AgentError::EphemeralCannotSuspend(_) => {
+                    record_non_suspending_failure("cannot-suspend")
+                }
+                _ => {}
+            }
+        }
+
         // Special case: jumping is always immediate and may not have a non-detached status.
         if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
             return RetryDecision::Immediate;
@@ -2656,9 +2686,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError> {
-        last_error(this, owned_agent_id, latest_worker_status).await
+        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
     }
 
     async fn resume_replay(
@@ -2831,6 +2862,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     Err(error) => Some(TrapType::from_error::<Ctx>(
                                         &anyhow!(error),
                                         OplogIndex::INITIAL,
+                                        store.as_context().data().agent_mode(),
                                     )),
                                 };
                                 let decision = match trap_type {
@@ -3058,8 +3090,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-
-        let _current_assignment = this.shard_service().try_get_current_assignment();
         let workers = this.worker_service().get_running_workers_in_shards().await;
 
         debug!(workers = ?workers, "Recovering running workers");
@@ -3069,6 +3099,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             let latest_worker_status = calculate_last_known_status_for_existing_worker(
                 this,
                 &owned_agent_id,
+                worker.initial_worker_metadata.agent_mode,
                 worker.last_known_status,
             )
             .await;
@@ -3316,9 +3347,13 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
 async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     latest_worker_status: &AgentStatusRecord,
 ) -> Option<LastError> {
-    let mut idx = this.oplog_service().get_last_index(owned_agent_id).await;
+    let mut idx = this
+        .oplog_service()
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
     if idx == OplogIndex::NONE {
         None
     } else {
@@ -3337,7 +3372,10 @@ async fn last_error<T: HasOplogService + HasConfig>(
                     break;
                 }
             } else {
-                let oplog_entry = this.oplog_service().read(owned_agent_id, idx, 1).await;
+                let oplog_entry = this
+                    .oplog_service()
+                    .read(owned_agent_id, agent_mode, idx, 1)
+                    .await;
                 match oplog_entry.first_key_value() {
                     Some((
                         _,
@@ -3399,7 +3437,8 @@ async fn last_error<T: HasOplogService + HasConfig>(
         match first_error {
             Some(error) => Some(LastError {
                 error,
-                stderr: recover_stderr_logs(this, owned_agent_id, last_error_index).await,
+                stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index)
+                    .await,
                 retry_from: first_retry_from,
             }),
             None => None,
@@ -3412,6 +3451,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
 pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     last_oplog_idx: OplogIndex,
 ) -> String {
     let max_count = this.config().limits.event_history_size;
@@ -3426,7 +3466,10 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
 
     loop {
         // TODO: this could be read in batches to speed up the process
-        let oplog_entry = this.oplog_service().read(owned_agent_id, idx, 1).await;
+        let oplog_entry = this
+            .oplog_service()
+            .read(owned_agent_id, agent_mode, idx, 1)
+            .await;
 
         // Because of retries we might have multiple invocation start entries.
         // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
@@ -4184,6 +4227,12 @@ impl HasOplog for PrivateDurableWorkerState {
 impl HasConfig for PrivateDurableWorkerState {
     fn config(&self) -> Arc<GolemConfig> {
         self.config.clone()
+    }
+}
+
+impl HasComponentService for PrivateDurableWorkerState {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
+        self.component_service.clone()
     }
 }
 

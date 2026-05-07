@@ -14,6 +14,7 @@
 
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
+use crate::error::service::ServiceError;
 use crate::model::GuestLanguage;
 use crate::model::component::{render_agent_constructor, render_data_schema};
 use crate::model::text::component::is_sensitive_env_var_name;
@@ -783,3 +784,10 @@ pub enum PostDeployError {
 }
 
 pub type PostDeployResult = Result<PostDeploySummary, PostDeployError>;
+
+pub enum UpdateStagedComponentError {
+    Service(ServiceError),
+    Other(anyhow::Error),
+}
+
+pub type UpdateStagedComponentResult<T> = Result<T, UpdateStagedComponentError>;

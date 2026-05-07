@@ -97,6 +97,8 @@ message CreateParameters {
   repeated PluginInstallationDescription initial_active_plugins = 11;
   golem.common.EnvironmentId environment_id = 12;
   optional golem.common.UUID original_phantom_id = 13;
+  golem.common.UUID instance_id = 14;
+  golem.component.AgentMode agent_mode = 15;
 }
 
 message HostCallParameters {

@@ -39,8 +39,8 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload, TimestampedUpdateDescription,
-    types::ObjectMetadata,
+    AgentError, OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload,
+    TimestampedUpdateDescription, types::ObjectMetadata,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
@@ -733,8 +733,8 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
 
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
-    fn ensure_fuel(&mut self, _current_level: u64) -> bool {
-        true
+    fn ensure_fuel(&mut self, _current_level: u64) -> Result<(), AgentError> {
+        Ok(())
     }
 
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
@@ -763,11 +763,13 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
             this,
             owned_agent_id,
+            agent_mode,
             latest_worker_status,
         )
         .await

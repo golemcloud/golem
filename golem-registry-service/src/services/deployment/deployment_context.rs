@@ -21,7 +21,9 @@ use super::route_compilation::{
     add_webhook_callback_routes, build_agent_http_api_deployment_details,
     make_invalid_agent_mount_error_maker,
 };
-use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
+use crate::model::agent_secret::{
+    DeploymentAgentSecretCreation, DeploymentAgentSecretReplacement, DeploymentAgentSecretUpdate,
+};
 use crate::model::api_definition::UnboundCompiledRoute;
 use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use crate::services::deployment::route_compilation::validate_path_segments;
@@ -312,10 +314,12 @@ impl DeploymentContext {
         &self,
         agent_secrets_in_environment: Vec<AgentSecret>,
         agent_secret_defaults_as_part_of_deployment: Vec<DeploymentAgentSecretDefault>,
+        replace_incompatible_agent_secrets: bool,
         errors: &mut Vec<DeployValidationError>,
     ) -> (
         Vec<DeploymentAgentSecretCreation>,
         Vec<DeploymentAgentSecretUpdate>,
+        Vec<DeploymentAgentSecretReplacement>,
     ) {
         let env_secrets: HashMap<&CanonicalAgentSecretPath, &AgentSecret> =
             agent_secrets_in_environment
@@ -331,6 +335,7 @@ impl DeploymentContext {
 
         let mut creations = Vec::new();
         let mut updates = Vec::new();
+        let mut replacements = Vec::new();
         let mut seen_secrets = HashMap::new();
 
         for agent_type in self.registered_agent_types.values() {
@@ -365,15 +370,46 @@ impl DeploymentContext {
                 {
                     // secret does exist in environment, we need to check that types are compatible with deployment
                     if environment_agent_secret_declaration.secret_type != config.value_type {
-                        errors.push(
-                            DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
+                        if replace_incompatible_agent_secrets {
+                            let agent_secret_default = defaults.get(&canonical_agent_secret_path);
+
+                            let agent_secret_value = ok_or_continue!(
+                                agent_secret_default
+                                    .map(|sd| ValueAndType::parse_with_type(
+                                        &sd.secret_value,
+                                        &config.value_type
+                                    ))
+                                    .transpose()
+                                    .map_err(|errors| {
+                                        DeployValidationError::AgentSecretDefaultTypeMismatch {
+                                            path: canonical_agent_secret_path.clone(),
+                                            errors,
+                                        }
+                                    }),
+                                errors
+                            )
+                            .map(|vat| vat.value);
+
+                            replacements.push(DeploymentAgentSecretReplacement {
+                                agent_secret_id: environment_agent_secret_declaration.id,
+                                current_revision: environment_agent_secret_declaration.revision,
                                 path: canonical_agent_secret_path.clone(),
-                                agent_secret_type: config.value_type.clone(),
-                                environment_secret_type: environment_agent_secret_declaration
-                                    .secret_type
-                                    .clone(),
-                            },
-                        );
+                                secret_type: config.value_type.clone(),
+                                secret_value: agent_secret_value,
+                            });
+                        } else {
+                            errors.push(
+                                DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
+                                    path: canonical_agent_secret_path.clone(),
+                                    agent_secret_type: config.value_type.clone(),
+                                    environment_secret_type: environment_agent_secret_declaration
+                                        .secret_type
+                                        .clone(),
+                                },
+                            );
+                        }
+
+                        continue;
                     }
 
                     // declaration exists in environment but has no value.
@@ -436,7 +472,7 @@ impl DeploymentContext {
             }
         }
 
-        (creations, updates)
+        (creations, updates, replacements)
     }
 
     pub fn deployment_resource_definition_creations(
