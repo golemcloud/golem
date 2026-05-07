@@ -14975,6 +14975,9 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfigUpdate'
+        allowIncompatibleConfig:
+          default: false
+          type: boolean
       required:
       - currentRevision
     CorsOptions:
@@ -15128,6 +15131,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentRetryPolicyDefault'
+        replaceIncompatibleAgentSecrets:
+          default: false
+          type: boolean
       required:
       - expectedDeploymentHash
       - version

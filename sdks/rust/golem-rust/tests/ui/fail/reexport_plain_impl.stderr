@@ -1,0 +1,8 @@
+error[E0046]: not all trait items implemented, missing: `agent_implementation_annotation`
+  --> tests/ui/fail/reexport_plain_impl.rs:19:1
+   |
+ 6 |     #[agent_definition]
+   |     ------------------- `agent_implementation_annotation` from trait
+...
+19 | impl prelude::ReexportedAgent for ReexportedAgentImpl {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `agent_implementation_annotation` in implementation

@@ -17,6 +17,10 @@ name = "agent"
 harness = false
 
 [[test]]
+name = "ui"
+harness = false
+
+[[test]]
 name = "agent_registry_bench"
 path = "benches/agent_registry_bench.rs"
 harness = false
@@ -81,3 +85,4 @@ url = ["dep:url"]
 [dev-dependencies]
 test-r = "2.3.1"
 proptest = "1.4.0"
+trybuild = "1.0.116"

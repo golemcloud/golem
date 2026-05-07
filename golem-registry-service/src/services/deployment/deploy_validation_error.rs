@@ -139,6 +139,10 @@ pub enum DeployValidationError {
     ConflictingResourceDefinitions { name: ResourceName },
     #[error("Multiple retry policy defaults with the same name: {name}")]
     ConflictingRetryPolicyDefaults { name: String },
+    #[error(
+        "Reset override flags are only allowed when environment compatibility_check is disabled"
+    )]
+    ResetOverrideRequiresCompatibilityCheckDisabled,
 }
 
 impl SafeDisplay for DeployValidationError {

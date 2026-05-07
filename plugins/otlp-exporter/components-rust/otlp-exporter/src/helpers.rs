@@ -82,5 +82,8 @@ pub(crate) fn worker_error_to_string(e: &WorkerError) -> String {
         WorkerError::NodeOutOfFilesystemStorage => "node out of filesystem storage".to_string(),
         WorkerError::AgentExceededFilesystemStorageLimit => "agent exceeded filesystem storage limit".to_string(),
         WorkerError::AgentTerminatedByQuota(_) => "agent terminated by quota".to_string(),
+        WorkerError::EphemeralSleepTooLong(_) => "ephemeral sleep too long".to_string(),
+        WorkerError::EphemeralFuelExhausted(_) => "ephemeral fuel exhausted".to_string(),
+        WorkerError::EphemeralCannotSuspend(_) => "ephemeral cannot suspend".to_string(),
     }
 }

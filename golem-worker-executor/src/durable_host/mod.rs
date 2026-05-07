@@ -38,6 +38,7 @@ use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
+use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::storage::{
     STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
 };
@@ -336,6 +337,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
         let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
+        let suspend_threshold = match execution_status.read().unwrap().agent_mode() {
+            AgentMode::Durable => config.suspend.suspend_after,
+            AgentMode::Ephemeral => config.suspend.ephemeral_max_sleep,
+        };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
             worker_dir.path().to_path_buf(),
@@ -343,7 +348,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             stdout,
             stderr,
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
-            config.suspend.suspend_after,
+            suspend_threshold,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
         let mut wasi_http = WasiHttpCtx::new();
@@ -739,6 +744,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => RetryDecision::None,
             TrapType::Error {
+                error:
+                    AgentError::EphemeralSleepTooLong(_)
+                    | AgentError::EphemeralFuelExhausted(_)
+                    | AgentError::EphemeralCannotSuspend(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
                 error: AgentError::InternalError(_),
                 ..
             } => RetryDecision::None,
@@ -820,6 +832,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::Unknown(_) => "unknown",
             AgentError::TransientError(_) => "transient-error",
             AgentError::AgentTerminatedByQuota(_) => "agent-terminated-by-quota",
+            AgentError::EphemeralSleepTooLong(_) => "ephemeral-sleep-too-long",
+            AgentError::EphemeralFuelExhausted(_) => "ephemeral-fuel-exhausted",
+            AgentError::EphemeralCannotSuspend(_) => "ephemeral-cannot-suspend",
         }
     }
 
@@ -2227,6 +2242,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
+        if let TrapType::Error { error, .. } = trap_type {
+            match error {
+                AgentError::EphemeralSleepTooLong(_) => {
+                    record_non_suspending_failure("sleep-too-long")
+                }
+                AgentError::EphemeralFuelExhausted(_) => {
+                    record_non_suspending_failure("fuel-exhausted")
+                }
+                AgentError::EphemeralCannotSuspend(_) => {
+                    record_non_suspending_failure("cannot-suspend")
+                }
+                _ => {}
+            }
+        }
+
         // Special case: jumping is always immediate and may not have a non-detached status.
         if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
             return RetryDecision::Immediate;
@@ -2832,6 +2862,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     Err(error) => Some(TrapType::from_error::<Ctx>(
                                         &anyhow!(error),
                                         OplogIndex::INITIAL,
+                                        store.as_context().data().agent_mode(),
                                     )),
                                 };
                                 let decision = match trap_type {
@@ -3059,8 +3090,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-
-        let _current_assignment = this.shard_service().try_get_current_assignment();
         let workers = this.worker_service().get_running_workers_in_shards().await;
 
         debug!(workers = ?workers, "Recovering running workers");

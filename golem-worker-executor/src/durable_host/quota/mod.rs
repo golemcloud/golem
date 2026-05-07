@@ -23,6 +23,7 @@ use crate::preview2::golem_quota::types::QuotaTokenRecord;
 use crate::services::quota::LeaseInterest;
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
+use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::host_functions;
@@ -193,12 +194,15 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
                         let agent_created_by = self.created_by();
                         let owned_agent_id = self.owned_agent_id().clone();
                         let scheduler_service = self.scheduler_service();
+                        let agent_mode = self.agent_mode();
 
                         debug!(
                             "Throttling agent due to failed quota reservation ({estimated_wait_nanos:?})"
                         );
                         let quota_token = self.table().get(&self_)?;
-                        if let Some(estimated_wait_nanos) = estimated_wait_nanos {
+                        if agent_mode == AgentMode::Durable
+                            && let Some(estimated_wait_nanos) = estimated_wait_nanos
+                        {
                             // schedule a continuation for when we expect the quota to be ready to serve us. If it still doesn't have capacity
                             // we will just end up suspending again.
                             let estimated_wait_nanos_i64 = if estimated_wait_nanos > i64::MAX as u64

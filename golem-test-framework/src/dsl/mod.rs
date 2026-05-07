@@ -1084,11 +1084,11 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             "Failed to parse component: {:?} revision {}: {}",
             component_id, component_revision, reason
         ),
-        WorkerExecutorError::GetLatestVersionOfComponentFailed {
+        WorkerExecutorError::GetCurrentVersionOfComponentFailed {
             component_id,
             reason,
         } => format!(
-            "Failed to get latest version of component: {:?}: {}",
+            "Failed to get current version of component: {:?}: {}",
             component_id, reason
         ),
         WorkerExecutorError::PromiseNotFound { promise_id } => {

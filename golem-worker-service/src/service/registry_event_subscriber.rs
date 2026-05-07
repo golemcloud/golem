@@ -72,7 +72,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                     current_deployment_revision = %current_deployment_revision,
                     "Received deployment changed event"
                 );
-                self.agent_resolution_cache.update_latest_revision(
+                self.agent_resolution_cache.update_current_revision(
                     *environment_id,
                     *deployment_revision,
                     *current_deployment_revision,
