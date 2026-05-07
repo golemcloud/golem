@@ -100,6 +100,7 @@ min_delay = "100ms"
 multiplier = 2.0
 
 [limits]
+ephemeral_fuel_overdraft_multiplier = 100
 epoch_interval = "10ms"
 epoch_ticks = 1
 event_broadcast_capacity = 1024
@@ -247,6 +248,7 @@ type = "Disabled"
 [shard_manager.tls.config]
 
 [suspend]
+ephemeral_max_sleep = "1m"
 suspend_after = "10s"
 
 [tracing]
@@ -417,6 +419,7 @@ without_time = false
 # [key_value_storage.config]
 # 
 # [limits]
+# ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
 # epoch_ticks = 1
 # event_broadcast_capacity = 1024
@@ -564,6 +567,7 @@ without_time = false
 # [shard_manager.tls.config]
 # 
 # [suspend]
+# ephemeral_max_sleep = "1m"
 # suspend_after = "10s"
 # 
 # [tracing]
@@ -704,6 +708,7 @@ without_time = false
 # [key_value_storage.config]
 # 
 # [limits]
+# ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
 # epoch_ticks = 1
 # event_broadcast_capacity = 1024
@@ -851,6 +856,7 @@ without_time = false
 # [shard_manager.tls.config]
 # 
 # [suspend]
+# ephemeral_max_sleep = "1m"
 # suspend_after = "10s"
 # 
 # [tracing]

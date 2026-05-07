@@ -355,6 +355,25 @@ pub struct AgentTerminatedByQuotaError {
     pub resource_name: ResourceName,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
+#[wit(name = "ephemeral-sleep-too-long", owner = "golem:api@1.5.0/oplog")]
+pub struct EphemeralSleepTooLongError {
+    pub requested_nanos: u64,
+    pub max_nanos: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
+#[wit(name = "ephemeral-fuel-exhausted", owner = "golem:api@1.5.0/oplog")]
+pub struct EphemeralFuelExhaustedError {
+    pub overdraft_limit: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
+#[wit(name = "ephemeral-cannot-suspend", owner = "golem:api@1.5.0/oplog")]
+pub struct EphemeralCannotSuspendError {
+    pub reason: String,
+}
+
 /// Describes the error that occurred in the worker
 #[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
 #[wit(name = "worker-error", owner = "golem:api@1.5.0/oplog")]
@@ -381,6 +400,12 @@ pub enum AgentError {
     AgentExceededFilesystemStorageLimit,
     // The agent was terminated by a quota with the terminae enforcement action (permanent)
     AgentTerminatedByQuota(AgentTerminatedByQuotaError),
+    // Ephemeral agents cannot suspend and the requested sleep exceeded the configured maximum
+    EphemeralSleepTooLong(EphemeralSleepTooLongError),
+    // Ephemeral agent exhausted its per-invocation fuel overdraft allowance
+    EphemeralFuelExhausted(EphemeralFuelExhaustedError),
+    // Ephemeral agent reached a condition that would suspend a durable agent
+    EphemeralCannotSuspend(EphemeralCannotSuspendError),
 }
 
 impl AgentError {
@@ -401,6 +426,9 @@ impl AgentError {
             Self::NodeOutOfFilesystemStorage => "Out of storage space",
             Self::AgentExceededFilesystemStorageLimit => "Exceeded plan storage limit",
             Self::AgentTerminatedByQuota(_) => "Terminated by quota",
+            Self::EphemeralSleepTooLong(_) => "Ephemeral sleep too long",
+            Self::EphemeralFuelExhausted(_) => "Ephemeral fuel exhausted",
+            Self::EphemeralCannotSuspend(_) => "Ephemeral agent cannot suspend",
         }
     }
 

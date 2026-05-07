@@ -906,6 +906,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(error) => Some(TrapType::from_error::<Ctx>(
                 &anyhow!(error),
                 OplogIndex::INITIAL,
+                self.parent.agent_mode(),
             )),
         };
         let decision = match trap_type {

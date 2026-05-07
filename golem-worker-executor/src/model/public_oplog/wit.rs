@@ -32,7 +32,8 @@ use golem_common::model::oplog::public_oplog_entry::{
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
-    AgentInvocationOutputParameters, AgentTerminatedByQuotaError, FallibleResultParameters,
+    AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
+    EphemeralFuelExhaustedError, EphemeralSleepTooLongError, FallibleResultParameters,
     JsonSnapshotData, MultipartPartData, MultipartSnapshotData, PublicOplogEntry,
     PublicSnapshotData, PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
     SnapshotBasedUpdateParameters,
@@ -707,6 +708,22 @@ impl From<oplog::WorkerError> for golem_common::model::oplog::AgentError {
                 Self::AgentTerminatedByQuota(AgentTerminatedByQuotaError {
                     environment_id: EnvironmentId(inner.environment_id.uuid.into()),
                     resource_name: ResourceName(inner.resource_name),
+                })
+            }
+            oplog::WorkerError::EphemeralSleepTooLong(inner) => {
+                Self::EphemeralSleepTooLong(EphemeralSleepTooLongError {
+                    requested_nanos: inner.requested_nanos,
+                    max_nanos: inner.max_nanos,
+                })
+            }
+            oplog::WorkerError::EphemeralFuelExhausted(inner) => {
+                Self::EphemeralFuelExhausted(EphemeralFuelExhaustedError {
+                    overdraft_limit: inner.overdraft_limit,
+                })
+            }
+            oplog::WorkerError::EphemeralCannotSuspend(inner) => {
+                Self::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                    reason: inner.reason,
                 })
             }
         }

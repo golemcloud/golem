@@ -49,7 +49,7 @@ use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::TimestampedUpdateDescription;
+use golem_common::model::oplog::{AgentError, TimestampedUpdateDescription};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
     OwnedAgentId,
@@ -222,8 +222,8 @@ pub trait WorkerCtx:
 pub trait FuelManagement {
     /// Ensures fuel is available for continued execution, borrowing a new batch
     /// from the account pool if the current pre-paid batch is exhausted.
-    /// Returns false if the account has no remaining fuel.
-    fn ensure_fuel(&mut self, current_level: u64) -> bool;
+    /// Returns an error if the account has no remaining fuel.
+    fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError>;
 
     /// Returns the amount of fuel consumed since the last call to return_fuel.
     fn return_fuel(&mut self, current_level: u64) -> u64;

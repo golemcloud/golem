@@ -228,6 +228,14 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_interrupt_ephemeral_agent(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            "The target agent is ephemeral. Interrupting it will stop the current invocation and it cannot be resumed. Continue?",
+            None,
+        )
+    }
+
     pub fn confirm_reset_allow_incompatible_component_update(
         &self,
         component_name: &ComponentName,
