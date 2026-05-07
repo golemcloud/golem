@@ -24,7 +24,7 @@ use anyhow::anyhow;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 pub use comfy_table::Table as ComfyTable;
-use comfy_table::{Cell, CellAlignment, ColumnConstraint, ContentArrangement};
+use comfy_table::{Cell, CellAlignment, ColumnConstraint, ContentArrangement, Width};
 use golem_common::model::AgentStatus;
 use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -411,23 +411,38 @@ pub fn format_typed_config(config: &[TypedAgentConfigEntry]) -> String {
 /// width, and whether its data rows should be right-aligned.
 pub struct Column {
     title: String,
-    fixed: bool,
     right_aligned: bool,
+    width: ColumnWidth,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnWidth {
+    Auto,
+    Content,
+    Exact(u16),
+    Min(u16),
+    Max(u16),
+    Range { min: u16, max: u16 },
 }
 
 impl Column {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
-            fixed: false,
             right_aligned: false,
+            width: ColumnWidth::Auto,
         }
     }
 
     /// Pin the column to its content width — it will not expand to fill surplus space.
-    pub fn fixed(mut self) -> Self {
-        self.fixed = true;
+    pub fn content(mut self) -> Self {
+        self.width = ColumnWidth::Content;
         self
+    }
+
+    /// Backward-compatible alias for content width columns.
+    pub fn fixed(self) -> Self {
+        self.content()
     }
 
     /// Right-align the data rows of this column.
@@ -437,14 +452,52 @@ impl Column {
     }
 
     /// Pin to content width and right-align — the common case for numeric/fixed columns.
-    pub fn fixed_right(mut self) -> Self {
-        self.fixed = true;
+    pub fn content_right(mut self) -> Self {
+        self.width = ColumnWidth::Content;
         self.right_aligned = true;
+        self
+    }
+
+    /// Backward-compatible alias for content width + right alignment.
+    pub fn fixed_right(self) -> Self {
+        self.content_right()
+    }
+
+    /// Set the minimum width for the column.
+    pub fn min_width(mut self, min_width: usize) -> Self {
+        self.width = ColumnWidth::Min(min_width.min(u16::MAX as usize) as u16);
+        self
+    }
+
+    /// Set an exact width for the column.
+    pub fn exact_width(mut self, width: usize) -> Self {
+        self.width = ColumnWidth::Exact(width.min(u16::MAX as usize) as u16);
+        self
+    }
+
+    /// Set the maximum width for the column.
+    pub fn max_width(mut self, max_width: usize) -> Self {
+        self.width = ColumnWidth::Max(max_width.min(u16::MAX as usize) as u16);
+        self
+    }
+
+    /// Set both minimum and maximum width for the column.
+    pub fn width_range(mut self, min_width: usize, max_width: usize) -> Self {
+        let min = min_width.min(u16::MAX as usize) as u16;
+        let max = max_width.min(u16::MAX as usize) as u16;
+        self.width = ColumnWidth::Range {
+            min: min.min(max),
+            max: max.max(min),
+        };
         self
     }
 
     pub fn as_str(&self) -> &str {
         &self.title
+    }
+
+    fn total_width_for_content_width(content_width: u16) -> u16 {
+        content_width.saturating_add(2)
     }
 }
 
@@ -493,17 +546,32 @@ pub fn new_table(preset: TablePreset, headers: Vec<Column>) -> ComfyTable {
                 .collect::<Vec<_>>(),
         );
     for (i, col) in headers.iter().enumerate() {
-        if col.fixed {
-            table
-                .column_mut(i)
-                .unwrap()
-                .set_constraint(ColumnConstraint::ContentWidth);
+        let column = table.column_mut(i).unwrap();
+        match col.width {
+            ColumnWidth::Auto => {}
+            ColumnWidth::Content => {
+                column.set_constraint(ColumnConstraint::ContentWidth);
+            }
+            ColumnWidth::Exact(width) => {
+                column.set_constraint(ColumnConstraint::Absolute(Width::Fixed(
+                    Column::total_width_for_content_width(width),
+                )));
+            }
+            ColumnWidth::Min(min_width) => {
+                column.set_constraint(ColumnConstraint::LowerBoundary(Width::Fixed(min_width)));
+            }
+            ColumnWidth::Max(max_width) => {
+                column.set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(max_width)));
+            }
+            ColumnWidth::Range { min, max } => {
+                column.set_constraint(ColumnConstraint::Boundaries {
+                    lower: Width::Fixed(Column::total_width_for_content_width(min)),
+                    upper: Width::Fixed(Column::total_width_for_content_width(max)),
+                });
+            }
         }
         if col.right_aligned {
-            table
-                .column_mut(i)
-                .unwrap()
-                .set_cell_alignment(CellAlignment::Right);
+            column.set_cell_alignment(CellAlignment::Right);
         }
     }
     table

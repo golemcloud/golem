@@ -39,7 +39,7 @@ use crate::log::{
     log_finished_ok, log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action,
     logged_failed_to, logged_finished_or_failed_to, logln,
 };
-use crate::model::GuestLanguage;
+use crate::model::{GuestLanguage, TemplateDescription};
 use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
@@ -391,20 +391,33 @@ impl AppCommandHandler {
     }
 
     pub fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
-        match filter {
+        let templates = match filter {
             Some(filter) => {
                 if let Some(language) = GuestLanguage::from_string(filter.clone()) {
                     self.ctx
-                        .app_handler()
-                        .log_templates_help(Some(language), None)
+                        .app_template_repo()?
+                        .search_agent_templates(Some(language), None)
                 } else {
                     self.ctx
-                        .app_handler()
-                        .log_templates_help(None, Some(&filter))
+                        .app_template_repo()?
+                        .search_agent_templates(None, Some(&filter))
                 }
             }
-            None => self.ctx.app_handler().log_templates_help(None, None),
-        }
+            None => self
+                .ctx
+                .app_template_repo()?
+                .search_agent_templates(None, None),
+        };
+
+        let templates: Vec<TemplateDescription> = templates
+            .into_values()
+            .flat_map(|templates| templates.into_values())
+            .map(|template| TemplateDescription::from_template(&template.0))
+            .collect();
+
+        self.ctx.log_handler().log_view(&templates);
+
+        Ok(())
     }
 
     pub async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
