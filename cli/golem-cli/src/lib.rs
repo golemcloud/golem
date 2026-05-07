@@ -30,6 +30,8 @@ pub mod auth;
 pub mod bridge_gen;
 pub mod client;
 pub mod command;
+pub mod command_examples;
+pub mod command_glossary;
 pub mod command_handler;
 pub mod composition;
 pub mod config;

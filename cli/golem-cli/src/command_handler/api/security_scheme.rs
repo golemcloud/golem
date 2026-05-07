@@ -53,7 +53,7 @@ impl ApiSecuritySchemeCommandHandler {
             } => {
                 self.cmd_create(
                     security_scheme_name,
-                    provider_type,
+                    provider_type.into(),
                     custom_provider_name,
                     custom_issuer_url,
                     client_id,
@@ -76,7 +76,7 @@ impl ApiSecuritySchemeCommandHandler {
                 scope,
                 redirect_url,
             } => {
-                let provider = match provider_type {
+                let provider = match provider_type.map(ProviderKind::from) {
                     Some(kind) => Some(match kind {
                         ProviderKind::Google => Provider::Google(Empty {}),
                         ProviderKind::Facebook => Provider::Facebook(Empty {}),

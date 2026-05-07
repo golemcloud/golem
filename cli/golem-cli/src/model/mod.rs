@@ -42,6 +42,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, Error};
 use golem_common::model::account::AccountId;
 use golem_common::model::quota::EnforcementAction;
+use golem_common::model::security_scheme::ProviderKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsStr;
@@ -57,9 +58,22 @@ use url::Url;
 
 // NOTE: the order of languages (currently) is NOT alphabetical, rather based on recommendation
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, Serialize, Deserialize,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    EnumIter,
+    Serialize,
+    Deserialize,
+    ValueEnum,
 )]
+#[clap(rename_all = "lower")]
 pub enum GuestLanguage {
+    #[value(alias = "ts")]
     TypeScript,
     Rust,
     Scala,
@@ -317,6 +331,28 @@ impl From<EnforcementActionArg> for EnforcementAction {
             EnforcementActionArg::Throttle => Self::Throttle,
             EnforcementActionArg::Terminate => Self::Terminate,
             EnforcementActionArg::Reject => Self::Reject,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+#[clap(rename_all = "lower")]
+pub enum ProviderKindArg {
+    Google,
+    Facebook,
+    Microsoft,
+    Gitlab,
+    Custom,
+}
+
+impl From<ProviderKindArg> for ProviderKind {
+    fn from(value: ProviderKindArg) -> Self {
+        match value {
+            ProviderKindArg::Google => ProviderKind::Google,
+            ProviderKindArg::Facebook => ProviderKind::Facebook,
+            ProviderKindArg::Microsoft => ProviderKind::Microsoft,
+            ProviderKindArg::Gitlab => ProviderKind::Gitlab,
+            ProviderKindArg::Custom => ProviderKind::Custom,
         }
     }
 }

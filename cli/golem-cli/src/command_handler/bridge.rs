@@ -48,6 +48,12 @@ impl BridgeCommandHandler {
                 component_names,
                 &ApplicationComponentSelectMode::CurrentDir,
             )
-            .await
+            .await?;
+
+        self.ctx.log_handler().log_view(
+            &crate::model::text::action_result::GenerateBridgeResult { generated: true },
+        );
+
+        Ok(())
     }
 }

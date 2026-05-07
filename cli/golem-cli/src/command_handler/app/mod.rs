@@ -151,7 +151,13 @@ impl AppCommandHandler {
             .await;
 
         logln("");
-        logged_finished_or_failed_to(result, "building", "build application")
+        let outcome = logged_finished_or_failed_to(result, "building", "build application");
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::BuildResult { built: true });
+        }
+        outcome
     }
 
     pub async fn cmd_clean(&self, component_name: OptionalComponentNames) -> anyhow::Result<()> {
@@ -163,7 +169,13 @@ impl AppCommandHandler {
             .await;
 
         logln("");
-        logged_finished_or_failed_to(result, "cleaning", "clean application")
+        let outcome = logged_finished_or_failed_to(result, "cleaning", "clean application");
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::CleanResult { cleaned: true });
+        }
+        outcome
     }
 
     pub async fn cmd_deploy(
@@ -244,7 +256,7 @@ impl AppCommandHandler {
             }
         }
 
-        match deploy_result {
+        let outcome: anyhow::Result<()> = match deploy_result {
             Ok(ok) => match ok {
                 DeploySummary::PlanOk => {
                     log_finished_ok("planning");
@@ -301,7 +313,13 @@ impl AppCommandHandler {
                     Err(err)
                 }
             },
+        };
+        if outcome.is_ok() {
+            self.ctx.log_handler().log_view(
+                &crate::model::text::action_result::DeployResultView { deployed: true },
+            );
         }
+        outcome
     }
 
     pub async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
@@ -391,20 +409,38 @@ impl AppCommandHandler {
     }
 
     pub fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
-        match filter {
-            Some(filter) => {
-                if let Some(language) = GuestLanguage::from_string(filter.clone()) {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(Some(language), None)
-                } else {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(None, Some(&filter))
-                }
-            }
-            None => self.ctx.app_handler().log_templates_help(None, None),
+        let (language_filter, template_filter) = match filter.as_deref() {
+            Some(filter) => match GuestLanguage::from_string(filter.to_string()) {
+                Some(language) => (Some(language), None),
+                None => (None, Some(filter)),
+            },
+            None => (None, None),
+        };
+
+        if matches!(self.ctx.format(), crate::model::format::Format::Text) {
+            return self
+                .ctx
+                .app_handler()
+                .log_templates_help(language_filter, template_filter);
         }
+
+        let templates: Vec<crate::model::TemplateDescription> = self
+            .ctx
+            .app_template_repo()?
+            .search_agent_templates(language_filter, template_filter)
+            .into_iter()
+            .flat_map(|(_language, lang_templates)| {
+                lang_templates
+                    .into_iter()
+                    .map(|(_name, template)| {
+                        crate::model::TemplateDescription::from_template(&template.0)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        self.ctx.log_handler().log_view(&templates);
+        Ok(())
     }
 
     pub async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
