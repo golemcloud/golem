@@ -244,7 +244,7 @@ impl Default for GrpcApiConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum LoginConfig {
-    OAuth2(OAuth2LoginSystemConfig),
+    OAuth2(Box<OAuth2LoginSystemConfig>),
     Disabled(Empty),
 }
 
@@ -266,7 +266,7 @@ impl SafeDisplay for LoginConfig {
 
 impl Default for LoginConfig {
     fn default() -> LoginConfig {
-        LoginConfig::OAuth2(OAuth2LoginSystemConfig::default())
+        LoginConfig::OAuth2(Box::default())
     }
 }
 
@@ -291,8 +291,20 @@ impl SafeDisplay for OAuth2LoginSystemConfig {
 pub struct OAuth2Config {
     #[serde(with = "humantime_serde")]
     pub webflow_state_expiry: std::time::Duration,
-    pub private_key: String,
-    pub public_key: String,
+    /// The URL to redirect the browser to after a CLI web flow completes.
+    /// Defaults to `https://golem.cloud`.
+    pub cli_redirect: url::Url,
+    /// Domains allowed as redirect targets in the browser web flow.
+    /// A redirect URL is accepted if its domain equals or is a subdomain of any entry.
+    /// Defaults to `["localhost", "golem.cloud"]`.
+    #[serde(default = "OAuth2Config::default_allowed_redirect_domains")]
+    pub allowed_redirect_domains: Vec<String>,
+}
+
+impl OAuth2Config {
+    fn default_allowed_redirect_domains() -> Vec<String> {
+        vec!["localhost".to_string(), "golem.cloud".to_string()]
+    }
 }
 
 impl SafeDisplay for OAuth2Config {
@@ -303,8 +315,12 @@ impl SafeDisplay for OAuth2Config {
             "webflow state expiry: {:?}",
             self.webflow_state_expiry
         );
-        let _ = writeln!(&mut result, "private key: ****");
-        let _ = writeln!(&mut result, "public key: {}", self.public_key);
+        let _ = writeln!(&mut result, "cli redirect: {}", self.cli_redirect);
+        let _ = writeln!(
+            &mut result,
+            "allowed redirect domains: {}",
+            self.allowed_redirect_domains.join(", ")
+        );
         result
     }
 }
@@ -313,9 +329,8 @@ impl Default for OAuth2Config {
     fn default() -> Self {
         Self {
             webflow_state_expiry: std::time::Duration::from_mins(5),
-            private_key: "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
-                .to_string(),
-            public_key: "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg=".to_string(),
+            cli_redirect: url::Url::parse("https://golem.cloud").unwrap(),
+            allowed_redirect_domains: Self::default_allowed_redirect_domains(),
         }
     }
 }
