@@ -25,7 +25,10 @@ use golem_client::Security;
 use golem_client::api::{
     LoginClient, LoginClientLive, LoginPollOauth2WebflowError, MeClient, MeClientLive,
 };
-use golem_client::model::{OAuth2Provider, OAuth2WebflowData, Token, TokenWithSecret};
+use golem_client::model::{
+    OAuth2Provider, OAuth2WebflowData, OAuth2WebflowStart, OAuth2WebflowStartCli, Token,
+    TokenWithSecret,
+};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::login::OAuth2WebflowStateId;
@@ -171,7 +174,9 @@ impl Auth {
     async fn start_oauth2(&self) -> anyhow::Result<OAuth2WebflowData> {
         info!("Start OAuth2 workflow");
         self.login_client
-            .start_oauth_2_webflow(&OAuth2Provider::Github, Some("https://golem.cloud"))
+            .start_oauth_2_webflow(&OAuth2WebflowStart::Cli(OAuth2WebflowStartCli {
+                provider: OAuth2Provider::Github,
+            }))
             .await
             .map_service_error()
     }

@@ -15,12 +15,13 @@
 use super::ApiResult;
 use super::error::ApiError;
 use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
+use crate::model::login::WebflowKind;
+use crate::services::oauth2::WebflowCallbackAction;
 use golem_common::base_model::api;
 use golem_common::model::Empty;
 use golem_common::model::auth::TokenWithSecret;
 use golem_common::model::login::{
-    EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2DeviceflowStart, OAuth2Provider,
-    OAuth2WebflowData, OAuth2WebflowStateId,
+    OAuth2Provider, OAuth2WebflowData, OAuth2WebflowStart, OAuth2WebflowStateId,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -85,99 +86,29 @@ impl LoginApi {
         Ok(Json(result))
     }
 
-    /// Start OAuth2 interactive flow
-    ///
-    /// Starts an interactive authorization flow.
-    /// The user must open the returned url and enter the userCode in a form before the expires deadline.
-    /// Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
-    #[oai(
-        path = "/oauth2/device/start",
-        method = "post",
-        operation_id = "start_oauth2_device_flow"
-    )]
-    async fn start_oauth2_device_flow(
-        &self,
-        request: Json<OAuth2DeviceflowStart>,
-    ) -> ApiResult<Json<OAuth2DeviceflowData>> {
-        let record = recorded_http_api_request!("start_oauth2_device_flow",);
-
-        let response = self
-            .start_oauth2_device_flow_internal(request.0)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn start_oauth2_device_flow_internal(
-        &self,
-        request: OAuth2DeviceflowStart,
-    ) -> ApiResult<Json<OAuth2DeviceflowData>> {
-        let login_system = self.get_enabled_login_system()?;
-
-        let result = login_system
-            .oauth2_service
-            .start_device_flow(request.provider)
-            .await
-            .map(Json)?;
-
-        Ok(result)
-    }
-
-    /// Finish GitHub OAuth2 interactive flow
-    ///
-    /// Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
-    /// Returns a JSON string containing the encodedSession from the start endpoint's response.
-    #[oai(
-        path = "/oauth2/device/complete",
-        method = "post",
-        operation_id = "complete_oauth2_device_flow"
-    )]
-    async fn complete_oauth2_device_flow(
-        &self,
-        result: Json<EncodedOAuth2DeviceflowSession>,
-    ) -> ApiResult<Json<TokenWithSecret>> {
-        let record = recorded_http_api_request!("complete_oauth2_device_flow",);
-        let response = self
-            .complete_oauth2_device_flow_internal(result.0)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn complete_oauth2_device_flow_internal(
-        &self,
-        result: EncodedOAuth2DeviceflowSession,
-    ) -> ApiResult<Json<TokenWithSecret>> {
-        let login_system = self.get_enabled_login_system()?;
-
-        let result = login_system
-            .oauth2_service
-            .finish_device_flow(&result)
-            .await?;
-
-        Ok(Json(result))
-    }
-
     /// Initiate OAuth2 Web Flow
     ///
-    /// Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
+    /// Starts the OAuth2 web flow. Two flow kinds are supported:
+    ///
+    /// - `browser`: The callback will immediately redirect to the given URL with the
+    ///   Golem token secret appended as a `token` query parameter. Intended for
+    ///   browser-based frontends.
+    ///
+    /// - `cli`: The callback stores the token in the session. The client polls the
+    ///   poll endpoint with the returned state id to retrieve the token once available.
+    ///   Intended for CLI tools and headless environments.
     #[oai(
         path = "/oauth2/web/authorize",
-        method = "get",
+        method = "post",
         operation_id = "start_oauth2_webflow"
     )]
     async fn start_oauth2_webflow(
         &self,
-        /// Currently only `github` is supported.
-        Query(provider): Query<OAuth2Provider>,
-        /// The redirect URL to redirect to after the user has authorized the application
-        Query(redirect): Query<Option<String>>,
+        request: Json<OAuth2WebflowStart>,
     ) -> ApiResult<Json<OAuth2WebflowData>> {
         let record = recorded_http_api_request!("start_oauth2_webflow",);
         let response = self
-            .start_oauth2_webflow_internal(provider, redirect)
+            .start_oauth2_webflow_internal(request.0)
             .instrument(record.span.clone())
             .await;
 
@@ -186,37 +117,21 @@ impl LoginApi {
 
     async fn start_oauth2_webflow_internal(
         &self,
-        provider: OAuth2Provider,
-        redirect: Option<String>,
+        request: OAuth2WebflowStart,
     ) -> ApiResult<Json<OAuth2WebflowData>> {
         let login_system = self.get_enabled_login_system()?;
 
-        let redirect = match redirect {
-            Some(r) => {
-                let url = url::Url::parse(&r).map_err(|_| {
-                    ApiError::bad_request(
-                        api::error_code::INVALID_REDIRECT_URL,
-                        "Invalid redirect URL".to_string(),
-                    )
-                })?;
-                if url
-                    .domain()
-                    .is_some_and(|d| d.starts_with("localhost") || d.contains("golem.cloud"))
-                {
-                    Some(url)
-                } else {
-                    return Err(ApiError::bad_request(
-                        api::error_code::INVALID_REDIRECT_URL,
-                        "Invalid redirect domain".to_string(),
-                    ));
-                }
+        let (provider, kind) = match request {
+            OAuth2WebflowStart::Browser(r) => {
+                let redirect = parse_redirect_url(&r.redirect)?;
+                (r.provider, WebflowKind::Browser { redirect })
             }
-            None => None,
+            OAuth2WebflowStart::Cli(r) => (r.provider, WebflowKind::Cli),
         };
 
         let result = login_system
             .oauth2_service
-            .start_webflow(&provider, redirect)
+            .start_webflow(&provider, kind)
             .await?;
 
         Ok(Json(result))
@@ -254,21 +169,20 @@ impl LoginApi {
     ) -> ApiResult<WebFlowCallbackResponse> {
         let login_system = self.get_enabled_login_system()?;
 
-        let state_metadata = login_system
+        let action = login_system
             .oauth2_service
             .handle_webflow_callback(&state, code)
             .await?;
 
-        let response = if let Some(mut redirect) = state_metadata.redirect {
-            redirect
-                .query_pairs_mut()
-                .append_pair("state", &state.0.to_string());
-            WebFlowCallbackResponse::Redirect(Json(Empty {}), redirect.to_string())
-        } else {
-            WebFlowCallbackResponse::Success(Json(Empty {}))
+        let redirect = match action {
+            WebflowCallbackAction::BrowserRedirect { redirect } => redirect,
+            WebflowCallbackAction::CliRedirect { redirect } => redirect,
         };
 
-        Ok(response)
+        Ok(WebFlowCallbackResponse::Redirect(
+            Json(Empty {}),
+            redirect.to_string(),
+        ))
     }
 
     /// Poll for OAuth2 Web Flow token
@@ -324,6 +238,15 @@ impl LoginApi {
     }
 }
 
+fn parse_redirect_url(url: &str) -> ApiResult<url::Url> {
+    url::Url::parse(url).map_err(|_| {
+        ApiError::bad_request(
+            api::error_code::INVALID_REDIRECT_URL,
+            "Invalid redirect URL".to_string(),
+        )
+    })
+}
+
 #[derive(Debug, Clone, ApiResponse)]
 enum WebFlowPollResponse {
     /// OAuth flow has completed
@@ -336,10 +259,7 @@ enum WebFlowPollResponse {
 
 #[derive(Debug, Clone, ApiResponse)]
 enum WebFlowCallbackResponse {
-    /// Redirect to the given URL specified in the web flow start
+    /// Redirect to the given URL after completing the OAuth flow
     #[oai(status = 302)]
     Redirect(Json<Empty>, #[oai(header = "Location")] String),
-    /// OAuth flow has completed
-    #[oai(status = 200)]
-    Success(Json<Empty>),
 }

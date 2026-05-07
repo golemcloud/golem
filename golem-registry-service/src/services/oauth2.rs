@@ -13,14 +13,11 @@
 // limitations under the License.
 
 use super::account::{AccountError, AccountService};
-use super::oauth2_github_client::{
-    DeviceWorkflowData, OAuth2GithubClient, OAuth2GithubClientError,
-};
+use super::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientError};
 use super::token::{TokenError, TokenService};
 use crate::config::OAuth2Config;
 use crate::model::login::{
-    ExternalLogin, OAuth2DeviceFlowSession, OAuth2Token, OAuth2WebflowState,
-    OAuth2WebflowStateMetadata,
+    ExternalLogin, OAuth2Token, OAuth2WebflowState, OAuth2WebflowStateMetadata, WebflowKind,
 };
 use crate::repo::model::oauth2_token::OAuth2TokenRecord;
 use crate::repo::oauth2_token::OAuth2TokenRepo;
@@ -30,31 +27,35 @@ use applying::Apply;
 use chrono::{Duration, Utc};
 use golem_common::model::account::{AccountCreation, AccountEmail, AccountId};
 use golem_common::model::auth::TokenWithSecret;
-use golem_common::model::login::{
-    EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2Provider, OAuth2WebflowData,
-    OAuth2WebflowStateId,
-};
+use golem_common::model::login::{OAuth2Provider, OAuth2WebflowData, OAuth2WebflowStateId};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::RepoError;
-use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use std::sync::Arc;
 use tap::Pipe;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2Error {
-    #[error("Invalid encoded oauth2 session: {}", 0.to_string())]
-    InvalidSession(jsonwebtoken::errors::Error),
+    #[error("Invalid redirect domain: {0}")]
+    InvalidRedirectDomain(String),
     #[error("OAuth2 web flow state not found: {0}")]
     OAuth2WebflowStateNotFound(OAuth2WebflowStateId),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
+/// The action the callback endpoint should take after completing the webflow.
+pub enum WebflowCallbackAction {
+    /// Browser flow: redirect to `redirect` with the token secret appended as `token=<secret>`.
+    BrowserRedirect { redirect: url::Url },
+    /// CLI flow: redirect the browser to the server's configured CLI redirect URL.
+    CliRedirect { redirect: url::Url },
+}
+
 impl SafeDisplay for OAuth2Error {
     fn to_safe_string(&self) -> String {
         match self {
-            Self::InvalidSession(_) => self.to_string(),
+            Self::InvalidRedirectDomain(_) => self.to_string(),
             Self::OAuth2WebflowStateNotFound(_) => self.to_string(),
             Self::InternalError(_) => "Internal Error".to_string(),
         }
@@ -75,9 +76,9 @@ pub struct OAuth2Service {
     token_service: Arc<TokenService>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
     oauth2_web_flow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
-    encoding_key: EncodingKey,
-    decoding_key: DecodingKey,
     webflow_state_expiry: Duration,
+    cli_redirect: url::Url,
+    allowed_redirect_domains: Vec<String>,
 }
 
 impl OAuth2Service {
@@ -89,22 +90,15 @@ impl OAuth2Service {
         oauth2_web_flow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
         config: &OAuth2Config,
     ) -> anyhow::Result<Self> {
-        let private_key = format_key(config.private_key.as_str(), "PRIVATE");
-        let public_key = format_key(config.public_key.as_str(), "PUBLIC");
-
-        let encoding_key = EncodingKey::from_ed_pem(private_key.as_bytes())?;
-
-        let decoding_key = DecodingKey::from_ed_pem(public_key.as_bytes())?;
-
         Ok(Self {
             client,
             account_service,
             token_service,
-            encoding_key,
-            decoding_key,
             oauth2_token_repo,
             oauth2_web_flow_state_repo,
             webflow_state_expiry: Duration::from_std(config.webflow_state_expiry)?,
+            cli_redirect: config.cli_redirect.clone(),
+            allowed_redirect_domains: config.allowed_redirect_domains.clone(),
         })
     }
 
@@ -155,11 +149,16 @@ impl OAuth2Service {
     pub async fn start_webflow(
         &self,
         provider: &OAuth2Provider,
-        redirect: Option<url::Url>,
+        kind: WebflowKind,
     ) -> Result<OAuth2WebflowData, OAuth2Error> {
+        // Validate the redirect URL domain for browser flows.
+        if let WebflowKind::Browser { ref redirect } = kind {
+            self.validate_redirect_url(redirect)?;
+        }
+
         let metadata = OAuth2WebflowStateMetadata {
-            redirect,
             provider: *provider,
+            kind,
         };
 
         let state = self
@@ -174,11 +173,24 @@ impl OAuth2Service {
         Ok(OAuth2WebflowData { url, state })
     }
 
+    fn validate_redirect_url(&self, url: &url::Url) -> Result<(), OAuth2Error> {
+        let domain = url.domain().unwrap_or("");
+        let allowed = self
+            .allowed_redirect_domains
+            .iter()
+            .any(|allowed| domain == allowed || domain.ends_with(&format!(".{allowed}")));
+        if allowed {
+            Ok(())
+        } else {
+            Err(OAuth2Error::InvalidRedirectDomain(domain.to_string()))
+        }
+    }
+
     pub async fn handle_webflow_callback(
         &self,
         state_id: &OAuth2WebflowStateId,
         code: String,
-    ) -> Result<OAuth2WebflowStateMetadata, OAuth2Error> {
+    ) -> Result<WebflowCallbackAction, OAuth2Error> {
         self.oauth2_web_flow_state_repo
             .delete_expired((Utc::now() - self.webflow_state_expiry).into())
             .await?;
@@ -198,11 +210,29 @@ impl OAuth2Service {
             .exchange_external_access_token_for_token(&state.metadata.provider, &access_token)
             .await?;
 
-        self.oauth2_web_flow_state_repo
-            .set_token_id(state_id.0, token.id.0)
-            .await?;
+        let action = match state.metadata.kind {
+            WebflowKind::Browser { mut redirect } => {
+                // Consume the state immediately — no polling needed.
+                self.oauth2_web_flow_state_repo
+                    .delete_by_id(state_id.0)
+                    .await?;
+                redirect
+                    .query_pairs_mut()
+                    .append_pair("token", token.secret.secret());
+                WebflowCallbackAction::BrowserRedirect { redirect }
+            }
+            WebflowKind::Cli => {
+                // Store the token for the CLI to pick up via polling.
+                self.oauth2_web_flow_state_repo
+                    .set_token_id(state_id.0, token.id.0)
+                    .await?;
+                WebflowCallbackAction::CliRedirect {
+                    redirect: self.cli_redirect.clone(),
+                }
+            }
+        };
 
-        Ok(state.metadata)
+        Ok(action)
     }
 
     pub async fn exchange_webflow_state_for_token(
@@ -229,61 +259,6 @@ impl OAuth2Service {
         }
 
         Ok(state)
-    }
-
-    pub async fn start_device_flow(
-        &self,
-        provider: OAuth2Provider,
-    ) -> Result<OAuth2DeviceflowData, OAuth2Error> {
-        let data = self.initiate_provider_device_flow(&provider).await?;
-        let now = chrono::Utc::now();
-        let session = OAuth2DeviceFlowSession {
-            provider,
-            device_code: data.device_code,
-            interval: data.interval,
-            expires_at: now + data.expires_in,
-        };
-        let encoded_session = self.encode_session(&session)?;
-
-        Ok(OAuth2DeviceflowData {
-            url: data.verification_uri,
-            user_code: data.user_code,
-            expires: session.expires_at,
-            encoded_session,
-        })
-    }
-
-    pub async fn finish_device_flow(
-        &self,
-        encoded_session: &EncodedOAuth2DeviceflowSession,
-    ) -> Result<TokenWithSecret, OAuth2Error> {
-        let session = self.decode_session(encoded_session)?;
-        let access_token = self
-            .client
-            .get_device_workflow_access_token(
-                &session.device_code,
-                session.interval,
-                session.expires_at,
-            )
-            .await?;
-
-        let token = self
-            .exchange_external_access_token_for_token(&session.provider, &access_token)
-            .await?;
-
-        Ok(token)
-    }
-
-    async fn initiate_provider_device_flow(
-        &self,
-        provider: &OAuth2Provider,
-    ) -> Result<DeviceWorkflowData, OAuth2Error> {
-        match provider {
-            OAuth2Provider::Github => {
-                let data = self.client.initiate_device_workflow().await?;
-                Ok(data)
-            }
-        }
     }
 
     async fn get_authorize_url(
@@ -315,32 +290,6 @@ impl OAuth2Service {
         match provider {
             OAuth2Provider::Github => Ok(self.client.get_external_login(access_token).await?),
         }
-    }
-
-    fn encode_session(
-        &self,
-        session: &OAuth2DeviceFlowSession,
-    ) -> Result<EncodedOAuth2DeviceflowSession, OAuth2Error> {
-        let header = Header::new(Algorithm::EdDSA);
-        let encoded = jsonwebtoken::encode(&header, session, &self.encoding_key)
-            .map_err(anyhow::Error::from)?;
-
-        Ok(EncodedOAuth2DeviceflowSession(encoded))
-    }
-
-    fn decode_session(
-        &self,
-        encoded_session: &EncodedOAuth2DeviceflowSession,
-    ) -> Result<OAuth2DeviceFlowSession, OAuth2Error> {
-        let validation = Validation::new(Algorithm::EdDSA);
-        let session = jsonwebtoken::decode::<OAuth2DeviceFlowSession>(
-            &encoded_session.0,
-            &self.decoding_key,
-            &validation,
-        )
-        .map_err(OAuth2Error::InvalidSession)?;
-
-        Ok(session.claims)
     }
 
     async fn make_account(&self, external_login: &ExternalLogin) -> Result<AccountId, OAuth2Error> {
@@ -396,27 +345,5 @@ impl OAuth2Service {
         }
 
         Ok(token_with_secret)
-    }
-}
-
-/// Formats a cryptographic key with PEM (Privacy Enhanced Mail) encoding delimiters.
-///
-/// # Arguments
-/// * `key: &str` - The raw key content to be formatted. This should not include any PEM encoding delimiters.
-/// * `key_type: &str` - The type of the key. Acceptable values are "PUBLIC" or "PRIVATE", case-insensitive.
-///
-/// # Returns
-/// A String containing the key formatted with PEM encoding delimiters.
-/// If the key is already in the correct PEM format, it is returned unchanged.
-/// Otherwise, it adds "-----BEGIN {} KEY-----" and "-----END {} KEY-----" around the key, with `{}` replaced by the specified key type.
-fn format_key(key: &str, key_type: &str) -> String {
-    let key_type = key_type.to_uppercase();
-    let begin_marker = format!("-----BEGIN {key_type} KEY-----");
-    let end_marker = format!("-----END {key_type} KEY-----");
-
-    if key.trim_start().starts_with(&begin_marker) && key.trim_end().ends_with(&end_marker) {
-        key.to_string()
-    } else {
-        format!("{begin_marker}\n{key}\n{end_marker}")
     }
 }

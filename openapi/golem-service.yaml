@@ -6901,163 +6901,29 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v1/login/oauth2/device/start:
-    post:
-      tags:
-      - RegistryService
-      - Login
-      summary: Start OAuth2 interactive flow
-      description: |-
-        Starts an interactive authorization flow.
-        The user must open the returned url and enter the userCode in a form before the expires deadline.
-        Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
-      operationId: start_oauth2_device_flow
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/OAuth2DeviceflowStart'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/OAuth2DeviceflowData'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-  /v1/login/oauth2/device/complete:
-    post:
-      tags:
-      - RegistryService
-      - Login
-      summary: Finish GitHub OAuth2 interactive flow
-      description: |-
-        Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
-        Returns a JSON string containing the encodedSession from the start endpoint's response.
-      operationId: complete_oauth2_device_flow
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              type: string
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/TokenWithSecret'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
   /v1/login/oauth2/web/authorize:
-    get:
+    post:
       tags:
       - RegistryService
       - Login
       summary: Initiate OAuth2 Web Flow
-      description: Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
+      description: |-
+        Starts the OAuth2 web flow. Two flow kinds are supported:
+
+        - `browser`: The callback will immediately redirect to the given URL with the
+        Golem token secret appended as a `token` query parameter. Intended for
+        browser-based frontends.
+
+        - `cli`: The callback stores the token in the session. The client polls the
+        poll endpoint with the returned state id to retrieve the token once available.
+        Intended for CLI tools and headless environments.
       operationId: start_oauth2_webflow
-      parameters:
-      - in: query
-        name: provider
-        description: Currently only `github` is supported.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/OAuth2WebflowStart'
         required: true
-        deprecated: false
-        schema:
-          $ref: '#/components/schemas/OAuth2Provider'
-        explode: true
-        style: form
-      - in: query
-        name: redirect
-        description: The redirect URL to redirect to after the user has authorized the application
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
       responses:
         '200':
           description: ''
@@ -7139,7 +7005,7 @@ paths:
         style: form
       responses:
         '302':
-          description: Redirect to the given URL specified in the web flow start
+          description: Redirect to the given URL after completing the OAuth flow
           headers:
             LOCATION:
               style: simple
@@ -7147,12 +7013,6 @@ paths:
               deprecated: false
               schema:
                 type: string
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Empty'
-        '200':
-          description: OAuth flow has completed
           content:
             application/json; charset=utf-8:
               schema:
@@ -16200,32 +16060,6 @@ components:
             $ref: '#/components/schemas/NamedElementSchema'
       required:
       - elements
-    OAuth2DeviceflowData:
-      title: OAuth2DeviceflowData
-      type: object
-      properties:
-        url:
-          type: string
-        userCode:
-          type: string
-        expires:
-          type: string
-          format: date-time
-        encodedSession:
-          type: string
-      required:
-      - url
-      - userCode
-      - expires
-      - encodedSession
-    OAuth2DeviceflowStart:
-      title: OAuth2DeviceflowStart
-      type: object
-      properties:
-        provider:
-          $ref: '#/components/schemas/OAuth2Provider'
-      required:
-      - provider
     OAuth2Provider:
       type: string
       enum:
@@ -16242,6 +16076,66 @@ components:
       required:
       - url
       - state
+    OAuth2WebflowStart:
+      discriminator:
+        propertyName: type
+        mapping:
+          Browser: '#/components/schemas/OAuth2WebflowStart_OAuth2WebflowStartBrowser'
+          Cli: '#/components/schemas/OAuth2WebflowStart_OAuth2WebflowStartCli'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/OAuth2WebflowStart_OAuth2WebflowStartBrowser'
+      - $ref: '#/components/schemas/OAuth2WebflowStart_OAuth2WebflowStartCli'
+    OAuth2WebflowStartBrowser:
+      title: OAuth2WebflowStartBrowser
+      description: |-
+        Starts the browser-based flow.
+        The callback will redirect to `redirect` with the token secret appended as `token=<secret>`.
+      type: object
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
+        redirect:
+          type: string
+      required:
+      - provider
+      - redirect
+    OAuth2WebflowStartCli:
+      title: OAuth2WebflowStartCli
+      description: |-
+        Starts the CLI polling flow.
+        The callback stores the token for retrieval via the poll endpoint.
+        The browser is redirected to the server's configured CLI redirect URL.
+      type: object
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
+      required:
+      - provider
+    OAuth2WebflowStart_OAuth2WebflowStartBrowser:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Browser
+            type: string
+            enum:
+            - Browser
+        required:
+        - type
+      - $ref: '#/components/schemas/OAuth2WebflowStartBrowser'
+    OAuth2WebflowStart_OAuth2WebflowStartCli:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Cli
+            type: string
+            enum:
+            - Cli
+        required:
+        - type
+      - $ref: '#/components/schemas/OAuth2WebflowStartCli'
     OplogProcessorPluginSpec:
       title: OplogProcessorPluginSpec
       type: object

@@ -237,14 +237,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // login
             (
-                "OAuth2DeviceflowData",
-                "golem_common::model::login::OAuth2DeviceflowData",
-            ),
-            (
-                "OAuth2DeviceflowStart",
-                "golem_common::model::login::OAuth2DeviceflowStart",
-            ),
-            (
                 "OAuth2WebflowData",
                 "golem_common::model::login::OAuth2WebflowData",
             ),
@@ -394,7 +386,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             ("ValueAndType", "golem_wasm::ValueAndType"),
         ],
-        &["/v1/components/{component_id}/workers/{agent_name}/connect"],
+        &[
+            "/v1/components/{component_id}/workers/{agent_name}/connect",
+            "/v1/login/oauth2/web/callback",
+        ],
     )
     .expect("Failed to generate client code from OpenAPI spec.");
 }
