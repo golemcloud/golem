@@ -114,7 +114,7 @@ impl WorkerService {
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
         let component = self
             .component_service
-            .get_latest_by_id_uncached(agent_id.component_id)
+            .get_current_by_id_uncached(agent_id.component_id)
             .await?;
 
         self.create_with_component(
@@ -178,7 +178,7 @@ impl WorkerService {
     ) -> WorkerResult<ConnectWorkerStream> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         let environment_auth_details = self
@@ -219,7 +219,7 @@ impl WorkerService {
     pub async fn delete(&self, agent_id: &AgentId, auth_ctx: AuthCtx) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -246,7 +246,7 @@ impl WorkerService {
     ) -> WorkerResult<bool> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -273,7 +273,7 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -303,7 +303,7 @@ impl WorkerService {
     ) -> WorkerResult<AgentMetadataDto> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -333,7 +333,7 @@ impl WorkerService {
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
         let component = self
             .component_service
-            .get_latest_by_id(component_id)
+            .get_current_by_id(component_id)
             .await?;
 
         self.auth_service
@@ -368,7 +368,7 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -396,7 +396,7 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -431,7 +431,7 @@ impl WorkerService {
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -467,7 +467,7 @@ impl WorkerService {
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -501,7 +501,7 @@ impl WorkerService {
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         let environment_auth_details = self
@@ -535,7 +535,7 @@ impl WorkerService {
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         let environment_auth_details = self
@@ -569,7 +569,7 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -600,7 +600,7 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -632,7 +632,7 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(source_agent_id.component_id)
+            .get_current_by_id(source_agent_id.component_id)
             .await?;
 
         let environment_auth_details = self
@@ -666,7 +666,7 @@ impl WorkerService {
     ) -> WorkerResult<()> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -692,7 +692,7 @@ impl WorkerService {
     ) -> WorkerResult<bool> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -771,7 +771,7 @@ impl WorkerService {
             Some(id) => id,
             None => {
                 self.component_service
-                    .get_latest_by_id(agent_id.component_id)
+                    .get_current_by_id(agent_id.component_id)
                     .await?
                     .environment_id
             }
@@ -1285,11 +1285,11 @@ mod tests {
 
     #[async_trait]
     impl ComponentService for StaticComponentService {
-        async fn get_latest_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
+        async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
             (self.component.id == component_id).then(|| self.component.clone())
         }
 
-        async fn get_latest_by_id_uncached(
+        async fn get_current_by_id_uncached(
             &self,
             component_id: ComponentId,
         ) -> Result<Component, ComponentServiceError> {

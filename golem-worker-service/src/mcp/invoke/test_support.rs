@@ -235,11 +235,11 @@ struct StaticComponentService {
 
 #[async_trait]
 impl ComponentService for StaticComponentService {
-    async fn get_latest_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
+    async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
         (self.component.id == component_id).then(|| self.component.clone())
     }
 
-    async fn get_latest_by_id_uncached(
+    async fn get_current_by_id_uncached(
         &self,
         component_id: ComponentId,
     ) -> Result<Component, ComponentServiceError> {

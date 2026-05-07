@@ -748,7 +748,7 @@ impl WorkerApi {
 
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -812,7 +812,7 @@ impl WorkerApi {
     ) -> Result<Json<ActivatePluginResponse>> {
         let component = self
             .component_service
-            .get_latest_by_id(agent_id.component_id)
+            .get_current_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -1094,7 +1094,7 @@ impl WorkerApi {
     ) -> Result<(AgentId, Component)> {
         let latest_component = self
             .component_service
-            .get_latest_by_id_uncached(component_id)
+            .get_current_by_id_uncached(component_id)
             .await
             .map_err(|error| {
                 ApiEndpointError::not_found(
