@@ -14,7 +14,11 @@
 
 import { Symbol } from './symbol';
 
-export type ConfigProperty = { path: string[]; secret: boolean; type: Type };
+export type ConfigProperty = {
+  path: string[];
+  secret: boolean;
+  type: Type;
+};
 
 export type Type =
   | { kind: 'boolean'; name?: string; owner?: string; optional: boolean }
@@ -64,6 +68,7 @@ export type Type =
       owner?: string;
       optional: boolean;
       properties: ConfigProperty[];
+      requiredMembers: { path: string[]; requiredKeys: string[] }[];
     }
   | { kind: 'quota-token'; name?: string; owner?: string; optional: boolean }
   | { kind: 'principal'; name?: string; owner?: string; optional: boolean }

@@ -28,6 +28,12 @@ describe('agent config handling', () => {
     expect(arg.type.kind).toBe('config');
     assert(arg.type.kind === 'config');
     expect(arg.type.properties).toHaveLength(7);
+    expect(arg.type.requiredMembers).toEqual(
+      expect.arrayContaining([
+        { path: ['nested'], requiredKeys: ['nestedSecret', 'a', 'b'] },
+        { path: ['aliasedNested'], requiredKeys: ['c'] },
+      ]),
+    );
     expect(arg.type.properties).toEqual([
       {
         path: ['foo'],
