@@ -119,6 +119,139 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     );
 }
 
+// Verifies that a Scala application created with a single template (flat layout)
+// can be transformed into a multi-component layout by adding a second Scala
+// component, and that the resulting application still builds.
+#[test]
+async fn scala_single_to_multi_component_upgrade_builds() {
+    single_to_multi_component_upgrade_builds_for_lang(GuestLanguage::Scala).await;
+}
+
+// Verifies that a MoonBit application created with a single template (flat layout)
+// can be transformed into a multi-component layout by adding a second MoonBit
+// component, and that the resulting application still builds.
+#[test]
+async fn moonbit_single_to_multi_component_upgrade_builds() {
+    single_to_multi_component_upgrade_builds_for_lang(GuestLanguage::MoonBit).await;
+}
+
+async fn single_to_multi_component_upgrade_builds_for_lang(language: GuestLanguage) {
+    let mut ctx = TestContext::new();
+
+    let app_name = format!("single-to-multi-{}", language.id());
+    let second_component = format!("{}:{}-second", app_name, language.id());
+
+    fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
+    ctx.cd(&app_name);
+
+    // Step 1: create a flat single-component application from the language's
+    // default template. After this call, sources should live at the app root.
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, language.id()])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Verify the layout is actually flat: the component sources are at the
+    // application root, not in a nested directory.
+    assert_flat_layout(ctx.cwd_path(), language);
+
+    // Step 2: add a second component using the same default template. This
+    // forces the existing component to be promoted from a flat layout into
+    // its own subdirectory (multi-component layout).
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            language.id(),
+            flag::COMPONENT_NAME,
+            &second_component,
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Verify the layout is now multi-component: sources are no longer at the
+    // application root.
+    assert_multi_component_layout(ctx.cwd_path(), language);
+
+    // Step 3: verify the upgraded application still builds.
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+}
+
+fn assert_flat_layout(app_root: &std::path::Path, language: GuestLanguage) {
+    match language {
+        GuestLanguage::Scala => {
+            assert!(
+                app_root.join("src").join("main").join("scala").exists(),
+                "expected flat Scala layout: src/main/scala/ should exist at the app root"
+            );
+            assert!(
+                app_root.join("build.sbt").exists(),
+                "expected flat Scala layout: build.sbt should exist at the app root"
+            );
+        }
+        GuestLanguage::MoonBit => {
+            assert!(
+                app_root.join("moon.pkg").exists(),
+                "expected flat MoonBit layout: moon.pkg should exist at the app root"
+            );
+            let has_mbt_at_root = std::fs::read_dir(app_root)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("mbt"));
+            assert!(
+                has_mbt_at_root,
+                "expected flat MoonBit layout: at least one *.mbt file should exist at the app root"
+            );
+        }
+        _ => {}
+    }
+}
+
+fn assert_multi_component_layout(app_root: &std::path::Path, language: GuestLanguage) {
+    match language {
+        GuestLanguage::Scala => {
+            assert!(
+                !app_root.join("src").join("main").join("scala").exists(),
+                "expected multi-component Scala layout: src/main/scala/ should no longer be at the app root"
+            );
+            // build.sbt MUST stay at the app root; it declares ThisBuild settings
+            // and pairs with project/build.properties + project/plugins.sbt.
+            assert!(
+                app_root.join("build.sbt").exists(),
+                "expected multi-component Scala layout: build.sbt should remain at the app root"
+            );
+            assert!(
+                app_root.join("project").join("build.properties").exists(),
+                "expected multi-component Scala layout: project/build.properties should remain at the app root"
+            );
+        }
+        GuestLanguage::MoonBit => {
+            assert!(
+                !app_root.join("moon.pkg").exists(),
+                "expected multi-component MoonBit layout: moon.pkg should no longer be at the app root"
+            );
+            let has_mbt_at_root = std::fs::read_dir(app_root)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("mbt"));
+            assert!(
+                !has_mbt_at_root,
+                "expected multi-component MoonBit layout: no *.mbt files should remain at the app root"
+            );
+            // moon.mod.json MUST stay at the app root; it is the module-level
+            // descriptor and pairs with the per-package moon.pkg files.
+            assert!(
+                app_root.join("moon.mod.json").exists(),
+                "expected multi-component MoonBit layout: moon.mod.json should remain at the app root"
+            );
+        }
+        _ => {}
+    }
+}
+
 // We only select a few non-conflicting templates from all apps.
 // Scala and MoonBit defaults both define CounterAgent, so we give the
 // MoonBit component an explicit name to avoid agent-type collisions.
