@@ -557,9 +557,10 @@ function extractConfigPropertiesFromTypeLiteral(
         ? (rawPropType.getUnionTypes().find((t) => !t.isUndefined()) ?? rawPropType)
         : rawPropType;
 
+    if (!memberOptional) requiredKeys.push(name);
+
     // 1. secret wrapper
     if (isExactly(propType, wellKnownTypes.sdk.secret)) {
-      if (!memberOptional) requiredKeys.push(name);
       properties.push({
         path: nextPath,
         secret: true,
@@ -571,7 +572,6 @@ function extractConfigPropertiesFromTypeLiteral(
     // 2. nested type literal
     const nestedTypeLiteral = resolveStrictTypeLiteralNode(propType);
     if (nestedTypeLiteral != null) {
-      if (!memberOptional) requiredKeys.push(name);
       const nested = extractConfigPropertiesFromTypeLiteral(
         nestedTypeLiteral,
         nextPath,
@@ -585,7 +585,6 @@ function extractConfigPropertiesFromTypeLiteral(
     }
 
     // 3. scalar leaf
-    if (!memberOptional) requiredKeys.push(name);
     properties.push({
       path: nextPath,
       secret: false,
