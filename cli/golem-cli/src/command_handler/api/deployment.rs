@@ -31,6 +31,7 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentCreation, HttpApiDeploymentId, HttpApiDeploymentRevision,
     HttpApiDeploymentUpdate,
 };
+use golem_common::model::mcp_deployment::{McpDeployment, McpDeploymentId, McpDeploymentRevision};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -211,6 +212,20 @@ impl ApiDeploymentCommandHandler {
             })
             .await
             .map_err(|err| anyhow!(err))
+    }
+
+    pub async fn get_mcp_deployment_revision_by_id(
+        &self,
+        mcp_deployment_id: &McpDeploymentId,
+        revision: McpDeploymentRevision,
+    ) -> anyhow::Result<McpDeployment> {
+        self.ctx
+            .golem_clients()
+            .await?
+            .mcp_deployment
+            .get_mcp_deployment_revision(&mcp_deployment_id.0, revision.into())
+            .await
+            .map_service_error()
     }
 
     pub async fn create_staged_http_api_deployment(

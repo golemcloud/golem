@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{ComponentDeployProperties, show_exported_agents};
+use crate::model::component::ComponentDeployProperties;
+use crate::model::deploy::{DeploymentDisplay, DeploymentDisplayContext, DeploymentDisplayMode};
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
-use crate::model::text::component::is_sensitive_env_var_name;
 use anyhow::bail;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
 use golem_common::model::agent::AgentType;
@@ -24,11 +24,11 @@ use golem_common::model::deployment::{
     CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
 };
 use golem_common::model::diff;
-use golem_common::model::diff::{Diffable, Hashable};
+use golem_common::model::diff::Diffable;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
-use itertools::Itertools;
+use golem_common::model::mcp_deployment::McpDeployment;
 use std::collections::{BTreeMap, HashMap};
 use tracing::debug;
 
@@ -99,109 +99,67 @@ impl DeployDiff {
         self.staged_deployment_hash == self.current_deployment_hash
     }
 
-    pub fn unified_diffs(&self, show_sensitive: bool) -> anyhow::Result<DeployUnifiedDiffs> {
-        let local_for_stage = normalized_diff_deployment(
-            show_sensitive,
-            &self.diffable_local_deployment,
-            self.diff_stage.as_ref(),
-        )?;
-
-        let staged_deployment = normalized_diff_deployment(
-            show_sensitive,
-            &self.diffable_staged_deployment,
-            self.diff_stage.as_ref(),
-        )?;
-
-        let local_for_current = normalized_diff_deployment(
-            show_sensitive,
-            &self.diffable_local_deployment,
-            Some(&self.diff),
-        )?;
-
-        let current_deployment = normalized_diff_deployment(
-            show_sensitive,
-            &self.diffable_current_deployment,
-            Some(&self.diff),
-        )?;
-
-        let local_agents_for_stage = self
-            .diff_stage
-            .as_ref()
-            .map(|diff_stage| {
-                self.deployable_components
-                    .iter()
-                    .filter(|(component_name, _)| {
-                        diff_stage.components.contains_key(&component_name.0)
-                    })
-                    .map(|(component_name, component)| {
-                        format_component_agents_for_diff(component_name, &component.agent_types)
-                    })
-                    .join("\n")
-            })
-            .unwrap_or_default();
-
-        let staged_agents = self
-            .diff_stage
-            .as_ref()
-            .map(|diff_stage| {
-                diff_stage
-                    .components
-                    .keys()
-                    .filter_map(|component_name| {
-                        self.staged_agent_types
-                            .get(component_name)
-                            .map(|agent_types| {
-                                format_component_agents_for_diff(component_name, agent_types)
-                            })
-                    })
-                    .join("\n")
-            })
-            .unwrap_or_default();
-
-        let local_agents_for_current = self
+    pub fn unified_diffs(
+        &self,
+        show_sensitive: bool,
+        show_full_deployment: bool,
+    ) -> anyhow::Result<DeployUnifiedDiffs> {
+        let mode = deployment_display_mode(show_full_deployment);
+        let local_agent_types = self
             .deployable_components
             .iter()
-            .filter(|(component_name, _)| self.diff.components.contains_key(&component_name.0))
             .map(|(component_name, component)| {
-                format_component_agents_for_diff(component_name, &component.agent_types)
+                (component_name.0.clone(), component.agent_types.clone())
             })
-            .join("\n");
-
-        let current_agents = self
-            .diff
-            .components
-            .keys()
-            .filter_map(|component_name| {
-                self.current_agent_types
-                    .get(component_name)
-                    .map(|agent_types| {
-                        format_component_agents_for_diff(component_name, agent_types)
-                    })
-            })
-            .join("\n");
+            .collect::<HashMap<_, _>>();
 
         Ok(DeployUnifiedDiffs {
-            deployment_diff_stage: self
+            display_diff_stage: self
                 .diff_stage
-                .is_some()
-                .then(|| {
-                    staged_deployment.unified_yaml_diff_with_new(
-                        &local_for_stage,
-                        diff::SerializeMode::ValueIfAvailable,
-                    )
+                .as_ref()
+                .map(|diff| {
+                    let local = DeploymentDisplay::from_context(DeploymentDisplayContext {
+                        show_sensitive,
+                        mode,
+                        deployment: &self.diffable_local_deployment,
+                        diff,
+                        agent_types_by_component: &local_agent_types,
+                    })?;
+                    let staged = DeploymentDisplay::from_context(DeploymentDisplayContext {
+                        show_sensitive,
+                        mode,
+                        deployment: &self.diffable_staged_deployment,
+                        diff,
+                        agent_types_by_component: &self.staged_agent_types,
+                    })?;
+                    if show_full_deployment {
+                        local.unified_yaml_diff_with_current_full_context(&staged)
+                    } else {
+                        local.unified_yaml_diff_with_current(&staged)
+                    }
                 })
                 .transpose()?,
-            agent_diff_stage: {
-                let diff = diff::unified_diff(staged_agents, local_agents_for_stage);
-                (!diff.is_empty()).then_some(diff)
-            },
-            deployment_diff: current_deployment.unified_yaml_diff_with_new(
-                &local_for_current,
-                diff::SerializeMode::ValueIfAvailable,
-            )?,
-            agent_diff: {
-                let diff = diff::unified_diff(current_agents, local_agents_for_current);
-                (!diff.is_empty()).then_some(diff)
+            display_diff: {
+                let local = DeploymentDisplay::from_context(DeploymentDisplayContext {
+                    show_sensitive,
+                    mode,
+                    deployment: &self.diffable_local_deployment,
+                    diff: &self.diff,
+                    agent_types_by_component: &local_agent_types,
+                })?;
+                let current = DeploymentDisplay::from_context(DeploymentDisplayContext {
+                    show_sensitive,
+                    mode,
+                    deployment: &self.diffable_current_deployment,
+                    diff: &self.diff,
+                    agent_types_by_component: &self.current_agent_types,
+                })?;
+
+                if show_full_deployment {
+                    local.unified_yaml_diff_with_current_full_context(&current)?
+                } else {
+                    local.unified_yaml_diff_with_current(&current)?
+                }
             },
         })
     }
@@ -343,6 +301,29 @@ impl DeployDiff {
             })
     }
 
+    pub fn current_mcp_deployment_identity(
+        &self,
+        domain: &Domain,
+    ) -> &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry {
+        self.current_deployment
+            .as_ref()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected MCP deployment {} not found in deployment plan, no deployment",
+                    domain
+                )
+            })
+            .mcp_deployments
+            .iter()
+            .find(|dep| &dep.domain == domain)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected MCP deployment {} not found in current deployment",
+                    domain
+                )
+            })
+    }
+
     pub fn component_identity(
         &self,
         kind: DeployDiffKind,
@@ -365,6 +346,17 @@ impl DeployDiff {
         }
     }
 
+    pub fn mcp_deployment_identity(
+        &self,
+        kind: DeployDiffKind,
+        domain: &Domain,
+    ) -> &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry {
+        match kind {
+            DeployDiffKind::Stage => self.staged_mcp_deployment_identity(domain),
+            DeployDiffKind::Current => self.current_mcp_deployment_identity(domain),
+        }
+    }
+
     pub fn add_details(
         &mut self,
         kind: DeployDiffKind,
@@ -376,6 +368,10 @@ impl DeployDiff {
 
         for (domain, http_api_deployment) in details.http_api_deployment {
             self.add_http_api_deployment_details(kind, domain, http_api_deployment)
+        }
+
+        for (domain, mcp_deployment) in details.mcp_deployment {
+            self.add_mcp_deployment_details(kind, domain, mcp_deployment)
         }
 
         match kind {
@@ -448,6 +444,26 @@ impl DeployDiff {
         }
     }
 
+    fn add_mcp_deployment_details(
+        &mut self,
+        kind: DeployDiffKind,
+        domain: Domain,
+        mcp_deployment: McpDeployment,
+    ) {
+        match &kind {
+            DeployDiffKind::Stage => {
+                self.diffable_staged_deployment
+                    .mcp_deployments
+                    .insert(domain.0, mcp_deployment.to_diffable().into());
+            }
+            DeployDiffKind::Current => {
+                self.diffable_current_deployment
+                    .mcp_deployments
+                    .insert(domain.0, mcp_deployment.to_diffable().into());
+            }
+        }
+    }
+
     pub fn current_deployment_revision(&self) -> Option<CurrentDeploymentRevision> {
         self.environment
             .server_environment
@@ -461,14 +477,13 @@ impl DeployDiff {
 pub struct DeployDetails {
     pub component: Vec<(ComponentName, ComponentDto)>,
     pub http_api_deployment: Vec<(Domain, HttpApiDeployment)>,
+    pub mcp_deployment: Vec<(Domain, McpDeployment)>,
 }
 
 #[derive(Debug)]
 pub struct DeployUnifiedDiffs {
-    pub deployment_diff_stage: Option<String>,
-    pub agent_diff_stage: Option<String>,
-    pub deployment_diff: String,
-    pub agent_diff: Option<String>,
+    pub display_diff_stage: Option<String>,
+    pub display_diff: String,
 }
 
 #[derive(Debug)]
@@ -535,6 +550,22 @@ impl RollbackDiff {
             })
     }
 
+    pub fn current_mcp_deployment_identity(
+        &self,
+        domain: &Domain,
+    ) -> &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry {
+        self.current_deployment
+            .mcp_deployments
+            .iter()
+            .find(|dep| &dep.domain == domain)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected MCP deployment {} not found in current deployment",
+                    domain
+                )
+            })
+    }
+
     pub fn target_component_identity(
         &self,
         component_name: &ComponentName,
@@ -562,6 +593,22 @@ impl RollbackDiff {
             .unwrap_or_else(|| {
                 panic!(
                     "Expected HTTP API deployment {} not found in target deployment",
+                    domain
+                )
+            })
+    }
+
+    pub fn target_mcp_deployment_identity(
+        &self,
+        domain: &Domain,
+    ) -> &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry {
+        self.target_deployment
+            .mcp_deployments
+            .iter()
+            .find(|dep| &dep.domain == domain)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected MCP deployment {} not found in target deployment",
                     domain
                 )
             })
@@ -615,6 +662,24 @@ impl RollbackDiff {
         }
     }
 
+    fn add_mcp_deployment_details(
+        &mut self,
+        mcp_deployment_details: RollbackEntityDetails<Domain, McpDeployment>,
+    ) {
+        if let Some(mcp_deployment) = mcp_deployment_details.new {
+            self.diffable_target_deployment.mcp_deployments.insert(
+                mcp_deployment_details.name.0.clone(),
+                mcp_deployment.to_diffable().into(),
+            );
+        }
+        if let Some(mcp_deployment) = mcp_deployment_details.current {
+            self.diffable_current_deployment.mcp_deployments.insert(
+                mcp_deployment_details.name.0.clone(),
+                mcp_deployment.to_diffable().into(),
+            );
+        }
+    }
+
     pub fn add_details(&mut self, details: RollbackDetails) -> anyhow::Result<()> {
         for component_details in details.component {
             self.add_component_details(component_details)?;
@@ -622,6 +687,10 @@ impl RollbackDiff {
 
         for http_api_deployment_details in details.http_api_deployment {
             self.add_http_api_deployment_details(http_api_deployment_details);
+        }
+
+        for mcp_deployment_details in details.mcp_deployment {
+            self.add_mcp_deployment_details(mcp_deployment_details);
         }
 
         match self
@@ -641,53 +710,34 @@ impl RollbackDiff {
         Ok(())
     }
 
-    pub fn unified_diffs(&self, show_sensitive: bool) -> anyhow::Result<RollbackUnifiedDiffs> {
-        let target_deployment = normalized_diff_deployment(
-            show_sensitive,
-            &self.diffable_target_deployment,
-            Some(&self.diff),
-        )?;
-
-        let current_deployment = normalized_diff_deployment(
-            show_sensitive,
-            &self.diffable_current_deployment,
-            Some(&self.diff),
-        )?;
-
-        let target_agents = self
-            .diff
-            .components
-            .keys()
-            .filter_map(|component_name| {
-                self.target_agent_types
-                    .get(component_name)
-                    .map(|agent_types| {
-                        format_component_agents_for_diff(component_name, agent_types)
-                    })
-            })
-            .join("\n");
-
-        let current_agents = self
-            .diff
-            .components
-            .keys()
-            .filter_map(|component_name| {
-                self.current_agent_types
-                    .get(component_name)
-                    .map(|agent_types| {
-                        format_component_agents_for_diff(component_name, agent_types)
-                    })
-            })
-            .join("\n");
-
+    pub fn unified_diffs(
+        &self,
+        show_sensitive: bool,
+        show_full_deployment: bool,
+    ) -> anyhow::Result<RollbackUnifiedDiffs> {
+        let mode = deployment_display_mode(show_full_deployment);
         Ok(RollbackUnifiedDiffs {
-            deployment_diff: target_deployment.unified_yaml_diff_with_current(
-                &current_deployment,
-                diff::SerializeMode::ValueIfAvailable,
-            )?,
-            agent_diff: {
-                let diff = diff::unified_diff(current_agents, target_agents);
-                (!diff.is_empty()).then_some(diff)
+            display_diff: {
+                let target = DeploymentDisplay::from_context(DeploymentDisplayContext {
+                    show_sensitive,
+                    mode,
+                    deployment: &self.diffable_target_deployment,
+                    diff: &self.diff,
+                    agent_types_by_component: &self.target_agent_types,
+                })?;
+                let current = DeploymentDisplay::from_context(DeploymentDisplayContext {
+                    show_sensitive,
+                    mode,
+                    deployment: &self.diffable_current_deployment,
+                    diff: &self.diff,
+                    agent_types_by_component: &self.current_agent_types,
+                })?;
+
+                if show_full_deployment {
+                    target.unified_yaml_diff_with_current_full_context(&current)?
+                } else {
+                    target.unified_yaml_diff_with_current(&current)?
+                }
             },
         })
     }
@@ -732,105 +782,18 @@ impl<'a, Name, Entity> RollbackEntityDetails<Name, &'a Entity> {
 pub struct RollbackDetails {
     pub component: Vec<RollbackEntityDetails<ComponentName, ComponentDto>>,
     pub http_api_deployment: Vec<RollbackEntityDetails<Domain, HttpApiDeployment>>,
+    pub mcp_deployment: Vec<RollbackEntityDetails<Domain, McpDeployment>>,
 }
 
 #[derive(Debug)]
 pub struct RollbackUnifiedDiffs {
-    pub deployment_diff: String,
-    pub agent_diff: Option<String>,
+    pub display_diff: String,
 }
 
-// Removes entries that are not involved in the diff and optionally masks sensitive values.
-fn normalized_diff_deployment(
-    show_sensitive: bool,
-    deployment: &diff::Deployment,
-    diff: Option<&diff::DeploymentDiff>,
-) -> anyhow::Result<diff::Deployment> {
-    if show_sensitive {
-        return Ok(deployment.clone());
+fn deployment_display_mode(show_full_deployment: bool) -> DeploymentDisplayMode {
+    if show_full_deployment {
+        DeploymentDisplayMode::Full
+    } else {
+        DeploymentDisplayMode::ChangedOnly
     }
-
-    let safe_env = |env: &BTreeMap<String, String>| -> BTreeMap<String, String> {
-        env.iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    if is_sensitive_env_var_name(show_sensitive, k) {
-                        format!("<hashed-secret:{}>", blake3::hash(v.as_bytes()).to_hex())
-                    } else {
-                        v.clone()
-                    },
-                )
-            })
-            .collect()
-    };
-
-    Ok(diff::Deployment {
-        components: deployment
-            .components
-            .iter()
-            .filter(|(component_name, _)| {
-                diff.is_some_and(|diff| diff.components.contains_key(*component_name))
-            })
-            .map(|(component_name, component)| {
-                Ok((
-                    component_name.clone(),
-                    match component.as_value() {
-                        Some(component) => diff::Component {
-                            wasm_hash: component.wasm_hash,
-                            agent_type_provision_configs: component
-                                .agent_type_provision_configs
-                                .iter()
-                                .map(|(name, config_hash)| {
-                                    let masked = match config_hash.as_value() {
-                                        Some(config) => diff::AgentTypeProvisionConfig {
-                                            env: safe_env(&config.env),
-                                            config: config.config.clone(),
-                                            files_by_path: config.files_by_path.clone(),
-                                            plugins_by_grant_id: config.plugins_by_grant_id.clone(),
-                                        }
-                                        .into(),
-                                        None => config_hash.clone(),
-                                    };
-                                    (name.clone(), masked)
-                                })
-                                .collect(),
-                        }
-                        .into(),
-                        None => component.hash()?.into(),
-                    },
-                ))
-            })
-            .collect::<Result<_, diff::DiffError>>()?,
-        http_api_deployments: deployment
-            .http_api_deployments
-            .iter()
-            .filter(|(domain, _)| {
-                diff.is_some_and(|diff| diff.http_api_deployments.contains_key(*domain))
-            })
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
-        mcp_deployments: deployment
-            .mcp_deployments
-            .iter()
-            .filter(|(domain, _)| {
-                diff.is_some_and(|diff| diff.mcp_deployments.contains_key(*domain))
-            })
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
-    })
-}
-
-fn format_component_agents_for_diff(
-    component_name: impl AsRef<str>,
-    agents: &[AgentType],
-) -> String {
-    format!(
-        "{}:\n{}\n",
-        component_name.as_ref(),
-        show_exported_agents(agents, false, false)
-            .into_iter()
-            .map(|l| format!("  {l}"))
-            .join("\n")
-    )
 }

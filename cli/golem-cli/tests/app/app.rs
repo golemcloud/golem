@@ -583,13 +583,17 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered([
-        "+    agentTypeProvisionConfigs:",
+        "+components:",
+        "+  test-app-name:rust-main:",
+        "+    agents:",
         "+      CounterAgent:",
-        "+        filesByPath:",
+        "+        files:",
         "+          /Cargo.toml:",
-        "+            permissions: read-only",
+        "+            permissions: readonly",
+        "+            hash:",
         "+          /src/lib.rs:",
         "+            permissions: read-write",
+        "+            hash:",
         "Planning",
         "- create component test-app-name:rust-main",
     ]));
@@ -629,22 +633,32 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered([
-        "       CounterAgent:",
-        "         filesByPath:",
-        "-          /Cargo.toml:",
-        "+          /Cargo2.toml:",
-        "             permissions: read-only",
-        "           /src/lib.rs:",
-        "-            permissions: read-write",
-        "+            permissions: read-only",
-        "Planning",
-        "- update component test-app-name:rust-main, changes:",
-        "  - provision configs",
-        "    - update agent type CounterAgent:",
-        "      - files",
-        "        - remove /Cargo.toml",
-        "        - add /Cargo2.toml",
-        "        - update /src/lib.rs (permissions)",
+        "  Planning ",
+        "      Component changes:",
+        "        - update component test-app-name:rust-main, changes:",
+        "          - provision configs",
+        "            - update agent type CounterAgent:",
+        "              - files",
+        "                - remove /Cargo.toml",
+        "                - add /Cargo2.toml",
+        "                - update /src/lib.rs (permissions)",
+    ]));
+
+    assert!(outputs.stdout_contains_ordered([
+        "  Diffing ",
+        "      @@ -7,13 +7,13 @@",
+        "               sourceLanguage: rust",
+        "               mode: Durable",
+        "               snapshotting: disabled",
+        "               files:",
+        "      -          /Cargo.toml:",
+        "      +          /Cargo2.toml:",
+        "                   permissions: readonly",
+        "                   hash:",
+        "                 /src/lib.rs:",
+        "      -            permissions: read-write",
+        "      +            permissions: readonly",
+        "                   hash:",
     ]));
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;

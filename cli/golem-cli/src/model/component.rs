@@ -274,7 +274,7 @@ fn render_param_name(name: &str, lang: &SourceLanguage) -> String {
     }
 }
 
-fn render_data_schema(
+pub(crate) fn render_data_schema(
     schema: &DataSchema,
     lang: &SourceLanguage,
     show_param_names: bool,

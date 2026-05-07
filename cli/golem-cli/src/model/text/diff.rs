@@ -155,7 +155,7 @@ impl TextView for DeploymentDiff {
                                         }
                                         BTreeMapDiffValue::Delete => {
                                             logln(format!(
-                                                "      - {} file {}",
+                                                "      - {} agent {}",
                                                 "delete".red(),
                                                 agent_name.log_color_highlight()
                                             ));
@@ -168,6 +168,9 @@ impl TextView for DeploymentDiff {
                                             ));
                                             if diff.security_scheme_changed {
                                                 logln("        - security_scheme");
+                                            }
+                                            if diff.test_session_header_changed {
+                                                logln("        - test_session_header");
                                             }
                                         }
                                     }
@@ -197,13 +200,53 @@ impl TextView for DeploymentDiff {
                             domain.log_color_highlight()
                         ));
                     }
-                    BTreeMapDiffValue::Update(_diff) => {
-                        logln(format!(
-                            "  - {} MCP deployment {}",
-                            "update".yellow(),
-                            domain.log_color_highlight()
-                        ));
-                    }
+                    BTreeMapDiffValue::Update(diff) => match diff {
+                        DiffForHashOf::HashDiff { .. } => {
+                            logln(format!(
+                                "  - {} MCP deployment {}",
+                                "update".yellow(),
+                                domain.log_color_highlight()
+                            ));
+                        }
+                        DiffForHashOf::ValueDiff { diff } => {
+                            logln(format!(
+                                "  - {} MCP deployment {}, changes:",
+                                "update".yellow(),
+                                domain.log_color_highlight()
+                            ));
+                            if !diff.agents_changes.is_empty() {
+                                logln("    - agents");
+                                for (agent_name, agent_diff) in &diff.agents_changes {
+                                    match agent_diff {
+                                        BTreeMapDiffValue::Create => {
+                                            logln(format!(
+                                                "      - {} agent {}",
+                                                "create".green(),
+                                                agent_name.log_color_highlight()
+                                            ));
+                                        }
+                                        BTreeMapDiffValue::Delete => {
+                                            logln(format!(
+                                                "      - {} agent {}",
+                                                "delete".red(),
+                                                agent_name.log_color_highlight()
+                                            ));
+                                        }
+                                        BTreeMapDiffValue::Update(diff) => {
+                                            logln(format!(
+                                                "      - {} agent {}, changes:",
+                                                "update".yellow(),
+                                                agent_name.log_color_highlight()
+                                            ));
+                                            if diff.security_scheme_changed {
+                                                logln("        - security_scheme");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
                 }
             }
             logln("");

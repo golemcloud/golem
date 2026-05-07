@@ -674,6 +674,9 @@ pub enum GolemCliSubcommand {
         /// Ask for approval for every staging step; used for testing
         #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
         approve_staging_steps: bool,
+        /// Show the full visual deployment state in the deployment diff instead of only changed entries
+        #[arg(long)]
+        show_full_deployment: bool,
         /// Revert to the specified version
         #[arg(long, conflicts_with_all = ["force_build", "revision", "stage", "approve_staging_steps"])]
         version: Option<String>,
