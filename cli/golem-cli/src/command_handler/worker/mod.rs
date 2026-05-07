@@ -23,18 +23,19 @@ use crate::command_handler::Handlers;
 use crate::command_handler::worker::stream::WorkerConnection;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::{AnyhowMapServiceError, ServiceError};
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
     LogColorize, LogIndent, log_action, log_error, log_error_action, log_failed_to, log_warn,
     log_warn_action, logln,
 };
-use crate::model::component::{ComponentNameMatchKind, show_exported_agent_constructors};
+use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
-    AgentNameHelp, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
+    AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
+    ParameterErrorTableView,
 };
 use crate::model::text::worker::{
     FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView, format_agent_name_match,
@@ -59,7 +60,9 @@ use golem_client::model::{
     UpdateWorkerRequest,
 };
 use golem_common::model::agent::{
-    AgentMode, AgentType, AgentTypeName, DataValue, ParsedAgentId, UntypedJsonDataValue,
+    AgentMode, AgentType, AgentTypeName, ComponentModelElementValue, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
+    ParsedAgentId, UntypedJsonDataValue,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -71,13 +74,14 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
+use golem_wasm::analysis::AnalysedType;
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
 use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
-use itertools::Itertools;
+use itertools::{EitherOrBoth, Itertools};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Stdout, Write};
@@ -393,11 +397,7 @@ impl WorkerCommandHandler {
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
         let agent_id = normalize_public_agent_id(&agent_id, &agent_type)?;
 
-        // If the function name is fully qualified (e.g., "rust:agent/foo-agent.{fun-string}"),
-        // extract the simple method name for fuzzy matching.
-        let method_pattern = extract_simple_method_name(function_name);
-
-        let matched_method_name = resolve_agent_method_name(&method_pattern, &agent_type);
+        let matched_method_name = resolve_agent_method_name(function_name, &agent_type);
         let method_name = match matched_method_name {
             Ok(match_) => {
                 log_fuzzy_match(&match_);
@@ -474,19 +474,12 @@ impl WorkerCommandHandler {
         };
 
         let source_language = SourceLanguage::from(agent_type.source_language.as_str());
-        let method = agent_type
-            .methods
-            .iter()
-            .find(|m| m.name == method_name)
-            .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
-        let joined_args = arguments.join(",");
-        let method_parameters = crate::agent_id_display::parse_agent_id_params(
-            &joined_args,
-            &method.input_schema,
+        let method_parameters = parse_method_parameters_with_error_table(
+            &agent_type,
+            &method_name,
+            arguments,
             &source_language,
-        )
-        .map_err(|e| anyhow!("Failed to parse method parameters: {e}"))?;
-        let method_parameters = UntypedJsonDataValue::from(method_parameters);
+        )?;
 
         let mut connect_handle = if !no_stream {
             let connection = WorkerConnection::new(
@@ -1343,7 +1336,7 @@ impl WorkerCommandHandler {
                         path.log_color_error_highlight()
                     ),
                 );
-                return Err(e);
+                return Err(e.into());
             }
         };
 
@@ -1418,7 +1411,7 @@ impl WorkerCommandHandler {
                         path.log_color_error_highlight()
                     ),
                 );
-                return Err(e);
+                return Err(e.into());
             }
         };
 
@@ -1647,7 +1640,9 @@ impl WorkerCommandHandler {
             )
             .await
             .map(|_| ())
-            .map_service_error()
+            .map_service_error()?;
+
+        Ok(())
     }
 
     pub async fn worker_metadata(
@@ -1674,7 +1669,9 @@ impl WorkerCommandHandler {
             .delete_worker(&component_id, agent_name)
             .await
             .map(|_| ())
-            .map_service_error()
+            .map_service_error()?;
+
+        Ok(())
     }
 
     pub async fn update_component_workers(
@@ -2305,6 +2302,8 @@ impl WorkerCommandHandler {
                 ));
                 logln("");
                 log_text_view(&AgentNameHelp);
+                self.log_available_deployed_agent_constructors(&environment)
+                    .await;
                 bail!(NonSuccessfulExit);
             }
         };
@@ -2326,6 +2325,8 @@ impl WorkerCommandHandler {
             );
             logln("");
             log_text_view(&AgentNameHelp);
+            self.log_available_deployed_agent_constructors(&environment)
+                .await;
             bail!(NonSuccessfulExit);
         };
 
@@ -2543,22 +2544,34 @@ impl WorkerCommandHandler {
                 None => Ok(Some((agent_id, agent_type.clone()))),
             },
             Err(err) => {
+                let parsed_agent_type_name =
+                    ParsedAgentId::parse_agent_type_name(&agent_name.0).ok();
+
                 logln("");
                 log_error(format!(
                     "Failed to parse agent name ({}) as agent id: {err}",
                     agent_name.0.log_color_error_highlight()
                 ));
                 logln("");
-                log_text_view(&AvailableAgentConstructorsHelp {
-                    component_name: component.component_name.0.clone(),
-                    constructors: show_exported_agent_constructors(
-                        component.metadata.agent_types(),
-                        true,
-                    ),
-                });
+                log_text_view(&AvailableAgentConstructorsHelp::for_component(
+                    component,
+                    parsed_agent_type_name.as_ref(),
+                ));
 
                 bail!(NonSuccessfulExit);
             }
+        }
+    }
+
+    async fn log_available_deployed_agent_constructors(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+    ) {
+        if let Ok(agent_types) = self.ctx.app_handler().list_agent_types(environment).await {
+            log_text_view(&AvailableAgentConstructorsHelp::for_deployed_agent_types(
+                &agent_types,
+            ));
+            logln("");
         }
     }
 
@@ -2613,22 +2626,6 @@ impl Drop for AlternateScreenGuard {
     }
 }
 
-/// Extracts the simple method name from a potentially fully qualified function name.
-///
-/// For example, `rust:agent/foo-agent.{fun-string}` → `fun-string`.
-/// Returns the input unchanged if it is already a simple name.
-fn extract_simple_method_name(function_name: &str) -> String {
-    if let Some(inner) = function_name
-        .strip_suffix('}')
-        .and_then(|s| s.rsplit_once('.'))
-        .and_then(|(_, rest)| rest.strip_prefix('{'))
-    {
-        inner.to_string()
-    } else {
-        function_name.to_string()
-    }
-}
-
 /// Fuzzy-matches a method name pattern against the original method names from agent metadata,
 /// returning the matched method name on success.
 fn resolve_agent_method_name(
@@ -2655,6 +2652,190 @@ fn resolve_agent_method_name(
             ..m
         }
     })
+}
+
+fn parse_method_parameters_with_error_table(
+    agent_type: &AgentType,
+    method_name: &str,
+    arguments: Vec<AgentFunctionArgument>,
+    source_language: &SourceLanguage,
+) -> anyhow::Result<UntypedJsonDataValue> {
+    let method = agent_type
+        .methods
+        .iter()
+        .find(|m| m.name == method_name)
+        .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
+
+    let element_schemas = match &method.input_schema {
+        DataSchema::Tuple(schemas) => &schemas.elements,
+        DataSchema::Multimodal(_) => {
+            let joined_args = arguments.join(",");
+            let method_parameters = crate::agent_id_display::parse_agent_id_params(
+                &joined_args,
+                &method.input_schema,
+                source_language,
+            )
+            .map_err(|e| anyhow!("Failed to parse method parameters: {e}"))?;
+
+            return Ok(UntypedJsonDataValue::from(method_parameters));
+        }
+    };
+
+    if element_schemas.len() != arguments.len() {
+        logln("");
+        log_error(format!(
+            "Wrong number of parameters: expected {}, got {}",
+            element_schemas.len(),
+            arguments.len()
+        ));
+        logln("");
+
+        let rows = element_schemas
+            .iter()
+            .zip_longest(arguments.iter())
+            .enumerate()
+            .map(|(idx, pair)| match pair {
+                EitherOrBoth::Both(schema, value) => ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: Some(schema.schema.clone()),
+                    value: Some(value.clone()),
+                    error: parse_method_argument_element(value, &schema.schema, source_language)
+                        .err()
+                        .map(|err| err.message),
+                    source_language: source_language.clone(),
+                },
+                EitherOrBoth::Left(schema) => ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: Some(schema.schema.clone()),
+                    value: None,
+                    error: Some("missing argument".to_string()),
+                    source_language: source_language.clone(),
+                },
+                EitherOrBoth::Right(value) => ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: None,
+                    value: Some(value.clone()),
+                    error: Some("extra argument".to_string()),
+                    source_language: source_language.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
+
+        log_text_view(&ParameterErrorTableView(rows));
+        logln("");
+        bail!(NonSuccessfulExit);
+    }
+
+    let mut values = Vec::with_capacity(element_schemas.len());
+    let mut rows = Vec::with_capacity(element_schemas.len());
+    let mut has_error = false;
+
+    for (idx, (schema, value)) in element_schemas.iter().zip(arguments.iter()).enumerate() {
+        match parse_method_argument_element(value, &schema.schema, source_language) {
+            Ok(parsed) => {
+                values.push(parsed);
+                rows.push(ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: Some(schema.schema.clone()),
+                    value: Some(value.clone()),
+                    error: None,
+                    source_language: source_language.clone(),
+                });
+            }
+            Err(err) => {
+                has_error = true;
+                rows.push(ArgumentError {
+                    argument_index: idx + 1,
+                    parameter_type: Some(schema.schema.clone()),
+                    value: Some(value.clone()),
+                    error: Some(err.message),
+                    source_language: source_language.clone(),
+                });
+            }
+        }
+    }
+
+    if has_error {
+        logln("");
+        log_error("Argument parse error(s)!");
+        logln("");
+        log_text_view(&ParameterErrorTableView(rows));
+        logln("");
+        bail!(NonSuccessfulExit);
+    }
+
+    Ok(UntypedJsonDataValue::from(DataValue::Tuple(
+        ElementValues { elements: values },
+    )))
+}
+
+fn parse_method_argument_value(
+    value: &str,
+    analysed_type: &AnalysedType,
+    source_language: &SourceLanguage,
+) -> Result<golem_wasm::ValueAndType, crate::agent_id_display::ParseError> {
+    let parsed =
+        crate::agent_id_display::parse_value_for_language(value, analysed_type, source_language);
+    if parsed.is_ok() {
+        return parsed;
+    }
+
+    if matches!(analysed_type, AnalysedType::Str(_)) {
+        let quoted =
+            serde_json::to_string(value).map_err(|err| crate::agent_id_display::ParseError {
+                position: 0,
+                message: format!("failed to quote string value: {err}"),
+            })?;
+
+        return crate::agent_id_display::parse_value_for_language(
+            &quoted,
+            analysed_type,
+            source_language,
+        );
+    }
+
+    parsed
+}
+
+fn parse_method_argument_element(
+    value: &str,
+    element_schema: &ElementSchema,
+    source_language: &SourceLanguage,
+) -> Result<ElementValue, crate::agent_id_display::ParseError> {
+    match element_schema {
+        ElementSchema::ComponentModel(cm) => {
+            let value = parse_method_argument_value(value, &cm.element_type, source_language)?;
+            Ok(ElementValue::ComponentModel(ComponentModelElementValue {
+                value,
+            }))
+        }
+        ElementSchema::UnstructuredText(_) | ElementSchema::UnstructuredBinary(_) => {
+            let schema = DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "value".to_string(),
+                    schema: element_schema.clone(),
+                }],
+            });
+
+            let parsed =
+                crate::agent_id_display::parse_agent_id_params(value, &schema, source_language)?;
+
+            match parsed {
+                DataValue::Tuple(ElementValues { mut elements }) => {
+                    elements
+                        .pop()
+                        .ok_or_else(|| crate::agent_id_display::ParseError {
+                            position: 0,
+                            message: "expected a single parsed value".to_string(),
+                        })
+                }
+                DataValue::Multimodal(_) => Err(crate::agent_id_display::ParseError {
+                    position: 0,
+                    message: "expected tuple parsed value".to_string(),
+                }),
+            }
+        }
+    }
 }
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
@@ -2779,13 +2960,15 @@ fn normalize_public_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, apply_list_mode_filter, build_repl_agent_id, extract_simple_method_name,
-        normalize_public_agent_id, split_agent_name,
+        AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
+        parse_method_argument_element, split_agent_name,
     };
+    use crate::agent_id_display::SourceLanguage;
     use golem_common::model::Empty;
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
-        ElementValues, NamedElementSchemas, ParsedAgentId, Snapshotting,
+        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryDescriptor,
+        DataSchema, ElementSchema, ElementValue, ElementValues, NamedElementSchemas, ParsedAgentId,
+        Snapshotting, TextDescriptor,
     };
     use pretty_assertions::assert_eq;
     use test_r::test;
@@ -2884,27 +3067,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_simple_method_name_simple() {
-        assert_eq!(extract_simple_method_name("fun_string"), "fun_string");
-    }
-
-    #[test]
-    fn test_extract_simple_method_name_qualified_kebab() {
-        assert_eq!(
-            extract_simple_method_name("rust:agent/FooAgent.{fun-string}"),
-            "fun-string"
-        );
-    }
-
-    #[test]
-    fn test_extract_simple_method_name_qualified_underscore() {
-        assert_eq!(
-            extract_simple_method_name("rust:agent/FooAgent.{fun_string}"),
-            "fun_string"
-        );
-    }
-
-    #[test]
     fn repl_agent_id_auto_generates_phantom_for_ephemeral_agents() {
         let agent_id =
             build_repl_agent_id(&test_agent_type(AgentMode::Ephemeral), empty_tuple(), None)
@@ -2943,5 +3105,29 @@ mod tests {
             normalize_public_agent_id(&agent_id, &test_agent_type(AgentMode::Ephemeral)).unwrap();
 
         assert!(normalized.phantom_id.is_some());
+    }
+
+    #[test]
+    fn parse_method_argument_element_parses_unstructured_text() {
+        let parsed = parse_method_argument_element(
+            "UnstructuredText::Url(\"https://example.com\")",
+            &ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+
+        assert!(matches!(parsed, ElementValue::UnstructuredText(_)));
+    }
+
+    #[test]
+    fn parse_method_argument_element_parses_unstructured_binary() {
+        let parsed = parse_method_argument_element(
+            "UnstructuredBinary::from_url(\"https://example.com/file.bin\")",
+            &ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+            &SourceLanguage::Rust,
+        )
+        .unwrap();
+
+        assert!(matches!(parsed, ElementValue::UnstructuredBinary(_)));
     }
 }

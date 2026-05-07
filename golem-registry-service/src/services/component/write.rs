@@ -291,6 +291,10 @@ impl ComponentWriteService {
             EnvironmentAction::UpdateComponent,
         )?;
 
+        if component_update.allow_incompatible_config && environment.compatibility_check {
+            return Err(ComponentError::ResetOverrideRequiresCompatibilityCheckDisabled);
+        }
+
         let mut component = component_record
             .try_into_model(environment.application_id, environment.owner_account_id)?;
 
@@ -403,7 +407,7 @@ impl ComponentWriteService {
             }
 
             // If agent types changed without a new wasm, validate existing typed config still matches
-            if agent_types_changed {
+            if agent_types_changed && !component_update.allow_incompatible_config {
                 for (agent_type_name, config) in &provision_configs {
                     let agent_type = component
                         .metadata
@@ -419,7 +423,7 @@ impl ComponentWriteService {
 
             // Preserve agent types from the (possibly updated) metadata, replace provision configs
             component.metadata = component.metadata.with_provision_configs(provision_configs);
-        } else if agent_types_changed {
+        } else if agent_types_changed && !component_update.allow_incompatible_config {
             // No explicit updates but agent types changed: validate existing typed config
             let provision_configs = component.metadata.agent_type_provision_configs().clone();
             for (agent_type_name, config) in &provision_configs {

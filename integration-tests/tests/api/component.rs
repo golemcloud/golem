@@ -28,6 +28,7 @@ use golem_common::model::component::{
     ComponentCreation, ComponentName, ComponentUpdate, PluginInstallation,
     PluginInstallationAction, PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
+use golem_common::model::environment::EnvironmentUpdate;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
@@ -219,6 +220,7 @@ async fn component_update_with_wrong_revision_is_rejected(
                 current_revision: component.revision.next()?,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
+                allow_incompatible_config: false,
             },
             None::<File>,
             None::<File>,
@@ -231,6 +233,104 @@ async fn component_update_with_wrong_revision_is_rejected(
             RegistryServiceUpdateComponentError::Error409(_)
         ))
     ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn component_update_rejects_reset_override_when_compatibility_check_enabled(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let env = client
+        .update_environment(
+            &env.id.0,
+            &EnvironmentUpdate {
+                current_revision: env.revision,
+                name: None,
+                compatibility_check: Some(true),
+                version_check: None,
+                security_overrides: None,
+            },
+        )
+        .await?;
+
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
+
+    let result = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                agent_types: None,
+                agent_type_provision_config_updates: None,
+                allow_incompatible_config: true,
+            },
+            None::<File>,
+            None::<File>,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceUpdateComponentError::Error409(_)
+        ))
+    ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn component_update_allows_reset_override_when_compatibility_check_disabled(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let env = client
+        .update_environment(
+            &env.id.0,
+            &EnvironmentUpdate {
+                current_revision: env.revision,
+                name: None,
+                compatibility_check: Some(false),
+                version_check: None,
+                security_overrides: None,
+            },
+        )
+        .await?;
+
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
+
+    let updated = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                agent_types: None,
+                agent_type_provision_config_updates: None,
+                allow_incompatible_config: true,
+            },
+            None::<File>,
+            None::<File>,
+        )
+        .await?;
+
+    assert_eq!(updated.id, component.id);
+    assert_ne!(updated.revision, component.revision);
 
     Ok(())
 }
@@ -363,6 +463,7 @@ async fn create_component_with_plugins_and_update_installations(
                         ..Default::default()
                     },
                 )])),
+                allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
@@ -398,6 +499,7 @@ async fn create_component_with_plugins_and_update_installations(
                         ..Default::default()
                     },
                 )])),
+                allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
@@ -477,6 +579,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
                         ..Default::default()
                     },
                 )])),
+                allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
@@ -950,6 +1053,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
                         ..Default::default()
                     },
                 )])),
+                allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
@@ -1035,6 +1139,7 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
                         ..Default::default()
                     },
                 )])),
+                allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,

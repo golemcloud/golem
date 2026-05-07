@@ -265,6 +265,7 @@ async fn upload_or_update_component(
                             current_revision: existing.revision,
                             agent_types: None,
                             agent_type_provision_config_updates: None,
+                            allow_incompatible_config: false,
                         },
                         Some(wasm_bytes.to_vec()),
                         None,
@@ -309,6 +310,7 @@ async fn deploy_environment(
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
             auth,
         )

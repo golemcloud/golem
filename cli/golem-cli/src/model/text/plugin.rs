@@ -14,7 +14,7 @@
 
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id,
-    format_message_highlight, log_table, new_table,
+    format_message_highlight, log_table, new_table_full_condensed,
 };
 use golem_common::model::plugin_registration::PluginRegistrationDto;
 use serde_derive::Serialize;
@@ -50,7 +50,7 @@ pub struct PluginListEntry {
 
 impl TextView for Vec<PluginListEntry> {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Plugin name").fixed(),
             Column::new("Plugin version").fixed(),
             Column::new("Source").fixed(),
@@ -74,7 +74,7 @@ impl TextView for Vec<PluginListEntry> {
 
 impl TextView for Vec<PluginRegistrationDto> {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Plugin name").fixed(),
             Column::new("Plugin version").fixed(),
             Column::new("Type").fixed(),

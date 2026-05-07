@@ -18,7 +18,7 @@ use crate::context::Context;
 use crate::error::HintError;
 use crate::error::HintError::NoApplicationManifestFound;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::MapServiceError;
 use crate::log::{
     LogColorize, LogIndent, log_action, log_error, log_skipping_up_to_date, log_warn_action, logln,
 };
@@ -304,13 +304,14 @@ impl EnvironmentCommandHandler {
         application_id: &ApplicationId,
         environment_name: &EnvironmentName,
     ) -> anyhow::Result<Option<golem_client::model::Environment>> {
-        self.ctx
+        Ok(self
+            .ctx
             .golem_clients()
             .await?
             .environment
             .get_application_environment(&application_id.0, &environment_name.0)
             .await
-            .map_service_error_not_found_as_opt()
+            .map_service_error_not_found_as_opt()?)
     }
 
     async fn get_server_environment_or_err(
@@ -352,7 +353,8 @@ impl EnvironmentCommandHandler {
                     bail!(NoApplicationManifestFound)
                 };
 
-                self.ctx
+                Ok(self
+                    .ctx
                     .golem_clients()
                     .await?
                     .environment
@@ -366,7 +368,7 @@ impl EnvironmentCommandHandler {
                         },
                     )
                     .await
-                    .map_service_error()
+                    .map_service_error()?)
             }
         }
     }
@@ -499,7 +501,7 @@ impl EnvironmentCommandHandler {
                         .list_environment_environment_plugin_grants(&environment.environment_id.0)
                         .await
                         .map_service_error()
-                        .map_err(Arc::new)
+                        .map_err(|err| Arc::new(err.into()))
                         .map(|result| {
                             {
                                 result.values.into_iter().map(|p| {

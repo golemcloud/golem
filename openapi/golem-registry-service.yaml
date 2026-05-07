@@ -9419,6 +9419,9 @@ components:
           default: null
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfigUpdate'
+        allowIncompatibleConfig:
+          type: boolean
+          default: false
     CorsOptions:
       type: object
       title: CorsOptions
@@ -9576,6 +9579,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentRetryPolicyDefault'
+        replaceIncompatibleAgentSecrets:
+          type: boolean
+          default: false
     DeploymentPlan:
       type: object
       title: DeploymentPlan

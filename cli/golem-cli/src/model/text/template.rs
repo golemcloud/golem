@@ -17,7 +17,7 @@ use crate::model::text::fmt::*;
 
 impl TextView for Vec<TemplateDescription> {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Name").fixed(),
             Column::new("Language").fixed(),
             Column::new("Description"),
