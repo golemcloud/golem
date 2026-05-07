@@ -303,7 +303,7 @@ test('Agent with unsupported type in config field is rejected with path in error
   await expect(async () => {
     await import('./agentWithInvalidConfig');
   }).rejects.toThrowError(
-    'Failed to describe agent config: config property `unsupported`: Unsupported type `class` in config for parameter `unsupported`. Hint: Use object instead.',
+    'Failed to describe config for agent `AgentWithInvalidConfig`: parameter `config`, config property `unsupported`: Unsupported type `class` in config for parameter `unsupported`. Hint: Use object instead.',
   );
 });
 
@@ -319,7 +319,7 @@ test('Config type used as a field inside another Config produces a helpful error
   expect(Either.isLeft(result)).toBe(true);
   assert(Either.isLeft(result));
   expect(result.val).toBe(
-    'Unsupported type `Config` in myConfig for parameter `nested`. Hint: Use a plain type literal instead.',
+    'Unsupported type `Config` in myConfig for parameter `nested`. Hint: Use an inline object type instead.',
   );
 });
 
