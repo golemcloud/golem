@@ -21,7 +21,7 @@ use crate::app::context::{find_main_source_from, validated_to_anyhow};
 use crate::app::template::{
     AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName, InMemoryFs,
     MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
-    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, UnsafeTemplatePlan,
+    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TextEdit, UnsafeTemplatePlan,
 };
 use crate::command_handler::Handlers;
 use crate::command_handler::app::AppCommandHandler;
@@ -43,7 +43,7 @@ use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff;
-use heck::ToKebabCase;
+use heck::{ToKebabCase, ToSnakeCase};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -584,6 +584,7 @@ impl TemplateHandler {
                         let component_template =
                             app_template_repo.component_template(component.language)?;
                         let upgrade_plan = self.plan_multi_component_layout_upgrade(
+                            component_name,
                             component,
                             application_path,
                             &new_component_dir,
@@ -745,6 +746,7 @@ impl TemplateHandler {
 
     fn plan_multi_component_layout_upgrade(
         &self,
+        component_name: &ComponentName,
         component: &ExistingComponent,
         application_path: &Path,
         new_component_dir: &Path,
@@ -788,13 +790,26 @@ impl TemplateHandler {
             GuestLanguage::Scala => {
                 let target_root = application_path.join(new_component_dir);
 
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("build.sbt"),
-                    target: target_root.join("build.sbt"),
-                });
+                // build.sbt and project/ stay at the application root: build.sbt
+                // declares ThisBuild settings (scalaVersion, ...) and pairs with
+                // project/build.properties + project/plugins.sbt as the sbt meta-build.
                 upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
                     source: application_path.join("src"),
                     target: target_root.join("src"),
+                });
+
+                // The per-component <component_snake>.sbt file stays at the app root
+                // but its `lazy val ... = project.in(file("componentDir"))` reference
+                // must be updated to point to the new component directory. We rewrite
+                // it in place to preserve any user customizations (extra dependencies,
+                // scalacOptions, settings, ...).
+                let snake = component_name.0.to_snake_case();
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Rewrite {
+                    path: application_path.join(format!("{snake}.sbt")),
+                    edit: TextEdit::ScalaSbtComponentDir {
+                        lazy_val: snake,
+                        new_dir: fs::path_to_unix_str(new_component_dir)?,
+                    },
                 });
             }
             GuestLanguage::MoonBit => {
@@ -848,6 +863,14 @@ impl TemplateHandler {
                         "move".yellow(),
                         source.display().to_string().log_color_highlight(),
                         target.display().to_string().log_color_highlight()
+                    ));
+                }
+                MultiComponentLayoutUpgradePlanStep::Rewrite { path, edit } => {
+                    logln(format!(
+                        "- {} {} ({})",
+                        "rewrite".yellow(),
+                        path.display().to_string().log_color_highlight(),
+                        edit.describe()
                     ));
                 }
             }
@@ -907,6 +930,42 @@ impl TemplateHandler {
                         }
                     }
                 }
+                MultiComponentLayoutUpgradePlanStep::Rewrite { path, edit } => {
+                    if !path.exists() {
+                        validation_errors.push(format!(
+                            "Rewrite target does not exist: {}",
+                            path.display().to_string().log_color_error_highlight()
+                        ));
+                        continue;
+                    }
+                    if !path.is_file() {
+                        validation_errors.push(format!(
+                            "Rewrite target is not a regular file: {}",
+                            path.display().to_string().log_color_error_highlight()
+                        ));
+                        continue;
+                    }
+                    // Dry-run the edit so we surface structural problems
+                    // (e.g. missing `lazy val ...` block) before any moves happen.
+                    match fs::read_to_string(path) {
+                        Ok(current) => {
+                            if let Err(err) = edit.apply(&current) {
+                                validation_errors.push(format!(
+                                    "Cannot rewrite {}: {}",
+                                    path.display().to_string().log_color_error_highlight(),
+                                    err
+                                ));
+                            }
+                        }
+                        Err(err) => {
+                            validation_errors.push(format!(
+                                "Failed to read rewrite target {}: {}",
+                                path.display().to_string().log_color_error_highlight(),
+                                err
+                            ));
+                        }
+                    }
+                }
             }
         }
 
@@ -956,6 +1015,21 @@ impl TemplateHandler {
                         ),
                     );
                     fs::rename(source, target)?;
+                }
+                MultiComponentLayoutUpgradePlanStep::Rewrite { path, edit } => {
+                    log_action(
+                        "Rewriting",
+                        format!(
+                            "{} ({})",
+                            path.display().to_string().log_color_highlight(),
+                            edit.describe()
+                        ),
+                    );
+                    let current = fs::read_to_string(path)?;
+                    let new = edit.apply(&current)?;
+                    if new != current {
+                        fs::write_str(path, new)?;
+                    }
                 }
             }
         }
