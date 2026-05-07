@@ -1011,6 +1011,7 @@ pub struct ComponentLayerApplyContext {
     app_root_dir: Option<String>,
     golem_temp_dir: Option<String>,
     component_dir: Option<String>,
+    component_dir_rel: Option<String>,
     cargo_target: Option<String>,
 }
 
@@ -1022,12 +1023,22 @@ impl ComponentLayerApplyContext {
         component_dir: Option<String>,
         cargo_target: Option<String>,
     ) -> Self {
+        let component_dir_rel = match (app_root_dir.as_deref(), component_dir.as_deref()) {
+            (Some(app_root), Some(comp_dir)) => Some(
+                std::path::Path::new(comp_dir)
+                    .strip_prefix(app_root)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+            ),
+            _ => None,
+        };
         Self {
             env: Self::new_template_env(),
             component_name,
             app_root_dir,
             golem_temp_dir,
             component_dir,
+            component_dir_rel,
             cargo_target,
         }
     }
@@ -1066,6 +1077,7 @@ impl ComponentLayerApplyContext {
             appRootDir => self.app_root_dir.as_deref().unwrap_or(EMPTY_STR),
             golemTempDir => self.golem_temp_dir.as_deref().unwrap_or(EMPTY_STR),
             componentDir => self.component_dir.as_deref().unwrap_or(EMPTY_STR),
+            componentDirRel => self.component_dir_rel.as_deref().unwrap_or(EMPTY_STR),
             cargoTarget => self.cargo_target.as_deref().unwrap_or(EMPTY_STR),
         })
     }
