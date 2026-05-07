@@ -14,7 +14,7 @@
 
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::MapServiceError;
 use crate::model::text::http_api_domain::{DomainRegistrationNewView, HttpApiDomainListView};
 
 use crate::command::api::domain::ApiDomainSubcommand;
@@ -185,7 +185,8 @@ impl ApiDomainCommandHandler {
         environment_id: &EnvironmentId,
         domain: &Domain,
     ) -> anyhow::Result<DomainRegistration> {
-        self.ctx
+        Ok(self
+            .ctx
             .golem_clients()
             .await?
             .api_domain
@@ -196,7 +197,7 @@ impl ApiDomainCommandHandler {
                 },
             )
             .await
-            .map_service_error()
+            .map_service_error()?)
     }
 
     async fn list_domains(

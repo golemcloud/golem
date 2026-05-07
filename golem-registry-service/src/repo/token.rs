@@ -216,6 +216,22 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
         let result: Option<Uuid> = self
             .with_tx_err("delete", |tx| {
                 Box::pin(async move {
+                    // Unlink any OAuth2 identity that points at this token before
+                    // deleting it, so the FK constraint is not violated and the user
+                    // can log in again (receiving a fresh token).
+                    tx.execute(
+                        sqlx::query("UPDATE oauth2_tokens SET token_id = NULL WHERE token_id = $1")
+                            .bind(token_id),
+                    )
+                    .await?;
+
+                    // Delete any pending webflow states that were waiting for this token.
+                    tx.execute(
+                        sqlx::query("DELETE FROM oauth2_web_flow_states WHERE token_id = $1")
+                            .bind(token_id),
+                    )
+                    .await?;
+
                     let deleted_row = tx
                         .fetch_optional(
                             sqlx::query(

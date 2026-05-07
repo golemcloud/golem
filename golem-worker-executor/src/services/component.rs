@@ -46,7 +46,7 @@ pub trait ComponentService: Send + Sync {
     ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError>;
 
     // If a version is provided, deleted components will also be returned.
-    // If no version is provided, only the latest non-deleted version is returned.
+    // If no version is provided, only the current deployed non-deleted version is returned.
     async fn get_metadata(
         &self,
         component_id: ComponentId,
@@ -67,20 +67,20 @@ pub trait ComponentService: Send + Sync {
     /// This is useful for some mock/local implementations.
     async fn all_cached_metadata(&self) -> Vec<Component>;
 
-    /// Invalidates cached "latest deployed" component metadata.
-    async fn invalidate_latest_deployed_metadata(&self) {}
+    /// Invalidates cached "current deployed" component metadata.
+    async fn invalidate_current_deployed_metadata(&self) {}
 
-    /// Invalidates cached "latest deployed" component metadata for a specific environment.
-    async fn invalidate_latest_deployed_metadata_for_environment(
+    /// Invalidates cached "current deployed" component metadata for a specific environment.
+    async fn invalidate_current_deployed_metadata_for_environment(
         &self,
         _environment_id: EnvironmentId,
     ) {
-        self.invalidate_latest_deployed_metadata().await
+        self.invalidate_current_deployed_metadata().await
     }
 
     /// Invalidates all cached component metadata.
     async fn invalidate_all(&self) {
-        self.invalidate_latest_deployed_metadata().await
+        self.invalidate_current_deployed_metadata().await
     }
 }
 
@@ -105,7 +105,7 @@ pub fn configured(
 pub struct ComponentServiceDefault {
     component_cache: Cache<ComponentKey, (), wasmtime::component::Component, WorkerExecutorError>,
     component_metadata_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
-    latest_component_metadata_cache: Cache<ComponentId, (), Component, WorkerExecutorError>,
+    current_component_metadata_cache: Cache<ComponentId, (), Component, WorkerExecutorError>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
 }
@@ -125,7 +125,7 @@ impl ComponentServiceDefault {
                 max_metadata_capacity,
                 time_to_idle,
             ),
-            latest_component_metadata_cache: create_latest_component_metadata_cache(
+            current_component_metadata_cache: create_current_component_metadata_cache(
                 max_metadata_capacity,
                 time_to_idle,
             ),
@@ -261,7 +261,7 @@ impl ComponentService for ComponentServiceDefault {
             None => {
                 let client = self.registry_client.clone();
                 let metadata = self
-                    .latest_component_metadata_cache
+                    .current_component_metadata_cache
                     .get_or_insert_simple(&component_id, || {
                         Box::pin(async move {
                             client
@@ -331,19 +331,19 @@ impl ComponentService for ComponentServiceDefault {
             .collect()
     }
 
-    async fn invalidate_latest_deployed_metadata(&self) {
-        let keys = self.latest_component_metadata_cache.keys().await;
+    async fn invalidate_current_deployed_metadata(&self) {
+        let keys = self.current_component_metadata_cache.keys().await;
         for key in keys {
-            self.latest_component_metadata_cache.remove(&key).await;
+            self.current_component_metadata_cache.remove(&key).await;
         }
     }
 
-    async fn invalidate_latest_deployed_metadata_for_environment(
+    async fn invalidate_current_deployed_metadata_for_environment(
         &self,
         environment_id: EnvironmentId,
     ) {
         let keys = self
-            .latest_component_metadata_cache
+            .current_component_metadata_cache
             .iter()
             .await
             .into_iter()
@@ -353,12 +353,12 @@ impl ComponentService for ComponentServiceDefault {
             .collect::<Vec<_>>();
 
         for key in keys {
-            self.latest_component_metadata_cache.remove(&key).await;
+            self.current_component_metadata_cache.remove(&key).await;
         }
     }
 
     async fn invalidate_all(&self) {
-        self.invalidate_latest_deployed_metadata().await;
+        self.invalidate_current_deployed_metadata().await;
 
         let metadata_keys = self.component_metadata_cache.keys().await;
         for key in metadata_keys {
@@ -388,7 +388,7 @@ fn create_component_metadata_cache(
     )
 }
 
-fn create_latest_component_metadata_cache(
+fn create_current_component_metadata_cache(
     max_capacity: usize,
     time_to_idle: Duration,
 ) -> Cache<ComponentId, (), Component, WorkerExecutorError> {
@@ -399,7 +399,7 @@ fn create_latest_component_metadata_cache(
             ttl: time_to_idle,
             period: Duration::from_secs(60),
         },
-        "latest_component_metadata",
+        "current_component_metadata",
     )
 }
 
@@ -667,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    async fn caches_latest_deployed_component_metadata_by_component_id() {
+    async fn caches_current_deployed_component_metadata_by_component_id() {
         let component_id = ComponentId::new();
         let environment_id = EnvironmentId::new();
         let registry = Arc::new(MockRegistryService::new([make_component(
@@ -692,12 +692,12 @@ mod tests {
         assert_eq!(
             calls.get(&component_id).copied().unwrap_or_default(),
             1,
-            "latest deployed metadata should be fetched once per component id"
+            "current deployed metadata should be fetched once per component id"
         );
     }
 
     #[test]
-    async fn invalidating_latest_deployed_component_metadata_forces_refresh() {
+    async fn invalidating_current_deployed_component_metadata_forces_refresh() {
         let component_id = ComponentId::new();
         let registry = Arc::new(MockRegistryService::new([make_component(
             component_id,
@@ -713,19 +713,19 @@ mod tests {
         );
 
         let _ = service.get_metadata(component_id, None).await.unwrap();
-        service.invalidate_latest_deployed_metadata().await;
+        service.invalidate_current_deployed_metadata().await;
         let _ = service.get_metadata(component_id, None).await.unwrap();
 
         let calls = calls.lock().unwrap();
         assert_eq!(
             calls.get(&component_id).copied().unwrap_or_default(),
             2,
-            "invalidating latest deployed metadata should force a fresh registry lookup"
+            "invalidating current deployed metadata should force a fresh registry lookup"
         );
     }
 
     #[test]
-    async fn invalidating_latest_deployed_component_metadata_for_environment_only_evicts_matching_entries()
+    async fn invalidating_current_deployed_component_metadata_for_environment_only_evicts_matching_entries()
      {
         let first_component_id = ComponentId::new();
         let second_component_id = ComponentId::new();
@@ -754,7 +754,7 @@ mod tests {
             .unwrap();
 
         service
-            .invalidate_latest_deployed_metadata_for_environment(first_environment_id)
+            .invalidate_current_deployed_metadata_for_environment(first_environment_id)
             .await;
 
         let _ = service

@@ -646,7 +646,7 @@ pub enum GolemCliSubcommand {
         language: Option<ReplLanguage>,
         #[command(flatten)]
         component_name: OptionalComponentName,
-        /// Optional component revision to use, defaults to latest deployed component revision
+        /// Optional component revision to use, defaults to current deployed component revision
         revision: Option<ComponentRevision>,
         #[command(flatten)]
         post_deploy_args: Option<PostDeployArgs>,
@@ -693,7 +693,7 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         component_name: OptionalComponentNames,
     },
-    /// Try to automatically update all existing agents of the application to the latest version
+    /// Try to automatically update all existing agents of the application to the current version
     UpdateAgents {
         #[command(flatten)]
         component_name: OptionalComponentNames,
@@ -707,7 +707,7 @@ pub enum GolemCliSubcommand {
         #[arg(long, default_value_t = false)]
         disable_wakeup: bool,
     },
-    /// Redeploy all agents of the application using the latest version
+    /// Redeploy all agents of the application using the current version
     RedeployAgents {
         #[command(flatten)]
         component_name: OptionalComponentNames,
@@ -887,13 +887,26 @@ pub mod shared_args {
     }
 
     impl PostDeployArgs {
+        fn effective_action(&self, env_args: &PostDeployArgs) -> PostDeployAction {
+            if let Some(update_mode) = self.update_agents {
+                PostDeployAction::Update(update_mode)
+            } else if self.reset {
+                PostDeployAction::Reset
+            } else if self.redeploy_agents {
+                PostDeployAction::Redeploy
+            } else if let Some(update_mode) = env_args.update_agents {
+                PostDeployAction::Update(update_mode)
+            } else if env_args.reset {
+                PostDeployAction::Reset
+            } else if env_args.redeploy_agents {
+                PostDeployAction::Redeploy
+            } else {
+                PostDeployAction::None
+            }
+        }
+
         pub fn is_any_set(&self, env_args: &PostDeployArgs) -> bool {
-            env_args.update_agents.is_some()
-                || env_args.redeploy_agents
-                || env_args.reset
-                || self.update_agents.is_some()
-                || self.redeploy_agents
-                || self.reset
+            !matches!(self.effective_action(env_args), PostDeployAction::None)
         }
 
         pub fn none() -> Self {
@@ -905,14 +918,31 @@ pub mod shared_args {
         }
 
         pub fn delete_agents(&self, env_args: &PostDeployArgs) -> bool {
-            (env_args.reset || self.reset) && !self.redeploy_agents && self.update_agents.is_none()
+            matches!(self.effective_action(env_args), PostDeployAction::Reset)
+        }
+
+        pub fn allow_incompatible_changes(&self, env_args: &PostDeployArgs) -> bool {
+            matches!(self.effective_action(env_args), PostDeployAction::Reset)
+        }
+
+        pub fn update_agents_mode(&self, env_args: &PostDeployArgs) -> Option<AgentUpdateMode> {
+            match self.effective_action(env_args) {
+                PostDeployAction::Update(update_mode) => Some(update_mode),
+                _ => None,
+            }
         }
 
         pub fn redeploy_agents(&self, env_args: &PostDeployArgs) -> bool {
-            (env_args.redeploy_agents || self.redeploy_agents)
-                && !self.reset
-                && self.update_agents.is_none()
+            matches!(self.effective_action(env_args), PostDeployAction::Redeploy)
         }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum PostDeployAction {
+        None,
+        Update(AgentUpdateMode),
+        Redeploy,
+        Reset,
     }
 
     #[derive(Debug, Args)]
@@ -956,14 +986,14 @@ pub mod component {
     pub enum ComponentSubcommand {
         /// List deployed component versions' metadata
         List,
-        /// Get the latest or selected revision of deployed component metadata
+        /// Get the current or selected revision of deployed component metadata
         Get {
             #[command(flatten)]
             component_name: OptionalComponentName,
             /// Optional component revision to get
             revision: Option<ComponentRevision>,
         },
-        /// Try to automatically update all existing agents of the selected component to the latest version
+        /// Try to automatically update all existing agents of the selected component to the current version
         UpdateAgents {
             #[command(flatten)]
             component_name: OptionalComponentName,
@@ -977,7 +1007,7 @@ pub mod component {
             #[arg(long, default_value_t = false)]
             disable_wakeup: bool,
         },
-        /// Redeploy all agents of the selected component using the latest version
+        /// Redeploy all agents of the selected component using the current version
         RedeployAgents {
             #[command(flatten)]
             component_name: OptionalComponentName,
@@ -1186,7 +1216,7 @@ pub mod worker {
             agent_id: AgentIdArgs,
             /// Update mode - auto or manual (default is auto)
             mode: Option<AgentUpdateMode>,
-            /// The new revision of the updated agent (default is the latest revision)
+            /// The new revision of the updated agent (default is the current deployed revision)
             target_revision: Option<ComponentRevision>,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
@@ -1911,12 +1941,13 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
 
 #[cfg(test)]
 mod test {
-
+    use crate::command::shared_args::PostDeployArgs;
     use crate::command::{
         GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
         help_target_to_subcommand_names,
     };
     use crate::error::ShowClapHelpTarget;
+    use crate::model::worker::AgentUpdateMode;
     use clap::builder::StyledStr;
     use clap::{Command, CommandFactory};
     use itertools::Itertools;
@@ -2199,5 +2230,53 @@ mod test {
                 }
             }
         }
+    }
+
+    fn post_deploy_args(
+        update_agents: Option<AgentUpdateMode>,
+        redeploy_agents: bool,
+        reset: bool,
+    ) -> PostDeployArgs {
+        PostDeployArgs {
+            update_agents,
+            redeploy_agents,
+            reset,
+        }
+    }
+
+    #[test]
+    fn post_deploy_args_cli_update_mode_overrides_env_reset() {
+        let cli_args = post_deploy_args(Some(AgentUpdateMode::Manual), false, false);
+        let env_args = post_deploy_args(None, false, true);
+
+        assert_eq!(
+            cli_args.update_agents_mode(&env_args),
+            Some(AgentUpdateMode::Manual)
+        );
+        assert!(!cli_args.delete_agents(&env_args));
+        assert!(!cli_args.redeploy_agents(&env_args));
+        assert!(!cli_args.allow_incompatible_changes(&env_args));
+    }
+
+    #[test]
+    fn post_deploy_args_env_reset_enables_delete_and_incompatible_changes() {
+        let cli_args = PostDeployArgs::none();
+        let env_args = post_deploy_args(None, false, true);
+
+        assert_eq!(cli_args.update_agents_mode(&env_args), None);
+        assert!(cli_args.delete_agents(&env_args));
+        assert!(cli_args.allow_incompatible_changes(&env_args));
+        assert!(!cli_args.redeploy_agents(&env_args));
+    }
+
+    #[test]
+    fn post_deploy_args_env_redeploy_does_not_delete_agents() {
+        let cli_args = PostDeployArgs::none();
+        let env_args = post_deploy_args(None, true, false);
+
+        assert_eq!(cli_args.update_agents_mode(&env_args), None);
+        assert!(cli_args.redeploy_agents(&env_args));
+        assert!(!cli_args.delete_agents(&env_args));
+        assert!(!cli_args.allow_incompatible_changes(&env_args));
     }
 }

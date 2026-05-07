@@ -86,7 +86,10 @@ declare_structs! {
         pub version: DeploymentVersion,
         pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
         pub quota_resource_defaults: Vec<ResourceDefinitionCreation>,
-        pub retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>
+        pub retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub replace_incompatible_agent_secrets: bool,
     }
 
     pub struct DeploymentRollback {

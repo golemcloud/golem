@@ -1,0 +1,10 @@
+error[E0046]: not all trait items implemented, missing: `agent_implementation_annotation`
+  --> tests/ui/fail/generic_plain_impl.rs:15:1
+   |
+ 4 |   #[agent_definition]
+   |   ------------------- `agent_implementation_annotation` from trait
+...
+15 | / impl<'a, T, const N: usize> GenericAgent for GenericAgentImpl<'a, T, N>
+16 | | where
+17 | |     T: Clone,
+   | |_____________^ missing `agent_implementation_annotation` in implementation

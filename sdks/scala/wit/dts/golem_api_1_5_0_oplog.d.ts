@@ -476,6 +476,16 @@ declare module 'golem:api/oplog@1.5.0' {
     environmentId: EnvironmentId;
     resourceName: string;
   };
+  export type EphemeralSleepTooLong = {
+    requestedNanos: bigint;
+    maxNanos: bigint;
+  };
+  export type EphemeralFuelExhausted = {
+    overdraftLimit: bigint;
+  };
+  export type EphemeralCannotSuspend = {
+    reason: string;
+  };
   /**
    * Describes the error that occurred in the agent
    */
@@ -531,6 +541,18 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-terminated-by-quota'
     val: AgentTerminatedByQuotaError
+  } |
+  {
+    tag: 'ephemeral-sleep-too-long'
+    val: EphemeralSleepTooLong
+  } |
+  {
+    tag: 'ephemeral-fuel-exhausted'
+    val: EphemeralFuelExhausted
+  } |
+  {
+    tag: 'ephemeral-cannot-suspend'
+    val: EphemeralCannotSuspend
   };
   export type RawCreateParameters = {
     timestamp: Datetime;

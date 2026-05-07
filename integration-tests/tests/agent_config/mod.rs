@@ -15,6 +15,7 @@
 mod local_agent_config;
 mod rpc;
 mod shared_agent_config;
+mod ts_optional_group_agent_config;
 
 use crate::Tracing;
 use convert_case::ccase;

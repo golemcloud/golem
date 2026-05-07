@@ -105,10 +105,17 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
             let load_snapshot_item = get_load_snapshot_item();
             let save_snapshot_item = get_save_snapshot_item();
+            let agent_type_name_item =
+                get_agent_type_name_item(&agent_definition_trait.ident.to_string());
+            let agent_implementation_annotation_item = get_agent_implementation_annotation_item();
 
             agent_definition_trait.items.push(load_snapshot_item);
             agent_definition_trait.items.push(save_snapshot_item);
             agent_definition_trait.items.push(registration_function);
+            agent_definition_trait.items.push(agent_type_name_item);
+            agent_definition_trait
+                .items
+                .push(agent_implementation_annotation_item);
 
             AgentConfigAttrRemover.visit_item_trait_mut(&mut agent_definition_trait);
 
@@ -137,6 +144,22 @@ fn get_save_snapshot_item() -> syn::TraitItem {
     syn::parse_quote! {
         async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
             Err("save_snapshot not implemented".to_string())
+        }
+    }
+}
+
+fn get_agent_implementation_annotation_item() -> syn::TraitItem {
+    syn::parse_quote! {
+        #[doc(hidden)]
+        fn agent_implementation_annotation() where Self: Sized;
+    }
+}
+
+fn get_agent_type_name_item(agent_type_name: &str) -> syn::TraitItem {
+    syn::parse_quote! {
+        #[doc(hidden)]
+        fn __golem_agent_type_name() -> &'static str where Self: Sized {
+            #agent_type_name
         }
     }
 }
