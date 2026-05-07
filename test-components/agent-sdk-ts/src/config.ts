@@ -140,6 +140,52 @@ export class OptionalGroupConfigAgent extends BaseAgent {
   }
 }
 
+type AllOptionalGroupConfigAgentConfig = {
+  allOptionalGroup?: {
+    x?: number;
+    y?: string;
+  };
+};
+
+@agent()
+export class AllOptionalGroupConfigAgent extends BaseAgent {
+  constructor(_name: string, readonly config: Config<AllOptionalGroupConfigAgentConfig>) {
+    super();
+  }
+
+  echoLocalConfig(): string {
+    const config = this.config.value;
+    return JSON.stringify({
+      allOptionalGroup: config.allOptionalGroup ?? null,
+    });
+  }
+}
+
+type NestedRequiredGroupConfigAgentConfig = {
+  outer?: {
+    required: string;
+    inner: {
+      a: number;
+    };
+  };
+};
+
+@agent()
+export class NestedRequiredGroupConfigAgent extends BaseAgent {
+  constructor(_name: string, readonly config: Config<NestedRequiredGroupConfigAgentConfig>) {
+    super();
+  }
+
+  echoLocalConfig(): string {
+    const config = this.config.value;
+    return JSON.stringify({
+      outer: config.outer
+        ? { required: config.outer.required, inner: { a: config.outer.inner.a } }
+        : undefined,
+    });
+  }
+}
+
 type RpcLocalConfigAgentConfig = {
   foo: number;
   nested_a?: boolean,

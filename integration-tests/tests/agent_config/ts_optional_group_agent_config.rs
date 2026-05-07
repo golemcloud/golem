@@ -170,10 +170,11 @@ async fn optional_group_present_with_required_field_only(
     Ok(())
 }
 
+// An optional group with only optional children returns {} when no children are provided
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn optional_group_absent_when_not_provided(
+async fn all_optional_group_is_empty_object_when_no_children_provided(
     deps: &EnvBasedTestDependencies,
     #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
 ) -> anyhow::Result<()> {
@@ -186,15 +187,173 @@ async fn optional_group_absent_when_not_provided(
         .store()
         .await?;
 
-    let agent_id = agent_id!("OptionalGroupConfigAgent", "test-agent");
+    let agent_id = agent_id!("AllOptionalGroupConfigAgent", "test-agent");
+    user.start_agent_with(&component.id, agent_id.clone(), HashMap::new(), vec![])
+        .await?;
+
+    let response = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let_assert!(Value::String(config) = response);
+    let parsed: serde_json::Value = serde_json::from_str(&config)?;
+
+    assert_eq!(parsed, json!({ "allOptionalGroup": {} }));
+
+    Ok(())
+}
+
+// An optional group with only optional children is present with the provided child.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn all_optional_group_present_when_child_provided(
+    deps: &EnvBasedTestDependencies,
+    #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("AllOptionalGroupConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
         HashMap::new(),
         vec![AgentConfigEntryDto {
-            path: vec!["required".to_string()],
+            path: vec![
+                ctx.case_config_path_segment("all-optional-group"),
+                "x".to_string(),
+            ],
+            value: json!(7).into(),
+        }],
+    )
+    .await?;
+
+    let response = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let_assert!(Value::String(config) = response);
+    let parsed: serde_json::Value = serde_json::from_str(&config)?;
+
+    assert_eq!(parsed, json!({ "allOptionalGroup": { "x": 7 } }));
+
+    Ok(())
+}
+
+// An optional group with a required nested object: if the required nested object's
+// required child is missing, the whole optional group is pruned.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn optional_group_absent_when_required_nested_child_missing(
+    deps: &EnvBasedTestDependencies,
+    #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
+        .store()
+        .await?;
+
+    // Provide outer.required but not outer.inner.a — inner is pruned, which
+    // makes outer.inner undefined, which prunes outer itself.
+    let agent_id = agent_id!("NestedRequiredGroupConfigAgent", "test-agent");
+    user.start_agent_with(
+        &component.id,
+        agent_id.clone(),
+        HashMap::new(),
+        vec![AgentConfigEntryDto {
+            path: vec![
+                ctx.case_config_path_segment("outer"),
+                "required".to_string(),
+            ],
             value: json!("hello").into(),
         }],
+    )
+    .await?;
+
+    let response = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let_assert!(Value::String(config) = response);
+    let parsed: serde_json::Value = serde_json::from_str(&config)?;
+
+    assert_eq!(parsed, json!({}));
+
+    Ok(())
+}
+
+// An optional group with a required nested object: present when all required fields are provided.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn optional_group_present_when_required_nested_child_provided(
+    deps: &EnvBasedTestDependencies,
+    #[tagged_as("ts")] ctx: &Arc<dyn TestContext>,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("NestedRequiredGroupConfigAgent", "test-agent");
+    user.start_agent_with(
+        &component.id,
+        agent_id.clone(),
+        HashMap::new(),
+        vec![
+            AgentConfigEntryDto {
+                path: vec![
+                    ctx.case_config_path_segment("outer"),
+                    "required".to_string(),
+                ],
+                value: json!("hello").into(),
+            },
+            AgentConfigEntryDto {
+                path: vec![
+                    ctx.case_config_path_segment("outer"),
+                    "inner".to_string(),
+                    "a".to_string(),
+                ],
+                value: json!(99).into(),
+            },
+        ],
     )
     .await?;
 
@@ -215,7 +374,10 @@ async fn optional_group_absent_when_not_provided(
     assert_eq!(
         parsed,
         json!({
-            "required": "hello"
+            "outer": {
+                "required": "hello",
+                "inner": { "a": 99 }
+            }
         })
     );
 

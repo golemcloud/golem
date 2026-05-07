@@ -154,7 +154,7 @@ function getTypeFromTsMorphInternal(
     if (typeLiteral == null)
       throw `Config<T> type parameter must be an inline object type (e.g. Config<{ key: string }>), got: ${innerType.getText()}`;
 
-    const result = extractConfigPropertiesFromTypeLiteral(typeLiteral, [], wellKnownTypes);
+    const result = extractConfigPropertiesFromTypeLiteral(typeLiteral, [], false, wellKnownTypes);
     if (result == null)
       throw 'Config<T> must be an object type with only property signatures. Method signatures and index signatures are not supported.';
 
@@ -164,7 +164,8 @@ function getTypeFromTsMorphInternal(
       owner: getTypeOwner(type),
       optional: isOptional,
       properties: result.properties,
-      requiredMembers: result.requiredMembers,
+      // Filter out the root entry (empty path) — it has no parent to prune.
+      requiredMembers: result.requiredMembers.filter((e) => e.path.length > 0),
     };
   }
 
@@ -511,12 +512,18 @@ function resolveStrictTypeLiteralNode(type: TsMorphType): TypeLiteralNode | unde
   return typeLiteralDecl;
 }
 
+// Extracts all leaf config properties from a type literal node, recursing into
+// nested type literals. Returns the flattened leaf properties and a
+// path-to-required-keys mapping for every intermediate node (deepest first),
+// which loadConfig uses for pruning.
+//
+// `hasOptionalAncestor` tracks whether any ancestor was declared optional (`?:`),
+// which propagates `optional: true` to all descendant leaves.
 function extractConfigPropertiesFromTypeLiteral(
   node: TypeLiteralNode,
   path: string[],
+  hasOptionalAncestor: boolean,
   wellKnownTypes: WellKnownTypes,
-  // Optional ancestor groups accumulated so far, deepest-first.
-  requiredMembers: { path: string[]; requiredKeys: string[] }[] = [],
 ):
   | {
       properties: Type.ConfigProperty[];
@@ -530,13 +537,17 @@ function extractConfigPropertiesFromTypeLiteral(
   }
 
   const properties: Type.ConfigProperty[] = [];
-  let accumulatedRequiredMembers = requiredMembers;
+
+  // Entries collected from nested nodes (depth first); this node's own entry
+  // is appended after all children so the array stays depth-first.
+  const nestedRequiredMembers: { path: string[]; requiredKeys: string[] }[] = [];
+  const requiredKeys: string[] = [];
 
   for (const member of members) {
     const name = member.getName();
     const nextPath = [...path, name];
     const memberOptional = member.hasQuestionToken();
-    const isOptional = memberOptional || accumulatedRequiredMembers.length > 0;
+    const isOptional = memberOptional || hasOptionalAncestor;
 
     // For optional properties (`field?: T`), ts-morph returns `T | undefined`.
     // Strip the `undefined` member so well-known-type checks work correctly.
@@ -548,6 +559,7 @@ function extractConfigPropertiesFromTypeLiteral(
 
     // 1. secret wrapper
     if (isExactly(propType, wellKnownTypes.sdk.secret)) {
+      if (!memberOptional) requiredKeys.push(name);
       properties.push({
         path: nextPath,
         secret: true,
@@ -556,32 +568,24 @@ function extractConfigPropertiesFromTypeLiteral(
       continue;
     }
 
-    // 2. nested type literal — if optional, prepend it to requiredMembers
-    //    (deepest-first order) before recursing into its children.
+    // 2. nested type literal
     const nestedTypeLiteral = resolveStrictTypeLiteralNode(propType);
     if (nestedTypeLiteral != null) {
-      let nestedRequiredMembers = accumulatedRequiredMembers;
-      if (memberOptional) {
-        const requiredKeys = nestedTypeLiteral
-          .getMembers()
-          .filter(TsMorphNode.isPropertySignature)
-          .filter((m) => !m.hasQuestionToken())
-          .map((m) => m.getName());
-        nestedRequiredMembers = [{ path: nextPath, requiredKeys }, ...accumulatedRequiredMembers];
-      }
+      if (!memberOptional) requiredKeys.push(name);
       const nested = extractConfigPropertiesFromTypeLiteral(
         nestedTypeLiteral,
         nextPath,
+        isOptional,
         wellKnownTypes,
-        nestedRequiredMembers,
       );
       if (nested == null) return undefined;
       properties.push(...nested.properties);
-      accumulatedRequiredMembers = nested.requiredMembers;
+      nestedRequiredMembers.push(...nested.requiredMembers);
       continue;
     }
 
-    // 3. leaf node
+    // 3. scalar leaf
+    if (!memberOptional) requiredKeys.push(name);
     properties.push({
       path: nextPath,
       secret: false,
@@ -589,7 +593,9 @@ function extractConfigPropertiesFromTypeLiteral(
     });
   }
 
-  return { properties, requiredMembers: accumulatedRequiredMembers };
+  const requiredMembers = [...nestedRequiredMembers, { path, requiredKeys }];
+
+  return { properties, requiredMembers };
 }
 
 type RawName = string;

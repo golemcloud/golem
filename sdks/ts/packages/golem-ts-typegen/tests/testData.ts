@@ -220,6 +220,12 @@ type NestedOptionalGroupConfig = {
     innerGroup?: {
       a: number;
     };
+    requiredInnerGroup: {
+      b: number;
+    };
+    requiredInnerGroupWithOptionalMember: {
+      c?: number;
+    };
   };
 };
 

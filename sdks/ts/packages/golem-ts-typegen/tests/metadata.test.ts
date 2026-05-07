@@ -191,7 +191,12 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     expect(param.type.optional).toBe(false);
     expect(param.type.kind).toBe('config');
     assert(param.type.kind === 'config');
-    expect(param.type.requiredMembers).toEqual([]);
+    expect(param.type.requiredMembers).toEqual(
+      expect.arrayContaining([
+        { path: ['nested'], requiredKeys: ['nestedSecret', 'a', 'b'] },
+        { path: ['aliasedNested'], requiredKeys: ['c'] },
+      ]),
+    );
     expect(param.type.properties).toEqual(
       expect.arrayContaining([
         { path: ['foo'], secret: false, type: { kind: 'number', optional: false } },
@@ -232,10 +237,15 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     const param = getConstructorParams('NestedOptionalGroupConfigAgent')[0];
     expect(param.type.kind).toBe('config');
     assert(param.type.kind === 'config');
-    // innerGroup is deeper than outerGroup, so it must appear first
+    // innerGroup (optional, deepest) comes first, then requiredInnerGroup, then outerGroup
     expect(param.type.requiredMembers).toEqual([
       { path: ['outerGroup', 'innerGroup'], requiredKeys: ['a'] },
-      { path: ['outerGroup'], requiredKeys: ['required'] },
+      { path: ['outerGroup', 'requiredInnerGroup'], requiredKeys: ['b'] },
+      { path: ['outerGroup', 'requiredInnerGroupWithOptionalMember'], requiredKeys: [] },
+      {
+        path: ['outerGroup'],
+        requiredKeys: ['required', 'requiredInnerGroup', 'requiredInnerGroupWithOptionalMember'],
+      },
     ]);
   });
 

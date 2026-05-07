@@ -62,8 +62,8 @@ export class Config<T> {
         : loadConfigKey(path, prop.type);
     }
 
-    // Prune optional groups where any required child is absent.
-    // Already deepest-first from typegen so no sort needed.
+    // Prune nodes where any required child is absent.
+    // Already deepest-first from typegen so nested nodes are pruned before parents.
     for (const { path: groupPath, requiredKeys } of this.requiredMembers) {
       let parent: Record<string, any> = root;
       let group: Record<string, any> = root;
@@ -74,8 +74,7 @@ export class Config<T> {
       }
       if (typeof group !== 'object' || group === null) continue;
 
-      const keysToCheck = requiredKeys.length > 0 ? requiredKeys : Object.keys(group);
-      if (keysToCheck.some((k) => group[k] === undefined)) {
+      if (requiredKeys.some((k) => group[k] == null)) {
         parent[groupPath.at(-1)!] = undefined;
       }
     }
