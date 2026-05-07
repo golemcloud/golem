@@ -619,7 +619,7 @@ impl WorkerCommandHandler {
             agent_type.agent_type.constructor.input_schema.clone(),
         )
         .map_err(|err| {
-            anyhow!("Failed to match agent type parameters to the latest metadata: {err}")
+            anyhow!("Failed to match agent type parameters to the current metadata: {err}")
         })?;
         let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
         let agent_name = RawAgentId(agent_id.to_string());
@@ -1190,7 +1190,7 @@ impl WorkerCommandHandler {
                     .await?
                 else {
                     bail!(
-                        "Component {} not found, while getting latest component version",
+                        "Component {} not found, while getting current component version",
                         component.component_name
                     );
                 };
@@ -1997,7 +1997,7 @@ impl WorkerCommandHandler {
         log_warn_action(
             "Redeploying",
             format!(
-                "agent {}/{} to latest version",
+                "agent {}/{} to current version",
                 component_name.0.bold().blue(),
                 worker_metadata.agent_id.agent_id.bold().green(),
             ),

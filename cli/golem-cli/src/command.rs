@@ -646,7 +646,7 @@ pub enum GolemCliSubcommand {
         language: Option<ReplLanguage>,
         #[command(flatten)]
         component_name: OptionalComponentName,
-        /// Optional component revision to use, defaults to latest deployed component revision
+        /// Optional component revision to use, defaults to current deployed component revision
         revision: Option<ComponentRevision>,
         #[command(flatten)]
         post_deploy_args: Option<PostDeployArgs>,
@@ -693,7 +693,7 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         component_name: OptionalComponentNames,
     },
-    /// Try to automatically update all existing agents of the application to the latest version
+    /// Try to automatically update all existing agents of the application to the current version
     UpdateAgents {
         #[command(flatten)]
         component_name: OptionalComponentNames,
@@ -707,7 +707,7 @@ pub enum GolemCliSubcommand {
         #[arg(long, default_value_t = false)]
         disable_wakeup: bool,
     },
-    /// Redeploy all agents of the application using the latest version
+    /// Redeploy all agents of the application using the current version
     RedeployAgents {
         #[command(flatten)]
         component_name: OptionalComponentNames,
@@ -986,14 +986,14 @@ pub mod component {
     pub enum ComponentSubcommand {
         /// List deployed component versions' metadata
         List,
-        /// Get the latest or selected revision of deployed component metadata
+        /// Get the current or selected revision of deployed component metadata
         Get {
             #[command(flatten)]
             component_name: OptionalComponentName,
             /// Optional component revision to get
             revision: Option<ComponentRevision>,
         },
-        /// Try to automatically update all existing agents of the selected component to the latest version
+        /// Try to automatically update all existing agents of the selected component to the current version
         UpdateAgents {
             #[command(flatten)]
             component_name: OptionalComponentName,
@@ -1007,7 +1007,7 @@ pub mod component {
             #[arg(long, default_value_t = false)]
             disable_wakeup: bool,
         },
-        /// Redeploy all agents of the selected component using the latest version
+        /// Redeploy all agents of the selected component using the current version
         RedeployAgents {
             #[command(flatten)]
             component_name: OptionalComponentName,
@@ -1216,7 +1216,7 @@ pub mod worker {
             agent_id: AgentIdArgs,
             /// Update mode - auto or manual (default is auto)
             mode: Option<AgentUpdateMode>,
-            /// The new revision of the updated agent (default is the latest revision)
+            /// The new revision of the updated agent (default is the current deployed revision)
             target_revision: Option<ComponentRevision>,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]

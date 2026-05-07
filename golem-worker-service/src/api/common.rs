@@ -311,7 +311,7 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::ComponentDownloadFailed { .. } => {
                 Self::internal(api::error_code::INTERNAL_COMPONENT_DOWNLOAD_FAILED, error)
             }
-            WorkerExecutorError::GetLatestVersionOfComponentFailed { .. } => {
+            WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. } => {
                 Self::internal(api::error_code::INTERNAL_COMPONENT_DOWNLOAD_FAILED, error)
             }
             WorkerExecutorError::InitialAgentFileDownloadFailed { .. } => {
