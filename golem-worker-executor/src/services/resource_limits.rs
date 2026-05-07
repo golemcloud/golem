@@ -267,7 +267,7 @@ impl AtomicResourceEntry {
         let amt_i64 = amount.min(i64::MAX as u64) as i64;
         self.delta
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
-                Some(d.saturating_sub(amt_i64))
+                Some(d.saturating_add(amt_i64))
             })
             .ok();
         record_ephemeral_overdraft_fuel(amount);
@@ -832,12 +832,12 @@ mod tests {
     }
 
     #[test]
-    fn record_overdraft_debt_decreases_delta_by_actual_consumed_amount() {
+    fn record_overdraft_debt_increases_delta_by_actual_consumed_amount() {
         let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX, u64::MAX);
         entry.record_overdraft_debt(2000);
 
-        assert_eq!(entry.delta.load(Ordering::Acquire), -2000);
-        assert_eq!(entry.effective_fuel(), 0);
+        assert_eq!(entry.delta.load(Ordering::Acquire), 2000);
+        assert_eq!(entry.effective_fuel(), 3000);
     }
 
     #[test]

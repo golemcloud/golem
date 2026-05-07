@@ -17,7 +17,6 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendF
 use crate::metrics::ephemeral::{dec_promise_waiting, inc_promise_waiting};
 use crate::workerctx::WorkerCtx;
 use chrono::{Duration, Utc};
-use futures::future::Either;
 use futures::pin_mut;
 use golem_common::model::Timestamp;
 use golem_common::model::agent::AgentMode;
@@ -172,6 +171,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             } else {
                 false
             };
+            let ephemeral_poll_timeout = if self.agent_mode() == AgentMode::Ephemeral {
+                Some(self.state.config.suspend.ephemeral_max_sleep)
+            } else {
+                None
+            };
 
             let result = {
                 let mut view = self.as_wasi_view();
@@ -179,22 +183,32 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let poll = Host::poll(&mut io_data, in_);
                 pin_mut!(poll);
 
-                if record_ephemeral_promise_wait {
-                    inc_promise_waiting();
-                }
-                let either_result = futures::future::select(poll, interrupt_signal).await;
-                match either_result {
-                    Either::Left((result, _)) => {
-                        if record_ephemeral_promise_wait {
-                            dec_promise_waiting();
+                let _promise_waiting = PromiseWaiting::new(record_ephemeral_promise_wait);
+
+                if let Some(timeout_duration) = ephemeral_poll_timeout {
+                    let timeout = tokio::time::sleep(timeout_duration);
+                    pin_mut!(timeout);
+
+                    tokio::select! {
+                        result = &mut poll => {
+                            result
                         }
-                        result
+                        interrupt_kind = interrupt_signal => {
+                            return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
+                        }
+                        _ = &mut timeout => {
+                            let max_nanos = std_duration_to_nanos(timeout_duration);
+                            return Err(ephemeral_sleep_too_long_error(max_nanos, max_nanos));
+                        }
                     }
-                    Either::Right((interrupt_kind, _)) => {
-                        if record_ephemeral_promise_wait {
-                            dec_promise_waiting();
+                } else {
+                    tokio::select! {
+                        result = &mut poll => {
+                            result
                         }
-                        return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
+                        interrupt_kind = interrupt_signal => {
+                            return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
+                        }
                     }
                 }
             };
@@ -220,15 +234,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Err(duration) => {
                 if self.agent_mode() == AgentMode::Ephemeral {
                     let max = self.state.config.suspend.ephemeral_max_sleep;
-                    Err(wasmtime::Error::from_anyhow(anyhow::anyhow!(
-                        WorkerExecutorError::InvocationFailed {
-                            error: AgentError::EphemeralSleepTooLong(EphemeralSleepTooLongError {
-                                requested_nanos: duration_to_nanos(duration),
-                                max_nanos: std_duration_to_nanos(max),
-                            }),
-                            stderr: String::new(),
-                        }
-                    )))
+                    Err(ephemeral_sleep_too_long_error(
+                        duration_to_nanos(duration),
+                        std_duration_to_nanos(max),
+                    ))
                 } else {
                     self.state.sleep_until(Utc::now() + duration).await?;
                     Err(wasmtime::Error::from_anyhow(
@@ -238,6 +247,35 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         }
     }
+}
+
+struct PromiseWaiting(bool);
+
+impl PromiseWaiting {
+    fn new(enabled: bool) -> Self {
+        if enabled {
+            inc_promise_waiting();
+        }
+        Self(enabled)
+    }
+}
+
+impl Drop for PromiseWaiting {
+    fn drop(&mut self) {
+        if self.0 {
+            dec_promise_waiting();
+        }
+    }
+}
+
+fn ephemeral_sleep_too_long_error(requested_nanos: u64, max_nanos: u64) -> wasmtime::Error {
+    wasmtime::Error::from_anyhow(anyhow::anyhow!(WorkerExecutorError::InvocationFailed {
+        error: AgentError::EphemeralSleepTooLong(EphemeralSleepTooLongError {
+            requested_nanos,
+            max_nanos,
+        }),
+        stderr: String::new(),
+    }))
 }
 
 fn duration_to_nanos(duration: Duration) -> u64 {
