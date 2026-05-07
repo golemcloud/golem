@@ -12,11 +12,11 @@ componentTemplates:
           dir: "{{ appRootDir }}"
         - command: moon build --target wasm
           dir: "{{ appRootDir }}"
-        - command: wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit {% if componentDirRel == '' %}{{ appRootDir }}/_build/wasm/debug/build/{{ componentName | split(':') | first }}.wasm{% else %}{{ appRootDir }}/_build/wasm/debug/build/{{ componentDirRel }}/{{ componentDirRel }}.wasm{% endif %} --encoding utf16 --output {{ appRootDir }}/_build/wasm/debug/{{ componentName | replace(':', '_') }}.embed.wasm
+        - command: wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit {{ appRootDir }}/_build/wasm/debug/build/{{ moonbitBuildPackagePath }} --encoding utf16 --output {{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.embed.wasm
           mkdirs:
           - "{{ appRootDir }}/_build/wasm/debug"
-        - command: wasm-tools component new {{ appRootDir }}/_build/wasm/debug/{{ componentName | replace(':', '_') }}.embed.wasm --output {{ appRootDir }}/_build/wasm/debug/{{ componentName | replace(':', '_') }}.agent.wasm
-        componentWasm: "{{ appRootDir }}/_build/wasm/debug/{{ componentName | replace(':', '_') }}.agent.wasm"
+        - command: wasm-tools component new {{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.embed.wasm --output {{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent.wasm
+        componentWasm: "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent.wasm"
       release:
         build:
         - command: GOLEM_MOONBIT_BUILD_TOOLS_CMD reexports GOLEM_MOONBIT_BUILD_SDK_PATH {{ componentDir }}
@@ -25,8 +25,8 @@ componentTemplates:
           dir: "{{ appRootDir }}"
         - command: moon build --target wasm --release
           dir: "{{ appRootDir }}"
-        - command: wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit {% if componentDirRel == '' %}{{ appRootDir }}/_build/wasm/release/build/{{ componentName | split(':') | first }}.wasm{% else %}{{ appRootDir }}/_build/wasm/release/build/{{ componentDirRel }}/{{ componentDirRel }}.wasm{% endif %} --encoding utf16 --output {{ appRootDir }}/_build/wasm/release/{{ componentName | replace(':', '_') }}.embed.wasm
+        - command: wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit {{ appRootDir }}/_build/wasm/release/build/{{ moonbitBuildPackagePath }} --encoding utf16 --output {{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm
           mkdirs:
           - "{{ appRootDir }}/_build/wasm/release"
-        - command: wasm-tools component new {{ appRootDir }}/_build/wasm/release/{{ componentName | replace(':', '_') }}.embed.wasm --output {{ appRootDir }}/_build/wasm/release/{{ componentName | replace(':', '_') }}.agent.wasm
-        componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | replace(':', '_') }}.agent.wasm"
+        - command: wasm-tools component new {{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm --output {{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm
+        componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
