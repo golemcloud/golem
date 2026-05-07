@@ -190,6 +190,8 @@ impl DeploymentWriteService {
             .get_latest_deployment_for_environment(&environment, auth)
             .await?;
 
+        let compatibility_check_enabled = environment.compatibility_check;
+
         let next_deployment_revision = latest_deployment
             .as_ref()
             .map(|ld| ld.revision.next())
@@ -256,6 +258,10 @@ impl DeploymentWriteService {
 
         let mut errors = Vec::new();
 
+        if data.replace_incompatible_agent_secrets && compatibility_check_enabled {
+            errors.push(DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled);
+        }
+
         let compiled_routes = deployment_context.compile_http_api_routes(&mut errors);
 
         let security_schemes_list = self
@@ -290,10 +296,11 @@ impl DeploymentWriteService {
             &mut errors,
         );
 
-        let (new_agent_secrets, updated_agent_secrets) = deployment_context
+        let (new_agent_secrets, updated_agent_secrets, replaced_agent_secrets) = deployment_context
             .deployment_agent_secret_creations_and_updates(
                 agent_secrets_in_environment,
                 data.agent_secret_defaults,
+                data.replace_incompatible_agent_secrets,
                 &mut errors,
             );
 
@@ -334,6 +341,7 @@ impl DeploymentWriteService {
                 .collect(),
             new_agent_secrets,
             updated_agent_secrets,
+            replaced_agent_secrets,
             new_resource_definitions,
             new_retry_policies,
             auth.account_id(),

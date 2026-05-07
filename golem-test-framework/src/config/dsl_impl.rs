@@ -304,6 +304,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                         .as_ref()
                         .map(|(_wasm, agent_types)| agent_types.clone()),
                     agent_type_provision_config_updates,
+                    allow_incompatible_config: false,
                 },
                 updated_wasm.map(|(wasm, _agent_types)| wasm),
                 {
@@ -932,6 +933,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             agent_secret_defaults: Vec::new(),
             quota_resource_defaults: Vec::new(),
             retry_policy_defaults: Vec::new(),
+            replace_incompatible_agent_secrets: false,
         };
 
         modify_deployment(&mut deployment_creation);

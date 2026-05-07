@@ -3059,8 +3059,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-
-        let _current_assignment = this.shard_service().try_get_current_assignment();
         let workers = this.worker_service().get_running_workers_in_shards().await;
 
         debug!(workers = ?workers, "Recovering running workers");

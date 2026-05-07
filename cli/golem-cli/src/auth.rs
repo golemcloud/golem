@@ -17,7 +17,7 @@ use crate::config::{
     ApplicationEnvironmentConfig, AuthenticationConfig, AuthenticationConfigWithSource,
     AuthenticationSource, OAuth2AuthenticationConfig, OAuth2AuthenticationData,
 };
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::LogColorize;
 use anyhow::{Context, anyhow, bail};
 use colored::Colorize;
@@ -165,15 +165,16 @@ impl Auth {
 
         let client = MeClientLive { context };
 
-        client.current_login_token().await.map_service_error()
+        Ok(client.current_login_token().await.map_service_error()?)
     }
 
     async fn start_oauth2(&self) -> anyhow::Result<OAuth2WebflowData> {
         info!("Start OAuth2 workflow");
-        self.login_client
+        Ok(self
+            .login_client
             .start_oauth_2_webflow(&OAuth2Provider::Github, Some("https://golem.cloud"))
             .await
-            .map_service_error()
+            .map_service_error()?)
     }
 
     async fn complete_oauth2(
@@ -200,7 +201,7 @@ impl Auth {
 
                         sleep(delay).await;
                     }
-                    _ => return Err(err).map_service_error(),
+                    _ => return Err(ServiceError::from(err).into()),
                 },
             }
         }

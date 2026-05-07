@@ -15,7 +15,7 @@
 use crate::command::api::deployment::ApiDeploymentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::{AnyhowMapServiceError, ServiceError};
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
@@ -130,11 +130,11 @@ impl ApiDeploymentCommandHandler {
                         return Ok(Some(deployment));
                     };
 
-                    clients
+                    Ok(clients
                         .api_deployment
                         .get_http_api_deployment_revision(&deployment.id.0, (*revision).into())
                         .await
-                        .map_service_error_not_found_as_opt()
+                        .map_service_error_not_found_as_opt()?)
                 },
             )
             .await
@@ -206,7 +206,7 @@ impl ApiDeploymentCommandHandler {
                         )
                         .await
                         .map_service_error()
-                        .map_err(Arc::new)
+                        .map_err(|err| Arc::new(err.into()))
                 }
             })
             .await
