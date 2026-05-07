@@ -506,6 +506,126 @@ async fn test_ts_counter() {
     }
 }
 
+#[test]
+#[tag(group4)]
+async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
+    let mut ctx = TestContext::new();
+    let app_name = "long-agent-id-rejected";
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let component_manifest_path = ctx.cwd_path_join("golem.yaml");
+    let component_source_code_main_file = ctx.cwd_path_join("src/main.ts");
+
+    fs::write_str(
+        &component_manifest_path,
+        indoc! { r#"
+            manifestVersion: 1.5.0
+
+            app: long-agent-id-rejected
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+              cloud:
+                server: cloud
+                componentPresets: release
+
+            components:
+              long-agent-id-rejected:ts-main:
+                templates: ts
+        "# },
+    )
+    .unwrap();
+
+    fs::write_str(
+        &component_source_code_main_file,
+        indoc! { r#"
+            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+
+            @agent()
+            class TargetAgent extends BaseAgent {
+              id: string;
+
+              constructor(id: string) {
+                super();
+                this.id = id;
+              }
+
+              async ping(): Promise<string> {
+                return `pong:${this.id}`;
+              }
+            }
+
+            @agent()
+            class CallerAgent extends BaseAgent {
+              id: string;
+
+              constructor(id: string) {
+                super();
+                this.id = id;
+              }
+
+              async callTarget(targetId: string): Promise<string> {
+                return await (await TargetAgent.get(targetId)).ping();
+              }
+            }
+        "# },
+    )
+    .unwrap();
+
+    ctx.start_server().await;
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let long_id = "x".repeat(5000);
+    let target_agent = format!("TargetAgent(\"{long_id}\")");
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &target_agent, "ping"])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains("Agent id is too long"));
+
+    let outputs = ctx
+        .cli([
+            cmd::REPL,
+            flag::LANGUAGE,
+            "ts",
+            flag::SCRIPT,
+            &format!("(await TargetAgent.get(\"{long_id}\")).ping()"),
+        ])
+        .await;
+    assert!(outputs.stderr_contains("Agent id is too long"));
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "CallerAgent(\"ok\")",
+            "callTarget",
+            &format!("\"{long_id}\""),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(
+        outputs.stderr_contains("Agent id is too long")
+            || outputs.stdout_contains("Agent id is too long")
+            || outputs.stderr_contains("Invocation Failed")
+    );
+}
+
 // Invocations on code-first typescript agents, with complex types / functions.
 // Each function call is executed via RPC, and at every stage, mostly return type is same as input type.
 // Early in the code-first release, some of these cases failed at the Golem execution stage

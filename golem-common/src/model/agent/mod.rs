@@ -56,6 +56,7 @@ use std::sync::LazyLock;
 use uuid::Uuid;
 
 pub use crate::base_model::agent::*;
+use crate::model::AgentId;
 
 impl TryFrom<i32> for AgentMode {
     type Error = String;
@@ -312,6 +313,7 @@ impl ParsedAgentId {
             use std::fmt::Write;
             write!(as_string, "[{phantom_id}]").unwrap();
         }
+        Self::validate_length(&as_string)?;
         Ok(Self {
             agent_type,
             parameters,
@@ -333,6 +335,10 @@ impl ParsedAgentId {
         };
 
         Self::new(agent_type, parameters, phantom_id)
+    }
+
+    fn validate_length(as_string: &str) -> Result<(), String> {
+        AgentId::validate_length(as_string)
     }
 
     pub fn parse(s: impl AsRef<str>, resolver: impl AgentTypeResolver) -> Result<Self, String> {
@@ -373,6 +379,8 @@ impl ParsedAgentId {
             write!(as_string, "[{phantom_id}]").unwrap();
         }
 
+        Self::validate_length(&as_string)?;
+
         let agent_id = ParsedAgentId {
             agent_type: agent_type.type_name.clone(),
             parameters: value,
@@ -382,7 +390,7 @@ impl ParsedAgentId {
         Ok((agent_id, agent_type))
     }
 
-    pub fn with_phantom_id(&self, phantom_id: Option<Uuid>) -> Self {
+    pub fn with_phantom_id(&self, phantom_id: Option<Uuid>) -> Result<Self, String> {
         use crate::model::agent::structural_format::format_structural;
         use std::fmt::Write;
 
@@ -391,12 +399,13 @@ impl ParsedAgentId {
         if let Some(ref id) = phantom_id {
             write!(as_string, "[{id}]").unwrap();
         }
-        Self {
+        Self::validate_length(&as_string)?;
+        Ok(Self {
             agent_type: self.agent_type.clone(),
             parameters: self.parameters.clone(),
             phantom_id,
             as_string,
-        }
+        })
     }
 
     /// Normalizes an agent ID string without requiring component metadata.

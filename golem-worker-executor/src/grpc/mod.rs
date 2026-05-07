@@ -3008,6 +3008,9 @@ fn extract_owned_agent_id<T>(
     let agent_id = get_agent_id(request)
         .as_ref()
         .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
+
+    AgentId::validate_length(&agent_id.name).map_err(WorkerExecutorError::invalid_request)?;
+
     let agent_id = agent_id
         .clone()
         .try_into()

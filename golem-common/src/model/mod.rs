@@ -105,19 +105,25 @@ pub enum InvocationStatus {
 impl AgentId {
     const AGENT_ID_MAX_LENGTH: usize = 512;
 
+    pub fn validate_length(id: &str) -> Result<(), String> {
+        if id.len() > Self::AGENT_ID_MAX_LENGTH {
+            Err(format!(
+                "Agent id is too long: {}, max length: {}, agent id: {}",
+                id.len(),
+                Self::AGENT_ID_MAX_LENGTH,
+                id,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn from_agent_id(
         component_id: ComponentId,
         agent_id: &ParsedAgentId,
     ) -> Result<AgentId, String> {
         let agent_id = agent_id.to_string();
-        if agent_id.len() > Self::AGENT_ID_MAX_LENGTH {
-            return Err(format!(
-                "Agent id is too long: {}, max length: {}, agent id: {}",
-                agent_id.len(),
-                Self::AGENT_ID_MAX_LENGTH,
-                agent_id,
-            ));
-        }
+        Self::validate_length(&agent_id)?;
         Ok(Self {
             component_id,
             agent_id,

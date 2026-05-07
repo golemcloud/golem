@@ -56,11 +56,14 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
     }
 
     fn agent_id(&self) -> Result<AgentId, WorkerExecutorError> {
-        self.proto_agent_id()
+        let agent_id = self
+            .proto_agent_id()
             .clone()
-            .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?
-            .try_into()
-            .map_err(WorkerExecutorError::invalid_request)
+            .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
+
+        AgentId::validate_length(&agent_id.name).map_err(WorkerExecutorError::invalid_request)?;
+
+        agent_id.try_into().map_err(WorkerExecutorError::invalid_request)
     }
 
     fn env(&self) -> Option<Vec<(String, String)>> {
