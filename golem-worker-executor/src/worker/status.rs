@@ -1048,6 +1048,9 @@ fn is_worker_error_retriable(
         AgentError::NodeOutOfFilesystemStorage => true,
         AgentError::AgentExceededFilesystemStorageLimit => false,
         AgentError::AgentTerminatedByQuota(_) => false,
+        AgentError::EphemeralSleepTooLong(_) => false,
+        AgentError::EphemeralFuelExhausted(_) => false,
+        AgentError::EphemeralCannotSuspend(_) => false,
     }
 }
 

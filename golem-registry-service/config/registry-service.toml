@@ -113,8 +113,8 @@ client_secret = "GITHUB_CLIENT_SECRET"
 redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback"
 
 [login.config.oauth2]
-private_key = "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
-public_key = "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg="
+allowed_redirect_domains = ["localhost", "golem.cloud"]
+cli_redirect = "https://golem.cloud/"
 webflow_state_expiry = "5m"
 
 [security_scheme]

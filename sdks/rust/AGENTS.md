@@ -124,6 +124,11 @@ impl MyAgent for MyAgentImpl {
 }
 ```
 
+Every implementation of an `#[agent_definition]` trait must be annotated with
+`#[agent_implementation]`, including test or mock implementations. If the
+attribute is forgotten, the compiler reports a missing hidden trait item named
+`agent_implementation_annotation`; add `#[agent_implementation]` to the impl.
+
 ## Integration with Main Repository
 
 This SDK is part of the main Golem repository but is **not built by `cargo make build`**. When changes affect core functionality, test with the full Golem test suite:

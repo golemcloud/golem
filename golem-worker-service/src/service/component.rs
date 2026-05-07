@@ -44,20 +44,20 @@ error_forwarding!(ComponentServiceError, RegistryServiceError);
 
 #[async_trait]
 pub trait ComponentService: Send + Sync {
-    async fn get_latest_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component>;
+    async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component>;
 
-    // Might be outdated. Use get_latest_by_id_uncached if you always need the latest version
-    async fn get_latest_by_id(
+    // Might be outdated. Use get_current_by_id_uncached if you always need the current version
+    async fn get_current_by_id(
         &self,
         component_id: ComponentId,
     ) -> Result<Component, ComponentServiceError> {
-        match self.get_latest_by_id_in_cache(component_id).await {
+        match self.get_current_by_id_in_cache(component_id).await {
             Some(cached) => Ok(cached),
-            None => self.get_latest_by_id_uncached(component_id).await,
+            None => self.get_current_by_id_uncached(component_id).await,
         }
     }
 
-    async fn get_latest_by_id_uncached(
+    async fn get_current_by_id_uncached(
         &self,
         component_id: ComponentId,
     ) -> Result<Component, ComponentServiceError>;
@@ -124,7 +124,7 @@ impl RemoteComponentService {
 
 #[async_trait]
 impl ComponentService for RemoteComponentService {
-    async fn get_latest_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
+    async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
         let mut keys = self.cache.keys().await;
         keys.retain(|(id, _)| *id == component_id);
         keys.sort_by_key(|(_, revision)| *revision);
@@ -138,7 +138,7 @@ impl ComponentService for RemoteComponentService {
         None
     }
 
-    async fn get_latest_by_id_uncached(
+    async fn get_current_by_id_uncached(
         &self,
         component_id: ComponentId,
     ) -> Result<Component, ComponentServiceError> {

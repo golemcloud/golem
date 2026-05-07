@@ -23,7 +23,7 @@ use crate::command_handler::Handlers;
 use crate::command_handler::worker::stream::WorkerConnection;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::{AnyhowMapServiceError, ServiceError};
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
     LogColorize, LogIndent, log_action, log_error, log_error_action, log_failed_to, log_warn,
@@ -619,7 +619,7 @@ impl WorkerCommandHandler {
             agent_type.agent_type.constructor.input_schema.clone(),
         )
         .map_err(|err| {
-            anyhow!("Failed to match agent type parameters to the latest metadata: {err}")
+            anyhow!("Failed to match agent type parameters to the current metadata: {err}")
         })?;
         let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
         let agent_name = RawAgentId(agent_id.to_string());
@@ -1123,6 +1123,20 @@ impl WorkerCommandHandler {
             .component_by_agent_name_match(&agent_name_match)
             .await?;
 
+        if component
+            .metadata
+            .agent_types()
+            .iter()
+            .find(|agent_type| agent_type.type_name == agent_name_match.agent_type_name)
+            .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral)
+            && !self
+                .ctx
+                .interactive_handler()
+                .confirm_interrupt_ephemeral_agent()?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
         log_action(
             "Interrupting",
             format!("agent {}", format_agent_name_match(&agent_name_match)),
@@ -1190,7 +1204,7 @@ impl WorkerCommandHandler {
                     .await?
                 else {
                     bail!(
-                        "Component {} not found, while getting latest component version",
+                        "Component {} not found, while getting current component version",
                         component.component_name
                     );
                 };
@@ -1322,7 +1336,7 @@ impl WorkerCommandHandler {
                         path.log_color_error_highlight()
                     ),
                 );
-                return Err(e);
+                return Err(e.into());
             }
         };
 
@@ -1397,7 +1411,7 @@ impl WorkerCommandHandler {
                         path.log_color_error_highlight()
                     ),
                 );
-                return Err(e);
+                return Err(e.into());
             }
         };
 
@@ -1626,7 +1640,9 @@ impl WorkerCommandHandler {
             )
             .await
             .map(|_| ())
-            .map_service_error()
+            .map_service_error()?;
+
+        Ok(())
     }
 
     pub async fn worker_metadata(
@@ -1653,7 +1669,9 @@ impl WorkerCommandHandler {
             .delete_worker(&component_id, agent_name)
             .await
             .map(|_| ())
-            .map_service_error()
+            .map_service_error()?;
+
+        Ok(())
     }
 
     pub async fn update_component_workers(
@@ -1993,7 +2011,7 @@ impl WorkerCommandHandler {
         log_warn_action(
             "Redeploying",
             format!(
-                "agent {}/{} to latest version",
+                "agent {}/{} to current version",
                 component_name.0.bold().blue(),
                 worker_metadata.agent_id.agent_id.bold().green(),
             ),

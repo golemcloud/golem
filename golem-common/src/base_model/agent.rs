@@ -151,7 +151,7 @@ pub struct ResolvedAgentType {
     pub registered_agent_type: RegisteredAgentType,
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
-    // Present only when resolving at the latest current deployment (no explicit deployment
+    // Present only when resolving at the current deployment (no explicit deployment
     // revision requested).
     pub current_deployment_revision: Option<CurrentDeploymentRevision>,
 }

@@ -202,6 +202,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
           secret,
           type: buildJSONFromType(type),
         })),
+        requiredMembers: type.requiredMembers,
         optional: type.optional,
       };
 

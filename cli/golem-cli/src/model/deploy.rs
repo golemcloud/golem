@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
+use crate::error::service::ServiceError;
 use crate::model::GuestLanguage;
 use crate::model::worker::RawAgentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -107,3 +108,10 @@ pub enum PostDeployError {
 }
 
 pub type PostDeployResult = Result<PostDeploySummary, PostDeployError>;
+
+pub enum UpdateStagedComponentError {
+    Service(ServiceError),
+    Other(anyhow::Error),
+}
+
+pub type UpdateStagedComponentResult<T> = Result<T, UpdateStagedComponentError>;

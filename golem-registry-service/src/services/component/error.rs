@@ -116,6 +116,10 @@ pub enum ComponentError {
         agent: AgentTypeName,
         key: Vec<String>,
     },
+    #[error(
+        "Reset override flags are only allowed when environment compatibility_check is disabled"
+    )]
+    ResetOverrideRequiresCompatibilityCheckDisabled,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -153,6 +157,7 @@ impl SafeDisplay for ComponentError {
             Self::AgentConfigDuplicateValue { .. } => self.to_string(),
             Self::AgentConfigPathSegmentContainsDot { .. } => self.to_string(),
             Self::AgentConfigOldConfigNotValid { .. } => self.to_string(),
+            Self::ResetOverrideRequiresCompatibilityCheckDisabled => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }

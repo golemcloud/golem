@@ -121,6 +121,19 @@ impl AgentSecretRevisionRecord {
             audit,
         }
     }
+
+    pub fn delete(
+        id: AgentSecretId,
+        current_revision: AgentSecretRevision,
+        actor: AccountId,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            agent_secret_id: id.0,
+            revision_id: current_revision.next()?.into(),
+            agent_secret_revision_data: Blob::new(AgentSecretRevisionData { secret_value: None }),
+            audit: DeletableRevisionAuditFields::deletion(actor.0),
+        })
+    }
 }
 
 #[derive(FromRow, Debug, Clone, PartialEq)]

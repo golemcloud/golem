@@ -139,6 +139,9 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub allow_incompatible_config: bool,
     }
 
     #[derive(Default)]

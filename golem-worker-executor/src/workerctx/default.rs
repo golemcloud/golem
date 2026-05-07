@@ -60,7 +60,10 @@ use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::TimestampedUpdateDescription;
+use golem_common::model::oplog::{
+    AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError,
+    TimestampedUpdateDescription,
+};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
     OwnedAgentId,
@@ -105,14 +108,23 @@ struct FuelTracker {
     pub(self) prepaid_gauge_floor: u64,
     /// Number of fuel units borrowed from the account pool per batch.
     pub(self) fuel_to_borrow: u64,
+    /// Maximum fuel that can be locally overdrafted by one ephemeral invocation.
+    pub(self) ephemeral_overdraft_limit: u64,
+    /// Locally prepaid overdraft fuel for the current invocation.
+    pub(self) ephemeral_overdraft_prepaid: u64,
+    /// Whether the currently outstanding partial batch came from local ephemeral overdraft.
+    pub(self) last_borrow_was_ephemeral_overdraft: bool,
 }
 
 impl FuelTracker {
-    pub(self) fn new(fuel_to_borrow: u64) -> Self {
+    pub(self) fn new(fuel_to_borrow: u64, ephemeral_overdraft_limit: u64) -> Self {
         Self {
             gauge_at_last_return: u64::MAX,
             prepaid_gauge_floor: u64::MAX,
             fuel_to_borrow,
+            ephemeral_overdraft_limit,
+            ephemeral_overdraft_prepaid: 0,
+            last_borrow_was_ephemeral_overdraft: false,
         }
     }
 
@@ -138,6 +150,52 @@ impl FuelTracker {
     /// regardless of any deficit covered by this borrow.
     pub(self) fn on_borrow_success(&mut self, current_gauge: u64) {
         self.prepaid_gauge_floor = current_gauge.saturating_sub(self.fuel_to_borrow);
+    }
+
+    pub(self) fn on_account_borrow_success(&mut self, current_gauge: u64) {
+        self.on_borrow_success(current_gauge);
+        self.last_borrow_was_ephemeral_overdraft = false;
+    }
+
+    pub(self) fn try_borrow_ephemeral_overdraft(
+        &mut self,
+        current_gauge: u64,
+        amount: u64,
+    ) -> Result<(), AgentError> {
+        let next_prepaid = self.ephemeral_overdraft_prepaid.saturating_add(amount);
+        if next_prepaid > self.ephemeral_overdraft_limit {
+            Err(AgentError::EphemeralFuelExhausted(
+                EphemeralFuelExhaustedError {
+                    overdraft_limit: self.ephemeral_overdraft_limit,
+                },
+            ))
+        } else {
+            self.ephemeral_overdraft_prepaid = next_prepaid;
+            self.on_borrow_success(current_gauge);
+            self.last_borrow_was_ephemeral_overdraft = true;
+            Ok(())
+        }
+    }
+
+    pub(self) fn overdraft_limit(&self) -> u64 {
+        self.ephemeral_overdraft_limit
+    }
+
+    pub(self) fn last_borrow_was_ephemeral_overdraft(&self) -> bool {
+        self.last_borrow_was_ephemeral_overdraft
+    }
+
+    pub(self) fn consumed_ephemeral_overdraft(&mut self, unused: u64) -> u64 {
+        let consumed_overdraft = if self.last_borrow_was_ephemeral_overdraft {
+            self.ephemeral_overdraft_prepaid.saturating_sub(unused)
+        } else {
+            self.ephemeral_overdraft_prepaid
+        };
+
+        self.ephemeral_overdraft_prepaid = 0;
+        self.last_borrow_was_ephemeral_overdraft = false;
+
+        consumed_overdraft
     }
 
     /// How much unused pre-paid fuel to return to the account pool at invocation end.
@@ -183,7 +241,13 @@ impl Context {
         Self {
             durable_ctx: golem_ctx,
             resource_limit_entry,
-            fuel_tracker: FuelTracker::new(config.limits.fuel_to_borrow),
+            fuel_tracker: FuelTracker::new(
+                config.limits.fuel_to_borrow,
+                config
+                    .limits
+                    .fuel_to_borrow
+                    .saturating_mul(config.limits.ephemeral_fuel_overdraft_multiplier),
+            ),
         }
     }
 
@@ -212,27 +276,59 @@ impl DurableWorkerCtxView<Context> for Context {
 
 #[async_trait]
 impl FuelManagement for Context {
-    fn ensure_fuel(&mut self, current_level: u64) -> bool {
+    fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
         if !self.fuel_tracker.needs_borrow(current_level) {
-            return true;
+            return Ok(());
         }
         let amount_to_borrow = self.fuel_tracker.determine_amount_to_borrow(current_level);
         let success = self.resource_limit_entry.borrow_fuel(amount_to_borrow);
         if success {
-            self.fuel_tracker.on_borrow_success(current_level);
-            debug!("borrowed {amount_to_borrow} fuel");
+            self.fuel_tracker.on_account_borrow_success(current_level);
+            debug!(amount = amount_to_borrow, "Borrowed fuel");
+            Ok(())
+        } else if self.agent_mode() == AgentMode::Ephemeral {
+            if !self.resource_limit_entry.has_effective_fuel() {
+                return Err(AgentError::EphemeralFuelExhausted(
+                    EphemeralFuelExhaustedError {
+                        overdraft_limit: self.fuel_tracker.overdraft_limit(),
+                    },
+                ));
+            }
+
+            self.fuel_tracker
+                .try_borrow_ephemeral_overdraft(current_level, amount_to_borrow)
+                .inspect(|_| {
+                    debug!(
+                        amount = amount_to_borrow,
+                        "Borrowed ephemeral overdraft fuel"
+                    );
+                })
+        } else {
+            Err(AgentError::EphemeralCannotSuspend(
+                EphemeralCannotSuspendError {
+                    reason: "fuel exhausted".to_string(),
+                },
+            ))
         }
-        success
     }
 
     fn return_fuel(&mut self, current_level: u64) -> u64 {
         let unused = self.fuel_tracker.unused_to_return(current_level);
-        if unused > 0 {
+        if unused > 0 && !self.fuel_tracker.last_borrow_was_ephemeral_overdraft() {
             self.resource_limit_entry.return_fuel(unused);
-            debug!("returned {} fuel", unused);
+            debug!(amount = unused, "Returned fuel");
+        }
+        let consumed_overdraft = self.fuel_tracker.consumed_ephemeral_overdraft(unused);
+        if consumed_overdraft > 0 {
+            self.resource_limit_entry
+                .record_overdraft_debt(consumed_overdraft);
+            debug!(
+                amount = consumed_overdraft,
+                "Recorded ephemeral overdraft fuel debt"
+            );
         }
         let consumed = self.fuel_tracker.on_return(current_level);
-        debug!("reset fuel mark to {}", current_level);
+        debug!(current_level, "Reset fuel mark");
         consumed
     }
 }
@@ -911,7 +1007,7 @@ mod tests {
     const INITIAL: u64 = u64::MAX; // wasmtime gauge starting value
 
     fn fuel_tracker() -> FuelTracker {
-        FuelTracker::new(FUEL_TO_BORROW)
+        FuelTracker::new(FUEL_TO_BORROW, FUEL_TO_BORROW * 100)
     }
 
     #[test]

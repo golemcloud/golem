@@ -15,7 +15,7 @@
 use crate::command::plugin::PluginSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
 use crate::model::PathBufOrStdin;
 use crate::model::environment::EnvironmentResolveMode;
