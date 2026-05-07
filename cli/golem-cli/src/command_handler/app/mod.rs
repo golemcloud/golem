@@ -39,7 +39,6 @@ use crate::log::{
     log_finished_ok, log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action,
     logged_failed_to, logged_finished_or_failed_to, logln,
 };
-use crate::model::{GuestLanguage, TemplateDescription};
 use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
@@ -57,6 +56,7 @@ use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
+use crate::model::{GuestLanguage, TemplateDescription};
 use anyhow::{anyhow, bail};
 use applying::Apply;
 use colored::Colorize;
