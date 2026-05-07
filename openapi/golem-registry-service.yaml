@@ -10463,6 +10463,7 @@ components:
           $ref: '#/components/schemas/OAuth2Provider'
         redirect:
           type: string
+          format: url
     OAuth2WebflowStartCli:
       type: object
       title: OAuth2WebflowStartCli

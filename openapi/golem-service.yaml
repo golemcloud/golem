@@ -16103,6 +16103,7 @@ components:
           $ref: '#/components/schemas/OAuth2Provider'
         redirect:
           type: string
+          format: url
       required:
       - provider
       - redirect

@@ -28,7 +28,7 @@ declare_structs! {
     /// The callback will redirect to `redirect` with the token secret appended as `token=<secret>`.
     pub struct OAuth2WebflowStartBrowser {
         pub provider: OAuth2Provider,
-        pub redirect: String,
+        pub redirect: url::Url,
     }
 
     /// Starts the CLI polling flow.

@@ -122,10 +122,12 @@ impl LoginApi {
         let login_system = self.get_enabled_login_system()?;
 
         let (provider, kind) = match request {
-            OAuth2WebflowStart::Browser(r) => {
-                let redirect = parse_redirect_url(&r.redirect)?;
-                (r.provider, WebflowKind::Browser { redirect })
-            }
+            OAuth2WebflowStart::Browser(r) => (
+                r.provider,
+                WebflowKind::Browser {
+                    redirect: r.redirect,
+                },
+            ),
             OAuth2WebflowStart::Cli(r) => (r.provider, WebflowKind::Cli),
         };
 
@@ -236,15 +238,6 @@ impl LoginApi {
             )),
         }
     }
-}
-
-fn parse_redirect_url(url: &str) -> ApiResult<url::Url> {
-    url::Url::parse(url).map_err(|_| {
-        ApiError::bad_request(
-            api::error_code::INVALID_REDIRECT_URL,
-            "Invalid redirect URL".to_string(),
-        )
-    })
 }
 
 #[derive(Debug, Clone, ApiResponse)]

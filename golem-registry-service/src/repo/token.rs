@@ -225,6 +225,13 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                     )
                     .await?;
 
+                    // Delete any pending webflow states that were waiting for this token.
+                    tx.execute(
+                        sqlx::query("DELETE FROM oauth2_web_flow_states WHERE token_id = $1")
+                            .bind(token_id),
+                    )
+                    .await?;
+
                     let deleted_row = tx
                         .fetch_optional(
                             sqlx::query(
