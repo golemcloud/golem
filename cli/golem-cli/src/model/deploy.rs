@@ -1158,7 +1158,6 @@ fn render_http_method(method: &HttpMethod) -> &str {
     }
 }
 
-
 fn render_agent_config_source(source: AgentConfigSource) -> &'static str {
     match source {
         AgentConfigSource::Local => "local",

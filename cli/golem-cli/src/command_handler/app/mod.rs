@@ -52,9 +52,7 @@ use crate::model::deploy::{
 };
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
-use crate::model::text::diff::{
-    DeployPlanView, log_unified_diff, log_unified_diff_for_path,
-};
+use crate::model::text::diff::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
