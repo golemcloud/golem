@@ -181,6 +181,8 @@ impl DeploymentWriteService {
             .as_ref()
             .map(|ld| ld.deployment_hash)
             && data.expected_deployment_hash == current_deployment_hash
+            && data.agent_secret_defaults.is_empty()
+            && data.quota_resource_defaults.is_empty()
             && data.retry_policy_defaults.is_empty()
         {
             return Err(DeploymentWriteError::NoOpDeployment);

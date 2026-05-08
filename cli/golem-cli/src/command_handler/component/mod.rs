@@ -623,7 +623,7 @@ impl ComponentCommandHandler {
                     plan: false,
                     stage: false,
                     approve_staging_steps: false,
-                    show_full_deployment: false,
+                    full_diff: false,
                     force_build: None,
                     post_deploy_args: post_deploy_args
                         .cloned()
@@ -681,7 +681,7 @@ impl ComponentCommandHandler {
                             plan: false,
                             stage: false,
                             approve_staging_steps: false,
-                            show_full_deployment: false,
+                            full_diff: false,
                             force_build: None,
                             post_deploy_args: PostDeployArgs::none(),
                             repl_bridge_sdk_target,

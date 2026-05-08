@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::model::component::ComponentDeployProperties;
-use crate::model::deploy::{DeploymentDisplay, DeploymentDisplayContext, DeploymentDisplayMode};
+use crate::model::deploy::{
+    DeploymentDisplay, DeploymentDisplayContext, DeploymentDisplayMode, EnvironmentSetupPlan,
+};
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
 use anyhow::bail;
@@ -77,7 +79,6 @@ pub struct DeployDiff {
     pub environment: ResolvedEnvironmentIdentity,
     pub deployable_components: BTreeMap<ComponentName, ComponentDeployProperties>,
     pub deployable_http_api_deployments: BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
-    #[allow(dead_code)]
     pub deployable_mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
@@ -92,6 +93,7 @@ pub struct DeployDiff {
     pub diffable_staged_deployment: diff::Deployment,
     pub diff: diff::DeploymentDiff,
     pub diff_stage: Option<diff::DeploymentDiff>,
+    pub environment_setup: Option<EnvironmentSetupPlan>,
 }
 
 impl DeployDiff {
@@ -99,12 +101,43 @@ impl DeployDiff {
         self.staged_deployment_hash == self.current_deployment_hash
     }
 
+    pub fn has_deployment_changes(&self) -> bool {
+        !self.diff.components.is_empty()
+            || !self.diff.http_api_deployments.is_empty()
+            || !self.diff.mcp_deployments.is_empty()
+    }
+
+    pub fn has_environment_setup_entries_to_apply(&self) -> bool {
+        self.environment_setup
+            .as_ref()
+            .is_some_and(|setup| setup.display.has_entries_to_apply())
+    }
+
+    pub fn has_environment_setup_entries_skipped_already_exists(&self) -> bool {
+        self.environment_setup
+            .as_ref()
+            .is_some_and(|setup| setup.display.has_entries_skipped_already_exists())
+    }
+
+    pub fn has_environment_setup_work(&self) -> bool {
+        self.has_environment_setup_entries_to_apply()
+            || self.has_environment_setup_entries_skipped_already_exists()
+    }
+
+    pub fn empty_deployment_diff() -> diff::DeploymentDiff {
+        diff::DeploymentDiff {
+            components: BTreeMap::new(),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::new(),
+        }
+    }
+
     pub fn unified_diffs(
         &self,
         show_sensitive: bool,
-        show_full_deployment: bool,
+        full_diff: bool,
     ) -> anyhow::Result<DeployUnifiedDiffs> {
-        let mode = deployment_display_mode(show_full_deployment);
+        let mode = deployment_display_mode(full_diff);
         let local_agent_types = self
             .deployable_components
             .iter()
@@ -132,7 +165,7 @@ impl DeployDiff {
                         diff,
                         agent_types_by_component: &self.staged_agent_types,
                     })?;
-                    if show_full_deployment {
+                    if full_diff {
                         local.unified_yaml_diff_with_current_full_context(&staged)
                     } else {
                         local.unified_yaml_diff_with_current(&staged)
@@ -155,12 +188,18 @@ impl DeployDiff {
                     agent_types_by_component: &self.current_agent_types,
                 })?;
 
-                if show_full_deployment {
+                if full_diff {
                     local.unified_yaml_diff_with_current_full_context(&current)?
                 } else {
                     local.unified_yaml_diff_with_current(&current)?
                 }
             },
+            environment_setup_report: self
+                .environment_setup
+                .as_ref()
+                .and_then(|setup| (!setup.display.is_empty()).then_some(setup))
+                .map(|setup| setup.display.to_yaml_report())
+                .transpose()?,
         })
     }
 
@@ -192,7 +231,6 @@ impl DeployDiff {
             })
     }
 
-    #[allow(dead_code)]
     pub fn deployable_manifest_mcp_deployment(
         &self,
         domain: &Domain,
@@ -381,17 +419,10 @@ impl DeployDiff {
                     .diff_with_new(&self.diffable_local_deployment)?;
             }
             DeployDiffKind::Current => {
-                match self
+                self.diff = self
                     .diffable_current_deployment
                     .diff_with_new(&self.diffable_local_deployment)?
-                {
-                    Some(diff) => self.diff = diff,
-                    None => {
-                        bail!(
-                            "Illegal state: empty diff between current and local deployment after adding details"
-                        )
-                    }
-                }
+                    .unwrap_or_else(Self::empty_deployment_diff);
             }
         }
 
@@ -484,6 +515,7 @@ pub struct DeployDetails {
 pub struct DeployUnifiedDiffs {
     pub display_diff_stage: Option<String>,
     pub display_diff: String,
+    pub environment_setup_report: Option<String>,
 }
 
 #[derive(Debug)]
@@ -713,9 +745,9 @@ impl RollbackDiff {
     pub fn unified_diffs(
         &self,
         show_sensitive: bool,
-        show_full_deployment: bool,
+        full_diff: bool,
     ) -> anyhow::Result<RollbackUnifiedDiffs> {
-        let mode = deployment_display_mode(show_full_deployment);
+        let mode = deployment_display_mode(full_diff);
         Ok(RollbackUnifiedDiffs {
             display_diff: {
                 let target = DeploymentDisplay::from_context(DeploymentDisplayContext {
@@ -733,7 +765,7 @@ impl RollbackDiff {
                     agent_types_by_component: &self.current_agent_types,
                 })?;
 
-                if show_full_deployment {
+                if full_diff {
                     target.unified_yaml_diff_with_current_full_context(&current)?
                 } else {
                     target.unified_yaml_diff_with_current(&current)?
@@ -790,8 +822,8 @@ pub struct RollbackUnifiedDiffs {
     pub display_diff: String,
 }
 
-fn deployment_display_mode(show_full_deployment: bool) -> DeploymentDisplayMode {
-    if show_full_deployment {
+fn deployment_display_mode(full_diff: bool) -> DeploymentDisplayMode {
+    if full_diff {
         DeploymentDisplayMode::Full
     } else {
         DeploymentDisplayMode::ChangedOnly

@@ -19,15 +19,19 @@ use crate::model::GuestLanguage;
 use crate::model::component::{render_agent_constructor, render_data_schema};
 use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::worker::RawAgentId;
+use golem_client::model::{AgentSecretDto, RetryPolicyDto};
 use golem_common::model::agent::{
     AgentConfigSource, AgentMethod, AgentType, HttpEndpointDetails, HttpMethod, HttpMountDetails,
     PathSegment, Snapshotting,
 };
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::{AgentFilePermissions, ComponentName, ComponentRevision};
+use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::diff::{self, Hashable};
+use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -53,6 +57,500 @@ pub struct DeploymentDisplayContext<'a> {
 pub enum DeploymentDisplayMode {
     ChangedOnly,
     Full,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSetupDisplay {
+    #[serde(skip_serializing_if = "EnvironmentSetupDetailedSection::is_empty")]
+    pub to_be_applied: EnvironmentSetupDetailedSection,
+    #[serde(skip_serializing_if = "EnvironmentSetupKeysOnlySection::is_empty")]
+    pub skipped_already_exists: EnvironmentSetupKeysOnlySection,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSetupDetailedSection {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub secret_values: BTreeMap<String, EnvironmentSetupSecretValueDisplay>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub retry_policies: BTreeMap<String, EnvironmentSetupRetryPolicyDisplay>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub resources: BTreeMap<String, EnvironmentSetupResourceDisplay>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSetupKeysOnlySection {
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub secret_values: BTreeSet<String>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub retry_policies: BTreeSet<String>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub resources: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSetupSecretValueDisplay {
+    pub secret_type: String,
+    pub value: serde_json::Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSetupRetryPolicyDisplay {
+    pub priority: u32,
+    pub predicate: serde_json::Value,
+    pub policy: serde_json::Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSetupResourceDisplay {
+    pub limit: serde_json::Value,
+    pub enforcement_action: String,
+    pub unit: String,
+    pub units: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct EnvironmentSetupPlan {
+    pub display: EnvironmentSetupDisplay,
+    pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
+    pub retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
+    pub resource_defaults: Vec<ResourceDefinitionCreation>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::base_model::UntypedJsonBody;
+    use golem_common::base_model::retry_policy::{ApiNeverPolicy, ApiPredicateFalse};
+    use golem_common::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
+    use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::quota::{
+        EnforcementAction, ResourceCapacityLimit, ResourceDefinitionId, ResourceLimit, ResourceName,
+    };
+    use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
+    use golem_wasm::analysis::analysed_type::str as analysed_str;
+    use uuid::Uuid;
+
+    fn secret_dto(
+        path: &[&str],
+        secret_type: golem_wasm::analysis::AnalysedType,
+        value: Option<serde_json::Value>,
+    ) -> AgentSecretDto {
+        AgentSecretDto {
+            id: AgentSecretId(Uuid::nil()),
+            environment_id: EnvironmentId(Uuid::nil()),
+            path: CanonicalAgentSecretPath::from_path_in_unknown_casing(
+                &path.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            ),
+            revision: serde_json::from_value(serde_json::json!(0)).unwrap(),
+            secret_type,
+            secret_value: value,
+        }
+    }
+
+    fn retry_policy(name: &str, priority: u32) -> RetryPolicyDto {
+        RetryPolicyDto {
+            id: RetryPolicyId(Uuid::nil()),
+            environment_id: EnvironmentId(Uuid::nil()),
+            name: name.to_string(),
+            revision: RetryPolicyRevision::INITIAL,
+            priority,
+            predicate: UntypedJsonBody(
+                serde_json::to_value(ApiPredicate::False(ApiPredicateFalse {})).unwrap(),
+            ),
+            policy: UntypedJsonBody(
+                serde_json::to_value(ApiRetryPolicy::Never(ApiNeverPolicy {})).unwrap(),
+            ),
+        }
+    }
+
+    fn resource(name: &str, limit_value: u64) -> ResourceDefinition {
+        ResourceDefinition {
+            id: ResourceDefinitionId(Uuid::nil()),
+            revision: serde_json::from_value(serde_json::json!(0)).unwrap(),
+            environment_id: EnvironmentId(Uuid::nil()),
+            name: ResourceName(name.to_string()),
+            limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: limit_value }),
+            enforcement_action: EnforcementAction::Reject,
+            unit: "unit".to_string(),
+            units: "units".to_string(),
+        }
+    }
+
+    fn resource_creation(name: &str, limit_value: u64) -> ResourceDefinitionCreation {
+        ResourceDefinitionCreation {
+            name: ResourceName(name.to_string()),
+            limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: limit_value }),
+            enforcement_action: EnforcementAction::Reject,
+            unit: "unit".to_string(),
+            units: "units".to_string(),
+        }
+    }
+
+    #[::test_r::test]
+    fn environment_setup_secret_type_rendering_matches_between_manifest_and_environment() {
+        let mut secret_types = BTreeMap::new();
+        secret_types.insert("superSecret".to_string(), analysed_str());
+
+        let plan = build_environment_setup_plan(
+            vec![DeploymentAgentSecretDefault {
+                path: AgentSecretPath(vec!["superSecret".to_string()]),
+                secret_value: serde_json::json!("same-value"),
+            }],
+            Vec::new(),
+            Vec::new(),
+            vec![secret_dto(
+                &["superSecret"],
+                analysed_str(),
+                Some(serde_json::json!("same-value")),
+            )],
+            Vec::new(),
+            Vec::new(),
+            &secret_types,
+            &SourceLanguage::TypeScript,
+        )
+        .unwrap();
+
+        assert!(
+            plan.display
+                .skipped_already_exists
+                .secret_values
+                .contains("superSecret")
+        );
+    }
+
+    #[::test_r::test]
+    fn environment_setup_classifies_secret_create_and_skip_existing() {
+        let mut secret_types = BTreeMap::new();
+        secret_types.insert("createSecret".to_string(), analysed_str());
+        secret_types.insert("driftSecret".to_string(), analysed_str());
+
+        let plan = build_environment_setup_plan(
+            vec![
+                DeploymentAgentSecretDefault {
+                    path: AgentSecretPath(vec!["createSecret".to_string()]),
+                    secret_value: serde_json::json!("create"),
+                },
+                DeploymentAgentSecretDefault {
+                    path: AgentSecretPath(vec!["driftSecret".to_string()]),
+                    secret_value: serde_json::json!("manifest"),
+                },
+            ],
+            Vec::new(),
+            Vec::new(),
+            vec![secret_dto(
+                &["driftSecret"],
+                analysed_str(),
+                Some(serde_json::json!("env")),
+            )],
+            Vec::new(),
+            Vec::new(),
+            &secret_types,
+            &SourceLanguage::TypeScript,
+        )
+        .unwrap();
+
+        assert!(
+            plan.display
+                .to_be_applied
+                .secret_values
+                .contains_key("createSecret")
+        );
+        assert!(
+            plan.display
+                .skipped_already_exists
+                .secret_values
+                .contains("driftSecret")
+        );
+    }
+
+    #[::test_r::test]
+    fn environment_setup_classifies_retry_policies_and_resources() {
+        let plan = build_environment_setup_plan(
+            Vec::new(),
+            vec![
+                DeploymentRetryPolicyDefault {
+                    name: "create-policy".to_string(),
+                    priority: 1,
+                    predicate: ApiPredicate::False(ApiPredicateFalse {}),
+                    policy: ApiRetryPolicy::Never(ApiNeverPolicy {}),
+                },
+                DeploymentRetryPolicyDefault {
+                    name: "drift-policy".to_string(),
+                    priority: 2,
+                    predicate: ApiPredicate::False(ApiPredicateFalse {}),
+                    policy: ApiRetryPolicy::Never(ApiNeverPolicy {}),
+                },
+            ],
+            vec![
+                resource_creation("create-resource", 1),
+                resource_creation("drift-resource", 2),
+            ],
+            Vec::new(),
+            vec![retry_policy("drift-policy", 999)],
+            vec![resource("drift-resource", 999)],
+            &BTreeMap::new(),
+            &SourceLanguage::TypeScript,
+        )
+        .unwrap();
+
+        assert!(
+            plan.display
+                .to_be_applied
+                .retry_policies
+                .contains_key("create-policy")
+        );
+        assert!(
+            plan.display
+                .skipped_already_exists
+                .retry_policies
+                .contains("drift-policy")
+        );
+
+        assert!(
+            plan.display
+                .to_be_applied
+                .resources
+                .contains_key("create-resource")
+        );
+        assert!(
+            plan.display
+                .skipped_already_exists
+                .resources
+                .contains("drift-resource")
+        );
+    }
+}
+
+impl EnvironmentSetupDetailedSection {
+    pub fn is_empty(&self) -> bool {
+        self.secret_values.is_empty() && self.retry_policies.is_empty() && self.resources.is_empty()
+    }
+}
+
+impl EnvironmentSetupKeysOnlySection {
+    pub fn is_empty(&self) -> bool {
+        self.secret_values.is_empty() && self.retry_policies.is_empty() && self.resources.is_empty()
+    }
+}
+
+impl EnvironmentSetupDisplay {
+    pub fn is_empty(&self) -> bool {
+        self.to_be_applied.is_empty() && self.skipped_already_exists.is_empty()
+    }
+
+    pub fn has_entries_to_apply(&self) -> bool {
+        !self.to_be_applied.is_empty()
+    }
+
+    pub fn has_entries_skipped_already_exists(&self) -> bool {
+        !self.skipped_already_exists.is_empty()
+    }
+
+    pub fn to_yaml_report(&self) -> anyhow::Result<String> {
+        if self.is_empty() {
+            Ok(String::new())
+        } else {
+            Ok(serde_yaml::to_string(self)?)
+        }
+    }
+}
+
+pub fn preferred_source_language_for_setup(
+    agent_types_by_component: &HashMap<String, Vec<AgentType>>,
+) -> SourceLanguage {
+    let mut languages = agent_types_by_component
+        .values()
+        .flat_map(|agent_types| agent_types.iter())
+        .filter_map(|agent_type| GuestLanguage::from_string(&agent_type.source_language))
+        .collect::<Vec<_>>();
+
+    languages.sort();
+    languages.dedup();
+
+    let selected = languages.into_iter().next();
+
+    match selected {
+        Some(GuestLanguage::Rust) => SourceLanguage::Rust,
+        Some(GuestLanguage::TypeScript) => SourceLanguage::TypeScript,
+        Some(GuestLanguage::Scala) => SourceLanguage::Scala,
+        Some(GuestLanguage::MoonBit) => SourceLanguage::MoonBit,
+        None => SourceLanguage::Other(String::new()),
+    }
+}
+
+pub fn build_environment_setup_plan(
+    resolved_agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
+    retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
+    resource_defaults: Vec<ResourceDefinitionCreation>,
+    current_agent_secrets: Vec<AgentSecretDto>,
+    current_retry_policies: Vec<RetryPolicyDto>,
+    current_resources: Vec<ResourceDefinition>,
+    secret_types_by_path: &BTreeMap<String, golem_wasm::analysis::AnalysedType>,
+    source_language: &SourceLanguage,
+) -> anyhow::Result<EnvironmentSetupPlan> {
+    let mut display = EnvironmentSetupDisplay::default();
+
+    let local_secret_defaults = resolved_agent_secret_defaults
+        .iter()
+        .map(|default| {
+            let canonical_path = CanonicalAgentSecretPath::from(default.path.clone());
+            let canonical_path_str = canonical_path.0.join(".");
+            Ok((
+                canonical_path_str.clone(),
+                EnvironmentSetupSecretValueDisplay {
+                    secret_type: secret_types_by_path
+                        .get(&canonical_path_str)
+                        .map(|typ| render_type_for_language(source_language, typ, true))
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    value: masked_json_value(&default.secret_value)?,
+                },
+            ))
+        })
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
+    let current_secret_values = current_agent_secrets
+        .into_iter()
+        .map(|secret| {
+            let value = match secret.secret_value {
+                Some(value) => masked_json_value(&value)?,
+                None => serde_json::Value::Null,
+            };
+            Ok((
+                secret.path.0.join("."),
+                EnvironmentSetupSecretValueDisplay {
+                    secret_type: render_type_for_language(
+                        source_language,
+                        &secret.secret_type,
+                        true,
+                    ),
+                    value,
+                },
+            ))
+        })
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
+    classify_environment_setup_entries(
+        &mut display,
+        local_secret_defaults,
+        current_secret_values,
+        |section, key, value| {
+            section.secret_values.insert(key, value);
+        },
+        |section, key| {
+            section.secret_values.insert(key);
+        },
+    );
+
+    let local_retry_policy_defaults = retry_policy_defaults
+        .iter()
+        .map(|policy| {
+            Ok((
+                policy.name.clone(),
+                EnvironmentSetupRetryPolicyDisplay {
+                    priority: policy.priority,
+                    predicate: serde_json::to_value(&policy.predicate)?,
+                    policy: serde_json::to_value(&policy.policy)?,
+                },
+            ))
+        })
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
+    let current_retry_policy_values = current_retry_policies
+        .into_iter()
+        .map(|policy| {
+            Ok((
+                policy.name.clone(),
+                EnvironmentSetupRetryPolicyDisplay {
+                    priority: policy.priority,
+                    predicate: serde_json::to_value(&policy.predicate)?,
+                    policy: serde_json::to_value(&policy.policy)?,
+                },
+            ))
+        })
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
+    classify_environment_setup_entries(
+        &mut display,
+        local_retry_policy_defaults,
+        current_retry_policy_values,
+        |section, key, value| {
+            section.retry_policies.insert(key, value);
+        },
+        |section, key| {
+            section.retry_policies.insert(key);
+        },
+    );
+
+    let local_resource_defaults = resource_defaults
+        .iter()
+        .map(|resource| {
+            Ok((
+                resource.name.0.clone(),
+                EnvironmentSetupResourceDisplay {
+                    limit: serde_json::to_value(&resource.limit)?,
+                    enforcement_action: format!("{:?}", resource.enforcement_action),
+                    unit: resource.unit.clone(),
+                    units: resource.units.clone(),
+                },
+            ))
+        })
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
+    let current_resource_values = current_resources
+        .into_iter()
+        .map(|resource| {
+            Ok((
+                resource.name.0.clone(),
+                EnvironmentSetupResourceDisplay {
+                    limit: serde_json::to_value(&resource.limit)?,
+                    enforcement_action: format!("{:?}", resource.enforcement_action),
+                    unit: resource.unit,
+                    units: resource.units,
+                },
+            ))
+        })
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
+    classify_environment_setup_entries(
+        &mut display,
+        local_resource_defaults,
+        current_resource_values,
+        |section, key, value| {
+            section.resources.insert(key, value);
+        },
+        |section, key| {
+            section.resources.insert(key);
+        },
+    );
+
+    Ok(EnvironmentSetupPlan {
+        display,
+        agent_secret_defaults: resolved_agent_secret_defaults,
+        retry_policy_defaults,
+        resource_defaults,
+    })
+}
+
+fn classify_environment_setup_entries<T: Clone + PartialEq>(
+    display: &mut EnvironmentSetupDisplay,
+    local: BTreeMap<String, T>,
+    current: BTreeMap<String, T>,
+    mut insert: impl FnMut(&mut EnvironmentSetupDetailedSection, String, T),
+    mut insert_existing: impl FnMut(&mut EnvironmentSetupKeysOnlySection, String),
+) {
+    for (key, local_value) in &local {
+        match current.get(key) {
+            None => insert(&mut display.to_be_applied, key.clone(), local_value.clone()),
+            Some(_) => insert_existing(&mut display.skipped_already_exists, key.clone()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -724,7 +1222,7 @@ pub struct DeployConfig {
     pub plan: bool,
     pub stage: bool,
     pub approve_staging_steps: bool,
-    pub show_full_deployment: bool,
+    pub full_diff: bool,
     pub force_build: Option<ForceBuildArg>,
     pub post_deploy_args: PostDeployArgs,
     pub repl_bridge_sdk_target: Option<GuestLanguage>,
@@ -734,9 +1232,11 @@ pub struct DeployConfig {
 pub enum DeploySummary {
     PlanOk,
     PlanUpToDate,
+    PlanSkippedOnly,
     StagingOk, // Only for internal testing purposes
     DeployOk(PostDeployResult),
     DeployUpToDate(PostDeployResult),
+    DeploySkippedOnly(PostDeployResult),
     RollbackOk(PostDeployResult),
     RollbackUpToDate(PostDeployResult),
 }

@@ -47,26 +47,31 @@ use crate::model::app::{
 };
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
-    DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
-    PostDeploySummary, UpdateStagedComponentError,
+    DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan, PostDeployError,
+    PostDeployResult, PostDeploySummary, UpdateStagedComponentError, build_environment_setup_plan,
+    preferred_source_language_for_setup,
 };
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
-use crate::model::text::diff::{log_unified_diff, log_unified_diff_for_path};
+use crate::model::text::diff::{
+    DeployPlanView, log_environment_setup_report, log_unified_diff, log_unified_diff_for_path,
+};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
-use applying::Apply;
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
-use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
+use golem_client::api::{
+    AgentSecretsClient, ApplicationClient, ComponentClient, EnvironmentClient, ResourcesClient,
+    RetryPoliciesClient,
+};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType};
-use golem_common::model::agent_secret::AgentSecretPath;
+use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
@@ -171,7 +176,7 @@ impl AppCommandHandler {
         plan: bool,
         stage: bool,
         approve_staging_steps: bool,
-        show_full_deployment: bool,
+        full_diff: bool,
         version: Option<String>,
         revision: Option<DeploymentRevision>,
         force_build: ForceBuildArg,
@@ -180,17 +185,17 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         let deploy_result = {
             if let Some(version) = version {
-                self.deploy_by_version(version, plan, show_full_deployment, post_deploy_args)
+                self.deploy_by_version(version, plan, full_diff, post_deploy_args)
                     .await
             } else if let Some(revision) = revision {
-                self.deploy_by_revision(revision, plan, show_full_deployment, post_deploy_args)
+                self.deploy_by_revision(revision, plan, full_diff, post_deploy_args)
                     .await
             } else {
                 self.deploy(DeployConfig {
                     plan,
                     stage,
                     approve_staging_steps,
-                    show_full_deployment,
+                    full_diff,
                     force_build: Some(force_build),
                     post_deploy_args,
                     repl_bridge_sdk_target,
@@ -246,6 +251,24 @@ impl AppCommandHandler {
             }
         }
 
+        fn log_deployment_status(label: &str, status: &str) {
+            logln(format!(
+                "{} {} {}",
+                "Deployment:".log_color_help_group(),
+                label,
+                status,
+            ));
+        }
+
+        fn log_environment_setup_status(label: &str, status: &str) {
+            logln(format!(
+                "{} {} {}",
+                "Environment setup:".log_color_help_group(),
+                label,
+                status,
+            ));
+        }
+
         match deploy_result {
             Ok(ok) => match ok {
                 DeploySummary::PlanOk => {
@@ -258,6 +281,17 @@ impl AppCommandHandler {
                     );
                     Ok(())
                 }
+                DeploySummary::PlanSkippedOnly => {
+                    log_deployment_status(
+                        "no changes required",
+                        "[UP-TO-DATE]".cyan().to_string().as_str(),
+                    );
+                    log_environment_setup_status(
+                        "requested entries already exist",
+                        "[SKIPPED]".yellow().to_string().as_str(),
+                    );
+                    Ok(())
+                }
                 DeploySummary::StagingOk => {
                     log_finished_ok("staging");
                     Ok(())
@@ -267,8 +301,20 @@ impl AppCommandHandler {
                     logged_post_deploy_result(post_deploy)
                 }
                 DeploySummary::DeployUpToDate(post_deploy_result) => {
-                    log_finished_up_to_date(
-                        "deployment planning, no changes are required for the environment",
+                    log_deployment_status(
+                        "no changes required",
+                        "[UP-TO-DATE]".cyan().to_string().as_str(),
+                    );
+                    logged_post_deploy_result(post_deploy_result)
+                }
+                DeploySummary::DeploySkippedOnly(post_deploy_result) => {
+                    log_deployment_status(
+                        "no changes required",
+                        "[UP-TO-DATE]".cyan().to_string().as_str(),
+                    );
+                    log_environment_setup_status(
+                        "requested entries already exist",
+                        "[SKIPPED]".yellow().to_string().as_str(),
                     );
                     logged_post_deploy_result(post_deploy_result)
                 }
@@ -501,7 +547,7 @@ impl AppCommandHandler {
         &self,
         version: String,
         plan: bool,
-        show_full_deployment: bool,
+        full_diff: bool,
         post_deploy_args: PostDeployArgs,
     ) -> DeployResult {
         let environment = self
@@ -551,7 +597,7 @@ impl AppCommandHandler {
                 .map(|d| d.revision)
                 .expect("No deployments"),
             plan,
-            show_full_deployment,
+            full_diff,
             post_deploy_args,
         )
         .await
@@ -561,7 +607,7 @@ impl AppCommandHandler {
         &self,
         target_revision: DeploymentRevision,
         plan: bool,
-        show_full_deployment: bool,
+        full_diff: bool,
         post_deploy_args: PostDeployArgs,
     ) -> DeployResult {
         let environment = self
@@ -572,7 +618,7 @@ impl AppCommandHandler {
             .map_err(DeployError::PrepareError)?;
 
         let Some(rollback_diff) = self
-            .prepare_rollback(environment.clone(), target_revision, show_full_deployment)
+            .prepare_rollback(environment.clone(), target_revision, full_diff)
             .await
             .map_err(DeployError::PrepareError)?
         else {
@@ -677,7 +723,7 @@ impl AppCommandHandler {
         }
 
         let Some(deploy_diff) = self
-            .prepare_deployment(environment.clone(), config.show_full_deployment)
+            .prepare_deployment(environment.clone(), config.full_diff)
             .await
             .map_err(DeployError::PrepareError)?
         else {
@@ -702,7 +748,52 @@ impl AppCommandHandler {
         };
 
         if config.plan {
-            return Ok(DeploySummary::PlanOk);
+            return Ok(
+                if deploy_diff.has_deployment_changes()
+                    || deploy_diff.has_environment_setup_entries_to_apply()
+                {
+                    DeploySummary::PlanOk
+                } else if deploy_diff.has_environment_setup_entries_skipped_already_exists() {
+                    DeploySummary::PlanSkippedOnly
+                } else {
+                    DeploySummary::PlanUpToDate
+                },
+            );
+        }
+
+        let has_deployment_changes = deploy_diff.has_deployment_changes();
+        let has_environment_setup_apply = deploy_diff.has_environment_setup_entries_to_apply();
+        let has_environment_setup_skipped =
+            deploy_diff.has_environment_setup_entries_skipped_already_exists();
+
+        if !has_deployment_changes && !has_environment_setup_apply {
+            return Ok(if has_environment_setup_skipped {
+                DeploySummary::DeploySkippedOnly(
+                    self.apply_post_deploy_args(
+                        &environment.environment_id,
+                        environment
+                            .server_environment
+                            .current_deployment
+                            .as_ref()
+                            .map(|d| d.deployment_revision),
+                        &config.post_deploy_args,
+                    )
+                    .await,
+                )
+            } else {
+                DeploySummary::DeployUpToDate(
+                    self.apply_post_deploy_args(
+                        &environment.environment_id,
+                        environment
+                            .server_environment
+                            .current_deployment
+                            .as_ref()
+                            .map(|d| d.deployment_revision),
+                        &config.post_deploy_args,
+                    )
+                    .await,
+                )
+            });
         }
 
         if !self
@@ -757,7 +848,7 @@ impl AppCommandHandler {
     async fn prepare_deployment(
         &self,
         environment: ResolvedEnvironmentIdentity,
-        show_full_deployment: bool,
+        full_diff: bool,
     ) -> anyhow::Result<Option<DeployDiff>> {
         log_action("Preparing", "deployment");
         let _indent = LogIndent::new();
@@ -766,7 +857,27 @@ impl AppCommandHandler {
 
         debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
 
-        if deploy_quick_diff.is_up_to_date() {
+        let deployment_is_up_to_date = deploy_quick_diff.is_up_to_date();
+
+        let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
+        debug!("deploy_diff: {:#?}", deploy_diff);
+
+        if deployment_is_up_to_date {
+            let environment_setup = self.build_environment_setup_plan(&deploy_diff).await?;
+
+            if !environment_setup.display.has_entries_to_apply()
+                && !environment_setup
+                    .display
+                    .has_entries_skipped_already_exists()
+            {
+                return Ok(None);
+            }
+        }
+
+        let deploy_diff = self.detailed_deploy_diff(deploy_diff, full_diff).await?;
+        debug!("detailed deploy_diff: {:#?}", deploy_diff);
+
+        if deployment_is_up_to_date && !deploy_diff.has_environment_setup_work() {
             return Ok(None);
         }
 
@@ -774,16 +885,7 @@ impl AppCommandHandler {
             log_action("Diffing", "");
             let _indent = self.ctx.log_handler().decorated_indent_primary();
 
-            let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
-            debug!("deploy_diff: {:#?}", deploy_diff);
-
-            let deploy_diff = self
-                .detailed_deploy_diff(deploy_diff, show_full_deployment)
-                .await?;
-            debug!("detailed deploy_diff: {:#?}", deploy_diff);
-
-            let unified_diffs =
-                deploy_diff.unified_diffs(self.ctx.show_sensitive(), show_full_deployment)?;
+            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive(), full_diff)?;
             let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
 
             log_action(
@@ -818,8 +920,17 @@ impl AppCommandHandler {
                     log_action("Diffing", "with current deployment");
                 }
 
-                let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                log_unified_diff(&unified_diffs.display_diff);
+                if deploy_diff.has_deployment_changes() || full_diff {
+                    let _indent = self.ctx.log_handler().decorated_indent_secondary();
+                    log_unified_diff(&unified_diffs.display_diff);
+                }
+
+                if let Some(report) = &unified_diffs.environment_setup_report {
+                    logln("");
+                    log_action("Checking", "environment setup against current environment");
+                    let _indent = self.ctx.log_handler().decorated_indent_secondary();
+                    log_environment_setup_report(report);
+                }
             }
 
             (stage_is_same_as_current, deploy_diff)
@@ -841,16 +952,29 @@ impl AppCommandHandler {
             }
 
             {
-                if stage_is_same_as_current {
+                if stage_is_same_as_current && deploy_diff.has_environment_setup_entries_to_apply()
+                {
                     log_action(
                         "Planned",
                         "changes to be applied to the staging area and to the environment:",
                     );
+                } else if deploy_diff.has_environment_setup_entries_skipped_already_exists()
+                    && !deploy_diff.has_deployment_changes()
+                {
+                    log_action(
+                        "Planned",
+                        "requested environment setup entries already exist:",
+                    );
                 } else {
                     log_action("Planned", "changes to be applied to the environment:");
                 }
-                let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                self.ctx.log_handler().log_view(&deploy_diff.diff)
+                if deploy_diff.has_deployment_changes() || deploy_diff.environment_setup.is_some() {
+                    let _indent = self.ctx.log_handler().decorated_indent_secondary();
+                    self.ctx.log_handler().log_view(&DeployPlanView {
+                        deployment_diff: &deploy_diff.diff,
+                        environment_setup: deploy_diff.environment_setup.as_ref(),
+                    });
+                }
             }
         }
 
@@ -1007,13 +1131,9 @@ impl AppCommandHandler {
 
         let staged_deployment_hash = diffable_staged_deployment.hash()?;
 
-        let Some(diff) = diffable_current_deployment
+        let diff = diffable_current_deployment
             .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?
-        else {
-            bail!(anyhow!(
-                "The environment was changed concurrently while diffing. Retry planning and deploying!"
-            ))
-        };
+            .unwrap_or_else(DeployDiff::empty_deployment_diff);
 
         let diff_stage = diffable_staged_deployment
             .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?;
@@ -1036,13 +1156,14 @@ impl AppCommandHandler {
             diffable_staged_deployment,
             diff,
             diff_stage,
+            environment_setup: None,
         })
     }
 
     async fn detailed_deploy_diff(
         &self,
         mut deploy_diff: DeployDiff,
-        show_full_deployment: bool,
+        full_diff: bool,
     ) -> anyhow::Result<DeployDiff> {
         let parallelism = self.ctx.http_parallelism();
         let limiter = Arc::new(tokio::sync::Semaphore::new(parallelism));
@@ -1054,13 +1175,16 @@ impl AppCommandHandler {
                     parallelism,
                     limiter.clone(),
                     &deploy_diff,
-                    show_full_deployment,
+                    full_diff,
                 )
                 .await?
             {
                 deploy_diff.add_details(kind, details)?;
             }
         }
+
+        deploy_diff.environment_setup =
+            Some(self.build_environment_setup_plan(&deploy_diff).await?);
 
         debug!(
             "diffable_server_staged_deployment hash: {:#?}",
@@ -1070,13 +1194,108 @@ impl AppCommandHandler {
         Ok(deploy_diff)
     }
 
+    async fn build_environment_setup_plan(
+        &self,
+        deploy_diff: &DeployDiff,
+    ) -> anyhow::Result<EnvironmentSetupPlan> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        let raw_agent_secret_defaults = app_ctx
+            .application()
+            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
+
+        let declared_secret_types = collect_declared_agent_secret_types(deploy_diff)?;
+        let declared_secret_paths = declared_secret_types
+            .keys()
+            .map(|path| path.split('.').map(str::to_string).collect())
+            .collect();
+
+        let (agent_secret_defaults, unused_secret_default_paths) =
+            materialize_agent_secret_defaults(
+                raw_agent_secret_defaults.as_ref(),
+                &declared_secret_paths,
+            );
+
+        if !unused_secret_default_paths.is_empty() {
+            let rendered_unused_secret_default_paths = unused_secret_default_paths
+                .iter()
+                .map(|path| path.join("."))
+                .collect::<Vec<_>>();
+
+            log_warn_action(
+                "Ignoring unused secret default paths",
+                rendered_unused_secret_default_paths.join(", "),
+            );
+
+            if !self
+                .ctx
+                .interactive_handler()
+                .confirm_ignore_unused_agent_secret_defaults(
+                    &rendered_unused_secret_default_paths,
+                )?
+            {
+                bail!(NonSuccessfulExit);
+            }
+        }
+
+        let resolved_agent_secret_defaults = resolve_secret_defaults(agent_secret_defaults)?;
+
+        let retry_policy_defaults = app_ctx
+            .application()
+            .deployment_retry_policy_defaults(&deploy_diff.environment.environment_name);
+
+        let resource_defaults = app_ctx
+            .application()
+            .resource_definition_defaults(&deploy_diff.environment.environment_name);
+
+        let clients = self.ctx.golem_clients().await?;
+        let current_agent_secrets = clients
+            .agent_secrets
+            .list_environment_agent_secrets(&deploy_diff.environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .values;
+        let current_retry_policies = clients
+            .retry_policies
+            .list_environment_retry_policies(&deploy_diff.environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .values;
+        let current_resources = clients
+            .resources
+            .list_environment_resources(&deploy_diff.environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .values;
+
+        let source_language = preferred_source_language_for_setup(
+            &deploy_diff
+                .deployable_components
+                .iter()
+                .map(|(name, component)| (name.0.clone(), component.agent_types.clone()))
+                .collect(),
+        );
+
+        build_environment_setup_plan(
+            resolved_agent_secret_defaults,
+            retry_policy_defaults,
+            resource_defaults,
+            current_agent_secrets,
+            current_retry_policies,
+            current_resources,
+            &declared_secret_types,
+            &source_language,
+        )
+    }
+
     async fn collect_deploy_diff_details(
         &self,
         kind: DeployDiffKind,
         parallelism: usize,
         limiter: Arc<tokio::sync::Semaphore>,
         deploy_diff: &DeployDiff,
-        show_full_deployment: bool,
+        full_diff: bool,
     ) -> anyhow::Result<Option<DeployDetails>> {
         let diff = match kind {
             DeployDiffKind::Stage => match deploy_diff.diff_stage.as_ref() {
@@ -1092,7 +1311,7 @@ impl AppCommandHandler {
         let http_api_deployment_handler = self.ctx.api_deployment_handler();
         let mcp_deployment_handler = self.ctx.api_deployment_handler();
 
-        let component_names = if show_full_deployment {
+        let component_names = if full_diff {
             match kind {
                 DeployDiffKind::Stage => deploy_diff
                     .staged_deployment
@@ -1147,7 +1366,7 @@ impl AppCommandHandler {
             .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>();
 
-        let http_domains = if show_full_deployment {
+        let http_domains = if full_diff {
             match kind {
                 DeployDiffKind::Stage => deploy_diff
                     .staged_deployment
@@ -1200,7 +1419,7 @@ impl AppCommandHandler {
             .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>();
 
-        let mcp_domains = if show_full_deployment {
+        let mcp_domains = if full_diff {
             match kind {
                 DeployDiffKind::Stage => deploy_diff
                     .staged_deployment
@@ -1268,7 +1487,7 @@ impl AppCommandHandler {
         &self,
         environment: ResolvedEnvironmentIdentity,
         deployment_revision: DeploymentRevision,
-        show_full_deployment: bool,
+        full_diff: bool,
     ) -> anyhow::Result<Option<RollbackDiff>> {
         log_action("Preparing", "rollback");
         let _indent = self.ctx.log_handler().decorated_indent_primary();
@@ -1288,12 +1507,11 @@ impl AppCommandHandler {
         debug!("rollback_diff: {:#?}", rollback_diff);
 
         let rollback_diff = self
-            .detailed_rollback_diff(rollback_diff, show_full_deployment)
+            .detailed_rollback_diff(rollback_diff, full_diff)
             .await?;
         debug!("detailed rollback_diff: {:#?}", rollback_diff);
 
-        let unified_diffs =
-            rollback_diff.unified_diffs(self.ctx.show_sensitive(), show_full_deployment)?;
+        let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive(), full_diff)?;
 
         {
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
@@ -1379,12 +1597,12 @@ impl AppCommandHandler {
     async fn detailed_rollback_diff(
         &self,
         mut rollback_diff: RollbackDiff,
-        show_full_deployment: bool,
+        full_diff: bool,
     ) -> anyhow::Result<RollbackDiff> {
         let parallelism = self.ctx.http_parallelism();
         let limiter = Arc::new(tokio::sync::Semaphore::new(parallelism));
 
-        let component_identities = if show_full_deployment {
+        let component_identities = if full_diff {
             rollback_diff
                 .target_deployment
                 .components
@@ -1461,7 +1679,7 @@ impl AppCommandHandler {
             .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>();
 
-        let http_api_deployment_identities = if show_full_deployment {
+        let http_api_deployment_identities = if full_diff {
             rollback_diff
                 .target_deployment
                 .http_api_deployments
@@ -1542,7 +1760,7 @@ impl AppCommandHandler {
             .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>();
 
-        let mcp_deployment_identities = if show_full_deployment {
+        let mcp_deployment_identities = if full_diff {
             rollback_diff
                 .target_deployment
                 .mcp_deployments
@@ -1839,54 +2057,10 @@ impl AppCommandHandler {
         deploy_diff: &DeployDiff,
         allow_incompatible_changes_fallback: bool,
     ) -> anyhow::Result<CurrentDeployment> {
-        let app_ctx = self.ctx.app_context_lock().await;
-
-        let raw_agent_secret_defaults = app_ctx
-            .some_or_err()?
-            .application()
-            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
-
-        let declared_secret_paths = collect_declared_agent_secret_paths(deploy_diff)?;
-
-        let (agent_secret_defaults, unused_secret_default_paths) =
-            materialize_agent_secret_defaults(
-                raw_agent_secret_defaults.as_ref(),
-                &declared_secret_paths,
-            );
-
-        if !unused_secret_default_paths.is_empty() {
-            let rendered_unused_secret_default_paths = unused_secret_default_paths
-                .iter()
-                .map(|path| path.join("."))
-                .collect::<Vec<_>>();
-
-            log_warn_action(
-                "Ignoring unused secret default paths",
-                rendered_unused_secret_default_paths.join(", "),
-            );
-
-            if !self
-                .ctx
-                .interactive_handler()
-                .confirm_ignore_unused_agent_secret_defaults(
-                    &rendered_unused_secret_default_paths,
-                )?
-            {
-                bail!(NonSuccessfulExit);
-            }
-        }
-
-        let agent_secret_defaults = agent_secret_defaults.apply(resolve_secret_defaults)?;
-
-        let retry_policy_defaults = app_ctx
-            .some_or_err()?
-            .application()
-            .deployment_retry_policy_defaults(&deploy_diff.environment.environment_name);
-
-        let quota_resource_defaults = app_ctx
-            .some_or_err()?
-            .application()
-            .resource_definition_defaults(&deploy_diff.environment.environment_name);
+        let environment_setup = deploy_diff
+            .environment_setup
+            .as_ref()
+            .expect("Environment setup should be prepared during deployment planning");
 
         let clients = self.ctx.golem_clients().await?;
 
@@ -1903,9 +2077,9 @@ impl AppCommandHandler {
                         current_revision: deploy_diff.current_deployment_revision(),
                         expected_deployment_hash: deploy_diff.local_deployment_hash,
                         version: DeploymentVersion("".to_string()), // TODO: atomic
-                        agent_secret_defaults: agent_secret_defaults.clone(),
-                        quota_resource_defaults: quota_resource_defaults.clone(),
-                        retry_policy_defaults: retry_policy_defaults.clone(),
+                        agent_secret_defaults: environment_setup.agent_secret_defaults.clone(),
+                        quota_resource_defaults: environment_setup.resource_defaults.clone(),
+                        retry_policy_defaults: environment_setup.retry_policy_defaults.clone(),
                         replace_incompatible_agent_secrets,
                     },
                 )
@@ -2500,9 +2674,9 @@ fn resolve_secret_defaults(
         .collect()
 }
 
-fn collect_declared_agent_secret_paths(
+fn collect_declared_agent_secret_types(
     deploy_diff: &DeployDiff,
-) -> anyhow::Result<BTreeSet<Vec<String>>> {
+) -> anyhow::Result<BTreeMap<String, AnalysedType>> {
     let mut declared_secret_types = BTreeMap::<Vec<String>, (AnalysedType, String)>::new();
 
     for component in deploy_diff.deployable_components.values() {
@@ -2535,7 +2709,17 @@ fn collect_declared_agent_secret_paths(
         }
     }
 
-    Ok(declared_secret_types.into_keys().collect())
+    Ok(declared_secret_types
+        .into_iter()
+        .map(|(path, (typ, _))| {
+            (
+                CanonicalAgentSecretPath::from(AgentSecretPath(path))
+                    .0
+                    .join("."),
+                typ,
+            )
+        })
+        .collect())
 }
 
 fn materialize_agent_secret_defaults(
