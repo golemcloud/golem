@@ -321,7 +321,7 @@ pub fn log_unified_diff_for_path(path: &Path, diff: &str) {
 
 pub fn log_environment_setup_report(report: &str) {
     for line in report.lines() {
-        logln(line.to_string());
+        logln(line);
     }
 }
 
