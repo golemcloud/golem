@@ -445,50 +445,22 @@ function createEvalWithErrors(): REPLEval {
   // Node's embedded REPL prints uncaught eval errors but does not report them through the eval
   // callback. Script mode needs callback errors so the outer CLI can return a non-zero status.
   return function (code, _context, _filename, callback) {
-    try {
-      const result = globalThis.eval(code);
-      if (result && typeof (result as Promise<unknown>).then === 'function') {
-        Promise.resolve(result)
-          .then((value) => callback(null, value))
-          .catch((error) => callback(normalizeEvalError(error), undefined));
-      } else {
-        callback(null, result);
-      }
-    } catch (error) {
-      if (isTopLevelAwaitError(error)) {
-        evalTopLevelAwait(code, callback);
-        return;
-      }
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
+      body: string,
+    ) => () => Promise<unknown>;
 
+    try {
+      const result = new AsyncFunction(transformScriptForAsyncEval(code))();
+      Promise.resolve(result)
+        .then((value) => callback(null, value))
+        .catch((error) => callback(normalizeEvalError(error), undefined));
+    } catch (error) {
       callback(normalizeEvalError(error), undefined);
     }
   };
 }
 
-function evalTopLevelAwait(
-  code: string,
-  callback: (err: Error | null, result: unknown) => void,
-): void {
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
-    body: string,
-  ) => () => Promise<unknown>;
-
-  let result: Promise<unknown>;
-  try {
-    // globalThis.eval cannot parse explicit top-level await. Retry in an async function while
-    // preserving REPL-like behavior: execute all statements and return the final expression.
-    result = new AsyncFunction(transformTopLevelAwaitScript(code))();
-  } catch (error) {
-    callback(normalizeEvalError(error), undefined);
-    return;
-  }
-
-  Promise.resolve(result)
-    .then((value) => callback(null, value))
-    .catch((error) => callback(normalizeEvalError(error), undefined));
-}
-
-function transformTopLevelAwaitScript(code: string): string {
+function transformScriptForAsyncEval(code: string): string {
   const sourceFile = ts.createSourceFile(
     'repl-script.js',
     code,
@@ -508,12 +480,6 @@ function transformTopLevelAwaitScript(code: string): string {
   const expression = code.slice(expressionStart, expressionEnd);
 
   return `${prefix}return await (${expression});`;
-}
-
-function isTopLevelAwaitError(error: unknown): boolean {
-  return (
-    error instanceof SyntaxError && error.message.includes('await is only valid in async functions')
-  );
 }
 
 function normalizeEvalError(error: unknown): Error {
