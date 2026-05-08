@@ -214,6 +214,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         name: json.name,
         owner: json.owner,
         properties,
+        requiredMembers: json.requiredMembers,
         optional: json.optional,
       };
     }

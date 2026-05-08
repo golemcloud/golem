@@ -32,7 +32,7 @@ pub mod text;
 pub mod wave;
 pub mod worker;
 
-use crate::app::template::{AppTemplate, AppTemplateName};
+use crate::app::template::AppTemplate;
 use crate::config::AuthenticationConfig;
 use crate::config::{NamedProfile, ProfileConfig, ProfileName};
 use anyhow::{Context, anyhow};
@@ -183,9 +183,9 @@ impl TypedValueParser for JsonValueParser {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct TemplateDescription {
-    pub name: AppTemplateName,
+    pub name: String,
     pub language: GuestLanguage,
     pub description: String,
 }
@@ -193,7 +193,7 @@ pub struct TemplateDescription {
 impl TemplateDescription {
     pub fn from_template(template: &AppTemplate) -> Self {
         Self {
-            name: template.name.clone(),
+            name: template.name.as_str().to_string(),
             language: template.language,
             description: template.description().to_string(),
         }

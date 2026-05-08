@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::Utc;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{TokenId, TokenWithSecret};
 use golem_common::model::login::OAuth2Provider;
@@ -34,18 +33,21 @@ pub struct OAuth2Token {
     pub token_id: Option<TokenId>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OAuth2DeviceFlowSession {
-    pub provider: OAuth2Provider,
-    pub device_code: String,
-    pub interval: std::time::Duration,
-    pub expires_at: chrono::DateTime<Utc>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WebflowKind {
+    /// Browser-based flow: the callback immediately returns the token via redirect.
+    /// The redirect URL receives the token secret as a `token` query parameter.
+    Browser { redirect: url::Url },
+    /// CLI flow: the callback stores the token in the session; the client polls for it.
+    /// The server redirects the browser to the configured `cli_redirect` URL.
+    Cli,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OAuth2WebflowStateMetadata {
-    pub redirect: Option<url::Url>,
     pub provider: OAuth2Provider,
+    pub kind: WebflowKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

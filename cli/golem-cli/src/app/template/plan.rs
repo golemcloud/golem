@@ -431,6 +431,39 @@ fn validate_yaml(source: &str) -> anyhow::Result<()> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MultiComponentLayoutUpgradePlanStep {
     Move { source: PathBuf, target: PathBuf },
+    Rewrite { path: PathBuf, edit: TextEdit },
+}
+
+/// A targeted in-place edit applied to an existing source file as part of a
+/// multi-component layout upgrade. Edits are designed to preserve any unrelated
+/// user customizations in the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextEdit {
+    /// Replace the argument of the first `.in(file("..."))` call inside the
+    /// `lazy val <lazy_val> = project` block of an sbt file.
+    ScalaSbtComponentDir { lazy_val: String, new_dir: String },
+}
+
+impl TextEdit {
+    /// Apply the edit to `current` and return the new file contents.
+    /// Returns an error if the file structure does not match what the edit expects.
+    pub fn apply(&self, current: &str) -> anyhow::Result<String> {
+        match self {
+            TextEdit::ScalaSbtComponentDir { lazy_val, new_dir } => {
+                crate::app::edit::build_sbt::rewrite_component_dir(current, lazy_val, new_dir)
+            }
+        }
+    }
+
+    /// Short, human-readable description of the edit, suitable for log lines.
+    pub fn describe(&self) -> String {
+        match self {
+            TextEdit::ScalaSbtComponentDir { lazy_val, new_dir } => format!(
+                "set componentDir of `lazy val {}` to {:?}",
+                lazy_val, new_dir
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

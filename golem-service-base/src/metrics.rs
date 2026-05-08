@@ -122,3 +122,52 @@ pub mod storage {
             .inc_by(count as f64);
     }
 }
+
+pub mod grpc {
+    //! Metrics for internal service-to-service gRPC calls made via `GrpcClient`.
+
+    use std::time::Duration;
+
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    lazy_static! {
+        static ref INTERNAL_GRPC_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
+            "internal_grpc_success_seconds",
+            "Duration of successful internal gRPC calls between Golem services",
+            &["target", "op"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref INTERNAL_GRPC_FAILURE_TOTAL: CounterVec = register_counter_vec!(
+            "internal_grpc_failure_total",
+            "Number of failed internal gRPC calls that were not retried or exhausted retries",
+            &["target", "op"]
+        )
+        .unwrap();
+        static ref INTERNAL_GRPC_RETRY_TOTAL: CounterVec = register_counter_vec!(
+            "internal_grpc_retry_total",
+            "Number of internal gRPC call attempts retried due to a reconnectable error",
+            &["target", "op"]
+        )
+        .unwrap();
+    }
+
+    pub fn record_internal_grpc_success(target: &str, op: &str, duration: Duration) {
+        INTERNAL_GRPC_SUCCESS_SECONDS
+            .with_label_values(&[target, op])
+            .observe(duration.as_secs_f64());
+    }
+
+    pub fn record_internal_grpc_failure(target: &str, op: &str) {
+        INTERNAL_GRPC_FAILURE_TOTAL
+            .with_label_values(&[target, op])
+            .inc();
+    }
+
+    pub fn record_internal_grpc_retry(target: &str, op: &str) {
+        INTERNAL_GRPC_RETRY_TOTAL
+            .with_label_values(&[target, op])
+            .inc();
+    }
+}

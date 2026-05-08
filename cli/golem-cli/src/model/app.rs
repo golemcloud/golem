@@ -1011,7 +1011,9 @@ pub struct ComponentLayerApplyContext {
     app_root_dir: Option<String>,
     golem_temp_dir: Option<String>,
     component_dir: Option<String>,
+    component_dir_rel: Option<String>,
     cargo_target: Option<String>,
+    moonbit_build_package_path: Option<String>,
 }
 
 impl ComponentLayerApplyContext {
@@ -1022,13 +1024,53 @@ impl ComponentLayerApplyContext {
         component_dir: Option<String>,
         cargo_target: Option<String>,
     ) -> Self {
+        // Compute the component directory path relative to the app root, normalized
+        // for portability (uses unix-style separators on Windows, avoids
+        // canonicalization, and compares paths in their normalized form so that
+        // surface differences like `./` or trailing slashes do not change the
+        // outcome). Falls back to an empty string if either path is missing or the
+        // component directory is not actually under the app root.
+        let component_dir_rel = match (app_root_dir.as_deref(), component_dir.as_deref()) {
+            (Some(app_root), Some(comp_dir)) => {
+                let app_root = fs::normalize_for_comparison(std::path::Path::new(app_root));
+                let comp_dir = fs::normalize_for_comparison(std::path::Path::new(comp_dir));
+                Some(
+                    fs::strip_prefix_or_err(&comp_dir, &app_root)
+                        .ok()
+                        .and_then(|rel| fs::path_to_unix_str(rel).ok())
+                        .unwrap_or_default(),
+                )
+            }
+            _ => None,
+        };
+
+        // Subpath, relative to `_build/wasm/<profile>/build/`, where `moon build`
+        // emits the .wasm artifact for this component. `moon build` writes either
+        // `<root_pkg>.wasm` for a root-level package or `<dir>/<dir>.wasm` for a
+        // sub-package. By convention the moon module name equals the application
+        // name, which equals the part of `componentName` before `:`. Pre-computing
+        // this here lets the moonbit template avoid embedding that branching.
+        let moonbit_build_package_path = match (
+            component_dir_rel.as_deref(),
+            component_name.as_ref().map(|n| n.0.as_str()),
+        ) {
+            (Some(""), Some(name)) => {
+                let root_pkg = name.split(':').next().unwrap_or(name);
+                Some(format!("{root_pkg}.wasm"))
+            }
+            (Some(rel), _) if !rel.is_empty() => Some(format!("{rel}/{rel}.wasm")),
+            _ => None,
+        };
+
         Self {
             env: Self::new_template_env(),
             component_name,
             app_root_dir,
             golem_temp_dir,
             component_dir,
+            component_dir_rel,
             cargo_target,
+            moonbit_build_package_path,
         }
     }
 
@@ -1066,7 +1108,9 @@ impl ComponentLayerApplyContext {
             appRootDir => self.app_root_dir.as_deref().unwrap_or(EMPTY_STR),
             golemTempDir => self.golem_temp_dir.as_deref().unwrap_or(EMPTY_STR),
             componentDir => self.component_dir.as_deref().unwrap_or(EMPTY_STR),
+            componentDirRel => self.component_dir_rel.as_deref().unwrap_or(EMPTY_STR),
             cargoTarget => self.cargo_target.as_deref().unwrap_or(EMPTY_STR),
+            moonbitBuildPackagePath => self.moonbit_build_package_path.as_deref().unwrap_or(EMPTY_STR),
         })
     }
 }

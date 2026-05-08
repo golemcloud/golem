@@ -39,7 +39,6 @@ use crate::log::{
     log_finished_ok, log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action,
     logged_failed_to, logged_finished_or_failed_to, logln,
 };
-use crate::model::GuestLanguage;
 use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
@@ -57,6 +56,7 @@ use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
+use crate::model::{GuestLanguage, TemplateDescription};
 use anyhow::{anyhow, bail};
 use applying::Apply;
 use colored::Colorize;
@@ -409,37 +409,32 @@ impl AppCommandHandler {
     }
 
     pub fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
-        let (language_filter, template_filter) = match filter.as_deref() {
-            Some(filter) => match GuestLanguage::from_string(filter.to_string()) {
-                Some(language) => (Some(language), None),
-                None => (None, Some(filter)),
-            },
-            None => (None, None),
+        let templates = match filter {
+            Some(filter) => {
+                if let Some(language) = GuestLanguage::from_string(filter.clone()) {
+                    self.ctx
+                        .app_template_repo()?
+                        .search_agent_templates(Some(language), None)
+                } else {
+                    self.ctx
+                        .app_template_repo()?
+                        .search_agent_templates(None, Some(&filter))
+                }
+            }
+            None => self
+                .ctx
+                .app_template_repo()?
+                .search_agent_templates(None, None),
         };
 
-        if matches!(self.ctx.format(), crate::model::format::Format::Text) {
-            return self
-                .ctx
-                .app_handler()
-                .log_templates_help(language_filter, template_filter);
-        }
-
-        let templates: Vec<crate::model::TemplateDescription> = self
-            .ctx
-            .app_template_repo()?
-            .search_agent_templates(language_filter, template_filter)
-            .into_iter()
-            .flat_map(|(_language, lang_templates)| {
-                lang_templates
-                    .into_iter()
-                    .map(|(_name, template)| {
-                        crate::model::TemplateDescription::from_template(&template.0)
-                    })
-                    .collect::<Vec<_>>()
-            })
+        let templates: Vec<TemplateDescription> = templates
+            .into_values()
+            .flat_map(|templates| templates.into_values())
+            .map(|template| TemplateDescription::from_template(&template.0))
             .collect();
 
         self.ctx.log_handler().log_view(&templates);
+
         Ok(())
     }
 

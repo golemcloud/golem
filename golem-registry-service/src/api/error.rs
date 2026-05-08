@@ -562,8 +562,8 @@ impl From<OAuth2Error> for ApiError {
     fn from(value: OAuth2Error) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            OAuth2Error::InvalidSession(_) => {
-                Self::bad_request(api::error_code::INVALID_OAUTH_SESSION, error)
+            OAuth2Error::InvalidRedirectDomain(_) => {
+                Self::bad_request(api::error_code::INVALID_REDIRECT_URL, error)
             }
             OAuth2Error::OAuth2WebflowStateNotFound(_) => {
                 Self::not_found(api::error_code::OAUTH_STATE_NOT_FOUND, error)
