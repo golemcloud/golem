@@ -187,7 +187,10 @@ export class Repl {
           evalCode(code);
         }
       } else {
-        const completions = languageService.getSnippetCompletions({ includePlaceholders: false });
+        const formattedHints = typeCheckResult.formattedHints;
+        const completions = languageService.getSnippetCompletions({
+          includePlaceholders: formattedHints.length === 0,
+        });
         if (completions && completions.entries.length) {
           let entries = completions.entries;
           if (completions.entries.length > MAX_COMPLETION_ENTRIES) {
@@ -198,8 +201,8 @@ export class Repl {
           logSnippetInfo(formatAsTable(entries));
         }
 
-        if (typeCheckResult.formattedHints.length) {
-          logSnippetInfo(typeCheckResult.formattedHints.map((hint) => pc.bold(hint)));
+        if (formattedHints.length) {
+          logSnippetInfo(formattedHints);
         }
 
         writeln(typeCheckResult.formattedErrors);

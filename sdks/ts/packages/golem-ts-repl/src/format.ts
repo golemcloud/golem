@@ -116,8 +116,12 @@ function splitTopLevelParams(text: string): string[] {
   let bracketDepth = 0;
   let parenDepth = 0;
   let angleDepth = 0;
+  let stringState: StringLiteralState = {};
 
   for (const { char, index } of chars) {
+    stringState = updateStringLiteralState(stringState, char);
+    if (stringState.active || stringState.justEnteredOrExited) continue;
+
     if (char === '{') braceDepth++;
     else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
     else if (char === '[') bracketDepth++;
@@ -170,8 +174,12 @@ function splitTopLevelUnion(text: string): string[] {
   let bracketDepth = 0;
   let parenDepth = 0;
   let angleDepth = 0;
+  let stringState: StringLiteralState = {};
 
   for (const { char, index } of chars) {
+    stringState = updateStringLiteralState(stringState, char);
+    if (stringState.active || stringState.justEnteredOrExited) continue;
+
     if (char === '{') braceDepth++;
     else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
     else if (char === '[') bracketDepth++;
@@ -198,10 +206,45 @@ function splitTopLevelUnion(text: string): string[] {
 }
 
 function findTopLevelChar(text: string, needle: string): number | undefined {
+  let stringState: StringLiteralState = {};
   for (const { char, index } of visibleChars(text)) {
+    stringState = updateStringLiteralState(stringState, char);
+    if (stringState.active || stringState.justEnteredOrExited) continue;
+
     if (char === needle) return index;
   }
   return undefined;
+}
+
+type StringLiteralState = {
+  quote?: '"' | "'" | '`';
+  escaped?: boolean;
+  active?: boolean;
+  justEnteredOrExited?: boolean;
+};
+
+function updateStringLiteralState(state: StringLiteralState, char: string): StringLiteralState {
+  if (state.quote) {
+    if (state.escaped) {
+      return { ...state, escaped: false, active: true, justEnteredOrExited: false };
+    }
+
+    if (char === '\\') {
+      return { ...state, escaped: true, active: true, justEnteredOrExited: false };
+    }
+
+    if (char === state.quote) {
+      return { justEnteredOrExited: true };
+    }
+
+    return { ...state, active: true, justEnteredOrExited: false };
+  }
+
+  if (char === '"' || char === "'" || char === '`') {
+    return { quote: char, active: true, justEnteredOrExited: true };
+  }
+
+  return {};
 }
 
 function trimVisible(value: string): string {

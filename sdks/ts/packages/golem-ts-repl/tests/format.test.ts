@@ -64,6 +64,25 @@ describe('wrapSnippetInfoLine', () => {
     ]);
   });
 
+  it('does not split commas inside string literal types', () => {
+    expect(wrapSnippetInfoLine('(x: "a,b", y: string): void;', 20)).toEqual([
+      '(',
+      '  x: "a,b",',
+      '  y: string',
+      '): void;',
+    ]);
+  });
+
+  it('does not split unions inside string literal types', () => {
+    expect(wrapSnippetInfoLine('(x: "ok|failed" | "unknown", y: string): void;', 24)).toEqual([
+      '(',
+      '  x: "ok|failed"',
+      '    | "unknown",',
+      '  y: string',
+      '): void;',
+    ]);
+  });
+
   it('preserves base indentation when wrapping', () => {
     expect(
       wrapSnippetInfoLine(
