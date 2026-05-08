@@ -12,32 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{declare_enums, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use crate::{declare_enums, declare_structs, declare_unions, newtype_uuid};
 use anyhow::anyhow;
-use chrono::Utc;
 use std::str::FromStr;
 
 newtype_uuid!(OAuth2WebflowStateId);
 
-declare_transparent_newtypes! {
-    pub struct EncodedOAuth2DeviceflowSession(pub String);
-}
-
 declare_structs! {
-    pub struct OAuth2DeviceflowStart {
-        pub provider: OAuth2Provider,
-    }
-
-    pub struct OAuth2DeviceflowData {
-        pub url: String,
-        pub user_code: String,
-        pub expires: chrono::DateTime<Utc>,
-        pub encoded_session: EncodedOAuth2DeviceflowSession,
-    }
-
     pub struct OAuth2WebflowData {
         pub url: String,
         pub state: OAuth2WebflowStateId,
+    }
+
+    /// Starts the browser-based flow.
+    /// The callback will redirect to `redirect` with the token secret appended as `token=<secret>`.
+    pub struct OAuth2WebflowStartBrowser {
+        pub provider: OAuth2Provider,
+        pub redirect: url::Url,
+    }
+
+    /// Starts the CLI polling flow.
+    /// The callback stores the token for retrieval via the poll endpoint.
+    /// The browser is redirected to the server's configured CLI redirect URL.
+    pub struct OAuth2WebflowStartCli {
+        pub provider: OAuth2Provider,
+    }
+}
+
+declare_unions! {
+    pub enum OAuth2WebflowStart {
+        Browser(OAuth2WebflowStartBrowser),
+        Cli(OAuth2WebflowStartCli),
     }
 }
 

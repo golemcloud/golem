@@ -92,6 +92,7 @@ export class Repl {
   }): repl.REPLServer {
     const output = options?.output ?? process.stdout;
     const terminal = options?.terminal ?? Boolean((output as any).isTTY);
+    const scriptMode = Boolean(this.replCliFlags.script);
     const prompt = this.replCliFlags.script
       ? ''
       : `${pc.cyan('golem-ts-repl')}` +
@@ -103,12 +104,13 @@ export class Repl {
       input: options?.input ?? process.stdin,
       output,
       terminal,
+      ...(scriptMode ? { eval: createEvalWithErrors() } : {}),
       useColors: pc.isColorSupported,
       useGlobal: true,
       preview: false,
       ignoreUndefined: true,
       prompt,
-      breakEvalOnSigint: true,
+      breakEvalOnSigint: !this.replCliFlags.script,
       writer: (value) => util.inspect(value, { depth: null, colors: pc.isColorSupported }),
     });
   }
@@ -154,6 +156,12 @@ export class Repl {
         });
       };
 
+      const failScript = (message: string) => {
+        const error = new Error(message);
+        writeTestSyncEvent('eval_done');
+        callback(error, undefined);
+      };
+
       const snippet = getOverrideSnippet() ?? code;
       languageService.setSnippet(snippet);
       const typeCheckResult = languageService.typeCheckSnippet();
@@ -165,7 +173,9 @@ export class Repl {
           if (replCliFlags.showTypeInfo) {
             logSnippetInfo(pc.bold('awaiting ' + typeInfo.formattedType));
           }
-          evalCode('await ' + code);
+          // Script mode uses a custom base eval that awaits returned promises; interactive mode
+          // keeps Node's REPL top-level-await behavior for promise expressions.
+          evalCode(replCliFlags.script ? code : 'await ' + code);
         } else {
           if (replCliFlags.showTypeInfo) {
             if (quickInfo) {
@@ -177,7 +187,10 @@ export class Repl {
           evalCode(code);
         }
       } else {
-        const completions = languageService.getSnippetCompletions();
+        const formattedHints = typeCheckResult.formattedHints;
+        const completions = languageService.getSnippetCompletions({
+          includePlaceholders: formattedHints.length === 0,
+        });
         if (completions && completions.entries.length) {
           let entries = completions.entries;
           if (completions.entries.length > MAX_COMPLETION_ENTRIES) {
@@ -188,7 +201,16 @@ export class Repl {
           logSnippetInfo(formatAsTable(entries));
         }
 
+        if (formattedHints.length) {
+          logSnippetInfo(formattedHints);
+        }
+
         writeln(typeCheckResult.formattedErrors);
+
+        if (replCliFlags.script) {
+          failScript(typeCheckResult.formattedErrors);
+          return;
+        }
 
         writeTestSyncEvent('eval_done');
         callback(null, undefined);
@@ -408,18 +430,73 @@ export class Repl {
 
     if (evalResult.error) {
       writeln(formatEvalError(evalResult.error));
+      process.exitCode = 1;
+      return;
     }
 
-    const jsonResult = tryJsonStringify(evalResult.result);
+    const finalResult = evalResult.result;
+
+    const jsonResult = tryJsonStringify(finalResult);
     if (jsonResult !== undefined) {
       process.stdout.write(jsonResult + '\n');
       return;
     }
 
-    if (evalResult.result === undefined && replServer.ignoreUndefined) return;
-    const rendered = replServer.writer(evalResult.result);
+    if (finalResult === undefined && replServer.ignoreUndefined) return;
+    const rendered = replServer.writer(finalResult);
     process.stdout.write(rendered + '\n');
   }
+}
+
+function createEvalWithErrors(): REPLEval {
+  // Node's embedded REPL prints uncaught eval errors but does not report them through the eval
+  // callback. Script mode needs callback errors so the outer CLI can return a non-zero status.
+  return function (code, _context, _filename, callback) {
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
+      body: string,
+    ) => () => Promise<unknown>;
+
+    try {
+      const result = new AsyncFunction(transformScriptForAsyncEval(code))();
+      Promise.resolve(result)
+        .then((value) => callback(null, value))
+        .catch((error) => callback(normalizeEvalError(error), undefined));
+    } catch (error) {
+      callback(normalizeEvalError(error), undefined);
+    }
+  };
+}
+
+function transformScriptForAsyncEval(code: string): string {
+  const sourceFile = ts.createSourceFile(
+    'repl-script.js',
+    code,
+    ts.ScriptTarget.ES2020,
+    true,
+    ts.ScriptKind.JS,
+  );
+
+  const lastStatement = sourceFile.statements[sourceFile.statements.length - 1];
+  if (!lastStatement || !ts.isExpressionStatement(lastStatement)) {
+    return code;
+  }
+
+  const expressionStart = lastStatement.expression.getStart(sourceFile, false);
+  const expressionEnd = lastStatement.expression.getEnd();
+  const prefix = code.slice(0, lastStatement.getFullStart());
+  const expression = code.slice(expressionStart, expressionEnd);
+
+  return `${prefix}return await (${expression});`;
+}
+
+function normalizeEvalError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  const normalized = new Error(String(error));
+  normalized.stack = normalized.message;
+  return normalized;
 }
 
 function tryHandleColonCommand(

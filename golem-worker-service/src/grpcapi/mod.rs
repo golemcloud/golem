@@ -186,8 +186,8 @@ pub fn error_to_status(error: AgentError) -> Status {
                     "Component Parsing Failed: Component ID = {:?}, Version: {}, Reason: {}",
                     err.component_id, err.component_revision, err.reason
                 ),
-                worker_execution_error::Error::GetLatestVersionOfComponentFailed(err) => format!(
-                    "Get Latest Version Of Component Failed: Component ID = {:?}, Reason: {}",
+                worker_execution_error::Error::GetCurrentVersionOfComponentFailed(err) => format!(
+                    "Get Current Version Of Component Failed: Component ID = {:?}, Reason: {}",
                     err.component_id, err.reason
                 ),
                 worker_execution_error::Error::PromiseNotFound(err) => {

@@ -32,6 +32,9 @@ use crate::log::{
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
+use crate::model::text::action_result::{
+    AgentDeleteResult, AgentPluginToggleResult, AgentRevertResult,
+};
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
     AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
@@ -619,7 +622,7 @@ impl WorkerCommandHandler {
             agent_type.agent_type.constructor.input_schema.clone(),
         )
         .map_err(|err| {
-            anyhow!("Failed to match agent type parameters to the latest metadata: {err}")
+            anyhow!("Failed to match agent type parameters to the current metadata: {err}")
         })?;
         let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
         let agent_name = RawAgentId(agent_id.to_string());
@@ -777,6 +780,13 @@ impl WorkerCommandHandler {
             "Reverted",
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
+
+        self.ctx.log_handler().log_view(&AgentRevertResult {
+            reverted: true,
+            agent: agent_name.0.clone(),
+            last_oplog_index,
+            number_of_invocations,
+        });
 
         Ok(())
     }
@@ -1204,7 +1214,7 @@ impl WorkerCommandHandler {
                     .await?
                 else {
                     bail!(
-                        "Component {} not found, while getting latest component version",
+                        "Component {} not found, while getting current component version",
                         component.component_name
                     );
                 };
@@ -1299,6 +1309,11 @@ impl WorkerCommandHandler {
             "Deleted",
             format!("agent {}", format_agent_name_match(&agent_name_match)),
         );
+
+        self.ctx.log_handler().log_view(&AgentDeleteResult {
+            deleted: true,
+            agent: agent_name.0.clone(),
+        });
 
         Ok(())
     }
@@ -1495,6 +1510,13 @@ impl WorkerCommandHandler {
             ),
         );
 
+        self.ctx.log_handler().log_view(&AgentPluginToggleResult {
+            activated: true,
+            agent: agent_name.0.clone(),
+            plugin: plugin_name.clone(),
+            priority: plugin_priority,
+        });
+
         Ok(())
     }
 
@@ -1538,6 +1560,13 @@ impl WorkerCommandHandler {
                 format_agent_name_match(&agent_name_match)
             ),
         );
+
+        self.ctx.log_handler().log_view(&AgentPluginToggleResult {
+            activated: false,
+            agent: agent_name.0.clone(),
+            plugin: plugin_name.clone(),
+            priority: plugin_priority,
+        });
 
         Ok(())
     }
@@ -1611,7 +1640,7 @@ impl WorkerCommandHandler {
                         priorities,
                     ));
                     logln("Use --plugin-priority to specify which installation to target.");
-                    logln("Use `golem component plugin get` to list installed plugins.");
+                    logln("Use `golem component get` to list installed plugins.");
                     logln("");
                     bail!(NonSuccessfulExit);
                 }
@@ -2011,7 +2040,7 @@ impl WorkerCommandHandler {
         log_warn_action(
             "Redeploying",
             format!(
-                "agent {}/{} to latest version",
+                "agent {}/{} to current version",
                 component_name.0.bold().blue(),
                 worker_metadata.agent_id.agent_id.bold().green(),
             ),

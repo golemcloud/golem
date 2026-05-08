@@ -39,7 +39,6 @@ use crate::log::{
     log_finished_ok, log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action,
     logged_failed_to, logged_finished_or_failed_to, logln,
 };
-use crate::model::GuestLanguage;
 use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
@@ -60,6 +59,7 @@ use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
+use crate::model::{GuestLanguage, TemplateDescription};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
@@ -156,7 +156,13 @@ impl AppCommandHandler {
             .await;
 
         logln("");
-        logged_finished_or_failed_to(result, "building", "build application")
+        let outcome = logged_finished_or_failed_to(result, "building", "build application");
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::BuildResult { built: true });
+        }
+        outcome
     }
 
     pub async fn cmd_clean(&self, component_name: OptionalComponentNames) -> anyhow::Result<()> {
@@ -168,7 +174,13 @@ impl AppCommandHandler {
             .await;
 
         logln("");
-        logged_finished_or_failed_to(result, "cleaning", "clean application")
+        let outcome = logged_finished_or_failed_to(result, "cleaning", "clean application");
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::CleanResult { cleaned: true });
+        }
+        outcome
     }
 
     pub async fn cmd_deploy(
@@ -268,8 +280,7 @@ impl AppCommandHandler {
                 status,
             ));
         }
-
-        match deploy_result {
+        let outcome: anyhow::Result<()> = match deploy_result {
             Ok(ok) => match ok {
                 DeploySummary::PlanOk => {
                     log_finished_ok("planning");
@@ -349,7 +360,13 @@ impl AppCommandHandler {
                     Err(err)
                 }
             },
+        };
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::DeployResultView { deployed: true });
         }
+        outcome
     }
 
     pub async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
@@ -439,20 +456,33 @@ impl AppCommandHandler {
     }
 
     pub fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
-        match filter {
+        let templates = match filter {
             Some(filter) => {
                 if let Some(language) = GuestLanguage::from_string(filter.clone()) {
                     self.ctx
-                        .app_handler()
-                        .log_templates_help(Some(language), None)
+                        .app_template_repo()?
+                        .search_agent_templates(Some(language), None)
                 } else {
                     self.ctx
-                        .app_handler()
-                        .log_templates_help(None, Some(&filter))
+                        .app_template_repo()?
+                        .search_agent_templates(None, Some(&filter))
                 }
             }
-            None => self.ctx.app_handler().log_templates_help(None, None),
-        }
+            None => self
+                .ctx
+                .app_template_repo()?
+                .search_agent_templates(None, None),
+        };
+
+        let templates: Vec<TemplateDescription> = templates
+            .into_values()
+            .flat_map(|templates| templates.into_values())
+            .map(|template| TemplateDescription::from_template(&template.0))
+            .collect();
+
+        self.ctx.log_handler().log_view(&templates);
+
+        Ok(())
     }
 
     pub async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {

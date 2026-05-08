@@ -16,9 +16,12 @@ use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::SafeDisplay;
+use golem_common::metrics::db::record_db_serialized_size;
 use golem_service_base::db::DBValue;
 use golem_service_base::db::sqlite::SqlitePool;
 use std::collections::HashMap;
+
+const DB_TYPE: &str = "sqlite";
 
 #[derive(Debug, Clone)]
 pub struct SqliteKeyValueStorage {
@@ -113,11 +116,12 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        _entity_name: &'static str,
+        entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
+        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let query = sqlx::query(
             "INSERT OR REPLACE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
         )
@@ -137,7 +141,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        _entity_name: &'static str,
+        entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String> {
@@ -145,6 +149,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         let mut tx = api.begin().await.map_err(|err| err.to_safe_string())?;
 
         for (field_key, field_value) in pairs {
+            record_db_serialized_size(DB_TYPE, svc_name, entity_name, field_value.len());
             tx.execute(
                 sqlx::query(
                     "INSERT OR REPLACE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
@@ -163,7 +168,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        _entity_name: &'static str,
+        entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
@@ -180,6 +185,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .await
             .map_err(|err| err.to_safe_string())?;
 
+        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let query = sqlx::query(
             "INSERT OR IGNORE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
         )
