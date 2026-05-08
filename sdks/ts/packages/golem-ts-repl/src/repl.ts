@@ -154,6 +154,12 @@ export class Repl {
         });
       };
 
+      const failScript = (message: string) => {
+        const error = new Error(message);
+        writeTestSyncEvent('eval_done');
+        callback(error, undefined);
+      };
+
       const snippet = getOverrideSnippet() ?? code;
       languageService.setSnippet(snippet);
       const typeCheckResult = languageService.typeCheckSnippet();
@@ -189,6 +195,11 @@ export class Repl {
         }
 
         writeln(typeCheckResult.formattedErrors);
+
+        if (replCliFlags.script) {
+          failScript(typeCheckResult.formattedErrors);
+          return;
+        }
 
         writeTestSyncEvent('eval_done');
         callback(null, undefined);
