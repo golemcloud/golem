@@ -1099,12 +1099,9 @@ pub mod environment {
         ///
         /// Deployment options are environment-level policy flags applied during
         /// `deploy`. The currently synced fields are:
-        ///   - `compatibilityCheck`  - whether to enforce backward-compatible
-        ///                             component upgrades.
-        ///   - `versionCheck`        - whether to enforce monotonic component
-        ///                             version bumps.
-        ///   - `securityOverrides`   - environment-level security overrides
-        ///                             (e.g. allowed signing keys).
+        ///   - `compatibilityCheck` - enforce backward-compatible component upgrades.
+        ///   - `versionCheck` - enforce monotonic component version bumps.
+        ///   - `securityOverrides` - environment-level security overrides (e.g. allowed signing keys).
         ///
         /// Behavior:
         ///   - The command only operates on the environment selected by the
@@ -1857,14 +1854,13 @@ pub mod resource_definition {
             )]
             limit: String,
             /// Enforcement action when the limit is exceeded:
-            ///   - throttle:  block the offending request until capacity becomes
-            ///                available again (back-pressure; default).
-            ///   - reject:    fail the offending acquire/use call immediately
-            ///                with a quota-exceeded error; the agent can decide
-            ///                to handle it.
+            ///   - throttle: block the offending request until capacity becomes
+            ///     available again (back-pressure; default).
+            ///   - reject: fail the offending acquire/use call immediately
+            ///     with a quota-exceeded error; the agent can decide to handle it.
             ///   - terminate: as `reject`, but additionally terminates the
-            ///                offending agent worker. Use only for hard limits
-            ///                where continuing the worker is unsafe.
+            ///     offending agent worker. Use only for hard limits where
+            ///     continuing the worker is unsafe.
             #[arg(long, default_value_t = EnforcementActionArg::Throttle, verbatim_doc_comment)]
             enforcement_action: EnforcementActionArg,
             /// Singular unit label (e.g. "token")

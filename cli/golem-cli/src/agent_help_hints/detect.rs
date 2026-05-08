@@ -31,10 +31,10 @@ const OVERRIDE_ENV_VAR: &str = "GOLEM_CLI_AGENT_HINTS";
 ///   2. Otherwise return `true` if any of the known agent fingerprints is
 ///      detected in the process environment.
 pub fn is_agent_help_enabled() -> bool {
-    if let Ok(raw) = env::var(OVERRIDE_ENV_VAR) {
-        if let Ok(value) = raw.trim().parse::<LenientBool>() {
-            return value.into();
-        }
+    if let Ok(raw) = env::var(OVERRIDE_ENV_VAR)
+        && let Ok(value) = raw.trim().parse::<LenientBool>()
+    {
+        return value.into();
     }
     detect_known_agent()
 }
@@ -84,7 +84,7 @@ fn detect_known_agent() -> bool {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+
     use lenient_bool::LenientBool;
     use test_r::test;
 
