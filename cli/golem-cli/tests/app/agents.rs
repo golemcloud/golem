@@ -606,6 +606,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
             &format!("(await TargetAgent.get(\"{long_id}\")).ping()"),
         ])
         .await;
+    assert!(!outputs.success());
     assert!(outputs.stderr_contains("Agent id is too long"));
 
     let outputs = ctx
