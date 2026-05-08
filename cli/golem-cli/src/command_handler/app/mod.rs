@@ -151,7 +151,13 @@ impl AppCommandHandler {
             .await;
 
         logln("");
-        logged_finished_or_failed_to(result, "building", "build application")
+        let outcome = logged_finished_or_failed_to(result, "building", "build application");
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::BuildResult { built: true });
+        }
+        outcome
     }
 
     pub async fn cmd_clean(&self, component_name: OptionalComponentNames) -> anyhow::Result<()> {
@@ -163,7 +169,13 @@ impl AppCommandHandler {
             .await;
 
         logln("");
-        logged_finished_or_failed_to(result, "cleaning", "clean application")
+        let outcome = logged_finished_or_failed_to(result, "cleaning", "clean application");
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::CleanResult { cleaned: true });
+        }
+        outcome
     }
 
     pub async fn cmd_deploy(
@@ -244,7 +256,7 @@ impl AppCommandHandler {
             }
         }
 
-        match deploy_result {
+        let outcome: anyhow::Result<()> = match deploy_result {
             Ok(ok) => match ok {
                 DeploySummary::PlanOk => {
                     log_finished_ok("planning");
@@ -301,7 +313,13 @@ impl AppCommandHandler {
                     Err(err)
                 }
             },
+        };
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::DeployResultView { deployed: true });
         }
+        outcome
     }
 
     pub async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {

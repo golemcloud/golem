@@ -15,6 +15,7 @@
 use crate::model::GuestLanguage;
 use crate::model::app::CustomBridgeSdkTarget;
 use crate::model::environment::ResolvedEnvironmentIdentity;
+use clap::ValueEnum;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::component::ComponentName;
 use serde_derive::{Deserialize, Serialize};
@@ -25,8 +26,10 @@ use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, ValueEnum)]
+#[clap(rename_all = "lower")]
 pub enum ReplLanguage {
+    #[value(alias = "ts")]
     TypeScript,
 }
 
