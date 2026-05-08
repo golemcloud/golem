@@ -424,9 +424,7 @@ impl ParsedAgentId {
         resolver: impl AgentTypeResolver,
         lenient: bool,
     ) -> Result<(Self, AgentType), String> {
-        use crate::model::agent::structural_format::{
-            normalize_structural, parse_structural,
-        };
+        use crate::model::agent::structural_format::{normalize_structural, parse_structural};
 
         let s = s.as_ref();
         let (agent_type_name, param_list, phantom_id_str) = parse_agent_id_parts(s)?;
@@ -442,7 +440,8 @@ impl ParsedAgentId {
         let value = parse_structural(&normalized_param_list, &agent_type.constructor.input_schema)
             .map_err(|e| e.to_string())?;
 
-        let agent_id = Self::new_internal(agent_type.type_name.clone(), value, phantom_id, lenient)?;
+        let agent_id =
+            Self::new_internal(agent_type.type_name.clone(), value, phantom_id, lenient)?;
         Ok((agent_id, agent_type))
     }
 

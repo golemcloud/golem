@@ -1363,12 +1363,8 @@ fn agent_id_too_long_rejected() {
         "Error should mention 'too long', got: {err}"
     );
 
-    let parsed = ParsedAgentId::new_lenient(
-        AgentTypeName("t".to_string()),
-        parameters,
-        None,
-    )
-    .expect("ParsedAgentId::new_lenient should succeed");
+    let parsed = ParsedAgentId::new_lenient(AgentTypeName("t".to_string()), parameters, None)
+        .expect("ParsedAgentId::new_lenient should succeed");
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(result.is_err(), "Expected error for too-long agent ID");
     let err = result.unwrap_err();
@@ -1406,13 +1402,9 @@ fn auto_phantom_lenient_allows_too_long_id_but_agent_id_still_rejects() {
         "Error should mention 'too long', got: {err}"
     );
 
-    let parsed = ParsedAgentId::new_auto_phantom_lenient(
-        agent_type,
-        params,
-        None,
-        AgentMode::Durable,
-    )
-    .expect("ParsedAgentId::new_auto_phantom_lenient should succeed");
+    let parsed =
+        ParsedAgentId::new_auto_phantom_lenient(agent_type, params, None, AgentMode::Durable)
+            .expect("ParsedAgentId::new_auto_phantom_lenient should succeed");
 
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(result.is_err(), "Expected error for too-long agent ID");
