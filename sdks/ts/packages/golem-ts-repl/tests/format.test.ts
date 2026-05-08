@@ -40,10 +40,7 @@ describe('wrapSnippetInfoLine', () => {
 
   it('wraps long property callable signatures', () => {
     expect(
-      wrapSnippetInfoLine(
-        'schedule: (scheduleAt: string, x: number, y: string) => void;',
-        40,
-      ),
+      wrapSnippetInfoLine('schedule: (scheduleAt: string, x: number, y: string) => void;', 40),
     ).toEqual([
       'schedule: (',
       '  scheduleAt: string,',

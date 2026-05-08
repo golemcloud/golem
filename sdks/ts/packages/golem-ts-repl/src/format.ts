@@ -62,7 +62,9 @@ function visibleLength(value: string): number {
   return util.stripVTControlCharacters(value).length;
 }
 
-function findCallableSignature(line: string): { paramsStart: number; paramsEnd: number } | undefined {
+function findCallableSignature(
+  line: string,
+): { paramsStart: number; paramsEnd: number } | undefined {
   const chars = visibleChars(line);
   const parenStart = chars.findIndex((char) => char.char === '(');
   if (parenStart < 0) return;
@@ -122,9 +124,16 @@ function splitTopLevelParams(text: string): string[] {
     else if (char === ']') bracketDepth = Math.max(0, bracketDepth - 1);
     else if (char === '(') parenDepth++;
     else if (char === ')') parenDepth = Math.max(0, parenDepth - 1);
-    else if (char === '<' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) angleDepth++;
+    else if (char === '<' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0)
+      angleDepth++;
     else if (char === '>' && angleDepth > 0) angleDepth--;
-    else if (char === ',' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0 && angleDepth === 0) {
+    else if (
+      char === ',' &&
+      braceDepth === 0 &&
+      bracketDepth === 0 &&
+      parenDepth === 0 &&
+      angleDepth === 0
+    ) {
       result.push(text.slice(start, index));
       start = index + 1;
     }
@@ -169,9 +178,16 @@ function splitTopLevelUnion(text: string): string[] {
     else if (char === ']') bracketDepth = Math.max(0, bracketDepth - 1);
     else if (char === '(') parenDepth++;
     else if (char === ')') parenDepth = Math.max(0, parenDepth - 1);
-    else if (char === '<' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) angleDepth++;
+    else if (char === '<' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0)
+      angleDepth++;
     else if (char === '>' && angleDepth > 0) angleDepth--;
-    else if (char === '|' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0 && angleDepth === 0) {
+    else if (
+      char === '|' &&
+      braceDepth === 0 &&
+      bracketDepth === 0 &&
+      parenDepth === 0 &&
+      angleDepth === 0
+    ) {
       result.push(text.slice(start, index));
       start = index + 1;
     }

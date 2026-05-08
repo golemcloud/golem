@@ -190,7 +190,9 @@ export class LanguageService {
     };
   }
 
-  getSnippetCompletions(options?: { includePlaceholders?: boolean }): SnippetCompletion | undefined {
+  getSnippetCompletions(options?: {
+    includePlaceholders?: boolean;
+  }): SnippetCompletion | undefined {
     const snippet = this.getSnippet();
     if (!snippet) return;
 
@@ -560,9 +562,7 @@ function isDiagnosticFromSnippet(diagnostic: tsm.Diagnostic, snippet: tsm.Source
   return !sourceFile || sourceFile.getFilePath() === snippet.getFilePath();
 }
 
-function getDiagnosticSpan(
-  diagnostic: tsm.Diagnostic,
-): { start: number; end: number } | undefined {
+function getDiagnosticSpan(diagnostic: tsm.Diagnostic): { start: number; end: number } | undefined {
   const start = diagnostic.getStart();
   if (start === undefined) return;
   return { start, end: start + (diagnostic.getLength() ?? 0) };
@@ -618,7 +618,8 @@ function getAccessEndingAt(
   let current: tsm.Node | undefined = node;
   while (current) {
     if (
-      (tsm.Node.isPropertyAccessExpression(current) || tsm.Node.isElementAccessExpression(current)) &&
+      (tsm.Node.isPropertyAccessExpression(current) ||
+        tsm.Node.isElementAccessExpression(current)) &&
       current.getEnd() >= pos
     ) {
       best = current;

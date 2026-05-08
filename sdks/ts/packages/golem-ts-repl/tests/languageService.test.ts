@@ -165,10 +165,7 @@ describe('LanguageService remote method diagnostic hints', () => {
   it('enriches unfinished remote operation diagnostics', () => {
     const cases = [
       ['MyAgent.get.trigger(', 'trigger: (authorization: string) => void;'],
-      [
-        'MyAgent.get.schedule(',
-        'schedule: (scheduleAt: string, authorization: string) => void;',
-      ],
+      ['MyAgent.get.schedule(', 'schedule: (scheduleAt: string, authorization: string) => void;'],
       [
         'MyAgent.get.schedule("2026-01-01T00:00:00Z",',
         'schedule: (scheduleAt: string, authorization: string) => void;',
