@@ -23,7 +23,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt, TryStreamExt, future, pin_mut};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentId;
-use golem_common::model::{AgentEvent, IdempotencyKey, LogLevel, Timestamp};
+use golem_common::model::{AgentEvent, AgentId, IdempotencyKey, LogLevel, Timestamp};
 use native_tls::TlsConnector;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -150,6 +150,8 @@ impl WorkerConnection {
         agent_name: String,
         allow_insecure: bool,
     ) -> anyhow::Result<(Request, Option<Connector>)> {
+        AgentId::validate_length(&agent_name).map_err(|err| anyhow!(err))?;
+
         let mut url = worker_service_url;
 
         let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };

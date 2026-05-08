@@ -80,7 +80,9 @@ impl FileSystemBlobStorage {
                 result.push("oplog_payload");
                 result.push(super::agent_mode_prefix(*agent_mode));
                 result.push(environment_id.to_string());
-                result.push(agent_id.to_string());
+                // The filesystem backend needs a bounded worker-derived path component because
+                // very long agent ids can exceed local filename limits on many operating systems.
+                result.push(Self::filesystem_safe_oplog_payload_agent_key(agent_id));
             }
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
@@ -114,6 +116,32 @@ impl FileSystemBlobStorage {
         } else {
             Ok(())
         }
+    }
+
+    pub fn filesystem_safe_oplog_payload_agent_key(
+        agent_id: &golem_common::model::AgentId,
+    ) -> String {
+        let logical = agent_id.to_string();
+        let digest = blake3::hash(logical.as_bytes()).to_hex();
+
+        let mut sanitized_prefix = String::with_capacity(32);
+        for ch in agent_id.agent_id.chars() {
+            if sanitized_prefix.len() >= 32 {
+                break;
+            }
+
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                sanitized_prefix.push(ch);
+            } else {
+                sanitized_prefix.push('_');
+            }
+        }
+
+        if sanitized_prefix.is_empty() {
+            sanitized_prefix.push_str("agent");
+        }
+
+        format!("{sanitized_prefix}-{digest}")
     }
 }
 
