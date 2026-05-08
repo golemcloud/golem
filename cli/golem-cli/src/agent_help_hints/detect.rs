@@ -14,42 +14,29 @@
 
 //! Heuristics for detecting that the CLI was invoked by an automated agent.
 
+use lenient_bool::LenientBool;
 use std::env;
 
-/// Manual override env var. Values:
-///   - `1` / `true` / `on`  — force agent help enrichment on
-///   - `0` / `false` / `off` — force agent help enrichment off
+/// Manual override env var. Parsed leniently via [`LenientBool`], so any of
+/// `1` / `true` / `t` / `yes` / `y` (case-insensitive) means "force on", and
+/// the corresponding negative spellings (`0` / `false` / `f` / `no` / `n`)
+/// mean "force off". Any other value is ignored and detection falls through
+/// to the env-var fingerprints.
 const OVERRIDE_ENV_VAR: &str = "GOLEM_CLI_AGENT_HINTS";
 
 /// Returns `true` when the CLI should emit agent-only help additions.
 ///
 /// Decision order:
-///   1. If `GOLEM_CLI_AGENT_HINTS` is set, honor it.
+///   1. If `GOLEM_CLI_AGENT_HINTS` is set to a recognized boolean, honor it.
 ///   2. Otherwise return `true` if any of the known agent fingerprints is
 ///      detected in the process environment.
 pub fn is_agent_help_enabled() -> bool {
     if let Ok(raw) = env::var(OVERRIDE_ENV_VAR) {
-        match parse_override(&raw) {
-            Some(value) => return value,
-            None => {} // fall through to detection
+        if let Ok(value) = raw.trim().parse::<LenientBool>() {
+            return value.into();
         }
     }
     detect_known_agent()
-}
-
-fn parse_override(raw: &str) -> Option<bool> {
-    let v = raw.trim();
-    if v.eq_ignore_ascii_case("1") || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on")
-    {
-        Some(true)
-    } else if v.eq_ignore_ascii_case("0")
-        || v.eq_ignore_ascii_case("false")
-        || v.eq_ignore_ascii_case("off")
-    {
-        Some(false)
-    } else {
-        None
-    }
 }
 
 fn detect_known_agent() -> bool {
@@ -98,26 +85,33 @@ fn detect_known_agent() -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+    use lenient_bool::LenientBool;
     use test_r::test;
+
+    fn parse(v: &str) -> Option<bool> {
+        v.trim().parse::<LenientBool>().ok().map(Into::into)
+    }
 
     #[test]
     fn override_parse_truthy() {
-        for v in ["1", "true", "TRUE", "on", "ON"] {
-            assert_eq!(parse_override(v), Some(true), "{v}");
+        for v in ["1", "true", "TRUE", "yes", "YES", "y", "t"] {
+            assert_eq!(parse(v), Some(true), "{v}");
         }
     }
 
     #[test]
     fn override_parse_falsy() {
-        for v in ["0", "false", "FALSE", "off", "OFF"] {
-            assert_eq!(parse_override(v), Some(false), "{v}");
+        for v in ["0", "false", "FALSE", "no", "NO", "n", "f"] {
+            assert_eq!(parse(v), Some(false), "{v}");
         }
     }
 
     #[test]
-    fn override_parse_unknown() {
-        for v in ["", "yes", "no", "maybe"] {
-            assert_eq!(parse_override(v), None, "{v}");
+    fn override_parse_unknown_falls_through_to_detection() {
+        // Anything LenientBool does not recognize must be ignored, including
+        // values like `on`/`off` that this crate does not accept.
+        for v in ["", "maybe", "on", "off", "agent", "please"] {
+            assert_eq!(parse(v), None, "{v}");
         }
     }
 }

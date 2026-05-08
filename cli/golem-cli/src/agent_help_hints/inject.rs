@@ -15,9 +15,7 @@
 //! Walks a clap [`Command`] tree and appends a `Relevant skills:` block to
 //! the long help (`after_long_help`) of selected commands.
 
-use crate::agent_help_hints::builtin_skill_map::{
-    SKILL_BINDINGS, SkillBinding, SkillKind,
-};
+use crate::agent_help_hints::builtin_skill_map::{SKILL_BINDINGS, SkillBinding, SkillKind};
 use crate::agent_help_hints::skill_discovery::{find_app_skill_root, skill_is_installed};
 use clap::Command;
 use std::collections::BTreeMap;
@@ -115,10 +113,7 @@ fn render_block_for(skill_root: &Path, bindings: &[&SkillBinding]) -> Option<Str
     }
 
     let mut out = String::new();
-    out.push_str(&format!(
-        "Relevant skills (in {}):\n",
-        skill_root.display()
-    ));
+    out.push_str(&format!("Relevant skills (in {}):\n", skill_root.display()));
     for entry in &entries {
         out.push_str(&format!("  {}\n", entry.summary));
         for item in &entry.items {

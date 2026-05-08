@@ -86,11 +86,11 @@ Examples:
 
 // ── [ARGUMENTS]... on `agent invoke` ─────────────────────────────────────────
 
-pub const INVOKE_ARGS_SHORT: &str =
-    "Agent function arguments specified using the agent component's language syntax \
+pub const INVOKE_ARGS_SHORT: &str = "Agent function arguments specified using the agent component's language syntax \
      (or the canonical structural form). One shell positional per function argument.";
 
-pub const INVOKE_ARGS_LONG: &str = "Agent function arguments. Pass ONE shell positional per function
+pub const INVOKE_ARGS_LONG: &str =
+    "Agent function arguments. Pass ONE shell positional per function
 argument — do NOT join them with commas.
 
 Each argument uses the agent component's source-language literal syntax (the
@@ -121,7 +121,8 @@ Shell quoting:
 
 // ── Group-level summary for `golem-cli agent --help` ─────────────────────────
 
-pub const AGENT_GROUP_AFTER: &str = "For the AGENT_ID grammar (forms, parameter syntax, shell quoting,
+pub const AGENT_GROUP_AFTER: &str =
+    "For the AGENT_ID grammar (forms, parameter syntax, shell quoting,
 per-language examples, and the universal structural fallback), run any leaf
 command with --help, e.g.:
   golem-cli agent get --help
@@ -131,8 +132,7 @@ For the function argument grammar on `agent invoke`, see:
 
 // ── Retry policy: --predicate ────────────────────────────────────────────────
 
-pub const RETRY_PREDICATE_SHORT: &str =
-    "Retry predicate as JSON or YAML (single-key object per node, camelCase keys). \
+pub const RETRY_PREDICATE_SHORT: &str = "Retry predicate as JSON or YAML (single-key object per node, camelCase keys). \
      See --help for the full grammar.";
 
 pub const RETRY_PREDICATE_LONG: &str = "Retry predicate as JSON or YAML.
@@ -190,8 +190,7 @@ Examples:
 
 // ── Retry policy: --policy ───────────────────────────────────────────────────
 
-pub const RETRY_POLICY_SHORT: &str =
-    "Retry policy as JSON or YAML (single-key object per node, camelCase keys). \
+pub const RETRY_POLICY_SHORT: &str = "Retry policy as JSON or YAML (single-key object per node, camelCase keys). \
      See --help for the full grammar.";
 
 pub const RETRY_POLICY_LONG: &str = "Retry policy as JSON or YAML.
@@ -260,8 +259,7 @@ Examples:
 
 // ── Resource quota: --limit ──────────────────────────────────────────────────
 
-pub const RESOURCE_LIMIT_SHORT: &str =
-    "Resource limit as JSON. Internally tagged by `type` (Rate | Capacity | Concurrency). \
+pub const RESOURCE_LIMIT_SHORT: &str = "Resource limit as JSON. Internally tagged by `type` (Rate | Capacity | Concurrency). \
      See --help for the full grammar.";
 
 pub const RESOURCE_LIMIT_LONG: &str = "Resource limit as JSON.
@@ -299,8 +297,7 @@ Examples:
 
 // ── Plugin manifest (`golem-cli plugin register <MANIFEST>`) ─────────────────
 
-pub const PLUGIN_MANIFEST_SHORT: &str =
-    "Path to the plugin manifest JSON or YAML, or '-' for STDIN. \
+pub const PLUGIN_MANIFEST_SHORT: &str = "Path to the plugin manifest JSON or YAML, or '-' for STDIN. \
      See --help for the manifest grammar.";
 
 pub const PLUGIN_MANIFEST_LONG: &str = "Path to the plugin manifest, or '-' to read from STDIN.
@@ -363,7 +360,8 @@ port was actually bound.";
 pub const SECURITY_SCHEME_SCOPE_SHORT: &str =
     "OAuth2/OIDC scope (provider-specific). Pass --scope multiple times for multiple scopes.";
 
-pub const SECURITY_SCHEME_SCOPE_LONG: &str = "OAuth2 / OIDC scope requested from the identity provider.
+pub const SECURITY_SCHEME_SCOPE_LONG: &str =
+    "OAuth2 / OIDC scope requested from the identity provider.
 
 Scopes are free-form strings whose meaning is defined by the chosen
 provider, not by Golem. Pass `--scope` once per scope. The exact set of
@@ -384,8 +382,7 @@ For full lists see each provider's docs, e.g.:
 
 // ── agent oplog --query ──────────────────────────────────────────────────────
 
-pub const OPLOG_QUERY_SHORT: &str =
-    "Lucene-style query against oplog entries (case-insensitive terms, AND/OR/NOT, phrases, regex). \
+pub const OPLOG_QUERY_SHORT: &str = "Lucene-style query against oplog entries (case-insensitive terms, AND/OR/NOT, phrases, regex). \
      Mutually exclusive with --from. See --help for matchable terms.";
 
 pub const OPLOG_QUERY_LONG: &str = "Lucene-style query against the agent's oplog.
@@ -422,7 +419,6 @@ Examples:
   --query 'invoke AND set_name'
   --query 'error AND NOT \"connection refused\"'
   --query '/timeout|throttle/'";
-
 
 pub const CONCEPTS: &str = "\
 Concepts:

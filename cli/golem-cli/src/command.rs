@@ -484,9 +484,7 @@ impl GolemCliCommand {
     /// hints before parsing. This is the only way to influence what clap
     /// renders for `--help` (clap renders help from the `Command` itself,
     /// not from the parsed struct).
-    fn try_parse_from_with_agent_hints(
-        args: &[OsString],
-    ) -> Result<GolemCliCommand, clap::Error> {
+    fn try_parse_from_with_agent_hints(args: &[OsString]) -> Result<GolemCliCommand, clap::Error> {
         use clap::FromArgMatches;
 
         let mut cmd = <GolemCliCommand as CommandFactory>::command();
@@ -1472,12 +1470,20 @@ pub mod worker {
             /// Revert by oplog index. Exactly one of `--last-oplog-index` or
             /// `--number-of-invocations` must be supplied. Mutually exclusive with
             /// `--number-of-invocations`.
-            #[arg(long, conflicts_with = "number_of_invocations", required_unless_present = "number_of_invocations")]
+            #[arg(
+                long,
+                conflicts_with = "number_of_invocations",
+                required_unless_present = "number_of_invocations"
+            )]
             last_oplog_index: Option<u64>,
             /// Revert by number of invocations. Exactly one of `--last-oplog-index` or
             /// `--number-of-invocations` must be supplied. Mutually exclusive with
             /// `--last-oplog-index`.
-            #[arg(long, conflicts_with = "last_oplog_index", required_unless_present = "last_oplog_index")]
+            #[arg(
+                long,
+                conflicts_with = "last_oplog_index",
+                required_unless_present = "last_oplog_index"
+            )]
             number_of_invocations: Option<u64>,
         },
         /// Cancels an enqueued invocation if it has not started yet

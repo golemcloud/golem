@@ -315,9 +315,9 @@ impl AppCommandHandler {
             },
         };
         if outcome.is_ok() {
-            self.ctx.log_handler().log_view(
-                &crate::model::text::action_result::DeployResultView { deployed: true },
-            );
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::DeployResultView { deployed: true });
         }
         outcome
     }
