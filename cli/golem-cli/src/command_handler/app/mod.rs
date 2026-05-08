@@ -36,8 +36,8 @@ use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
     LogColorize, LogIndent, LogOutput, Output, log_action, log_error, log_failed_to,
-    log_finished_ok, log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action,
-    logged_failed_to, logged_finished_or_failed_to, logln,
+    log_finished_ok, log_finished_up_to_date, log_preformatted, log_skipping_up_to_date, log_warn,
+    log_warn_action, logged_failed_to, logged_finished_or_failed_to, logln,
 };
 use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
@@ -53,7 +53,7 @@ use crate::model::deploy::{
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
 use crate::model::text::diff::{
-    DeployPlanView, log_environment_setup_report, log_unified_diff, log_unified_diff_for_path,
+    DeployPlanView, log_unified_diff, log_unified_diff_for_path,
 };
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
@@ -961,7 +961,7 @@ impl AppCommandHandler {
                     logln("");
                     log_action("Checking", "environment setup against current environment");
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                    log_environment_setup_report(report);
+                    log_preformatted(report);
                 }
             }
 

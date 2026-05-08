@@ -229,7 +229,7 @@ mod tests {
     fn environment_setup_classifies_secret_create_and_skip_existing() {
         let mut secret_types = BTreeMap::new();
         secret_types.insert("createSecret".to_string(), analysed_str());
-        secret_types.insert("driftSecret".to_string(), analysed_str());
+        secret_types.insert("existingSecret".to_string(), analysed_str());
 
         let plan = build_environment_setup_plan(
             vec![
@@ -238,14 +238,14 @@ mod tests {
                     secret_value: serde_json::json!("create"),
                 },
                 DeploymentAgentSecretDefault {
-                    path: AgentSecretPath(vec!["driftSecret".to_string()]),
+                    path: AgentSecretPath(vec!["existingSecret".to_string()]),
                     secret_value: serde_json::json!("manifest"),
                 },
             ],
             Vec::new(),
             Vec::new(),
             vec![secret_dto(
-                &["driftSecret"],
+                &["existingSecret"],
                 analysed_str(),
                 Some(serde_json::json!("env")),
             )],
@@ -266,7 +266,7 @@ mod tests {
             plan.display
                 .skipped_already_exists
                 .secret_values
-                .contains("driftSecret")
+                .contains("existingSecret")
         );
     }
 
@@ -282,7 +282,7 @@ mod tests {
                     policy: ApiRetryPolicy::Never(ApiNeverPolicy {}),
                 },
                 DeploymentRetryPolicyDefault {
-                    name: "drift-policy".to_string(),
+                    name: "existing-policy".to_string(),
                     priority: 2,
                     predicate: ApiPredicate::False(ApiPredicateFalse {}),
                     policy: ApiRetryPolicy::Never(ApiNeverPolicy {}),
@@ -290,11 +290,11 @@ mod tests {
             ],
             vec![
                 resource_creation("create-resource", 1),
-                resource_creation("drift-resource", 2),
+                resource_creation("existing-resource", 2),
             ],
             Vec::new(),
-            vec![retry_policy("drift-policy", 999)],
-            vec![resource("drift-resource", 999)],
+            vec![retry_policy("existing-policy", 999)],
+            vec![resource("existing-resource", 999)],
             &BTreeMap::new(),
             &SourceLanguage::TypeScript,
         )
@@ -310,7 +310,7 @@ mod tests {
             plan.display
                 .skipped_already_exists
                 .retry_policies
-                .contains("drift-policy")
+                .contains("existing-policy")
         );
 
         assert!(
@@ -323,7 +323,7 @@ mod tests {
             plan.display
                 .skipped_already_exists
                 .resources
-                .contains("drift-resource")
+                .contains("existing-resource")
         );
     }
 }
