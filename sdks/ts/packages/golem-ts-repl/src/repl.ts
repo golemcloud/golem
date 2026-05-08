@@ -177,7 +177,7 @@ export class Repl {
           evalCode(code);
         }
       } else {
-        const completions = languageService.getSnippetCompletions();
+        const completions = languageService.getSnippetCompletions({ includePlaceholders: false });
         if (completions && completions.entries.length) {
           let entries = completions.entries;
           if (completions.entries.length > MAX_COMPLETION_ENTRIES) {
@@ -186,6 +186,10 @@ export class Repl {
           }
 
           logSnippetInfo(formatAsTable(entries));
+        }
+
+        if (typeCheckResult.formattedHints.length) {
+          logSnippetInfo(typeCheckResult.formattedHints.map((hint) => pc.bold(hint)));
         }
 
         writeln(typeCheckResult.formattedErrors);

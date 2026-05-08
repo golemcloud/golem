@@ -24,6 +24,7 @@ export type SnippetTypeCheckResult =
   | {
       ok: false;
       formattedErrors: string;
+      formattedHints: string[];
     };
 
 export type SnippetQuickInfo = {
@@ -125,6 +126,7 @@ export class LanguageService {
       return {
         ok: false,
         formattedErrors: this.project.formatDiagnosticsWithColorAndContext(errors),
+        formattedHints: this.getRemoteMethodDiagnosticHints(snippet, errors),
       };
     }
   }
@@ -188,7 +190,7 @@ export class LanguageService {
     };
   }
 
-  getSnippetCompletions(): SnippetCompletion | undefined {
+  getSnippetCompletions(options?: { includePlaceholders?: boolean }): SnippetCompletion | undefined {
     const snippet = this.getSnippet();
     if (!snippet) return;
 
@@ -202,8 +204,9 @@ export class LanguageService {
     const rawStart = this.snippetStartPos;
     const rawEnd = rawStart + this.rawSnippet.length;
 
+    const includePlaceholders = options?.includePlaceholders ?? true;
     const placeholderResult =
-      triggerCharacter === '.'
+      !includePlaceholders || triggerCharacter === '.'
         ? undefined
         : this.getSnippetPlaceholderCompletions(snippet, pos, rawStart);
 
@@ -524,6 +527,157 @@ export class LanguageService {
 
     return { checker, typeInfo, remoteMethodExpansion };
   }
+
+  private getRemoteMethodDiagnosticHints(
+    snippet: tsm.SourceFile,
+    diagnostics: tsm.Diagnostic[],
+  ): string[] {
+    const checker = this.project.getTypeChecker();
+    const hints: string[] = [];
+    const seen = new Set<string>();
+
+    for (const diagnostic of diagnostics) {
+      if (!isDiagnosticFromSnippet(diagnostic, snippet)) continue;
+
+      const span = getDiagnosticSpan(diagnostic);
+      const access = span ? getRemoteMethodAccessForDiagnostic(snippet, span) : undefined;
+      if (!access) continue;
+
+      const parameterNames = this.getRemoteMethodParameterNames(access, checker);
+      const hint = formatRemoteMethodOperationHint(access, checker, parameterNames);
+      if (!hint || seen.has(hint)) continue;
+
+      seen.add(hint);
+      hints.push(formatTypeText(hint));
+    }
+
+    return hints;
+  }
+}
+
+function isDiagnosticFromSnippet(diagnostic: tsm.Diagnostic, snippet: tsm.SourceFile): boolean {
+  const sourceFile = diagnostic.getSourceFile();
+  return !sourceFile || sourceFile.getFilePath() === snippet.getFilePath();
+}
+
+function getDiagnosticSpan(
+  diagnostic: tsm.Diagnostic,
+): { start: number; end: number } | undefined {
+  const start = diagnostic.getStart();
+  if (start === undefined) return;
+  return { start, end: start + (diagnostic.getLength() ?? 0) };
+}
+
+function getRemoteMethodAccessForDiagnostic(
+  snippet: tsm.SourceFile,
+  span: { start: number; end: number },
+): tsm.PropertyAccessExpression | tsm.ElementAccessExpression | undefined {
+  for (const call of getCallsIntersectingSpan(snippet, span)) {
+    const access = getRemoteMethodAccessFromTarget(call.getExpression());
+    if (access) return access;
+  }
+
+  return getRemoteMethodAccessFromUnclosedCall(snippet, span);
+}
+
+function getCallsIntersectingSpan(
+  snippet: tsm.SourceFile,
+  span: { start: number; end: number },
+): tsm.CallExpression[] {
+  const spanEnd = span.end === span.start ? span.start + 1 : span.end;
+  return snippet
+    .getDescendantsOfKind(tsm.SyntaxKind.CallExpression)
+    .filter((call) => call.getStart() < spanEnd && call.getEnd() >= span.start)
+    .sort((a, b) => a.getWidth() - b.getWidth());
+}
+
+function getRemoteMethodAccessFromUnclosedCall(
+  snippet: tsm.SourceFile,
+  span: { start: number; end: number },
+): tsm.PropertyAccessExpression | tsm.ElementAccessExpression | undefined {
+  const text = snippet.getText();
+  for (const pos of [span.start, Math.max(0, span.end - 1), snippet.getEnd() - 1]) {
+    const openParenPos = findOpenParenForCall(text, pos);
+    if (openParenPos === undefined) continue;
+
+    const target = getAccessEndingAt(snippet, openParenPos);
+    const access = target ? getRemoteMethodAccessFromTarget(target) : undefined;
+    if (access) return access;
+  }
+  return undefined;
+}
+
+function getAccessEndingAt(
+  snippet: tsm.SourceFile,
+  pos: number,
+): tsm.PropertyAccessExpression | tsm.ElementAccessExpression | undefined {
+  const node = snippet.getDescendantAtPos(Math.max(0, pos - 1));
+  if (!node) return;
+
+  let best: tsm.PropertyAccessExpression | tsm.ElementAccessExpression | undefined;
+  let current: tsm.Node | undefined = node;
+  while (current) {
+    if (
+      (tsm.Node.isPropertyAccessExpression(current) || tsm.Node.isElementAccessExpression(current)) &&
+      current.getEnd() >= pos
+    ) {
+      best = current;
+    }
+    current = current.getParent();
+  }
+  return best;
+}
+
+const REMOTE_METHOD_OPERATIONS = new Set([
+  'abortable',
+  'trigger',
+  'schedule',
+  'scheduleCancelable',
+]);
+
+function getRemoteMethodAccessFromTarget(
+  target: tsm.Node,
+): tsm.PropertyAccessExpression | tsm.ElementAccessExpression | undefined {
+  const access = getAccessExpression(target);
+  if (!access) return;
+
+  if (isRemoteMethodType(access.getType())) return access;
+
+  const operationName = getRemoteMethodName(access);
+  if (!operationName || !REMOTE_METHOD_OPERATIONS.has(operationName)) return;
+
+  const receiver = getAccessExpression(access.getExpression());
+  return receiver && isRemoteMethodType(receiver.getType()) ? receiver : undefined;
+}
+
+function getAccessExpression(
+  node: tsm.Node,
+): tsm.PropertyAccessExpression | tsm.ElementAccessExpression | undefined {
+  if (tsm.Node.isPropertyAccessExpression(node) || tsm.Node.isElementAccessExpression(node)) {
+    return node;
+  }
+  return undefined;
+}
+
+function isRemoteMethodType(type: tsm.Type): boolean {
+  return type.getAliasSymbol()?.getName() === REMOTE_METHOD_ALIAS;
+}
+
+function formatRemoteMethodOperationHint(
+  access: tsm.PropertyAccessExpression | tsm.ElementAccessExpression,
+  checker: tsm.TypeChecker,
+  parameterNames?: string[],
+): string | undefined {
+  const parent = access.getParent();
+  const operation =
+    parent && tsm.Node.isPropertyAccessExpression(parent) ? parent.getName() : undefined;
+  const operationName = operation && REMOTE_METHOD_OPERATIONS.has(operation) ? operation : 'invoke';
+  const expansion = getRemoteMethodExpansion(access.getType(), access, checker, parameterNames);
+  if (!expansion) return;
+
+  return expansion
+    .split('\n')
+    .find((line) => operationName === 'invoke' || line.trimStart().startsWith(`${operationName}:`));
 }
 
 function matchTriggerCharacter(
@@ -1396,24 +1550,42 @@ function getRemoteMethodExpansion(
   checker: tsm.TypeChecker,
   parameterNames?: string[],
 ): string | undefined {
-  const aliasSymbol = type.getAliasSymbol();
-  if (!aliasSymbol || aliasSymbol.getName() !== REMOTE_METHOD_ALIAS) return;
-
-  const aliasArgs = type.getAliasTypeArguments();
-  if (aliasArgs.length < 2) return;
+  const aliasArgs = getRemoteMethodAliasArgs(type);
+  if (!aliasArgs) return;
 
   const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, node, parameterNames);
   const returnText = stripImportTypePrefix(
     checker.getTypeText(aliasArgs[1], node, ts.TypeFormatFlags.NoTruncation),
   );
-
-  const scheduleAtText = getRemoteMethodScheduleParam(type, checker, node);
-  const scheduleArgs = argsText ? `${scheduleAtText}, ${argsText}` : scheduleAtText;
+  const scheduleAtText = getRemoteMethodFunctionParam(
+    type,
+    'schedule',
+    0,
+    'scheduleAt',
+    'string',
+    checker,
+    node,
+  );
+  const abortSignalText = getRemoteMethodFunctionParam(
+    type,
+    'abortable',
+    0,
+    'signal',
+    'AbortSignal',
+    checker,
+    node,
+  );
+  const scheduleArgs = joinParameterTexts(scheduleAtText, argsText);
+  const abortableArgs = joinParameterTexts(abortSignalText, argsText);
+  const cancellationTokenText =
+    getRemoteMethodFunctionReturn(type, 'scheduleCancelable', checker, node) ?? 'CancellationToken';
 
   const lines = [
     `(${argsText}): Promise<${returnText}>;`,
+    `abortable: (${abortableArgs}) => Promise<${returnText}>;`,
     `trigger: (${argsText}) => void;`,
     `schedule: (${scheduleArgs}) => void;`,
+    `scheduleCancelable: (${scheduleArgs}) => ${cancellationTokenText};`,
   ];
 
   return lines.map((line) => line.replace(/\(\)/g, '()')).join('\n');
@@ -1425,11 +1597,8 @@ function getRemoteMethodClientSignature(
   location: tsm.Node,
   parameterNames?: string[],
 ): string | undefined {
-  const aliasSymbol = type.getAliasSymbol();
-  if (!aliasSymbol || aliasSymbol.getName() !== REMOTE_METHOD_ALIAS) return;
-
-  const aliasArgs = type.getAliasTypeArguments();
-  if (aliasArgs.length < 2) return;
+  const aliasArgs = getRemoteMethodAliasArgs(type);
+  if (!aliasArgs) return;
 
   const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, location, parameterNames);
   const returnText = stripImportTypePrefix(
@@ -1437,6 +1606,15 @@ function getRemoteMethodClientSignature(
   );
 
   return `(${argsText}) => ${returnText}`;
+}
+
+function getRemoteMethodAliasArgs(type: tsm.Type): [tsm.Type, tsm.Type] | undefined {
+  const aliasSymbol = type.getAliasSymbol();
+  if (!aliasSymbol || aliasSymbol.getName() !== REMOTE_METHOD_ALIAS) return;
+
+  const aliasArgs = type.getAliasTypeArguments();
+  if (aliasArgs.length < 2) return;
+  return [aliasArgs[0], aliasArgs[1]];
 }
 
 function formatRemoteMethodArgs(
@@ -1485,28 +1663,60 @@ function formatRemoteMethodArgs(
   return `...args: ${fallbackTypeText}`;
 }
 
-function getRemoteMethodScheduleParam(
+function joinParameterTexts(...entries: Array<string | undefined>): string {
+  return entries.filter((entry): entry is string => Boolean(entry)).join(', ');
+}
+
+function getRemoteMethodFunctionParam(
   type: tsm.Type,
+  propertyName: string,
+  parameterIndex: number,
+  parameterName: string,
+  fallbackType: string,
   checker: tsm.TypeChecker,
   location: tsm.Node,
 ): string {
+  const signature = getRemoteMethodFunctionSignature(type, propertyName, checker, location);
+  const param = signature?.getParameters()[parameterIndex];
+  const paramType = param
+    ? stripImportTypePrefix(
+        checker.getTypeText(
+          checker.getTypeOfSymbolAtLocation(param, location),
+          location,
+          ts.TypeFormatFlags.NoTruncation,
+        ),
+      )
+    : fallbackType;
+  return `${parameterName}: ${paramType}`;
+}
+
+function getRemoteMethodFunctionReturn(
+  type: tsm.Type,
+  propertyName: string,
+  checker: tsm.TypeChecker,
+  location: tsm.Node,
+): string | undefined {
+  const signature = getRemoteMethodFunctionSignature(type, propertyName, checker, location);
+  const returnType = signature?.getReturnType();
+  if (!returnType) return;
+
+  return stripImportTypePrefix(
+    checker.getTypeText(returnType, location, ts.TypeFormatFlags.NoTruncation),
+  );
+}
+
+function getRemoteMethodFunctionSignature(
+  type: tsm.Type,
+  propertyName: string,
+  checker: tsm.TypeChecker,
+  location: tsm.Node,
+): tsm.Signature | undefined {
   const apparent = type.getApparentType();
-  const scheduleProp = apparent.getProperty('schedule') ?? type.getProperty('schedule');
-  if (scheduleProp) {
-    const scheduleType = checker.getTypeOfSymbolAtLocation(scheduleProp, location);
-    const signature = scheduleType.getCallSignatures()[0];
-    const param = signature?.getParameters()[0];
-    if (param) {
-      const paramType = checker.getTypeOfSymbolAtLocation(param, location);
-      const paramText = stripImportTypePrefix(
-        checker.getTypeText(paramType, location, ts.TypeFormatFlags.NoTruncation),
-      );
-      if (paramText) {
-        return `scheduleAt: ${paramText}`;
-      }
-    }
-  }
-  return 'scheduleAt: string';
+  const prop = apparent.getProperty(propertyName) ?? type.getProperty(propertyName);
+  if (!prop) return;
+
+  const propType = checker.getTypeOfSymbolAtLocation(prop, location);
+  return propType.getCallSignatures()[0];
 }
 
 function parameterNameForIndex(index: number): string {
