@@ -392,23 +392,31 @@ async fn agent_reads_secret_after_canonicalized_update(
         )
         .await?;
 
-    let response = user
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            ctx.agent_method_name(),
-            data_value!(),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
+    // There is a race here between the updated agent secret becoming visible and the invocation,
+    // so poll until we see the new value
+    let parsed_config: serde_json::Value;
+    loop {
+        let response = user
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                ctx.agent_method_name(),
+                data_value!(),
+            )
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-    let_assert!(Value::String(config) = response);
+        let_assert!(Value::String(config) = response);
 
-    let parsed: serde_json::Value = serde_json::from_str(&config)?;
+        if config.contains("bar") {
+            parsed_config = serde_json::from_str(&config)?;
+            break;
+        }
+    }
 
     assert_eq!(
-        parsed,
+        parsed_config,
         json!({
             "secretPath": "bar"
         })
