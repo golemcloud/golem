@@ -1347,19 +1347,73 @@ fn agent_id_too_long_rejected() {
 
     let component_id = ComponentId(Uuid::nil());
     let long_string = "a".repeat(600);
-    let parsed = ParsedAgentId::new(
+    let parameters = DataValue::Tuple(ElementValues {
+        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+            value: ValueAndType::new(
+                Value::String(long_string),
+                golem_wasm::analysis::analysed_type::str(),
+            ),
+        })],
+    });
+
+    let err = ParsedAgentId::new(AgentTypeName("t".to_string()), parameters.clone(), None)
+        .expect_err("ParsedAgentId::new should reject too-long ids");
+    assert!(
+        err.contains("too long"),
+        "Error should mention 'too long', got: {err}"
+    );
+
+    let parsed = ParsedAgentId::new_lenient(
         AgentTypeName("t".to_string()),
-        DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-                value: ValueAndType::new(
-                    Value::String(long_string),
-                    golem_wasm::analysis::analysed_type::str(),
-                ),
-            })],
-        }),
+        parameters,
         None,
     )
-    .expect("ParsedAgentId::new should succeed");
+    .expect("ParsedAgentId::new_lenient should succeed");
+    let result = AgentId::from_agent_id(component_id, &parsed);
+    assert!(result.is_err(), "Expected error for too-long agent ID");
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("too long"),
+        "Error should mention 'too long', got: {err}"
+    );
+}
+
+#[test]
+fn auto_phantom_lenient_allows_too_long_id_but_agent_id_still_rejects() {
+    use crate::base_model::AgentId;
+    use crate::base_model::component::ComponentId;
+
+    let component_id = ComponentId(Uuid::nil());
+    let agent_type = AgentTypeName("t".to_string());
+    let params = DataValue::Tuple(ElementValues {
+        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+            value: ValueAndType::new(
+                Value::String("a".repeat(600)),
+                golem_wasm::analysis::analysed_type::str(),
+            ),
+        })],
+    });
+
+    let err = ParsedAgentId::new_auto_phantom(
+        agent_type.clone(),
+        params.clone(),
+        None,
+        AgentMode::Durable,
+    )
+    .expect_err("ParsedAgentId::new_auto_phantom should reject too-long ids");
+    assert!(
+        err.contains("too long"),
+        "Error should mention 'too long', got: {err}"
+    );
+
+    let parsed = ParsedAgentId::new_auto_phantom_lenient(
+        agent_type,
+        params,
+        None,
+        AgentMode::Durable,
+    )
+    .expect("ParsedAgentId::new_auto_phantom_lenient should succeed");
+
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(result.is_err(), "Expected error for too-long agent ID");
     let err = result.unwrap_err();
