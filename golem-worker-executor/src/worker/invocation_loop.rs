@@ -776,7 +776,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: IdempotencyKey,
         invocation: AgentInvocation,
     ) -> Result<InvokeResult, WorkerExecutorError> {
-        let (lowered, local_span_ids, inherited_span_ids, component_metadata) = async {
+        let (lowered, local_span_ids, inherited_span_ids) = async {
             self.store
                 .data_mut()
                 .set_current_idempotency_key(idempotency_key.clone())
@@ -814,12 +814,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 self.parent.parsed_agent_id.as_ref(),
             )?;
 
-            Ok::<_, WorkerExecutorError>((
-                lowered,
-                local_span_ids,
-                inherited_span_ids,
-                component_metadata,
-            ))
+            Ok::<_, WorkerExecutorError>((lowered, local_span_ids, inherited_span_ids))
         }
         .instrument(span!(Level::INFO, "prepare_invocation_context"))
         .await?;
@@ -828,7 +823,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             lowered,
             self.store,
             self.instance,
-            &component_metadata,
             InvocationMode::Live(invocation),
         )
         .await;
@@ -912,6 +906,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(error) => Some(TrapType::from_error::<Ctx>(
                 &anyhow!(error),
                 OplogIndex::INITIAL,
+                self.parent.agent_mode(),
             )),
         };
         let decision = match trap_type {
@@ -975,17 +970,36 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
         };
 
+        let invocation_context = InvocationContextStack::fresh();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+        if let Err(err) = self
+            .store
+            .data_mut()
+            .set_current_invocation_context(invocation_context)
+            .await
+        {
+            warn!("Failed to install invocation context for manual update save-snapshot: {err}");
+            return self
+                .fail_update(
+                    target_revision,
+                    format!("failed to install invocation context for save-snapshot: {err}"),
+                )
+                .await;
+        }
+
         self.store.data_mut().begin_call_snapshotting_function();
 
-        let result = invoke_observed_and_traced(
-            lowered,
-            self.store,
-            self.instance,
-            &component_metadata,
-            InvocationMode::Replay,
-        )
-        .await;
+        let result =
+            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
+                .await;
         self.store.data_mut().end_call_snapshotting_function();
+
+        for span_id in local_span_ids {
+            let _ = self.store.data_mut().remove_span(&span_id);
+        }
+        for span_id in inherited_span_ids {
+            let _ = self.store.data_mut().remove_span(&span_id);
+        }
 
         match result {
             Ok(InvokeResult::Succeeded {
@@ -1185,17 +1199,49 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
         };
 
+        let invocation_context = InvocationContextStack::fresh();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+        if let Err(err) = self
+            .store
+            .data_mut()
+            .set_current_invocation_context(invocation_context)
+            .await
+        {
+            warn!("Failed to install invocation context for periodic save-snapshot: {err}");
+            return CommandOutcome::Continue;
+        }
+
         self.store.data_mut().begin_call_snapshotting_function();
 
-        let result = invoke_observed_and_traced(
-            lowered,
-            self.store,
-            self.instance,
-            &component_metadata,
-            InvocationMode::Replay,
-        )
-        .await;
+        let result =
+            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
+                .await;
         self.store.data_mut().end_call_snapshotting_function();
+
+        for span_id in local_span_ids {
+            let _ = self.store.data_mut().remove_span(&span_id);
+        }
+        for span_id in inherited_span_ids {
+            let _ = self.store.data_mut().remove_span(&span_id);
+        }
+
+        if let Some(outcome) = periodic_snapshot_failure_outcome(&result) {
+            match &result {
+                Ok(InvokeResult::Failed { .. }) => {
+                    warn!(
+                        "Periodic snapshot save function failed; restarting worker to recover the store"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "Periodic snapshot save invocation error: {err}; restarting worker to recover the store"
+                    );
+                }
+                _ => unreachable!(),
+            }
+
+            return outcome;
+        }
 
         match result {
             Ok(InvokeResult::Succeeded {
@@ -1235,10 +1281,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 warn!("Periodic snapshot returned unexpected result format");
                 CommandOutcome::Continue
             }
-            Ok(InvokeResult::Failed { .. }) => {
-                warn!("Periodic snapshot save function failed");
-                CommandOutcome::Continue
-            }
             Ok(InvokeResult::Exited { .. }) => {
                 warn!("Worker exited during periodic snapshot save");
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
@@ -1247,16 +1289,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 warn!("Worker interrupted during periodic snapshot save");
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
-            Err(err) => {
-                warn!("Periodic snapshot save invocation error: {err}");
-                CommandOutcome::Continue
-            }
+            Ok(InvokeResult::Failed { .. }) | Err(_) => unreachable!(),
         }
     }
 }
 
 /// Outcome of processing a single command within the inner invocation loop
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum CommandOutcome {
     /// Break from both the inner and outer loops, there is no way to retry anything
     BreakOuterLoop,
@@ -1273,6 +1312,17 @@ enum PeriodicSnapshotAction {
     NotNeeded,
     DueNow,
     Wait(Duration),
+}
+
+fn periodic_snapshot_failure_outcome(
+    result: &Result<InvokeResult, WorkerExecutorError>,
+) -> Option<CommandOutcome> {
+    match result {
+        Ok(InvokeResult::Failed { .. }) | Err(_) => {
+            Some(CommandOutcome::BreakInnerLoop(RetryDecision::Immediate))
+        }
+        _ => None,
+    }
 }
 
 fn snapshot_baseline_timestamp(
@@ -1304,8 +1354,15 @@ fn snapshot_action_at(
 
 #[cfg(test)]
 mod tests {
-    use super::{PeriodicSnapshotAction, snapshot_action_at, snapshot_baseline_timestamp};
-    use golem_common::model::Timestamp;
+    use super::{
+        CommandOutcome, PeriodicSnapshotAction, periodic_snapshot_failure_outcome,
+        snapshot_action_at, snapshot_baseline_timestamp,
+    };
+    use crate::worker::RetryDecision;
+    use crate::worker::invocation::InvokeResult;
+    use golem_common::model::oplog::AgentError;
+    use golem_common::model::{OplogIndex, Timestamp};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::time::Duration;
     use test_r::test;
 
@@ -1338,6 +1395,30 @@ mod tests {
         assert_eq!(
             action,
             PeriodicSnapshotAction::Wait(Duration::from_millis(1_750))
+        );
+    }
+
+    #[test]
+    fn periodic_snapshot_failed_invocation_triggers_immediate_recovery() {
+        let result = Ok(InvokeResult::Failed {
+            consumed_fuel: 0,
+            error: AgentError::InternalError("boom".to_string()),
+            retry_from: OplogIndex::INITIAL,
+        });
+
+        assert_eq!(
+            periodic_snapshot_failure_outcome(&result),
+            Some(CommandOutcome::BreakInnerLoop(RetryDecision::Immediate))
+        );
+    }
+
+    #[test]
+    fn periodic_snapshot_invocation_error_triggers_immediate_recovery() {
+        let result = Err(WorkerExecutorError::runtime("boom"));
+
+        assert_eq!(
+            periodic_snapshot_failure_outcome(&result),
+            Some(CommandOutcome::BreakInnerLoop(RetryDecision::Immediate))
         );
     }
 }

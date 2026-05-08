@@ -81,25 +81,27 @@ final class TransactionsDemoImpl(@unused private val name: String) extends Trans
       compensateFn = (input, output) => { appendTrace(s"op2.compensate($input,$output)"); Future.successful(Right(())) }
     )
 
-    Transactions.fallibleTransaction[Int, String] { tx =>
-      tx.execute(op1, 1).flatMap {
-        case Left(err) =>
-          appendTrace(s"op1 result=Left($err)")
-          Future.successful(Left(err))
-        case Right(v1) =>
-          appendTrace(s"op1 result=Right($v1)")
-          tx.execute(op2, v1).map { r2 =>
-            appendTrace(s"op2 result=$r2")
-            r2
-          }
+    Transactions
+      .fallibleTransaction[Int, String] { tx =>
+        tx.execute(op1, 1).flatMap {
+          case Left(err) =>
+            appendTrace(s"op1 result=Left($err)")
+            Future.successful(Left(err))
+          case Right(v1) =>
+            appendTrace(s"op1 result=Right($v1)")
+            tx.execute(op2, v1).map { r2 =>
+              appendTrace(s"op2 result=$r2")
+              r2
+            }
+        }
       }
-    }.map { result =>
-      sb.append(s"transaction result=$result\n")
-      sb.append("trace:\n")
-      sb.append(resetAndGetTrace())
-      sb.append("\n")
-      sb.result()
-    }
+      .map { result =>
+        sb.append(s"transaction result=$result\n")
+        sb.append("trace:\n")
+        sb.append(resetAndGetTrace())
+        sb.append("\n")
+        sb.result()
+      }
   }
 
   override def fallibleFailureDemo(): Future[String] = {
@@ -116,41 +118,45 @@ final class TransactionsDemoImpl(@unused private val name: String) extends Trans
     )
     val failOp = Operation[Int, Int, String](
       run = i => { appendTrace(s"failOp.run($i) -> LEFT"); Future.successful(Left("intentional-failure")) },
-      compensateFn = (input, output) => { appendTrace(s"failOp.compensate($input,$output)"); Future.successful(Right(())) }
+      compensateFn = (input, output) => {
+        appendTrace(s"failOp.compensate($input,$output)"); Future.successful(Right(()))
+      }
     )
 
-    Transactions.fallibleTransaction[Int, String] { tx =>
-      tx.execute(op1, 10).flatMap {
-        case Left(err) =>
-          appendTrace(s"op1 result=Left($err)")
-          Future.successful(Left(err))
-        case Right(v1) =>
-          appendTrace(s"op1 result=Right($v1)")
-          tx.execute(op2, v1).flatMap {
-            case Left(err) =>
-              appendTrace(s"op2 result=Left($err)")
-              Future.successful(Left(err))
-            case Right(v2) =>
-              appendTrace(s"op2 result=Right($v2)")
-              tx.execute(failOp, v2).map { r3 =>
-                appendTrace(s"failOp result=$r3")
-                r3
-              }
-          }
+    Transactions
+      .fallibleTransaction[Int, String] { tx =>
+        tx.execute(op1, 10).flatMap {
+          case Left(err) =>
+            appendTrace(s"op1 result=Left($err)")
+            Future.successful(Left(err))
+          case Right(v1) =>
+            appendTrace(s"op1 result=Right($v1)")
+            tx.execute(op2, v1).flatMap {
+              case Left(err) =>
+                appendTrace(s"op2 result=Left($err)")
+                Future.successful(Left(err))
+              case Right(v2) =>
+                appendTrace(s"op2 result=Right($v2)")
+                tx.execute(failOp, v2).map { r3 =>
+                  appendTrace(s"failOp result=$r3")
+                  r3
+                }
+            }
+        }
       }
-    }.map { result =>
-      val resultStr = result match {
-        case Right(v)                                                            => s"Right($v)"
-        case Left(TransactionFailure.FailedAndRolledBackCompletely(err))         => s"FailedAndRolledBackCompletely($err)"
-        case Left(TransactionFailure.FailedAndRolledBackPartially(err, compErr)) =>
-          s"FailedAndRolledBackPartially($err, $compErr)"
-      }
+      .map { result =>
+        val resultStr = result match {
+          case Right(v)                                                            => s"Right($v)"
+          case Left(TransactionFailure.FailedAndRolledBackCompletely(err))         => s"FailedAndRolledBackCompletely($err)"
+          case Left(TransactionFailure.FailedAndRolledBackPartially(err, compErr)) =>
+            s"FailedAndRolledBackPartially($err, $compErr)"
+        }
 
-      sb.append(s"transaction result=$resultStr\n")
-      sb.append("trace:\n")
-      sb.append(resetAndGetTrace())
-      sb.append("\n")
-      sb.result()
-    }
+        sb.append(s"transaction result=$resultStr\n")
+        sb.append("trace:\n")
+        sb.append(resetAndGetTrace())
+        sb.append("\n")
+        sb.result()
+      }
   }
 }

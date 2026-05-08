@@ -29,7 +29,7 @@ use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{ParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -284,7 +284,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 .get_or_create_running(
                     &target_owned,
                     None,
-                    None,
                     Vec::new(),
                     Some(running_plugin.component_revision),
                     None,
@@ -318,7 +317,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     agent_id: Some(worker_metadata.agent_id.clone().into()),
                     environment_id: Some(worker_metadata.environment_id.into()),
                     env: HashMap::from_iter(worker_metadata.env.iter().cloned()),
-                    wasi_config: worker_metadata.wasi_config.clone().into_iter().collect(),
                     config: worker_metadata
                         .config
                         .clone()
@@ -499,6 +497,7 @@ impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for PerExecutorOplogProcessorPlugin
 #[derive(Clone)]
 struct CreateOplogConstructor {
     owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
     initial_entry: Option<OplogEntry>,
     inner: Arc<dyn OplogService>,
     last_oplog_index: Option<OplogIndex>,
@@ -512,8 +511,10 @@ struct CreateOplogConstructor {
 }
 
 impl CreateOplogConstructor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         initial_entry: Option<OplogEntry>,
         inner: Arc<dyn OplogService>,
         last_oplog_index: Option<OplogIndex>,
@@ -527,6 +528,7 @@ impl CreateOplogConstructor {
     ) -> Self {
         Self {
             owned_agent_id,
+            agent_mode,
             initial_entry,
             inner,
             last_oplog_index,
@@ -546,12 +548,17 @@ impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let last_oplog_index = match self.last_oplog_index {
             Some(idx) => idx,
-            None => self.inner.get_last_index(&self.owned_agent_id).await,
+            None => {
+                self.inner
+                    .get_last_index(&self.owned_agent_id, self.agent_mode)
+                    .await
+            }
         };
         let inner = if let Some(initial_entry) = self.initial_entry {
             self.inner
                 .create(
                     &self.owned_agent_id,
+                    self.agent_mode,
                     initial_entry,
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
@@ -562,6 +569,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.inner
                 .open(
                     &self.owned_agent_id,
+                    self.agent_mode,
                     Some(last_oplog_index),
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
@@ -627,6 +635,7 @@ impl OplogService for ForwardingOplogService {
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -637,6 +646,7 @@ impl OplogService for ForwardingOplogService {
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
+                    agent_mode,
                     Some(initial_entry),
                     self.inner.clone(),
                     Some(OplogIndex::INITIAL),
@@ -655,6 +665,7 @@ impl OplogService for ForwardingOplogService {
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -665,6 +676,7 @@ impl OplogService for ForwardingOplogService {
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
+                    agent_mode,
                     None,
                     self.inner.clone(),
                     last_oplog_index,
@@ -680,55 +692,65 @@ impl OplogService for ForwardingOplogService {
             .await
     }
 
-    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
-        self.inner.get_last_index(owned_agent_id).await
+    async fn get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogIndex {
+        self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId) {
-        self.inner.delete(owned_agent_id).await
+    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        self.inner.delete(owned_agent_id, agent_mode).await
     }
 
     async fn read(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read(owned_agent_id, idx, n).await
+        self.inner.read(owned_agent_id, agent_mode, idx, n).await
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
-        self.inner.exists(owned_agent_id).await
+    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+        self.inner.exists(owned_agent_id, agent_mode).await
     }
 
     async fn scan_for_component(
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
+        modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, cursor, count)
+            .scan_for_component(environment_id, component_id, modes, cursor, count)
             .await
     }
 
     async fn upload_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String> {
-        self.inner.upload_raw_payload(owned_agent_id, data).await
+        self.inner
+            .upload_raw_payload(owned_agent_id, agent_mode, data)
+            .await
     }
 
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner
-            .download_raw_payload(owned_agent_id, payload_id, md5_hash)
+            .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
             .await
     }
 }
@@ -1103,6 +1125,15 @@ impl ForwardingOplogState {
             None => return,
         };
 
+        tracing::info!(
+            plugin_name = plugin.plugin_name,
+            source_agent = %self.initial_worker_metadata.agent_id,
+            batch_start = %batch_start,
+            batch_end = %batch_end,
+            is_retry,
+            "Oplog processor: flushing batch to plugin"
+        );
+
         let target_agent_id = if let Some(id) = &live.target_agent_id {
             id.clone()
         } else {
@@ -1112,6 +1143,11 @@ impl ForwardingOplogState {
                 .await
             {
                 Ok(id) => {
+                    tracing::info!(
+                        plugin_name = plugin.plugin_name,
+                        target_agent = %id,
+                        "Oplog processor: resolved target plugin worker"
+                    );
                     self.write_checkpoint(
                         grant_id,
                         &id,
@@ -1198,6 +1234,14 @@ impl ForwardingOplogState {
             .await
         {
             Ok(()) => {
+                tracing::info!(
+                    plugin_name = plugin.plugin_name,
+                    source_agent = %metadata.agent_id,
+                    target_agent = %target_agent_id,
+                    batch_start = %batch_start,
+                    batch_end = %batch_end,
+                    "Oplog processor: batch enqueued successfully"
+                );
                 // Enqueue succeeded — immediately confirm
                 self.write_checkpoint(
                     grant_id,
@@ -1596,9 +1640,12 @@ impl ForwardingOplogState {
                 s.target_agent_id = Some(new_target.clone());
             }
             tracing::info!(
+                source_worker = %self.initial_worker_metadata.agent_id,
                 plugin = %grant_id,
                 old_target = %old_target,
                 new_target = %new_target,
+                confirmed_up_to = confirmed.as_u64(),
+                last_batch_start = last_batch_start.as_u64(),
                 "Locality recovery: migrated plugin to new local target"
             );
         }
@@ -1628,7 +1675,7 @@ fn oplog_processor_idempotency_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::Timestamp;
+    use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{
@@ -1640,6 +1687,7 @@ mod tests {
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::plugin_registration::PluginRegistrationId;
+    use golem_common::model::{AgentFingerprint, Timestamp};
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
     use test_r::test;
@@ -1905,7 +1953,7 @@ mod tests {
                 account_id: AccountId::new(),
                 component_size: 100,
                 metadata: ComponentMetadata::from_parts(
-                    vec![],
+                    KnownExports::default(),
                     vec![],
                     None,
                     None,
@@ -2049,12 +2097,13 @@ mod tests {
             env: vec![],
             environment_id,
             created_by: account_id,
-            wasi_config: BTreeMap::new(),
             config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: status.clone(),
             original_phantom_id: None,
+            fingerprint: AgentFingerprint::new(),
+            agent_mode: AgentMode::Durable,
         };
 
         let status_lock =

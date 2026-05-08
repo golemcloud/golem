@@ -1,0 +1,7 @@
+{
+  "import": [
+    "moonbitlang/core/buffer",
+    "moonbitlang/core/cmp"
+  ],
+  "test-import": [ ]
+}

@@ -1,0 +1,11 @@
+{
+    "import": [
+        {
+            "path": "moonbitlang/x/benchmark/internal/benchmark_ffi",
+            "alias": "ffi"
+        },
+        "moonbitlang/core/double",
+        "moonbitlang/core/cmp"
+    ],
+    "warn-list": "-deprecated"
+}

@@ -1,0 +1,21 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/keyvalue/atomic"
+
+import {
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/types",
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError",
+}
+
+// Values
+pub fn compare_and_swap(@types.Bucket, String, UInt64, UInt64) -> Result[Bool, @wasiKeyvalueError.Error_]
+
+pub fn increment(@types.Bucket, String, UInt64) -> Result[UInt64, @wasiKeyvalueError.Error_]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

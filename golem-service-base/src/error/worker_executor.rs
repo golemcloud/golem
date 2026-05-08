@@ -59,7 +59,7 @@ pub enum WorkerExecutorError {
         component_revision: ComponentRevision,
         reason: String,
     },
-    GetLatestVersionOfComponentFailed {
+    GetCurrentVersionOfComponentFailed {
         component_id: ComponentId,
         reason: String,
     },
@@ -230,13 +230,13 @@ impl Display for WorkerExecutorError {
                     "Failed to parse downloaded component: {component_id}#{component_revision}: {reason}"
                 )
             }
-            Self::GetLatestVersionOfComponentFailed {
+            Self::GetCurrentVersionOfComponentFailed {
                 component_id,
                 reason,
             } => {
                 write!(
                     f,
-                    "Failed to get latest version of component {component_id}: {reason}"
+                    "Failed to get current version of component {component_id}: {reason}"
                 )
             }
             Self::InitialAgentFileDownloadFailed { path, reason } => {
@@ -322,8 +322,8 @@ impl Error for WorkerExecutorError {
             Self::FailedToResumeAgent { .. } => "Failed to resume worker",
             Self::ComponentDownloadFailed { .. } => "Failed to download component",
             Self::ComponentParseFailed { .. } => "Failed to parse downloaded component",
-            Self::GetLatestVersionOfComponentFailed { .. } => {
-                "Failed to get latest version of component"
+            Self::GetCurrentVersionOfComponentFailed { .. } => {
+                "Failed to get current version of component"
             }
             Self::PromiseNotFound { .. } => "Promise not found",
             Self::PromiseDropped { .. } => "Promise dropped",
@@ -357,7 +357,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::FailedToResumeAgent { .. } => "FailedToResumeAgent",
             Self::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
             Self::ComponentParseFailed { .. } => "ComponentParseFailed",
-            Self::GetLatestVersionOfComponentFailed { .. } => "GetLatestVersionOfComponentFailed",
+            Self::GetCurrentVersionOfComponentFailed { .. } => "GetCurrentVersionOfComponentFailed",
             Self::InitialAgentFileDownloadFailed { .. } => "InitialAgentFileDownloadFailed",
             Self::PromiseNotFound { .. } => "PromiseNotFound",
             Self::PromiseDropped { .. } => "PromiseDropped",
@@ -393,7 +393,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::FailedToResumeAgent { .. }
             | Self::ComponentDownloadFailed { .. }
             | Self::ComponentParseFailed { .. }
-            | Self::GetLatestVersionOfComponentFailed { .. }
+            | Self::GetCurrentVersionOfComponentFailed { .. }
             | Self::InitialAgentFileDownloadFailed { .. }
             | Self::ParamTypeMismatch { .. }
             | Self::NoValueInMessage
@@ -545,13 +545,13 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            WorkerExecutorError::GetLatestVersionOfComponentFailed {
+            WorkerExecutorError::GetCurrentVersionOfComponentFailed {
                 component_id,
                 reason,
             } => Self {
                 error: Some(
-                    golem::worker::v1::worker_execution_error::Error::GetLatestVersionOfComponentFailed(
-                        golem::worker::v1::GetLatestVersionOfComponentFailed {
+                    golem::worker::v1::worker_execution_error::Error::GetCurrentVersionOfComponentFailed(
+                        golem::worker::v1::GetCurrentVersionOfComponentFailed {
                             component_id: Some(component_id.into()),
                             reason,
                         },
@@ -767,15 +767,15 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 reason: component_parse_failed.reason,
             }),
             Some(
-                golem::worker::v1::worker_execution_error::Error::GetLatestVersionOfComponentFailed(
-                    get_latest_version_of_component_failed,
+                golem::worker::v1::worker_execution_error::Error::GetCurrentVersionOfComponentFailed(
+                    get_current_version_of_component_failed,
                 ),
-            ) => Ok(Self::GetLatestVersionOfComponentFailed {
-                component_id: get_latest_version_of_component_failed
+            ) => Ok(Self::GetCurrentVersionOfComponentFailed {
+                component_id: get_current_version_of_component_failed
                     .component_id
                     .ok_or("Missing component_id")?
                     .try_into()?,
-                reason: get_latest_version_of_component_failed.reason,
+                reason: get_current_version_of_component_failed.reason,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::PromiseNotFound(
                 promise_not_found,

@@ -54,8 +54,7 @@ object OplogApi {
     parent: Option[AgentHostApi.AgentIdLiteral],
     componentSize: BigInt,
     initialTotalLinearMemorySize: BigInt,
-    initialActivePlugins: List[PluginInstallationDescription],
-    configVars: Map[String, String]
+    initialActivePlugins: List[PluginInstallationDescription]
   )
 
   final case class HostCallParameters(
@@ -125,7 +124,7 @@ object OplogApi {
   final case class SetRetryPolicyParameters(
     timestamp: ContextApi.DateTime,
     name: String,
-    priority: Int,
+    priority: Long,
     predicateJson: String,
     policyJson: String
   )
@@ -465,12 +464,12 @@ object OplogApi {
           AgentInvocationFinished(
             parseAgentInvocationFinishedParameters(v.asInstanceOf[JsAgentInvocationFinishedParameters])
           )
-        case "suspend"             => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "error"               => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
-        case "no-op"               => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "jump"                => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
-        case "interrupted"         => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "exited"              => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "suspend"          => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "error"            => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
+        case "no-op"            => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "jump"             => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
+        case "interrupted"      => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "exited"           => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "set-retry-policy" =>
           SetRetryPolicy(parseSetRetryPolicyParameters(v.asInstanceOf[JsSetRetryPolicyParameters]))
         case "remove-retry-policy" =>
@@ -559,7 +558,7 @@ object OplogApi {
 
   private def parseDateTime(raw: JsDatetime): ContextApi.DateTime = {
     val secs  = BigInt(raw.seconds.toString)
-    val nanos = raw.nanoseconds.toLong
+    val nanos = raw.nanoseconds.toInt
     ContextApi.DateTime(secs, nanos)
   }
 
@@ -587,8 +586,7 @@ object OplogApi {
       parent = raw.parent.toOption.map(parseAgentId),
       componentSize = BigInt(raw.componentSize.toString),
       initialTotalLinearMemorySize = BigInt(raw.initialTotalLinearMemorySize.toString),
-      initialActivePlugins = raw.initialActivePlugins.toList.map(parsePluginInstallationDescription),
-      configVars = raw.configVars.toSeq.map(t => t._1 -> t._2).toMap
+      initialActivePlugins = raw.initialActivePlugins.toList.map(parsePluginInstallationDescription)
     )
 
   private def parseHostCallParameters(raw: JsHostCallParameters): HostCallParameters =
@@ -737,7 +735,14 @@ object OplogApi {
     SetRetryPolicyParameters(
       timestamp = parseDateTime(raw.timestamp),
       name = p.name,
-      priority = p.priority,
+      priority =
+        if (
+          !p.priority.isFinite || p.priority < 0 || p.priority > 0xffffffffL.toDouble || p.priority != p.priority.floor
+        ) {
+          throw new IllegalArgumentException(s"Invalid retry policy priority in oplog entry: ${p.priority}")
+        } else {
+          p.priority.toLong
+        },
       predicateJson = js.JSON.stringify(p.predicate.asInstanceOf[js.Any]),
       policyJson = js.JSON.stringify(p.policy.asInstanceOf[js.Any])
     )

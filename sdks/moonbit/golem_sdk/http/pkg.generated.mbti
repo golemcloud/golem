@@ -1,0 +1,54 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/http"
+
+import {
+  "golemcloud/golem_sdk/interface/wasi/http/types",
+  "golemcloud/golem_sdk/interface/wasi/io/streams",
+}
+
+// Values
+pub fn handle(@types.OutgoingRequest, @types.RequestOptions?) -> Result[@types.FutureIncomingResponse, @types.ErrorCode]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+pub using @types {type DnsErrorPayload}
+
+pub using @types {type FieldSizePayload}
+
+pub using @types {type Fields}
+
+pub using @types {type FutureIncomingResponse}
+
+pub using @types {type FutureTrailers}
+
+pub using @types {type IncomingBody}
+
+pub using @types {type IncomingRequest}
+
+pub using @types {type IncomingResponse}
+
+pub using @streams {type InputStream}
+
+pub using @types {type Method}
+
+pub using @types {type OutgoingBody}
+
+pub using @types {type OutgoingRequest}
+
+pub using @types {type OutgoingResponse}
+
+pub using @streams {type OutputStream}
+
+pub using @types {type RequestOptions}
+
+pub using @types {type ResponseOutparam}
+
+pub using @types {type Scheme}
+
+pub using @types {type TlsAlertReceivedPayload}
+
+// Traits
+

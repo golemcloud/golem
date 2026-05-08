@@ -43,6 +43,15 @@ pub enum PathSegment {
     CatchAll { display_name: String },
 }
 
+impl PathSegment {
+    pub fn literal_value(&self) -> Option<&str> {
+        match self {
+            Self::Literal { value } => Some(value),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for PathSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -187,6 +196,8 @@ pub enum RequestBodySchema {
     JsonBody { expected_type: AnalysedType },
     UnrestrictedBinary,
     RestrictedBinary { allowed_mime_types: Vec<String> },
+    UnrestrictedText,
+    RestrictedText { allowed_language_codes: Vec<String> },
 }
 
 #[derive(Debug, Clone, BinaryCodec)]
@@ -217,6 +228,7 @@ pub enum MethodParameter {
         field_index: SafeIndex,
     },
     UnstructuredBinaryBody,
+    UnstructuredTextBody,
 }
 
 #[derive(Debug)]
@@ -260,6 +272,8 @@ pub struct CallAgentBehaviour {
     pub method_name: String,
     pub method_parameters: Vec<MethodParameter>,
     pub expected_agent_response: DataSchema,
+    #[desert(default)]
+    pub method_description: Option<String>,
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -287,7 +301,16 @@ pub struct WebhookCallbackBehaviour {
 
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
-pub struct OpenApiSpecBehaviour {}
+pub struct OpenApiSpecBehaviour {
+    pub format: OpenApiSpecFormat,
+}
+
+#[derive(Debug, Clone, Copy, BinaryCodec)]
+#[desert(evolution())]
+pub enum OpenApiSpecFormat {
+    Json,
+    Yaml,
+}
 
 #[derive(Debug, Clone)]
 pub enum RouteSecurity {

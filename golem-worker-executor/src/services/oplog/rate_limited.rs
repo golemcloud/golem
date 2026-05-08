@@ -19,6 +19,7 @@ use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
@@ -260,6 +261,7 @@ impl OplogService for RateLimitedOplogService {
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -272,6 +274,7 @@ impl OplogService for RateLimitedOplogService {
             .inner
             .create(
                 owned_agent_id,
+                agent_mode,
                 initial_entry,
                 initial_worker_metadata,
                 last_known_status,
@@ -289,6 +292,7 @@ impl OplogService for RateLimitedOplogService {
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -301,6 +305,7 @@ impl OplogService for RateLimitedOplogService {
             .inner
             .open(
                 owned_agent_id,
+                agent_mode,
                 last_oplog_index,
                 initial_worker_metadata,
                 last_known_status,
@@ -315,55 +320,65 @@ impl OplogService for RateLimitedOplogService {
         ))
     }
 
-    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
-        self.inner.get_last_index(owned_agent_id).await
+    async fn get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogIndex {
+        self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId) {
-        self.inner.delete(owned_agent_id).await
+    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        self.inner.delete(owned_agent_id, agent_mode).await
     }
 
     async fn read(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read(owned_agent_id, idx, n).await
+        self.inner.read(owned_agent_id, agent_mode, idx, n).await
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
-        self.inner.exists(owned_agent_id).await
+    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+        self.inner.exists(owned_agent_id, agent_mode).await
     }
 
     async fn scan_for_component(
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
+        modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, cursor, count)
+            .scan_for_component(environment_id, component_id, modes, cursor, count)
             .await
     }
 
     async fn upload_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String> {
-        self.inner.upload_raw_payload(owned_agent_id, data).await
+        self.inner
+            .upload_raw_payload(owned_agent_id, agent_mode, data)
+            .await
     }
 
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner
-            .download_raw_payload(owned_agent_id, payload_id, md5_hash)
+            .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
             .await
     }
 }
@@ -385,7 +400,9 @@ mod tests {
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::regions::OplogRegion;
-    use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, Timestamp};
+    use golem_common::model::{
+        AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, Timestamp,
+    };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -395,6 +412,26 @@ mod tests {
     use uuid::Uuid;
 
     test_r::enable!();
+
+    fn make_agent_metadata(
+        agent_id: AgentId,
+        created_by: AccountId,
+        environment_id: EnvironmentId,
+    ) -> AgentMetadata {
+        AgentMetadata {
+            agent_id,
+            env: vec![],
+            environment_id,
+            created_by,
+            config: Vec::new(),
+            created_at: Timestamp::now_utc(),
+            parent: None,
+            last_known_status: AgentStatusRecord::default(),
+            original_phantom_id: None,
+            fingerprint: AgentFingerprint::new(),
+            agent_mode: AgentMode::Durable,
+        }
+    }
 
     /// [`ResourceLimits`] stub that always returns the same pre-seeded entry
     /// regardless of account. Allows tests to inject a specific rate directly.
@@ -473,8 +510,9 @@ mod tests {
         service
             .open(
                 &owned,
+                AgentMode::Durable,
                 None,
-                AgentMetadata::default(agent_id, account_id, env_id),
+                make_agent_metadata(agent_id, account_id, env_id),
                 last_known_status,
                 execution_status,
             )

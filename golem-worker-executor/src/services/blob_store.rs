@@ -169,13 +169,16 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<(), BlobStoreError> {
+        let namespace = BlobStorageNamespace::CustomStorage { environment_id };
+        let path = Path::new(&container_name);
         self.blob_storage
-            .delete_dir(
-                "blob_store",
-                "clear",
-                BlobStorageNamespace::CustomStorage { environment_id },
-                Path::new(&container_name),
-            )
+            .delete_dir("blob_store", "clear", namespace.clone(), path)
+            .await
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+        // Re-create the empty container directory so the container continues to exist.
+        // clear() semantics: remove all objects, keep the container itself.
+        self.blob_storage
+            .create_dir("blob_store", "clear", namespace, path)
             .await
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
         Ok(())

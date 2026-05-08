@@ -115,7 +115,7 @@ interface host {
         version(agent-version-filter),
         created-at(agent-created-at-filter),
         env(agent-env-filter),
-        wasi-config-vars(agent-config-vars-filter)
+        config(agent-config-vars-filter)
     }
 
     /// Combines multiple filter conditions with an `AND` relationship for enumerating agents
@@ -137,7 +137,7 @@ interface host {
         /// Environment variables seen by the agent
         env: list<tuple<string, string>>,
         /// Configuration variables seen by the agent
-        config-vars: list<tuple<string, string>>,
+        config: list<tuple<string, string>>,
         /// The current agent status
         status: agent-status,
         /// The component version the agent is running with
@@ -220,6 +220,14 @@ interface host {
     /// Commits this atomic operation. After `mark-end-operation` is called for a given index, further calls
     /// with the same parameter will do nothing.
     mark-end-operation: func(begin: oplog-index);
+
+    /// Unconditionally traps the current invocation with the given reason.
+    ///
+    /// This call never returns: it surfaces as an uncatchable wasm trap on the host side
+    /// and the worker enters the standard trap-recovery flow. SDK guard helpers use this
+    /// to guarantee that a failed atomic region always leads to a trap, regardless of
+    /// whether the guest language could otherwise catch the failure.
+    trap: func(reason: string);
 
     /// Gets the agent's current persistence level.
     get-oplog-persistence-level: func() -> persistence-level;

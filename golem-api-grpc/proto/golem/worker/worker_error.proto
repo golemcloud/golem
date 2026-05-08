@@ -21,6 +21,9 @@ message AgentError {
     ExceededHttpCallLimit exceeded_http_call_limit = 13;
     ExceededRpcCallLimit exceeded_rpc_call_limit = 14;
     AgentTerminatedByQuota agent_terminated_by_quota = 15;
+    EphemeralSleepTooLong ephemeral_sleep_too_long = 16;
+    EphemeralFuelExhausted ephemeral_fuel_exhausted = 17;
+    EphemeralCannotSuspend ephemeral_cannot_suspend = 18;
   }
 }
 
@@ -67,4 +70,17 @@ message AgentExceededFilesystemStorageLimit {}
 message AgentTerminatedByQuota {
   golem.common.EnvironmentId environment_id = 1;
   string resource_name = 2;
+}
+
+message EphemeralSleepTooLong {
+  uint64 requested_nanos = 1;
+  uint64 max_nanos = 2;
+}
+
+message EphemeralFuelExhausted {
+  uint64 overdraft_limit = 1;
+}
+
+message EphemeralCannotSuspend {
+  string reason = 1;
 }

@@ -53,7 +53,7 @@ pub async fn invoke_resource(
         }
     };
 
-    let parsed_agent_id = ParsedAgentId::new(
+    let parsed_agent_id = ParsedAgentId::new_auto_phantom(
         mcp_resource.agent_type_name.clone(),
         DataValue::Tuple(ElementValues {
             elements: constructor_params
@@ -62,6 +62,7 @@ pub async fn invoke_resource(
                 .collect(),
         }),
         None,
+        mcp_resource.agent_mode,
     )
     .map_err(|e| {
         tracing::error!("Failed to parse agent id: {}", e);
@@ -231,12 +232,17 @@ fn convert_to_resource_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind};
+    use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
     use golem_common::base_model::agent::{
-        BinaryDescriptor, ComponentModelElementSchema, ElementSchema, NamedElementSchema,
+        AgentConstructor, AgentMethod, AgentMode, AgentTypeName, BinaryDescriptor,
+        ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
         NamedElementSchemas, TextDescriptor, UntypedNamedElementValue, Url as AgentUrl,
     };
+    use golem_common::model::AgentInvocationOutput;
     use golem_wasm::Value;
     use golem_wasm::analysis::analysed_type::str;
+    use rmcp::model::{Annotated, RawResource};
     use serde_json::json;
     use test_r::test;
 
@@ -415,5 +421,56 @@ mod tests {
         });
         let err = convert_to_resource_content(elem, TEST_URI).unwrap_err();
         assert!(err.message.contains("URL"), "got: {}", err.message);
+    }
+
+    #[test]
+    async fn invoke_resource_auto_generates_phantom_for_ephemeral_agents() {
+        let harness = InvocationHarness::new(AgentInvocationOutput {
+            result: golem_common::model::AgentInvocationResult::AgentInitialization,
+            consumed_fuel: None,
+            invocation_status: None,
+            component_revision: None,
+        });
+        let resource = AgentMcpResource {
+            kind: AgentMcpResourceKind::Static(Annotated::new(
+                RawResource {
+                    uri: TEST_URI.to_string(),
+                    name: "mcp-agent-read".to_string(),
+                    title: None,
+                    description: None,
+                    mime_type: None,
+                    size: None,
+                    icons: None,
+                    meta: None,
+                },
+                None,
+            )),
+            environment_id: harness.environment_id,
+            account_id: harness.account_id,
+            constructor: AgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+            },
+            raw_method: AgentMethod {
+                name: "read".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                http_endpoint: vec![],
+            },
+            component_id: harness.component_id,
+            agent_type_name: AgentTypeName("mcp-agent".to_string()),
+            agent_mode: AgentMode::Ephemeral,
+        };
+
+        let result = invoke_resource(&harness.worker_service, &resource, TEST_URI, None).await;
+
+        assert!(result.is_ok());
+        let agent_id = harness.recorded_agent_id();
+        assert_eq!(agent_id.component_id, harness.component_id);
+        assert!(phantom_id(&agent_id).is_some());
     }
 }

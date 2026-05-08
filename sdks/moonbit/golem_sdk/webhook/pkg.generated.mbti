@@ -1,0 +1,25 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/webhook"
+
+// Values
+pub fn create() -> WebhookHandler
+
+// Errors
+
+// Types and methods
+pub(all) struct WebhookHandler {
+  // private fields
+}
+pub fn WebhookHandler::url(Self) -> String
+pub fn WebhookHandler::wait(Self) -> WebhookRequestPayload
+
+pub(all) struct WebhookRequestPayload {
+  // private fields
+}
+pub fn WebhookRequestPayload::bytes(Self) -> Bytes
+pub fn WebhookRequestPayload::text(Self) -> String
+
+// Type aliases
+
+// Traits
+

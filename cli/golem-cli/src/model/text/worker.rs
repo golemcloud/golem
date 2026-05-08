@@ -19,7 +19,7 @@ use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
 use crate::model::worker::{
-    AgentMetadata, AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView, RawAgentId,
+    AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView, RawAgentId,
 };
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
@@ -37,14 +37,16 @@ use golem_common::model::agent::{
 };
 use golem_common::model::component::ComponentName;
 use golem_common::model::oplog::{
-    PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
-    PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
+    MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
+    PublicUpdateDescription, StringAttributeValue,
 };
-use golem_common::model::worker::UpdateRecord;
+use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
 use golem_wasm::{ValueAndType, print_value_and_type};
 use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,19 +90,26 @@ pub struct WorkerGetView {
 }
 
 impl WorkerGetView {
-    pub fn from_metadata(metadata: AgentMetadata, precise: bool) -> Self {
-        Self {
-            metadata: AgentMetadataView::from(metadata),
-            precise,
-        }
+    pub fn from_metadata(metadata: AgentMetadataView, precise: bool) -> Self {
+        Self { metadata, precise }
     }
+}
 
-    pub fn from_metadata_view(metadata: AgentMetadataView) -> Self {
-        Self {
-            metadata,
-            precise: false,
-        }
-    }
+fn format_untyped_config(config: &[AgentConfigEntryDto]) -> String {
+    config
+        .iter()
+        .map(|entry| {
+            format!(
+                "{}={}",
+                entry.path.join(".").log_color_highlight(),
+                entry.value.0
+            )
+        })
+        .join("\n")
+}
+
+fn to_sorted_btree_map(map: &HashMap<String, String>) -> BTreeMap<String, String> {
+    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
 impl MessageWithFields for WorkerGetView {
@@ -180,14 +189,28 @@ impl MessageWithFields for WorkerGetView {
                 format_binary_size,
             )
             .fmt_field_optional(
-                "Environment variables",
+                "Environment variables - defaults",
+                &self.metadata.default_env,
+                !self.metadata.default_env.is_empty(),
+                |env| format_env(true, &to_sorted_btree_map(env)),
+            )
+            .fmt_field_optional(
+                "Environment variables - overrides",
                 &self.metadata.env,
                 !self.metadata.env.is_empty(),
-                |env| {
-                    env.iter()
-                        .map(|(k, v)| format!("{}={}", k, v.bold()))
-                        .join(";")
-                },
+                |env| format_env(true, &to_sorted_btree_map(env)),
+            )
+            .fmt_field_optional(
+                "Config - defaults",
+                &self.metadata.default_config,
+                !self.metadata.default_config.is_empty(),
+                |config| format_untyped_config(config),
+            )
+            .fmt_field_optional(
+                "Config - overrides",
+                &self.metadata.config,
+                !self.metadata.config.is_empty(),
+                |config| format_untyped_config(config),
             )
             .fmt_field_optional("Status", &self.metadata.status, self.precise, format_status)
             .fmt_field_optional(
@@ -481,7 +504,19 @@ impl TextView for PublicOplogEntry {
                 }
             },
             PublicOplogEntry::AgentInvocationFinished(params) => {
-                logln(format_message_highlight("INVOKE COMPLETED"));
+                let variant_label = match &params.result {
+                    PublicAgentInvocationResult::AgentInitialization(_) => "initialization",
+                    PublicAgentInvocationResult::AgentMethod(_) => "method",
+                    PublicAgentInvocationResult::ManualUpdate(_) => "manual update",
+                    PublicAgentInvocationResult::LoadSnapshot(_) => "load snapshot",
+                    PublicAgentInvocationResult::SaveSnapshot(_) => "save snapshot",
+                    PublicAgentInvocationResult::ProcessOplogEntries(_) => "process oplog entries",
+                };
+                logln(format!(
+                    "{} ({})",
+                    format_message_highlight("INVOKE COMPLETED"),
+                    variant_label
+                ));
                 logln(format!(
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
@@ -490,7 +525,23 @@ impl TextView for PublicOplogEntry {
                     "{pad}consumed fuel:     {}",
                     format_id(&params.consumed_fuel),
                 ));
-                logln(format!("{pad}result:            {:?}", params.result));
+                match &params.result {
+                    PublicAgentInvocationResult::AgentInitialization(output)
+                    | PublicAgentInvocationResult::AgentMethod(output) => {
+                        logln(format!("{pad}output:"));
+                        log_data_value(pad, &output.output, &SourceLanguage::default());
+                    }
+                    PublicAgentInvocationResult::ManualUpdate(_) => {}
+                    PublicAgentInvocationResult::LoadSnapshot(fallible) => {
+                        log_optional_error(pad, &fallible.error);
+                    }
+                    PublicAgentInvocationResult::ProcessOplogEntries(result) => {
+                        log_optional_error(pad, &result.error);
+                    }
+                    PublicAgentInvocationResult::SaveSnapshot(snapshot_result) => {
+                        log_snapshot_data(pad, &snapshot_result.snapshot);
+                    }
+                }
             }
             PublicOplogEntry::Suspend(params) => {
                 logln(format_message_highlight("SUSPEND"));
@@ -942,48 +993,7 @@ impl TextView for PublicOplogEntry {
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
                 ));
-                match &params.data {
-                    PublicSnapshotData::Raw(raw) => {
-                        logln(format!(
-                            "{pad}mime type:         {}",
-                            format_id(&raw.mime_type)
-                        ));
-                        logln(format!(
-                            "{pad}data:              ({} bytes)",
-                            raw.data.len()
-                        ));
-                    }
-                    PublicSnapshotData::Json(json) => {
-                        logln(format!(
-                            "{pad}data:              {}",
-                            serde_json::to_string_pretty(&json.data)
-                                .unwrap_or_else(|_| format!("{:?}", json.data))
-                        ));
-                    }
-                    PublicSnapshotData::Multipart(multipart) => {
-                        use golem_common::model::oplog::MultipartPartData;
-
-                        logln(format!(
-                            "{pad}mime type:         {}",
-                            format_id(&multipart.mime_type)
-                        ));
-                        for part in &multipart.parts {
-                            let data_summary = match &part.data {
-                                MultipartPartData::Json(json) => {
-                                    serde_json::to_string_pretty(&json.data)
-                                        .unwrap_or_else(|_| format!("{:?}", json.data))
-                                }
-                                MultipartPartData::Raw(raw) => {
-                                    format!("({} bytes)", raw.data.len())
-                                }
-                            };
-                            logln(format!(
-                                "{pad}part:              {} [{}]: {}",
-                                part.name, part.content_type, data_summary
-                            ));
-                        }
-                    }
-                }
+                log_snapshot_data(pad, &params.data);
             }
             PublicOplogEntry::OplogProcessorCheckpoint(params) => {
                 logln(format_message_highlight("OPLOG PROCESSOR CHECKPOINT"));
@@ -1128,6 +1138,58 @@ fn log_element_value(pad: &str, value: &ElementValue) {
     }
 }
 
+fn log_optional_error(pad: &str, error: &Option<String>) {
+    match error {
+        None => {
+            logln(format!("{pad}result:            ok"));
+        }
+        Some(err) => {
+            logln(format!("{pad}error:             {}", format_error(err)));
+        }
+    }
+}
+
+fn log_snapshot_data(pad: &str, snapshot: &PublicSnapshotData) {
+    match snapshot {
+        PublicSnapshotData::Raw(raw) => {
+            logln(format!(
+                "{pad}mime type:         {}",
+                format_id(&raw.mime_type)
+            ));
+            logln(format!(
+                "{pad}data:              ({} bytes)",
+                raw.data.len()
+            ));
+        }
+        PublicSnapshotData::Json(json) => {
+            logln(format!(
+                "{pad}data:              {}",
+                serde_json::to_string_pretty(&json.data)
+                    .unwrap_or_else(|_| format!("{:?}", json.data))
+            ));
+        }
+        PublicSnapshotData::Multipart(multipart) => {
+            logln(format!(
+                "{pad}mime type:         {}",
+                format_id(&multipart.mime_type)
+            ));
+            for part in &multipart.parts {
+                let data_summary = match &part.data {
+                    MultipartPartData::Json(json) => serde_json::to_string_pretty(&json.data)
+                        .unwrap_or_else(|_| format!("{:?}", json.data)),
+                    MultipartPartData::Raw(raw) => {
+                        format!("({} bytes)", raw.data.len())
+                    }
+                };
+                logln(format!(
+                    "{pad}part:              {} [{}]: {}",
+                    part.name, part.content_type, data_summary
+                ));
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerFilesView {
     pub nodes: Vec<FileNodeView>,
@@ -1147,7 +1209,7 @@ impl TextView for WorkerFilesView {
         if self.nodes.is_empty() {
             logln("No files found.");
         } else {
-            let mut table = new_table(vec![
+            let mut table = new_table_full_condensed(vec![
                 Column::new("Name"),
                 Column::new("Kind").fixed(),
                 Column::new("Permissions").fixed(),
@@ -1178,6 +1240,13 @@ pub fn format_timestamp(timestamp: u64) -> String {
 }
 
 pub fn format_agent_name_match(agent_name_match: &AgentNameMatch) -> String {
+    let rendered_agent_name = match &agent_name_match.parsed_agent_id {
+        Some(parsed) if agent_name_match.source_language.is_known() => {
+            crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
+        }
+        _ => agent_name_match.agent_name.0.clone(),
+    };
+
     format!(
         "{}{}/{}",
         match &agent_name_match.environment_reference() {
@@ -1213,6 +1282,6 @@ pub fn format_agent_name_match(agent_name_match: &AgentNameMatch) -> String {
             None => "".to_string(),
         },
         agent_name_match.component_name.0.blue().bold(),
-        agent_name_match.agent_name.0.green().bold(),
+        rendered_agent_name.green().bold(),
     )
 }

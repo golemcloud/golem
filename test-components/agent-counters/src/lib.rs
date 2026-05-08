@@ -34,7 +34,7 @@ impl Counter for CounterImpl {
     }
 
     async fn increment_through_rpc_to_ephemeral(&mut self) -> u32 {
-        let mut client = EphemeralCounterClient::get(format!("{}-ephemeral", self.id));
+        let mut client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral", self.id));
         client.increment().await
     }
 

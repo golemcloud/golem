@@ -20,7 +20,6 @@ use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 
 use crate::services::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
-use golem_common::golem_version;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
@@ -47,6 +46,7 @@ const SYSTEM_ENV_NAME: &str = "builtin-plugins";
 struct BuiltinPluginDescriptor {
     component_name: &'static str,
     plugin_name: &'static str,
+    version: &'static str,
     description: &'static str,
     wasm_bytes: &'static [u8],
 }
@@ -64,6 +64,7 @@ impl BuiltinPluginDescriptor {
 static BUILTIN_PLUGINS: &[BuiltinPluginDescriptor] = &[BuiltinPluginDescriptor {
     component_name: "otlp:exporter",
     plugin_name: "golem-otlp-exporter",
+    version: "1.5.0",
     description: "Built-in OTLP exporter oplog processor plugin",
     wasm_bytes: include_bytes!("../../../plugins/otlp-exporter.wasm"),
 }];
@@ -85,7 +86,6 @@ pub async fn provision_builtin_plugins(
     }
 
     let auth = AuthCtx::system();
-    let plugin_version = golem_version().to_string();
 
     let app = get_or_create_application(
         application_service,
@@ -125,7 +125,6 @@ pub async fn provision_builtin_plugins(
             plugin_repo,
             builtin_plugin_owner_account_id,
             descriptor,
-            &plugin_version,
             component,
             &auth,
         )
@@ -266,6 +265,7 @@ async fn upload_or_update_component(
                             current_revision: existing.revision,
                             agent_types: None,
                             agent_type_provision_config_updates: None,
+                            allow_incompatible_config: false,
                         },
                         Some(wasm_bytes.to_vec()),
                         None,
@@ -310,6 +310,7 @@ async fn deploy_environment(
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
             auth,
         )
@@ -329,11 +330,11 @@ async fn register_plugin(
     plugin_repo: &Arc<dyn PluginRepo>,
     account_id: AccountId,
     descriptor: &BuiltinPluginDescriptor,
-    plugin_version: &str,
     component: &Component,
     auth: &AuthCtx,
 ) -> anyhow::Result<()> {
     let plugin_name = descriptor.plugin_name;
+    let plugin_version = descriptor.version;
     match plugin_registration_service
         .register_plugin(
             account_id,

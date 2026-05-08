@@ -14,7 +14,7 @@ use crate::custom_api::openapi::schema_mapping::create_schema_from_analysed_type
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::{ElementSchema, HttpMethod};
 use golem_common::model::agent::DataSchema;
-use golem_service_base::custom_api::PathSegment;
+use golem_service_base::custom_api::OpenApiSpecFormat;
 use golem_wasm::analysis::AnalysedType;
 use indexmap::IndexMap;
 use openapiv3::{
@@ -31,9 +31,14 @@ pub enum ResponseBodyOpenApiSchema {
     NoBody,
 }
 
+pub struct ResponseHeaderSchema {
+    pub schema: Schema,
+    pub required: bool,
+}
+
 pub struct RouteResponseOpenApiSchema {
     pub body_and_status_codes: IndexMap<u16, ResponseBodyOpenApiSchema>,
-    pub headers: IndexMap<String, Schema>,
+    pub headers: IndexMap<String, ResponseHeaderSchema>,
 }
 
 pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpenApiSchema {
@@ -74,7 +79,7 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                                             },
                                         );
                                     } else {
-                                        responses.insert(200, ResponseBodyOpenApiSchema::Unknown);
+                                        responses.insert(204, ResponseBodyOpenApiSchema::Unknown);
                                     }
 
                                     if let Some(err_type) = &res.err {
@@ -86,7 +91,6 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                                                 content_type: "application/json".to_string(),
                                             },
                                         );
-                                        responses.insert(500, ResponseBodyOpenApiSchema::NoBody);
                                     } else {
                                         responses.insert(500, ResponseBodyOpenApiSchema::Unknown);
                                     }
@@ -128,8 +132,55 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                                     },
                                 );
                             }
-                            _ => {
-                                responses.insert(200, ResponseBodyOpenApiSchema::Unknown);
+                            ElementSchema::UnstructuredText(text_descriptor) => {
+                                let schema = Schema {
+                                    schema_data: SchemaData::default(),
+                                    schema_kind: SchemaKind::Type(Type::String(StringType {
+                                        format: VariantOrUnknownOrEmpty::Empty,
+                                        pattern: None,
+                                        enumeration: Vec::new(),
+                                        min_length: None,
+                                        max_length: None,
+                                    })),
+                                };
+                                responses.insert(
+                                    200,
+                                    ResponseBodyOpenApiSchema::Known {
+                                        schema: Box::new(schema),
+                                        content_type: "text/plain".to_string(),
+                                    },
+                                );
+
+                                // Optional Content-Language response header
+                                let allowed_languages: Vec<Option<String>> = text_descriptor
+                                    .restrictions
+                                    .as_ref()
+                                    .map(|types| {
+                                        types
+                                            .iter()
+                                            .map(|tt| Some(tt.language_code.clone()))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+
+                                let lang_schema = Schema {
+                                    schema_data: SchemaData::default(),
+                                    schema_kind: SchemaKind::Type(Type::String(StringType {
+                                        format: VariantOrUnknownOrEmpty::Empty,
+                                        pattern: None,
+                                        enumeration: allowed_languages,
+                                        min_length: None,
+                                        max_length: None,
+                                    })),
+                                };
+
+                                headers.insert(
+                                    "Content-Language".to_string(),
+                                    ResponseHeaderSchema {
+                                        schema: lang_schema,
+                                        required: false,
+                                    },
+                                );
                             }
                         }
                     }
@@ -158,17 +209,26 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
 
             headers.insert(
                 "Access-Control-Allow-Origin".to_string(),
-                string_schema.clone(),
+                ResponseHeaderSchema {
+                    schema: string_schema.clone(),
+                    required: true,
+                },
             );
 
             headers.insert(
                 "Access-Control-Allow-Headers".to_string(),
-                string_schema.clone(),
+                ResponseHeaderSchema {
+                    schema: string_schema.clone(),
+                    required: true,
+                },
             );
 
             headers.insert(
                 "Access-Control-Allow-Credentials".to_string(),
-                string_schema.clone(),
+                ResponseHeaderSchema {
+                    schema: string_schema.clone(),
+                    required: true,
+                },
             );
 
             let allowed_methods: Vec<_> = cors_preflight_behaviour
@@ -197,15 +257,18 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
 
             headers.insert(
                 "Access-Control-Allow-Methods".to_string(),
-                Schema {
-                    schema_data: Default::default(),
-                    schema_kind: SchemaKind::Type(Type::String(StringType {
-                        format: VariantOrUnknownOrEmpty::Empty,
-                        pattern: None,
-                        enumeration: allowed_methods_enum,
-                        min_length: None,
-                        max_length: None,
-                    })),
+                ResponseHeaderSchema {
+                    schema: Schema {
+                        schema_data: Default::default(),
+                        schema_kind: SchemaKind::Type(Type::String(StringType {
+                            format: VariantOrUnknownOrEmpty::Empty,
+                            pattern: None,
+                            enumeration: allowed_methods_enum,
+                            min_length: None,
+                            max_length: None,
+                        })),
+                    },
+                    required: true,
                 },
             );
         }
@@ -214,12 +277,10 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
             responses.insert(204, ResponseBodyOpenApiSchema::NoBody);
             responses.insert(404, ResponseBodyOpenApiSchema::NoBody);
         }
-        RichRouteBehaviour::OpenApiSpec(_) => {
-            let content_type = match route.path.as_slice() {
-                [PathSegment::Literal { value }] if value == "openapi.yaml" => {
-                    "application/yaml".to_string()
-                }
-                _ => "application/json".to_string(),
+        RichRouteBehaviour::OpenApiSpec(behaviour) => {
+            let content_type = match behaviour.format {
+                OpenApiSpecFormat::Json => "application/json".to_string(),
+                OpenApiSpecFormat::Yaml => "application/yaml".to_string(),
             };
 
             let schema = openapiv3::Schema {
@@ -253,8 +314,20 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                 })),
             };
 
-            headers.insert("Set-Cookie".to_string(), string_schema.clone());
-            headers.insert("Location".to_string(), string_schema);
+            headers.insert(
+                "Set-Cookie".to_string(),
+                ResponseHeaderSchema {
+                    schema: string_schema.clone(),
+                    required: true,
+                },
+            );
+            headers.insert(
+                "Location".to_string(),
+                ResponseHeaderSchema {
+                    schema: string_schema,
+                    required: true,
+                },
+            );
         }
     }
 

@@ -12,11 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::check::{
+    ClaudePathState, ClaudeSkillsContext, ClaudeSkillsSyncMode, SkillSyncTarget,
+    create_claude_symlink_if_needed, map_embedded_skill_target_path, resolve_claude_skills_context,
+    warn_claude_path_is_file,
+};
 use crate::app::context::{find_main_source_from, validated_to_anyhow};
 use crate::app::template::{
-    AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName,
+    AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName, InMemoryFs,
     MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
-    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, UnsafeTemplatePlan,
+    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TextEdit, UnsafeTemplatePlan,
 };
 use crate::command_handler::Handlers;
 use crate::command_handler::app::AppCommandHandler;
@@ -38,7 +43,7 @@ use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff;
-use heck::ToKebabCase;
+use heck::{ToKebabCase, ToSnakeCase};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -130,11 +135,14 @@ impl TemplateHandler {
             &context.existing_components,
         )?;
 
+        let claude_skills_ctx = resolve_claude_skills_context(&context.application_path)?;
+
         let template_plan = self.plan_applying_new_template(
             &selections.application_name,
             &context.application_path,
             &template_mapping.template_to_component,
             &template_inputs,
+            &claude_skills_ctx,
         )?;
 
         let (safe_template_plan, unsafe_template_plan) = template_plan.partition();
@@ -152,7 +160,15 @@ impl TemplateHandler {
         }
 
         self.apply_new_template_plan(&safe_template_plan)?;
-        create_claude_symlink(&context.application_path)?;
+
+        match claude_skills_ctx.mode {
+            ClaudeSkillsSyncMode::ClaudeSymlink => {
+                create_claude_symlink_if_needed(&context.application_path, &claude_skills_ctx)?;
+            }
+            ClaudeSkillsSyncMode::SyncAll => {
+                // NOP: no symlink setup in sync-all mode.
+            }
+        }
 
         logln("");
         log_finished_ok("applying template(s)");
@@ -166,6 +182,14 @@ impl TemplateHandler {
             needs_switch_directory: should_switch_to_app_dir_hint(&context.application_path)?,
             binary_name: command_name(),
         });
+
+        self.ctx
+            .log_handler()
+            .log_view(&crate::model::text::action_result::NewAppResult {
+                created: true,
+                application_name: selections.application_name.to_string(),
+                application_dir: context.application_path.clone(),
+            });
 
         Ok(())
     }
@@ -568,6 +592,7 @@ impl TemplateHandler {
                         let component_template =
                             app_template_repo.component_template(component.language)?;
                         let upgrade_plan = self.plan_multi_component_layout_upgrade(
+                            component_name,
                             component,
                             application_path,
                             &new_component_dir,
@@ -630,6 +655,7 @@ impl TemplateHandler {
         application_path: &Path,
         template_to_component: &BTreeMap<AppTemplateName, ComponentName>,
         template_inputs: &NewTemplateInputs,
+        claude_skills_ctx: &ClaudeSkillsContext,
     ) -> anyhow::Result<TemplatePlan> {
         let mut template_plan_builder = TemplatePlanBuilder::new();
 
@@ -694,6 +720,33 @@ impl TemplateHandler {
             );
         }
 
+        match claude_skills_ctx.mode {
+            ClaudeSkillsSyncMode::ClaudeSymlink => {
+                // NOP: `.claude` points to `.agents`, so template updates only need generic target files.
+            }
+            ClaudeSkillsSyncMode::SyncAll => match claude_skills_ctx.path_state {
+                ClaudePathState::File => {
+                    warn_claude_path_is_file(application_path, claude_skills_ctx);
+                    // NOP: `.claude` is a regular file. We skip Claude skill planning for this run.
+                }
+                ClaudePathState::Missing
+                | ClaudePathState::Symlink
+                | ClaudePathState::Directory => {
+                    let common_template_skill_files = collect_common_template_skill_files(
+                        self.ctx.app_template_repo()?,
+                        &template_inputs.common_templates,
+                    )?;
+                    let claude_skill_files = rebase_common_template_skill_files(
+                        application_path,
+                        &common_template_skill_files,
+                        SkillSyncTarget::Claude,
+                    )?;
+                    let claude_skill_fs = InMemoryFs::from_files(claude_skill_files);
+                    template_plan_builder.add("claude-skills", &claude_skill_fs);
+                }
+            },
+        }
+
         debug!("template plan steps: {:#?}", template_plan_builder);
 
         Ok(template_plan_builder.build())
@@ -701,6 +754,7 @@ impl TemplateHandler {
 
     fn plan_multi_component_layout_upgrade(
         &self,
+        component_name: &ComponentName,
         component: &ExistingComponent,
         application_path: &Path,
         new_component_dir: &Path,
@@ -744,14 +798,46 @@ impl TemplateHandler {
             GuestLanguage::Scala => {
                 let target_root = application_path.join(new_component_dir);
 
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("build.sbt"),
-                    target: target_root.join("build.sbt"),
-                });
+                // build.sbt and project/ stay at the application root: build.sbt
+                // declares ThisBuild settings (scalaVersion, ...) and pairs with
+                // project/build.properties + project/plugins.sbt as the sbt meta-build.
                 upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
                     source: application_path.join("src"),
                     target: target_root.join("src"),
                 });
+
+                // The per-component <component_snake>.sbt file stays at the app root
+                // but its `lazy val ... = project.in(file("componentDir"))` reference
+                // must be updated to point to the new component directory. We rewrite
+                // it in place to preserve any user customizations (extra dependencies,
+                // scalacOptions, settings, ...).
+                let snake = component_name.0.to_snake_case();
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Rewrite {
+                    path: application_path.join(format!("{snake}.sbt")),
+                    edit: TextEdit::ScalaSbtComponentDir {
+                        lazy_val: snake,
+                        new_dir: fs::path_to_unix_str(new_component_dir)?,
+                    },
+                });
+            }
+            GuestLanguage::MoonBit => {
+                let target_root = application_path.join(new_component_dir);
+
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: application_path.join("moon.pkg"),
+                    target: target_root.join("moon.pkg"),
+                });
+                for entry in std::fs::read_dir(application_path)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("mbt") {
+                        let file_name = entry.file_name();
+                        upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                            source: path.clone(),
+                            target: target_root.join(&file_name),
+                        });
+                    }
+                }
             }
         }
 
@@ -785,6 +871,14 @@ impl TemplateHandler {
                         "move".yellow(),
                         source.display().to_string().log_color_highlight(),
                         target.display().to_string().log_color_highlight()
+                    ));
+                }
+                MultiComponentLayoutUpgradePlanStep::Rewrite { path, edit } => {
+                    logln(format!(
+                        "- {} {} ({})",
+                        "rewrite".yellow(),
+                        path.display().to_string().log_color_highlight(),
+                        edit.describe()
                     ));
                 }
             }
@@ -844,6 +938,42 @@ impl TemplateHandler {
                         }
                     }
                 }
+                MultiComponentLayoutUpgradePlanStep::Rewrite { path, edit } => {
+                    if !path.exists() {
+                        validation_errors.push(format!(
+                            "Rewrite target does not exist: {}",
+                            path.display().to_string().log_color_error_highlight()
+                        ));
+                        continue;
+                    }
+                    if !path.is_file() {
+                        validation_errors.push(format!(
+                            "Rewrite target is not a regular file: {}",
+                            path.display().to_string().log_color_error_highlight()
+                        ));
+                        continue;
+                    }
+                    // Dry-run the edit so we surface structural problems
+                    // (e.g. missing `lazy val ...` block) before any moves happen.
+                    match fs::read_to_string(path) {
+                        Ok(current) => {
+                            if let Err(err) = edit.apply(&current) {
+                                validation_errors.push(format!(
+                                    "Cannot rewrite {}: {}",
+                                    path.display().to_string().log_color_error_highlight(),
+                                    err
+                                ));
+                            }
+                        }
+                        Err(err) => {
+                            validation_errors.push(format!(
+                                "Failed to read rewrite target {}: {}",
+                                path.display().to_string().log_color_error_highlight(),
+                                err
+                            ));
+                        }
+                    }
+                }
             }
         }
 
@@ -893,6 +1023,21 @@ impl TemplateHandler {
                         ),
                     );
                     fs::rename(source, target)?;
+                }
+                MultiComponentLayoutUpgradePlanStep::Rewrite { path, edit } => {
+                    log_action(
+                        "Rewriting",
+                        format!(
+                            "{} ({})",
+                            path.display().to_string().log_color_highlight(),
+                            edit.describe()
+                        ),
+                    );
+                    let current = fs::read_to_string(path)?;
+                    let new = edit.apply(&current)?;
+                    if new != current {
+                        fs::write_str(path, new)?;
+                    }
                 }
             }
         }
@@ -1017,39 +1162,46 @@ impl TemplateHandler {
     }
 }
 
-/// Creates a `.claude` → `.agents` symlink in the application directory so that
-/// Claude Code can discover the same skills as Amp/Codex without duplicating files.
-pub(crate) fn create_claude_symlink(application_path: &Path) -> anyhow::Result<()> {
-    let agents_dir = application_path.join(".agents");
-    let claude_link = application_path.join(".claude");
-
-    if !agents_dir.exists() {
-        return Ok(());
-    }
-
-    if claude_link.exists() || claude_link.is_symlink() {
-        return Ok(());
-    }
-
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(".agents", &claude_link)?;
-    }
-
-    #[cfg(windows)]
-    {
-        std::os::windows::fs::symlink_dir(".agents", &claude_link)?;
-    }
-
-    Ok(())
-}
-
 fn is_non_empty_dir(path: &Path) -> anyhow::Result<bool> {
     if !path.exists() || !path.is_dir() {
         return Ok(false);
     }
 
     Ok(std::fs::read_dir(path)?.next().is_some())
+}
+
+fn rebase_common_template_skill_files(
+    application_path: &Path,
+    skill_files: &BTreeMap<PathBuf, String>,
+    target: SkillSyncTarget,
+) -> anyhow::Result<BTreeMap<PathBuf, String>> {
+    let mut result = BTreeMap::new();
+
+    for (skill_path, content) in skill_files {
+        result.insert(
+            map_embedded_skill_target_path(application_path, skill_path, target)?,
+            content.clone(),
+        );
+    }
+
+    Ok(result)
+}
+
+fn collect_common_template_skill_files(
+    app_template_repo: &crate::app::template::AppTemplateRepo,
+    common_templates: &BTreeMap<AppTemplateName, AppTemplateCommon>,
+) -> anyhow::Result<BTreeMap<PathBuf, String>> {
+    let mut result = BTreeMap::new();
+
+    for template_name in common_templates.keys() {
+        for (skill_path, content) in
+            app_template_repo.common_template_skill_files(template_name.language())?
+        {
+            result.insert(skill_path, content);
+        }
+    }
+
+    Ok(result)
 }
 
 fn should_switch_to_app_dir_hint(application_dir: &Path) -> anyhow::Result<bool> {

@@ -528,7 +528,7 @@ export type TextOrImage =
   | { tag: 'un-binary'; val: UnstructuredBinary<['application/json']> };
 
 @agent({ mode: 'ephemeral' })
-class EphemeralAgent extends BaseAgent {
+export class EphemeralAgent extends BaseAgent {
   constructor(readonly input: string) {
     super();
     this.input = input;
@@ -606,6 +606,38 @@ class ComplexHttpAgent extends BaseAgent {
   // Endpoint with just root path
   @endpoint({ get: '/' })
   async rootPathFun() {}
+}
+
+@agent({ mount: '/test' })
+class AllHttpMethodsAgent extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  @endpoint({ get: '/get' })
+  async getMethod(): Promise<string> {
+    return Promise.resolve('GET');
+  }
+
+  @endpoint({ post: '/post' })
+  async postMethod(): Promise<string> {
+    return Promise.resolve('POST');
+  }
+
+  @endpoint({ put: '/put' })
+  async putMethod(): Promise<string> {
+    return Promise.resolve('PUT');
+  }
+
+  @endpoint({ delete: '/delete' })
+  async deleteMethod(): Promise<string> {
+    return Promise.resolve('DELETE');
+  }
+
+  @endpoint({ patch: '/patch' })
+  async patchMethod(): Promise<string> {
+    return Promise.resolve('PATCH');
+  }
 }
 
 @agent()

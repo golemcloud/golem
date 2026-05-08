@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::assert_json_content_type;
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
@@ -61,6 +62,7 @@ async fn principal_auto_injection(agent: &HttpTestContext) -> anyhow::Result<()>
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "value": {"anonymous": null} }));
@@ -81,6 +83,7 @@ async fn principal_auto_injection_middle_segment(agent: &HttpTestContext) -> any
         .send()
         .await?;
 
+    assert_json_content_type(&response);
     let body: serde_json::Value = response.json().await?;
 
     assert_eq!(
@@ -104,6 +107,7 @@ async fn principal_auto_injection_last_segment(agent: &HttpTestContext) -> anyho
         .send()
         .await?;
 
+    assert_json_content_type(&response);
     let body: serde_json::Value = response.json().await?;
 
     assert_eq!(
@@ -128,6 +132,7 @@ async fn default_test_header_oidc_principal(agent: &HttpTestContext) -> anyhow::
         .send()
         .await?;
 
+    assert_json_content_type(&response);
     let mut body: serde_json::Value = response.json().await?;
     // claims include exp, which is not deterministic in tests
     if let Some(oidc) = body
@@ -177,6 +182,7 @@ async fn test_header_oidc_principal_with_overrides(agent: &HttpTestContext) -> a
         .send()
         .await?;
 
+    assert_json_content_type(&response);
     let mut body: serde_json::Value = response.json().await?;
     // claims include exp, which is not deterministic in tests
     if let Some(oidc) = body

@@ -1,11 +1,7 @@
 // rollup.config.mjs
-import resolve from '@rollup/plugin-node-resolve';
-import commonjs from '@rollup/plugin-commonjs';
 import typescript from 'rollup-plugin-typescript2';
 import dts from 'rollup-plugin-dts';
 import { defineConfig } from 'rollup';
-
-const external = ['ts-morph'];
 
 export default defineConfig([
   {
@@ -15,15 +11,21 @@ export default defineConfig([
       format: 'esm',
       sourcemap: true,
     },
-    external,
+    external: [
+      'node:child_process',
+      'node:fs',
+      'node:process',
+      'node:repl',
+      'node:stream',
+      'node:util',
+      'picocolors',
+      'ts-morph',
+      'uuid',
+    ],
     plugins: [
-      resolve({
-        extensions: ['.js', '.ts'],
-      }),
-      commonjs(),
       typescript({
         tsconfig: './tsconfig.json',
-        useTsconfigDeclarationDir: true,
+        include: ['src/**/*'],
         tsconfigOverride: {
           compilerOptions: { declaration: false },
         },
@@ -37,7 +39,6 @@ export default defineConfig([
       file: 'dist/index.d.mts',
       format: 'esm',
     },
-    external,
     plugins: [dts()],
   },
 ]);

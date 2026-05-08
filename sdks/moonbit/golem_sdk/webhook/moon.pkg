@@ -1,0 +1,6 @@
+import {
+  "golemcloud/golem_sdk/api" @api,
+  "golemcloud/golem_sdk/interface/golem/agent/host" @agent_host,
+  "golemcloud/golem_sdk/interface/golem/core/types" @types,
+  "moonbitlang/core/encoding/utf8" @utf8,
+}

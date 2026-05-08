@@ -15,9 +15,10 @@
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
+use crate::error::HintError;
 use crate::error::HintError::NoApplicationManifestFound;
 use crate::error::NonSuccessfulExit;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::MapServiceError;
 use crate::log::{
     LogColorize, LogIndent, log_action, log_error, log_skipping_up_to_date, log_warn_action, logln,
 };
@@ -100,16 +101,35 @@ impl EnvironmentCommandHandler {
         &self,
         mode: EnvironmentResolveMode,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
-        match self.ctx.environment_reference() {
+        let resolved = match self.ctx.environment_reference() {
             Some(environment_reference) => {
                 self.resolve_environment_reference(mode, environment_reference)
                     .await
             }
             None => self.resolve_manifest_environment(mode).await,
-        }
+        }?;
+
+        self.ensure_diff_model_version_compatible(resolved)
     }
 
-    pub async fn resolve_manifest_environment(
+    fn ensure_diff_model_version_compatible(
+        &self,
+        resolved: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        let expected_cli_diff_model_version = diff::DIFF_MODEL_VERSION;
+        let server_diff_model_version = resolved.server_environment.diff_model_version;
+
+        if server_diff_model_version != expected_cli_diff_model_version {
+            bail!(HintError::DiffModelVersionMismatch {
+                expected_cli_diff_model_version,
+                server_diff_model_version,
+            });
+        }
+
+        Ok(resolved)
+    }
+
+    async fn resolve_manifest_environment(
         &self,
         mode: EnvironmentResolveMode,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
@@ -180,7 +200,7 @@ impl EnvironmentCommandHandler {
         }
     }
 
-    pub async fn resolve_environment_reference(
+    async fn resolve_environment_reference(
         &self,
         mode: EnvironmentResolveMode,
         environment_reference: &EnvironmentReference,
@@ -284,13 +304,14 @@ impl EnvironmentCommandHandler {
         application_id: &ApplicationId,
         environment_name: &EnvironmentName,
     ) -> anyhow::Result<Option<golem_client::model::Environment>> {
-        self.ctx
+        Ok(self
+            .ctx
             .golem_clients()
             .await?
             .environment
             .get_application_environment(&application_id.0, &environment_name.0)
             .await
-            .map_service_error_not_found_as_opt()
+            .map_service_error_not_found_as_opt()?)
     }
 
     async fn get_server_environment_or_err(
@@ -332,7 +353,8 @@ impl EnvironmentCommandHandler {
                     bail!(NoApplicationManifestFound)
                 };
 
-                self.ctx
+                Ok(self
+                    .ctx
                     .golem_clients()
                     .await?
                     .environment
@@ -346,7 +368,7 @@ impl EnvironmentCommandHandler {
                         },
                     )
                     .await
-                    .map_service_error()
+                    .map_service_error()?)
             }
         }
     }
@@ -363,7 +385,7 @@ impl EnvironmentCommandHandler {
         let diffable_manifest_options = manifest_options.to_diffable();
         let diffable_current_options = environment.server_environment.to_diffable();
 
-        let Some(_diff) = diffable_manifest_options.diff_with_current(&diffable_current_options)
+        let Some(_diff) = diffable_manifest_options.diff_with_current(&diffable_current_options)?
         else {
             return Ok(false);
         };
@@ -371,7 +393,7 @@ impl EnvironmentCommandHandler {
         let unified_diff = diffable_manifest_options.unified_yaml_diff_with_current(
             &diffable_current_options,
             diff::SerializeMode::ValueIfAvailable,
-        );
+        )?;
 
         log_warn_action("Detected", "environment deployment option changes");
         {
@@ -479,7 +501,7 @@ impl EnvironmentCommandHandler {
                         .list_environment_environment_plugin_grants(&environment.environment_id.0)
                         .await
                         .map_service_error()
-                        .map_err(Arc::new)
+                        .map_err(|err| Arc::new(err.into()))
                         .map(|result| {
                             {
                                 result.values.into_iter().map(|p| {

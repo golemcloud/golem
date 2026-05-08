@@ -15,16 +15,16 @@
 use super::call_agent::CallAgentHandler;
 use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
 use super::error::RequestHandlerError;
-use super::model::{OpenApiSpecFormat, RichRouteBehaviour};
+use super::model::RichRouteBehaviour;
 use super::oidc::handler::OidcHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
 use super::session_from_header_security::apply_session_from_header_security_middleware;
-use super::webhoooks::WebhookCallbackHandler;
+use super::webhooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
 use golem_service_base::custom_api::OpenApiSpecBehaviour;
-use golem_service_base::custom_api::PathSegment;
+use golem_service_base::custom_api::OpenApiSpecFormat;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use http::StatusCode;
 use poem::{Request, Response};
@@ -125,30 +125,19 @@ impl RequestHandler {
                     .await
             }
 
-            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}) => {
+            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }) => {
                 let spec = resolved_route
                     .openapi_spec
                     .clone()
                     .ok_or(RequestHandlerError::OpenApiSpecGenerationFailed)?;
 
-                let format = match resolved_route.route.path.as_slice() {
-                    [PathSegment::Literal { value }] if value == "openapi.json" => {
-                        OpenApiSpecFormat::Json
-                    }
-                    [PathSegment::Literal { value }] if value == "openapi.yaml" => {
-                        OpenApiSpecFormat::Yaml
-                    }
-                    _ => {
-                        return Err(RequestHandlerError::invariant_violated(
-                            "Unexpected OpenAPI route path",
-                        ));
-                    }
-                };
-
                 Ok(RouteExecutionResult {
                     status: StatusCode::OK,
                     headers: HashMap::new(),
-                    body: ResponseBody::OpenApiSchema { spec, format },
+                    body: ResponseBody::OpenApiSchema {
+                        spec,
+                        format: *format,
+                    },
                 })
             }
 
@@ -180,12 +169,31 @@ fn route_execution_result_to_response(
             )
             .map_err(anyhow::Error::from)?;
 
-            Ok(response_builder.body(body))
+            Ok(response_builder
+                .body(body)
+                .set_content_type("application/json"))
         }
 
         ResponseBody::UnstructuredBinaryBody { body } => Ok(response_builder
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
+
+        ResponseBody::UnstructuredTextBody { body } => {
+            let mut response_builder = response_builder.content_type("text/plain; charset=utf-8");
+            if let Some(text_type) = &body.text_type {
+                let trimmed = text_type.language_code.trim();
+                if !trimmed.is_empty()
+                    && !trimmed.contains(',')
+                    && trimmed
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                {
+                    response_builder =
+                        response_builder.header(http::header::CONTENT_LANGUAGE, trimmed);
+                }
+            }
+            Ok(response_builder.body(body.data))
+        }
 
         ResponseBody::OpenApiSchema { spec: body, format } => {
             let response = match format {

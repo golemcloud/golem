@@ -1,0 +1,5 @@
+import {
+  "golemcloud/golem_sdk/interface/wasi/filesystem/preopens" @preopens,
+  "golemcloud/golem_sdk/interface/wasi/filesystem/types" @types,
+  "moonbitlang/core/encoding/utf8" @utf8,
+}

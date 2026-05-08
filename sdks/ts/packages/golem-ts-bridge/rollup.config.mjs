@@ -1,5 +1,3 @@
-import resolve from '@rollup/plugin-node-resolve';
-import commonjs from '@rollup/plugin-commonjs';
 import typescript from 'rollup-plugin-typescript2';
 import dts from 'rollup-plugin-dts';
 import { defineConfig } from 'rollup';
@@ -13,13 +11,9 @@ export default defineConfig([
       sourcemap: true,
     },
     plugins: [
-      resolve({
-        extensions: ['.js', '.ts'],
-      }),
-      commonjs(),
       typescript({
         tsconfig: './tsconfig.json',
-        useTsconfigDeclarationDir: true,
+        include: ['src/**/*'],
         tsconfigOverride: {
           compilerOptions: { declaration: false },
         },

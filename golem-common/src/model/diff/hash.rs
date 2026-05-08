@@ -13,20 +13,23 @@
 // limitations under the License.
 
 pub use crate::base_model::diff::hash::*;
-use crate::model::diff::Diffable;
 use crate::model::diff::ser::{SerializeMode, ToSerializableWithMode, to_json_with_mode};
+use crate::model::diff::{DiffError, Diffable};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use std::sync::OnceLock;
 
 pub trait Hashable {
-    fn hash(&self) -> Hash;
+    fn hash(&self) -> Result<Hash, DiffError>;
 }
 
 #[derive(Debug, Clone)]
 pub enum HashOfKind<V> {
     Precalculated(Hash),
-    FromValue { value: V, lazy_hash: OnceLock<Hash> },
+    FromValue {
+        value: V,
+        lazy_hash: OnceLock<Result<Hash, DiffError>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -56,18 +59,20 @@ impl<V> HashOf<V> {
     }
 }
 
-impl<V: Hashable> Hashable for HashOf<V> {
-    fn hash(&self) -> Hash {
-        match &self.0 {
-            HashOfKind::Precalculated(hash) => *hash,
-            HashOfKind::FromValue { value, lazy_hash } => *lazy_hash.get_or_init(|| value.hash()),
-        }
+impl<V: Hashable> HashOf<V> {
+    pub fn equals(&self, other: &Self) -> Result<bool, DiffError> {
+        Ok(self.hash()? == other.hash()?)
     }
 }
 
-impl<V: Hashable> PartialEq for HashOf<V> {
-    fn eq(&self, other: &Self) -> bool {
-        self.hash() == other.hash()
+impl<V: Hashable> Hashable for HashOf<V> {
+    fn hash(&self) -> Result<Hash, DiffError> {
+        match &self.0 {
+            HashOfKind::Precalculated(hash) => Ok(*hash),
+            HashOfKind::FromValue { value, lazy_hash } => {
+                lazy_hash.get_or_init(|| value.hash()).clone()
+            }
+        }
     }
 }
 
@@ -80,26 +85,26 @@ pub enum DiffForHashOf<V: Diffable> {
 impl<V: Hashable + Diffable> Diffable for HashOf<V> {
     type DiffResult = DiffForHashOf<V>;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        if new == current {
-            return None;
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        if new.equals(current)? {
+            return Ok(None);
         }
 
-        let new_hash = new.hash();
-        let current_hash = current.hash();
+        let new_hash = new.hash()?;
+        let current_hash = current.hash()?;
 
         let diff = match (new.as_value(), current.as_value()) {
-            (Some(new), Some(current)) => new.diff_with_current(current),
+            (Some(new), Some(current)) => new.diff_with_current(current)?,
             _ => None,
         };
 
-        match diff {
+        Ok(match diff {
             Some(diff) => Some(DiffForHashOf::ValueDiff { diff }),
             None => Some(DiffForHashOf::HashDiff {
                 new_hash,
                 current_hash,
             }),
-        }
+        })
     }
 }
 
@@ -142,32 +147,35 @@ impl<V: Hashable> From<blake3::Hash> for HashOf<V> {
 }
 
 impl<V: Hashable + Serialize> ToSerializableWithMode for HashOf<V> {
-    fn to_serializable(&self, mode: SerializeMode) -> serde_json::Value {
+    fn to_serializable(&self, mode: SerializeMode) -> Result<serde_json::Value, DiffError> {
         match mode {
-            SerializeMode::HashOnly => {
-                serde_json::Value::String(self.hash().0.to_hex().to_string())
-            }
+            SerializeMode::HashOnly => Ok(serde_json::Value::String(
+                self.hash()?.0.to_hex().to_string(),
+            )),
             SerializeMode::ValueIfAvailable => match &self.0 {
                 HashOfKind::Precalculated(hash) => {
-                    serde_json::Value::String(hash.0.to_hex().to_string())
+                    Ok(serde_json::Value::String(hash.0.to_hex().to_string()))
                 }
                 HashOfKind::FromValue {
                     value,
                     lazy_hash: _,
-                } => serde_json::to_value(value)
-                    .expect("failed to convert value to JSON for hashing"),
+                } => Ok(serde_json::to_value(value).map_err(|err| {
+                    DiffError::serde_json("diff.hash.serialize embedded value to JSON", err)
+                })?),
             },
         }
     }
 }
 
-pub fn hash_from_serialized_value<T: Serialize>(value: &T) -> Hash {
-    blake3::hash(
+pub fn hash_from_serialized_value<T: Serialize>(value: &T) -> Result<Hash, DiffError> {
+    Ok(blake3::hash(
         to_json_with_mode(value, SerializeMode::HashOnly)
-            .expect("failed to serialize as JSON for hashing")
+            .map_err(|err| {
+                DiffError::serde_json("diff.hash.serialize value as JSON for hash", err)
+            })?
             .as_bytes(),
     )
-    .into()
+    .into())
 }
 
 mod poem {

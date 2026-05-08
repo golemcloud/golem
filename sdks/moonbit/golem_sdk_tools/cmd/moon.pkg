@@ -1,0 +1,13 @@
+import {
+  "moonbitlang/core/env",
+  "moonbitlang/core/list",
+  "moonbitlang/formatter",
+  "moonbitlang/parser/syntax",
+  "moonbitlang/x/fs",
+  "golemcloud/golem_sdk_tools/lib" @lib,
+}
+
+options(
+  "bin-name": "golem-sdk-tools",
+  "is-main": true,
+)

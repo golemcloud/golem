@@ -14,7 +14,7 @@
 
 use crate::model::text::fmt::{
     Column, FieldsBuilder, MessageWithFields, TextView, format_main_id, format_message_highlight,
-    log_table, new_table,
+    log_table, new_table_full_condensed,
 };
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentSecurity};
 use serde_derive::{Deserialize, Serialize};
@@ -44,7 +44,10 @@ fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> 
         .fmt_field("Environment ID", &dep.environment_id, format_main_id)
         .fmt_field("Revision", &dep.revision, format_main_id)
         .fmt_field("Created at", &dep.created_at, |d| d.to_string())
-        .fmt_field("Webhooks url", &dep.webhooks_url, |d| d.clone())
+        .fmt_field("Webhooks url", &dep.webhooks_prefix, |d| d.clone())
+        .fmt_field("OpenAPI endpoint", &dep.openapi_endpoint_prefix, |d| {
+            d.clone()
+        })
         .fmt_field("Agents", &dep.agents, |agents| {
             let mut result = String::new();
             for (agent_name, agent_options) in agents {
@@ -67,7 +70,7 @@ fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> 
 
 impl TextView for Vec<HttpApiDeployment> {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Domain"),
             Column::new("ID").fixed(),
             Column::new("Environment ID").fixed(),

@@ -42,6 +42,10 @@ pub enum HintError {
     NoApplicationManifestFound,
     ExpectedCloudProfile,
     EnvironmentHasNoDeployment,
+    DiffModelVersionMismatch {
+        expected_cli_diff_model_version: u32,
+        server_diff_model_version: u32,
+    },
     ShowClapHelp(ShowClapHelpTarget),
 }
 
@@ -97,6 +101,21 @@ pub mod service {
         pub fn has_code(&self, code: &str) -> bool {
             self.code.as_deref() == Some(code)
         }
+
+        fn error_subcodes(&self) -> Vec<&str> {
+            self.errors
+                .iter()
+                .filter_map(|error| error.split_once(':').map(|(subcode, _)| subcode.trim()))
+                .collect()
+        }
+
+        pub fn all_error_subcodes_in(&self, allowed_codes: &[&str]) -> bool {
+            let subcodes = self.error_subcodes();
+            !subcodes.is_empty()
+                && subcodes
+                    .iter()
+                    .all(|code| allowed_codes.iter().any(|allowed| allowed == code))
+        }
     }
 
     #[derive(Debug)]
@@ -110,6 +129,28 @@ pub mod service {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
                     err.is_status_code(409) && err.has_code(api::error_code::DOMAIN_NOT_REGISTERED)
+                }
+                _ => false,
+            }
+        }
+
+        pub fn is_agent_config_old_config_invalid(&self) -> bool {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(err) => {
+                    err.is_status_code(409)
+                        && err.has_code(api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID)
+                }
+                _ => false,
+            }
+        }
+
+        pub fn is_agent_secret_not_compatible(&self) -> bool {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(err) => {
+                    err.has_code(api::error_code::deployment_validation::FAILED)
+                        && err.all_error_subcodes_in(&[
+                            api::error_code::deployment_validation::AGENT_SECRET_NOT_COMPATIBLE,
+                        ])
                 }
                 _ => false,
             }
@@ -246,10 +287,10 @@ pub mod service {
         }
     }
 
-    pub trait AnyhowMapServiceError<R> {
-        fn map_service_error(self) -> anyhow::Result<R>;
+    pub trait MapServiceError<R> {
+        fn map_service_error(self) -> Result<R, ServiceError>;
 
-        fn map_service_error_not_found_as_opt(self) -> anyhow::Result<Option<R>>;
+        fn map_service_error_not_found_as_opt(self) -> Result<Option<R>, ServiceError>;
     }
 
     trait ClientErrorResultExt<R, E> {
@@ -271,17 +312,16 @@ pub mod service {
         }
     }
 
-    impl<R, E> AnyhowMapServiceError<R> for Result<R, golem_client::Error<E>>
+    impl<R, E> MapServiceError<R> for Result<R, golem_client::Error<E>>
     where
         E: golem_client::ErrorInfo,
     {
-        fn map_service_error(self) -> anyhow::Result<R> {
-            self.map_err(|err| ServiceError::from(err).into())
+        fn map_service_error(self) -> Result<R, ServiceError> {
+            self.map_err(ServiceError::from)
         }
 
-        fn map_service_error_not_found_as_opt(self) -> anyhow::Result<Option<R>> {
-            self.map_not_found_to_none()
-                .map_err(|err| ServiceError::from(err).into())
+        fn map_service_error_not_found_as_opt(self) -> Result<Option<R>, ServiceError> {
+            self.map_not_found_to_none().map_err(ServiceError::from)
         }
     }
 

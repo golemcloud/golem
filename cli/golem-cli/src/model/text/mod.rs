@@ -13,8 +13,8 @@
 // limitations under the License.
 
 pub mod account;
+pub mod action_result;
 pub mod agent;
-pub mod agent_secret;
 pub mod component;
 pub mod deployment;
 pub mod diff;
@@ -28,6 +28,7 @@ pub mod plugin;
 pub mod profile;
 pub mod resource_definition;
 pub mod retry_policy;
+pub mod secret;
 pub mod server;
 pub mod template;
 pub mod token;

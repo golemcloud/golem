@@ -40,7 +40,7 @@ struct PinnedAgentResolutionCacheKey {
     owner_account_email: Option<String>,
 }
 
-struct LatestDeploymentRevisions {
+struct CurrentDeploymentRevisions {
     deployment_revision: DeploymentRevision,
     current_deployment_revision: CurrentDeploymentRevision,
 }
@@ -49,7 +49,7 @@ pub struct AgentResolutionCache {
     cache: Cache<AgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
     pinned_cache: Cache<PinnedAgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
     registry_service: Arc<dyn RegistryService>,
-    latest_revisions: scc::HashMap<EnvironmentId, LatestDeploymentRevisions>,
+    current_revisions: scc::HashMap<EnvironmentId, CurrentDeploymentRevisions>,
 }
 
 impl AgentResolutionCache {
@@ -78,7 +78,7 @@ impl AgentResolutionCache {
             cache,
             pinned_cache,
             registry_service,
-            latest_revisions: scc::HashMap::new(),
+            current_revisions: scc::HashMap::new(),
         }
     }
 
@@ -122,7 +122,7 @@ impl AgentResolutionCache {
 
         // Track the revision for staleness detection
         if let Some(current_deployment_revision) = resolved.current_deployment_revision {
-            self.advance_latest_revision(
+            self.advance_current_revision(
                 resolved.environment_id,
                 resolved.deployment_revision,
                 current_deployment_revision,
@@ -177,30 +177,30 @@ impl AgentResolutionCache {
             warn!(
                 environment_id = %resolved.environment_id,
                 deployment_revision = resolved.deployment_revision.get(),
-                "Resolved latest agent type without current_deployment_revision; treating as stale"
+                "Resolved current agent type without current_deployment_revision; treating as stale"
             );
             return true;
         };
 
-        self.latest_revisions
-            .read_sync(&resolved.environment_id, |_, latest_rev| {
-                current_deployment_revision != latest_rev.current_deployment_revision
-                    || resolved.deployment_revision != latest_rev.deployment_revision
+        self.current_revisions
+            .read_sync(&resolved.environment_id, |_, current_rev| {
+                current_deployment_revision != current_rev.current_deployment_revision
+                    || resolved.deployment_revision != current_rev.deployment_revision
             })
             == Some(true)
     }
 
-    fn advance_latest_revision(
+    fn advance_current_revision(
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         current_deployment_revision: CurrentDeploymentRevision,
     ) {
         let updated = self
-            .latest_revisions
+            .current_revisions
             .update_sync(&environment_id, |_, existing| {
                 if current_deployment_revision > existing.current_deployment_revision {
-                    *existing = LatestDeploymentRevisions {
+                    *existing = CurrentDeploymentRevisions {
                         deployment_revision,
                         current_deployment_revision,
                     }
@@ -208,9 +208,9 @@ impl AgentResolutionCache {
             })
             .is_some();
         if !updated {
-            let _ = self.latest_revisions.insert_sync(
+            let _ = self.current_revisions.insert_sync(
                 environment_id,
-                LatestDeploymentRevisions {
+                CurrentDeploymentRevisions {
                     deployment_revision,
                     current_deployment_revision,
                 },
@@ -218,17 +218,49 @@ impl AgentResolutionCache {
         }
     }
 
-    pub fn update_latest_revision(
+    pub fn update_current_revision(
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         current_deployment_revision: CurrentDeploymentRevision,
     ) {
-        self.advance_latest_revision(
+        self.advance_current_revision(
             environment_id,
             deployment_revision,
             current_deployment_revision,
         );
+    }
+
+    /// Removes all cache entries for a specific application name.
+    /// Also removes corresponding entries from `current_revisions` for the
+    /// given environment UUIDs to avoid the stale-but-not-observed path.
+    pub async fn invalidate_by_app_name(&self, app_name: &str, environment_ids: &[EnvironmentId]) {
+        let keys = self.cache.keys().await;
+        for key in keys.into_iter().filter(|k| k.app_name == app_name) {
+            self.cache.remove(&key).await;
+        }
+        for env_id in environment_ids {
+            self.current_revisions.remove_sync(env_id);
+        }
+    }
+
+    /// Removes all cache entries for a specific (app_name, env_name) pair.
+    /// Also removes the corresponding `current_revisions` entry for the given
+    /// environment UUID.
+    pub async fn invalidate_by_env(
+        &self,
+        app_name: &str,
+        env_name: &str,
+        environment_id: EnvironmentId,
+    ) {
+        let keys = self.cache.keys().await;
+        for key in keys
+            .into_iter()
+            .filter(|k| k.app_name == app_name && k.env_name == env_name)
+        {
+            self.cache.remove(&key).await;
+        }
+        self.current_revisions.remove_sync(&environment_id);
     }
 
     pub async fn clear(&self) {
@@ -236,7 +268,7 @@ impl AgentResolutionCache {
         for key in keys {
             self.cache.remove(&key).await;
         }
-        self.latest_revisions.retain_sync(|_, _| false);
+        self.current_revisions.retain_sync(|_, _| false);
     }
 }
 
@@ -556,7 +588,7 @@ mod tests {
 
         // Simulate invalidation with a newer revision
         let new_rev = DeploymentRevision::new(1).unwrap();
-        cache.update_latest_revision(
+        cache.update_current_revision(
             env_id,
             new_rev,
             CurrentDeploymentRevision::new(new_rev.get()).unwrap(),
@@ -584,7 +616,7 @@ mod tests {
         let result = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         assert!(result.is_ok());
 
-        cache.update_latest_revision(
+        cache.update_current_revision(
             env_id,
             DeploymentRevision::INITIAL,
             CurrentDeploymentRevision::INITIAL,

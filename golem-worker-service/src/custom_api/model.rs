@@ -15,11 +15,12 @@
 use crate::custom_api::openapi::HttpApiOpenApiSpec;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::BinarySource;
+use golem_common::model::agent::{BinarySource, TextSource};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::custom_api::{
     CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
-    SecuritySchemeDetails, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    OpenApiSpecFormat, SecuritySchemeDetails, SessionFromHeaderRouteSecurity,
+    WebhookCallbackBehaviour,
 };
 use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
 use http::Method;
@@ -123,16 +124,13 @@ pub enum ResponseBody {
     UnstructuredBinaryBody {
         body: BinarySource,
     },
+    UnstructuredTextBody {
+        body: TextSource,
+    },
     OpenApiSchema {
         spec: Arc<HttpApiOpenApiSpec>,
         format: OpenApiSpecFormat,
     },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum OpenApiSpecFormat {
-    Json,
-    Yaml,
 }
 
 impl fmt::Debug for ResponseBody {
@@ -144,6 +142,7 @@ impl fmt::Debug for ResponseBody {
                 .field("body", body)
                 .finish(),
             ResponseBody::UnstructuredBinaryBody { .. } => f.write_str("UnstructuredBinaryBody"),
+            ResponseBody::UnstructuredTextBody { .. } => f.write_str("UnstructuredTextBody"),
             ResponseBody::OpenApiSchema { spec, format } => f
                 .debug_struct("OpenApiSchema")
                 .field("spec", &spec.0)
@@ -158,6 +157,8 @@ pub enum ParsedRequestBody {
     JsonBody(golem_wasm::Value),
     // Always Some initially, will be None after being consumed by handler code
     UnstructuredBinary(Option<BinarySource>),
+    // Always Some initially, will be None after being consumed by handler code
+    UnstructuredText(Option<TextSource>),
 }
 
 impl fmt::Debug for ParsedRequestBody {
@@ -166,6 +167,7 @@ impl fmt::Debug for ParsedRequestBody {
             ParsedRequestBody::Unused => f.write_str("Unused"),
             ParsedRequestBody::JsonBody(value) => f.debug_tuple("JsonBody").field(value).finish(),
             ParsedRequestBody::UnstructuredBinary(_) => f.write_str("UnstructuredBinary"),
+            ParsedRequestBody::UnstructuredText(_) => f.write_str("UnstructuredText"),
         }
     }
 }

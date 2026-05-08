@@ -16,7 +16,7 @@ message WorkerExecutionError {
     FailedToResumeAgent failed_to_resume_agent = 4;
     ComponentDownloadFailed component_download_failed = 5;
     ComponentParseFailed component_parse_failed = 6;
-    GetLatestVersionOfComponentFailed get_latest_version_of_component_failed = 7;
+    GetCurrentVersionOfComponentFailed get_current_version_of_component_failed = 7;
     PromiseNotFound promise_not_found = 8;
     PromiseDropped promise_dropped = 9;
     PromiseAlreadyCompleted promise_already_completed = 10;
@@ -69,7 +69,7 @@ message ComponentParseFailed {
   string reason = 3;
 }
 
-message GetLatestVersionOfComponentFailed {
+message GetCurrentVersionOfComponentFailed {
   golem.component.ComponentId component_id = 1;
   string reason = 2;
 }

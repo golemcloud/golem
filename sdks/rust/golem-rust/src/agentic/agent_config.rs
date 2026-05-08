@@ -27,6 +27,13 @@ impl<T> Default for Config<T> {
 }
 
 impl<T> Config<T> {
+    /// Creates a config handle.
+    ///
+    /// This exists primarily for SDK-generated code that materializes
+    /// `#[agent_config]` constructor parameters. User code should receive
+    /// `Config<T>` through constructor injection instead of constructing it
+    /// manually, because agent config metadata is only registered from
+    /// `#[agent_config]` constructor parameters.
     pub fn new() -> Self {
         Self(PhantomData)
     }

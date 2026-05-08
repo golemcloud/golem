@@ -7,24 +7,71 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 
 | Skill | Description |
 |-------|-------------|
+| `golem-cloud-account-setup` | Setting up a Golem Cloud account — authentication, cloud profiles, API tokens, and first cloud deployment |
 | `golem-new-project` | Creating a new Golem application project with `golem new` |
+| `golem-add-component` | Adding a new component or agent templates to an existing application |
+| `golem-edit-manifest` | Editing the Golem Application Manifest (golem.yaml) — components, agents, templates, environments, httpApi, mcp, bridge SDKs, plugins, and more |
 | `golem-build` | Building a Golem application with `golem build` |
+| `golem-troubleshoot-build` | Troubleshooting Golem build failures and debugging manifest file (golem.yaml) configuration — diagnosing tool, dependency, env var, config, and manifest layer issues with `golem component manifest-trace` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
+| `golem-local-dev-server` | Starting and managing the local Golem development server with `golem server` |
+| `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
+| `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
+| `golem-create-agent-instance-scala` | Creating a new agent instance with `golem agent new` |
+| `golem-invoke-agent-scala` | Invoking a Golem agent method from the CLI |
+| `golem-trigger-agent-scala` | Triggering a fire-and-forget invocation on a Golem agent |
+| `golem-schedule-agent-scala` | Scheduling a future invocation on a Golem agent |
 | `golem-add-scala-dependency` | Adding a library dependency to the project |
+| `golem-add-postgres-scala` | Connecting to PostgreSQL with `golem.host.Rdbms.Postgres` from Scala agents |
+| `golem-add-mysql-scala` | Connecting to MySQL with `golem.host.Rdbms.Mysql` from Scala agents |
+| `golem-add-ignite-scala` | Current Apache Ignite limitation in the Scala SDK and the SDK work required before using `golem:rdbms/ignite2` |
 | `golem-add-agent-scala` | Adding a new agent type to a Scala Golem component |
 | `golem-configure-durability-scala` | Choosing between durable and ephemeral agents |
+| `golem-stateless-agent-scala` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-scala` | Adding prompt and description annotations to agent methods |
 | `golem-call-another-agent-scala` | Calling another agent and awaiting the result (RPC) |
+| `golem-call-from-external-scala` | Calling agents from external applications (no bridge generator yet — use the REST API or a TS/Rust bridge) |
 | `golem-fire-and-forget-scala` | Triggering an agent invocation without waiting for the result |
+| `golem-parallel-workers-scala` | Fan out work to multiple parallel agents and collect results |
 | `golem-schedule-future-call-scala` | Scheduling a future agent invocation |
-| `golem-atomic-block-scala` | Atomic blocks, persistence control, and oplog management |
+| `golem-recurring-task-scala` | Implementing recurring (cron-like) tasks via self-scheduling — periodic polling, cleanup, heartbeats, backoff, and cancellation |
+| `golem-wait-for-external-input-scala` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
+| `golem-add-webhook-scala` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
+| `golem-multi-instance-agent-scala` | Creating multiple agent instances with the same constructor parameters using phantom agents |
+| `golem-atomic-block-scala` | Atomic blocks, persistence control, and idempotency |
 | `golem-add-transactions-scala` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-scala` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-scala` | Mapping path, query, header, and body parameters for HTTP endpoints |
 | `golem-add-http-auth-scala` | Enabling authentication on HTTP endpoints |
 | `golem-add-cors-scala` | Configuring CORS allowed origins for HTTP endpoints |
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
+| `golem-configure-mcp-server` | Configuring MCP (Model Context Protocol) server deployments in golem.yaml |
+| `golem-manage-plugins` | Managing Golem plugins — listing available plugins, installing and configuring plugins via golem.yaml or CLI, and understanding built-in plugins like the OTLP exporter |
+| `golem-add-config-scala` | Adding typed configuration to Scala Golem agents |
+| `golem-add-secret-scala` | Adding secrets to Scala Golem agents |
+| `golem-quota-scala` | Adding resource quotas (rate limiting, capacity, concurrency) to Scala Golem agents using QuotaToken and reservations |
+| `golem-retry-policies-scala` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `withRetryPolicy`, and live CLI management |
+| `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
+| `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
+| `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
+| `golem-file-io-scala` | Reading and writing files from agent code |
+| `golem-js-runtime` | JavaScript runtime environment: available Web APIs, Node.js modules, and npm compatibility |
+| `golem-add-llm-scala` | Adding LLM and AI capabilities by calling provider APIs with fetch or ZIO HTTP |
 | `golem-make-http-request-scala` | Making outgoing HTTP requests from agent code using fetch or ZIO HTTP |
+| `golem-logging-scala` | Adding logging to a Scala Golem agent using `golem.wasi.Logging` and `wasi:logging` |
+| `golem-enable-otlp-scala` | Enabling the OpenTelemetry (OTLP) plugin for a Scala agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the invocation context API |
+| `golem-view-agent-logs` | Viewing agent logs and output via streaming |
+| `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
+| `golem-list-and-filter-agents` | Listing and querying agents with filters |
+| `golem-get-agent-metadata` | Checking agent metadata and status |
+| `golem-debug-agent-history` | Querying the operation log |
+| `golem-undo-agent-state` | Reverting agent state by undoing operations |
+| `golem-interrupt-resume-agent` | Interrupting and resuming a Golem agent |
+| `golem-test-crash-recovery` | Simulating a crash on an agent for testing crash recovery |
+| `golem-integration-test-setup` | Setting up a dedicated Golem environment for integration testing — isolated local server, test environment in golem.yaml, dynamic port discovery, and non-interactive deploys |
+| `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
+| `golem-delete-agent` | Deleting an agent instance |
+| `golem-interactive-repl-scala` | Using the Golem REPL for interactive testing and scripting of agents |
 
 # Golem Application Development Guide (Scala)
 
@@ -44,6 +91,20 @@ Key concepts:
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see Agent-to-Agent Communication)
 - An agent is created implicitly on first invocation — no separate creation step needed
+- **Futures cannot outlive invocations** — every `Future` (or other async effect, including the underlying JS `Promise`) started during an invocation must be awaited / completed before the invocation returns; do not store unresolved futures in agent state to await them from a later invocation
+
+## Durability & Automatic Retries
+
+Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `try/catch` + retry patterns, `Future.recoverWith` retry chains, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter, clamped to [100ms, 1s]) applies when no user-defined policy matches.
+
+The following are retried transparently:
+
+- **HTTP requests** to external services (via `fetch`, ZIO HTTP, `wasi:http`, etc.)
+- **RPC calls** between agents
+- **Database / storage calls** — `golem.host.Rdbms.Postgres`, `golem.host.Rdbms.Mysql`, `wasi:blobstore`, `wasi:keyvalue`
+- **Uncaught exceptions** (`Throwable`s thrown from, or `Future` failures escaping, an agent method) — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
+
+Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-scala` skill.
 
 ## Project Structure
 
@@ -86,166 +147,6 @@ golem-temp/                           # Build artifacts (gitignored)
 - sbt (Scala build tool)
 - Golem CLI (`golem`): download from https://github.com/golemcloud/golem/releases
 
-## Building
-
-```shell
-golem build                      # Build all components
-golem component build my:comp    # Build a specific component
-```
-
-The build runs Scala.js compilation, JavaScript linking, QuickJS WASM injection, agent wrapper generation, and WASM composition. Output goes to `golem-temp/`.
-
-Do NOT run `sbt compile` or `sbt fastLinkJS` directly — always use `golem build` which orchestrates the full pipeline including WASM component linking.
-
-## Deploying and Running
-
-```shell
-golem server run                 # Start local Golem server
-golem deploy                     # Deploy all components to the configured server
-golem deploy --try-update-agents # Deploy and update running agents
-golem deploy --reset             # Deploy and delete all previously created agents
-```
-
-**WARNING**: `golem server run --clean` deletes all existing state (agents, data, deployed components). Never run it without explicitly asking the user for confirmation first.
-
-After starting the server, components must be deployed with `golem deploy` before agents can be invoked. When iterating on code changes, use `golem deploy --reset` to delete all previously created agents — without this, existing agent instances continue running with the old component version. This is by design: Golem updates do not break existing running instances.
-
-To try out agents after deploying, use `golem agent invoke` for individual method calls, or write a Rib script and run it with `golem repl` for interactive testing. The Golem server must be running in a separate process before invoking or testing agents.
-
-## Name Mapping (Kebab-Case Convention)
-
-All Scala identifiers are converted to **kebab-case** when used externally (in CLI commands, Rib scripts, REPL, agent IDs, and WAVE values). This applies to:
-
-- **Agent type names**: `CounterAgent` → `counter-agent`
-- **Method names**: `getCount` → `get-count`, `increment` → `increment`
-- **Record/case class field names**: `fieldName` → `field-name`
-- **Variant/sealed trait case names**: `MyCase` → `my-case`
-
-This conversion is automatic and consistent across all external interfaces.
-
-## Testing Agents
-
-### Using the REPL
-
-```shell
-golem repl                       # Interactive Rib scripting REPL
-```
-
-In the REPL, use kebab-case names and WAVE-encoded values:
-```rib
-let agent = counter-agent("my-counter")
-agent.increment()
-agent.increment()
-```
-
-### Using `golem agent invoke`
-
-Invoke agent methods directly from the CLI. The method name must be fully qualified:
-
-```shell
-# Method name format: <component-name>/<agent-type>.{method-name}
-# All names in kebab-case
-
-golem agent invoke 'counter-agent("my-counter")' \
-  'my:example/counter-agent.{increment}'
-
-# With arguments (WAVE-encoded)
-golem agent invoke 'my-agent("id")' \
-  'my:example/my-agent.{set-value}' '"hello world"'
-
-# With a record argument
-golem agent invoke 'my-agent("id")' \
-  'my:example/my-agent.{update}' '{field-name: "value", count: 42}'
-
-# Fire-and-forget (enqueue without waiting for result)
-golem agent invoke --enqueue 'counter-agent("c1")' \
-  'my:example/counter-agent.{increment}'
-
-# With idempotency key
-golem agent invoke --idempotency-key 'unique-key-123' \
-  'counter-agent("c1")' 'my:example/counter-agent.{increment}'
-```
-
-## WAVE Value Encoding
-
-All argument values passed to `golem agent invoke` and used in Rib scripts follow the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) format. See the full [type mapping reference](https://learn.golem.cloud/type-mapping).
-
-### Scala Type to WAVE Mapping
-
-| Scala Type | WIT Type | WAVE Example |
-|------------|----------|--------------|
-| `String` | `string` | `"hello world"` |
-| `Boolean` | `bool` | `true`, `false` |
-| `Int` | `s32` | `42` |
-| `Long` | `s64` | `100` |
-| `Float` | `f32` | `3.14` |
-| `Double` | `f64` | `1234.0` |
-| `List[T]` | `list<T>` | `[1, 2, 3]` |
-| `Option[T]` | `option<T>` | `some("value")`, `none` |
-| case class | `record { ... }` | `{field-name: "value", count: 42}` |
-| sealed trait / enum | `variant { ... }` | `my-case("data")` |
-| Tuple | `tuple<...>` | `("hello", 1234, true)` |
-
-### WAVE Encoding Rules
-
-**Strings**: double-quoted with escape sequences (`\"`, `\\`, `\n`, `\t`, `\r`, `\u{...}`)
-```
-"hello \"world\""
-```
-
-**Records**: field names in kebab-case, optional fields (`Option[T]`) can be omitted (defaults to `none`)
-```
-{required-field: "value", optional-field: some(42)}
-{required-field: "value"}
-```
-
-**Variants**: case name in kebab-case, with optional payload in parentheses
-```
-my-case
-my-case("payload")
-```
-
-**Options**: can use shorthand (bare value = `some`)
-```
-some(42)      // explicit
-42            // shorthand for some(42), only for non-option/non-result inner types
-none
-```
-
-**Results**: can use shorthand (bare value = `ok`)
-```
-ok("value")   // explicit ok
-err("oops")   // explicit err
-"value"       // shorthand for ok("value")
-```
-
-**Flags**: set of labels in curly braces
-```
-{read, write}
-{}
-```
-
-**Keywords as identifiers**: prefix with `%` if a name conflicts with `true`, `false`, `some`, `none`, `ok`, `err`, `inf`, `nan`
-```
-%true
-%none
-```
-
-## Defining Agents
-
-Load the `golem-add-agent-scala` skill for defining agents, custom types, and HTTP API annotations. See also the skill table above for durability configuration, annotations, RPC, atomic blocks, and transactions.
-
-## Application Manifest (golem.yaml)
-
-- Root `golem.yaml`: app name, includes, environments, and `components` entries
-- `golem-temp/common/scala/golem.yaml`: generated on-demand build templates (Scala.js compilation, QuickJS WASM injection, WASM composition) shared by all Scala components
-
-Key fields in each `components.<name>` entry:
-- `dir`: component directory (`"."` for single-component apps)
-- `templates`: references a template from common golem.yaml (e.g., `scala`)
-- `env`: environment variables passed to agents at runtime
-- `dependencies`: WASM dependencies (e.g., LLM providers from golem-ai)
-
 ## Available Libraries
 
 From `build.sbt` / `project/plugins.sbt`:
@@ -256,16 +157,6 @@ From `build.sbt` / `project/plugins.sbt`:
 - `sbt-scalajs` — Scala.js compilation plugin
 
 Libraries must be **Scala.js-compatible** — use the `%%%` operator in `build.sbt` so sbt resolves the `_sjs1_` cross-published variant. JVM-only libraries (reflection, `java.io.File`, threads, etc.) will not work.
-
-## Debugging
-
-```shell
-golem agent get '<agent-id>'                    # Check agent state
-golem agent stream '<agent-id>'                 # Stream live logs
-golem agent oplog '<agent-id>'                  # View operation log
-golem agent revert '<agent-id>' --number-of-invocations 1  # Revert last invocation
-golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
-```
 
 ## Key Constraints
 

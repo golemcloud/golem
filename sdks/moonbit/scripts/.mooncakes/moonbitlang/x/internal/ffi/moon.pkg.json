@@ -1,0 +1,7 @@
+{
+    "targets": {
+        "string_wasm.mbt": ["wasm", "wasm-gc"],
+        "byte_array_wasm.mbt": ["wasm", "wasm-gc"],
+        "dir_wasm.mbt": ["wasm", "wasm-gc"]
+    }
+}

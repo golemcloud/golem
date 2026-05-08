@@ -39,8 +39,8 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload, TimestampedUpdateDescription,
-    types::ObjectMetadata,
+    AgentError, OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload,
+    TimestampedUpdateDescription, types::ObjectMetadata,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
@@ -508,6 +508,7 @@ fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
         grpc: GrpcApiConfig {
             port: 0,
             tls: GrpcServerTlsConfig::disabled(),
+            ..Default::default()
         },
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
@@ -605,7 +606,9 @@ async fn start_executor_with_config(
             let otel_channel = ServiceBuilder::new()
                 .layer(tonic_tracing_opentelemetry::middleware::client::OtelGrpcLayer)
                 .service(channel);
-            let client = WorkerExecutorClient::new(otel_channel);
+            let client = WorkerExecutorClient::new(otel_channel)
+                .max_decoding_message_size(32 * 1024 * 1024)
+                .max_encoding_message_size(32 * 1024 * 1024);
             break Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 _run_details: details,
@@ -730,8 +733,8 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
 
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
-    fn ensure_fuel(&mut self, _current_level: u64) -> bool {
-        true
+    fn ensure_fuel(&mut self, _current_level: u64) -> Result<(), AgentError> {
+        Ok(())
     }
 
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
@@ -760,11 +763,13 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
             this,
             owned_agent_id,
+            agent_mode,
             latest_worker_status,
         )
         .await
@@ -1612,7 +1617,9 @@ async fn run_production_context_bootstrap(
             let otel_channel = tower::ServiceBuilder::new()
                 .layer(tonic_tracing_opentelemetry::middleware::client::OtelGrpcLayer)
                 .service(channel);
-            let client = WorkerExecutorClient::new(otel_channel);
+            let client = WorkerExecutorClient::new(otel_channel)
+                .max_decoding_message_size(32 * 1024 * 1024)
+                .max_encoding_message_size(32 * 1024 * 1024);
             return Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 _run_details: details,
@@ -2635,7 +2642,6 @@ impl Rpc for FailingRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
@@ -2645,7 +2651,6 @@ impl Rpc for FailingRpc {
                 self_created_by,
                 self_agent_id,
                 self_env,
-                self_config,
                 self_stack,
                 config,
             )
@@ -2661,7 +2666,6 @@ impl Rpc for FailingRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, ServiceRpcError> {
         if self
@@ -2682,7 +2686,6 @@ impl Rpc for FailingRpc {
                     self_created_by,
                     self_agent_id,
                     self_env,
-                    self_config,
                     self_stack,
                 )
                 .await
@@ -2698,7 +2701,6 @@ impl Rpc for FailingRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), ServiceRpcError> {
         self.inner
@@ -2710,7 +2712,6 @@ impl Rpc for FailingRpc {
                 self_created_by,
                 self_agent_id,
                 self_env,
-                self_config,
                 self_stack,
             )
             .await

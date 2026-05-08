@@ -17,6 +17,7 @@ mod oplog_macro;
 pub(crate) mod public_types;
 
 use crate::base_model::account::AccountId;
+use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
@@ -71,6 +72,7 @@ oplog_entry! {
         wit_public_type: "create-parameters"
         raw {
             agent_id: AgentId,
+            agent_mode: AgentMode,
             component_revision: ComponentRevision,
             env: Vec<(String, String)>,
             environment_id: EnvironmentId,
@@ -79,12 +81,14 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
-            config_vars: BTreeMap<String, String>,
             local_agent_config: Vec<UntypedAgentConfigEntry>,
-            original_phantom_id: Option<Uuid>
+            original_phantom_id: Option<Uuid>,
+            /// Per-instance fingerprint, unique across recreations of the same agent ID.
+            instance_id: Uuid
         }
         public {
             agent_id: AgentId,
+            agent_mode: AgentMode,
             component_revision: ComponentRevision,
             env: BTreeMap<String, String>,
             created_by: AccountId,
@@ -93,9 +97,9 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            config_vars: BTreeMap<String, String>,
             local_agent_config: Vec<TypedAgentConfigEntry>,
-            original_phantom_id: Option<Uuid>
+            original_phantom_id: Option<Uuid>,
+            instance_id: Uuid
         }
     },
     /// The agent invoked a host function

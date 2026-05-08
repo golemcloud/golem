@@ -15,6 +15,9 @@
 use crate::Tracing;
 
 use golem_common::model::AgentId;
+use golem_common::model::agent::AgentMode;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
@@ -23,7 +26,7 @@ use golem_worker_executor_test_utils::{
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -33,6 +36,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("constructor_parameter_echo_unnamed")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_update_v1")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -134,13 +141,7 @@ async fn agent_env_inheritance(
     env.insert("ENV3".to_string(), "33".to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -319,5 +320,103 @@ async fn ephemeral_agent_works(
     assert_eq!(result2, Value::String("param1!".to_string()));
     assert_eq!(result3, Value::String("param2!".to_string()));
     assert_eq!(result4, Value::String("param2!".to_string()));
+    Ok(())
+}
+
+/// Verifies that `AgentMode` is persisted in the `Create` oplog entry of a Durable agent and that
+/// the worker is accessible afterwards (i.e. its oplog can be queried using the persisted mode).
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn create_oplog_entry_persists_durable_agent_mode(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .with_agent_config(
+            "CounterAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["var1".to_string()],
+                value: serde_json::Value::String("value1".to_string()).into(),
+            }],
+        )
+        .store()
+        .await?;
+    let agent_id = agent_id!("CounterAgent", "persistence-test");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Drive the agent so that the Create entry has been written
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let create_entry = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Create(params) => Some(params),
+            _ => None,
+        })
+        .expect("Expected a Create entry at the start of the oplog");
+
+    assert_eq!(create_entry.agent_mode, AgentMode::Durable);
+
+    // The worker remains queryable using its persisted mode.
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(metadata.agent_id, worker_id);
+
+    Ok(())
+}
+
+/// Verifies that `AgentMode` is persisted in the `Create` oplog entry of an Ephemeral agent.
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn create_oplog_entry_persists_ephemeral_agent_mode(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    constructor_parameter_echo_unnamed: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(
+            &context.default_environment_id,
+            constructor_parameter_echo_unnamed,
+        )
+        .store()
+        .await?;
+    let agent_id = agent_id!("EphemeralEchoAgent", "persistence-test");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Trigger an invocation so the worker has actually been instantiated and Create persisted.
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "changeAndGet", data_value!())
+        .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let create_entry = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Create(params) => Some(params),
+            _ => None,
+        })
+        .expect("Expected a Create entry at the start of the oplog");
+
+    assert_eq!(create_entry.agent_mode, AgentMode::Ephemeral);
     Ok(())
 }

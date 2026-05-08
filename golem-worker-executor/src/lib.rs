@@ -847,6 +847,7 @@ pub async fn create_worker_executor_impl<
     let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
         worker_service.clone(),
         oplog_service.clone(),
+        component_service.clone(),
         golem_config.clone(),
     ));
 
@@ -968,12 +969,14 @@ pub async fn bootstrap_and_run_worker_executor<
 
     if start_registry_invalidation_handler {
         let registry_service = registry_service.clone();
+        let component_service = worker_executor_impl.component_service();
         let environment_state_service = worker_executor_impl.environment_state_service();
         let agent_types_service = worker_executor_impl.agent_types();
         let shutdown_token = shutdown.token();
         join_set.spawn(async move {
             WorkerExecutorRegistryInvalidationHandler::run(
                 registry_service,
+                component_service,
                 environment_state_service,
                 agent_types_service,
                 shutdown_token,
@@ -1039,7 +1042,9 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
 
     let service = WorkerExecutorServer::new(worker_impl)
         .accept_compressed(CompressionEncoding::Gzip)
-        .send_compressed(CompressionEncoding::Gzip);
+        .send_compressed(CompressionEncoding::Gzip)
+        .max_decoding_message_size(golem_config.grpc.max_message_size)
+        .max_encoding_message_size(golem_config.grpc.max_message_size);
 
     join_set.spawn({
         let mut server = Server::builder();

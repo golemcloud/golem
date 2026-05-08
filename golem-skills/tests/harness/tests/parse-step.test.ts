@@ -487,6 +487,9 @@ name: "kitchen-sink"
 prerequisites:
   env:
     DB_URL: "postgres://localhost/test"
+  services:
+    - postgres
+    - mysql
 settings:
   timeout_per_subprompt: 600
   cleanup: true
@@ -524,7 +527,10 @@ steps:
       name: "bg-worker"
 `);
     assert.equal(spec.name, "kitchen-sink");
-    assert.deepEqual(spec.prerequisites, { env: { DB_URL: "postgres://localhost/test" } });
+    assert.deepEqual(spec.prerequisites, {
+      env: { DB_URL: "postgres://localhost/test" },
+      services: ["postgres", "mysql"],
+    });
     assert.equal(spec.settings?.cleanup, true);
     assert.equal(spec.steps.length, 8);
 

@@ -1,0 +1,29 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/blobstore/blobstore"
+
+import {
+  "golemcloud/golem_sdk/interface/wasi/blobstore/container",
+  "golemcloud/golem_sdk/interface/wasi/blobstore/types",
+}
+
+// Values
+pub fn container_exists(String) -> Result[Bool, String]
+
+pub fn copy_object(@types.ObjectId, @types.ObjectId) -> Result[Unit, String]
+
+pub fn create_container(String) -> Result[@container.Container, String]
+
+pub fn delete_container(String) -> Result[Unit, String]
+
+pub fn get_container(String) -> Result[@container.Container, String]
+
+pub fn move_object(@types.ObjectId, @types.ObjectId) -> Result[Unit, String]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

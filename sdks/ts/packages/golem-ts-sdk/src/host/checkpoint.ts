@@ -13,11 +13,8 @@
 // limitations under the License.
 
 import { type OplogIndex, getOplogIndex, setOplogIndex } from './hostapi';
+import { isPromiseLike } from './guard';
 import { Result } from './result';
-
-function isPromiseLike(value: unknown): value is Promise<unknown> {
-  return value !== null && value !== undefined && typeof (value as any).then === 'function';
-}
 
 /**
  * A checkpoint that captures the current oplog index and can revert execution to that point.

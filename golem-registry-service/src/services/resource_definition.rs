@@ -123,7 +123,7 @@ impl ResourceDefinitionService {
             data.unit,
             data.units,
             auth.account_id(),
-        );
+        )?;
 
         let stored_resource_definition: ResourceDefinition = self
             .resource_definition_repo
@@ -193,7 +193,7 @@ impl ResourceDefinitionService {
         let record = ResourceDefinitionRevisionRecord::from_model(
             resource_definition,
             DeletableRevisionAuditFields::new(auth.account_id().0),
-        );
+        )?;
 
         let stored_resource_definition: ResourceDefinition = self
             .resource_definition_repo
@@ -236,7 +236,7 @@ impl ResourceDefinitionService {
         let record = ResourceDefinitionRevisionRecord::from_model(
             resource_definition,
             DeletableRevisionAuditFields::deletion(auth.account_id().0),
-        );
+        )?;
 
         self.resource_definition_repo
             .delete(record)

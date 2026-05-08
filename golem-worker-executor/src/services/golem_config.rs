@@ -259,12 +259,15 @@ impl Default for GolemConfig {
             environment_state_service: EnvironmentStateServiceConfig::default(),
             direct_invocation_auth_cache: DirectInvocationAuthCacheConfig::default(),
             agent_webhooks_service: AgentWebhooksServiceConfig::default(),
-            registry_service: GrpcRegistryServiceConfig {
-                client_config: GrpcClientConfig {
-                    request_timeout: Some(Duration::from_secs(30)),
-                    ..GrpcClientConfig::default()
-                },
-                ..GrpcRegistryServiceConfig::default()
+            registry_service: {
+                let default = GrpcRegistryServiceConfig::default();
+                GrpcRegistryServiceConfig {
+                    client_config: GrpcClientConfig {
+                        request_timeout: Some(Duration::from_secs(30)),
+                        ..default.client_config
+                    },
+                    ..default
+                }
             },
             quota_service: QuotaServiceConfig::default(),
             engine: EngineConfig::default(),
@@ -285,6 +288,7 @@ pub struct Limits {
     pub event_broadcast_capacity: usize,
     pub event_history_size: usize,
     pub fuel_to_borrow: u64,
+    pub ephemeral_fuel_overdraft_multiplier: u64,
     #[serde(with = "humantime_serde")]
     pub epoch_interval: Duration,
     pub epoch_ticks: u64,
@@ -323,6 +327,11 @@ impl SafeDisplay for Limits {
         let _ = writeln!(&mut result, "fuel to borrow: {}", self.fuel_to_borrow);
         let _ = writeln!(
             &mut result,
+            "ephemeral fuel overdraft multiplier: {}",
+            self.ephemeral_fuel_overdraft_multiplier
+        );
+        let _ = writeln!(
+            &mut result,
             "epoch interval: {}",
             self.epoch_interval.as_secs()
         );
@@ -341,6 +350,12 @@ impl SafeDisplay for Limits {
 pub struct GrpcApiConfig {
     pub port: u16,
     pub tls: GrpcServerTlsConfig,
+    #[serde(default = "default_grpc_max_message_size")]
+    pub max_message_size: usize,
+}
+
+fn default_grpc_max_message_size() -> usize {
+    32 * 1024 * 1024
 }
 
 impl SafeDisplay for GrpcApiConfig {
@@ -348,6 +363,7 @@ impl SafeDisplay for GrpcApiConfig {
         let mut result = String::new();
 
         let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
 
         let _ = writeln!(&mut result, "tls:");
         let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
@@ -361,6 +377,7 @@ impl Default for GrpcApiConfig {
         Self {
             port: 9093,
             tls: GrpcServerTlsConfig::disabled(),
+            max_message_size: default_grpc_max_message_size(),
         }
     }
 }
@@ -440,11 +457,16 @@ impl GolemConfig {
 pub struct SuspendConfig {
     #[serde(with = "humantime_serde")]
     pub suspend_after: Duration,
+    #[serde(with = "humantime_serde")]
+    pub ephemeral_max_sleep: Duration,
 }
 
 impl SafeDisplay for SuspendConfig {
     fn to_safe_string(&self) -> String {
-        format!("suspend after: {:?}", self.suspend_after)
+        format!(
+            "suspend after: {:?}, ephemeral max sleep: {:?}",
+            self.suspend_after, self.ephemeral_max_sleep
+        )
     }
 }
 
@@ -1328,6 +1350,7 @@ impl Default for Limits {
             event_broadcast_capacity: 1024,
             event_history_size: 128,
             fuel_to_borrow: 10000,
+            ephemeral_fuel_overdraft_multiplier: 100,
             epoch_interval: Duration::from_millis(10),
             epoch_ticks: 1,
             max_oplog_query_pages_size: 100,
@@ -1359,6 +1382,7 @@ impl Default for SuspendConfig {
     fn default() -> Self {
         Self {
             suspend_after: Duration::from_secs(10),
+            ephemeral_max_sleep: Duration::from_secs(60),
         }
     }
 }

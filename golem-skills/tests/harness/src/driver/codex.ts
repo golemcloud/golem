@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import {
   BaseAgentDriver,
   AgentResult,
   killProcessTree,
   ActivityMonitor,
+  CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
+  type UsageStats,
 } from "./base.js";
 import * as log from "../log.js";
 
@@ -12,6 +15,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
   protected readonly driverName = "codex";
   protected readonly skillDirs = [".agents/skills"];
   private lastSessionId: string | null = null;
+  private accumulatedUsage: UsageStats = {};
 
   async sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     const result = await this.executeCodex(
@@ -49,6 +53,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
   }
 
   private executeCodex(args: string[], opts: DriverTimeoutOptions): Promise<AgentResult> {
+    this.accumulatedUsage = {};
     const startTime = Date.now();
     const prefix = this.logPrefix;
 
@@ -67,6 +72,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
       const outputParts: string[] = [];
       let stdoutBuf = "";
       let stderrBuf = "";
+      let creditInsufficient = false;
 
       child.stdout?.on("data", (data: Buffer) => {
         monitor.noteActivity();
@@ -74,7 +80,12 @@ export class CodexAgentDriver extends BaseAgentDriver {
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
         for (const line of lines) {
-          this.handleJsonLine(prefix, line, outputParts, startTime);
+          if (this.handleJsonLine(prefix, line, outputParts, startTime)) {
+            creditInsufficient = true;
+            log.driverFatal(prefix, "✗ credit balance too low — aborting run");
+            killProcessTree(child);
+            return;
+          }
         }
       });
 
@@ -90,9 +101,26 @@ export class CodexAgentDriver extends BaseAgentDriver {
 
       child.on("close", (exitCode) => {
         monitor.finish();
-        if (stdoutBuf) this.handleJsonLine(prefix, stdoutBuf, outputParts, startTime);
+        if (stdoutBuf) {
+          if (this.handleJsonLine(prefix, stdoutBuf, outputParts, startTime)) {
+            creditInsufficient = true;
+          }
+        }
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
         const durationSeconds = (Date.now() - startTime) / 1000;
+
+        if (creditInsufficient) {
+          resolve({
+            success: false,
+            output: `Credit balance too low. ${outputParts.join("")}`,
+            durationSeconds,
+            exitCode,
+            creditInsufficient: true,
+            usage: { ...this.accumulatedUsage },
+          });
+          return;
+        }
+
         resolve({
           success: !monitor.isTimedOut && exitCode === 0,
           output: monitor.isTimedOut
@@ -102,6 +130,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
           exitCode: monitor.isTimedOut ? null : exitCode,
           timedOut: monitor.isTimedOut || undefined,
           timeoutKind: monitor.timeoutKind,
+          usage: { ...this.accumulatedUsage },
         });
       });
 
@@ -113,6 +142,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
           output: outputParts.join("") + (err.message || "Unknown error"),
           durationSeconds,
           exitCode: null,
+          usage: { ...this.accumulatedUsage },
         });
       });
     });
@@ -123,22 +153,22 @@ export class CodexAgentDriver extends BaseAgentDriver {
     line: string,
     outputParts: string[],
     startTime: number,
-  ): void {
+  ): boolean {
     const trimmed = line.trim();
-    if (!trimmed) return;
+    if (!trimmed) return false;
 
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(trimmed) as Record<string, unknown>;
     } catch {
       log.driver(prefix, line);
-      return;
+      return false;
     }
 
     const type = event.type as string | undefined;
     if (!type) {
       log.driver(prefix, line);
-      return;
+      return false;
     }
 
     switch (type) {
@@ -161,10 +191,17 @@ export class CodexAgentDriver extends BaseAgentDriver {
         if (usage) {
           const input = usage.input_tokens as number | undefined;
           const output = usage.output_tokens as number | undefined;
+          if (input != null) {
+            this.accumulatedUsage.inputTokens = (this.accumulatedUsage.inputTokens ?? 0) + input;
+          }
+          if (output != null) {
+            this.accumulatedUsage.outputTokens = (this.accumulatedUsage.outputTokens ?? 0) + output;
+          }
           if (input != null || output != null) {
             extra = `tokens=${input ?? 0}in/${output ?? 0}out`;
           }
         }
+        this.accumulatedUsage.numTurns = (this.accumulatedUsage.numTurns ?? 0) + 1;
         log.driverSuccess(prefix, durationStr, extra);
         break;
       }
@@ -173,6 +210,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
         const error = event.error as Record<string, unknown> | undefined;
         const msg = (error?.message as string) ?? "unknown error";
         log.driverError(prefix, msg);
+        if (CREDIT_INSUFFICIENT_PATTERN.test(msg)) return true;
         break;
       }
 
@@ -181,13 +219,14 @@ export class CodexAgentDriver extends BaseAgentDriver {
       case "item.completed": {
         const item = event.item as Record<string, unknown> | undefined;
         if (!item) break;
-        this.handleItem(prefix, item, type, outputParts);
+        if (this.handleItem(prefix, item, type, outputParts)) return true;
         break;
       }
 
       case "error": {
         const msg = (event.message as string) ?? "fatal stream error";
         log.driverError(prefix, msg);
+        if (CREDIT_INSUFFICIENT_PATTERN.test(msg)) return true;
         break;
       }
 
@@ -195,6 +234,8 @@ export class CodexAgentDriver extends BaseAgentDriver {
         log.driver(prefix, line);
         break;
     }
+
+    return false;
   }
 
   private handleItem(
@@ -202,9 +243,9 @@ export class CodexAgentDriver extends BaseAgentDriver {
     item: Record<string, unknown>,
     eventType: string,
     outputParts: string[],
-  ): void {
+  ): boolean {
     const itemType = item.type as string | undefined;
-    if (!itemType) return;
+    if (!itemType) return false;
 
     switch (itemType) {
       case "agent_message": {
@@ -243,8 +284,20 @@ export class CodexAgentDriver extends BaseAgentDriver {
         if (changes) {
           for (const change of changes) {
             const kind = (change.kind as string) ?? "update";
-            const path = (change.path as string) ?? "?";
-            log.driver(prefix, `file: ${kind} ${path}`);
+            const filePath = (change.path as string) ?? "?";
+            log.driver(prefix, `file: ${kind} ${filePath}`);
+            if (kind === "add" && filePath !== "?") {
+              try {
+                const content = readFileSync(filePath, "utf-8");
+                log.driver(prefix, `--- ${filePath} (${content.split("\n").length} lines) ---`);
+                for (const line of content.split("\n")) {
+                  log.driver(prefix, `│ ${line}`);
+                }
+                log.driver(prefix, `--- end ${filePath} ---`);
+              } catch {
+                // File may have been deleted or be inaccessible
+              }
+            }
           }
         }
         break;
@@ -287,11 +340,14 @@ export class CodexAgentDriver extends BaseAgentDriver {
       case "error": {
         const message = (item.message as string) ?? "unknown item error";
         log.driverError(prefix, message);
+        if (CREDIT_INSUFFICIENT_PATTERN.test(message)) return true;
         break;
       }
 
       default:
         break;
     }
+
+    return false;
   }
 }

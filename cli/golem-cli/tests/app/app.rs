@@ -653,3 +653,549 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
         "Finished deployment planning, no changes are required for the environment [UP-TO-DATE]"
     ));
 }
+
+#[test]
+async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "test-app-reset-incompatible";
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+    ctx.start_server().await;
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
+        indoc! {
+            r#"
+            import {
+                agent,
+                BaseAgent,
+                prompt,
+                description,
+                Config,
+                Secret,
+            } from '@golemcloud/golem-ts-sdk';
+
+            type CounterAgentConfigV1 = {
+                value: number;
+            };
+
+            @agent()
+            class CounterAgent extends BaseAgent {
+                count = 0;
+
+                constructor(name: string, readonly config: Config<CounterAgentConfigV1>) {
+                    super();
+                }
+
+                @prompt("Increase the count by the configured amount")
+                @description("Increases the count and returns the new value")
+                async increment(): Promise<number> {
+                    this.count += this.config.value.value;
+                    return this.count;
+                }
+            }
+
+            export { CounterAgent };
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {
+            r#"
+            manifestVersion: 1.5.0
+
+            app: test-app-reset-incompatible
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-reset-incompatible:ts-main:
+                templates: ts
+
+            agents:
+              CounterAgent:
+                config:
+                  value: 1
+            "#
+        },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
+        indoc! {
+            r#"
+            import {
+                agent,
+                BaseAgent,
+                prompt,
+                description,
+                Config,
+                Secret,
+            } from '@golemcloud/golem-ts-sdk';
+
+            type CounterAgentConfigV2 = {
+                value: boolean;
+            };
+
+            @agent()
+            class CounterAgent extends BaseAgent {
+                count = 0;
+
+                constructor(name: string, readonly config: Config<CounterAgentConfigV2>) {
+                    super();
+                }
+
+                @prompt("Increase the count based on the configured boolean")
+                @description("Increases the count and returns the new value")
+                async increment(): Promise<number> {
+                    this.count += this.config.value.value ? 1 : 0;
+                    return this.count;
+                }
+            }
+
+            export { CounterAgent };
+            "#
+        },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(!outputs.success_or_dump());
+    assert!(outputs.stdout_contains("Old config value for agent CounterAgent at config key value is no longer valid due to an updated agent."));
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES, flag::RESET]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("Reset fallback"));
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {
+            r#"
+            manifestVersion: 1.5.0
+
+            app: test-app-reset-incompatible
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-reset-incompatible:ts-main:
+                templates: ts
+
+            agents:
+              CounterAgent:
+                config:
+                  value: true
+            secretDefaults:
+              local:
+                secret: first
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
+        indoc! {
+            r#"
+            import {
+                agent,
+                BaseAgent,
+                prompt,
+                description,
+                Config,
+                Secret,
+            } from '@golemcloud/golem-ts-sdk';
+
+            type CounterAgentConfigV3 = {
+                value: boolean;
+                secret: Secret<string>;
+            };
+
+            @agent()
+            class CounterAgent extends BaseAgent {
+                count = 0;
+
+                constructor(name: string, readonly config: Config<CounterAgentConfigV3>) {
+                    super();
+                }
+
+                @prompt("Increase the count using the configured secret")
+                @description("Increases the count and returns the new value")
+                async increment(): Promise<number> {
+                    const config = this.config.value;
+                    this.count += config.value ? config.secret.get().length : 0;
+                    return this.count;
+                }
+            }
+
+            export { CounterAgent };
+            "#
+        },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {
+            r#"
+            manifestVersion: 1.5.0
+
+            app: test-app-reset-incompatible
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-reset-incompatible:ts-main:
+                templates: ts
+
+            agents:
+              CounterAgent:
+                config:
+                  value: true
+            secretDefaults:
+              local:
+                secret: 42
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
+        indoc! {
+            r#"
+            import {
+                agent,
+                BaseAgent,
+                prompt,
+                description,
+                Config,
+                Secret,
+            } from '@golemcloud/golem-ts-sdk';
+
+            type CounterAgentConfigV4 = {
+                value: boolean;
+                secret: Secret<number>;
+            };
+
+            @agent()
+            class CounterAgent extends BaseAgent {
+                count = 0;
+
+                constructor(name: string, readonly config: Config<CounterAgentConfigV4>) {
+                    super();
+                }
+
+                @prompt("Increase the count using the configured numeric secret")
+                @description("Increases the count and returns the new value")
+                async increment(): Promise<number> {
+                    const config = this.config.value;
+                    this.count += config.value ? config.secret.get() : 0;
+                    return this.count;
+                }
+            }
+
+            export { CounterAgent };
+            "#
+        },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(!outputs.success_or_dump());
+    assert!(outputs.stdout_contains("AGENT_SECRET_NOT_COMPATIBLE: Agent secret at path secret is not compatible with existing secret in the environment."));
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES, flag::RESET]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("Reset fallback"));
+}
+
+#[test]
+async fn component_level_ifs_with_multiple_agents_deploys(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "test-app-component-level-ifs";
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("counter-agent.ts")),
+        indoc! {
+            r#"
+            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import { readFileSync } from 'node:fs';
+
+            @agent({})
+            class CounterAgent extends BaseAgent {
+                constructor(name: string) {
+                    super();
+                }
+
+                async increment(): Promise<number> {
+                    return 1;
+                }
+
+                async readFile(path: string): Promise<string> {
+                    return readFileSync(path, 'utf8');
+                }
+            }
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("sample-agent.ts")),
+        indoc! {
+            r#"
+            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import { readFileSync } from 'node:fs';
+
+            @agent({})
+            class SampleAgent extends BaseAgent {
+                constructor(name: string) {
+                    super();
+                }
+
+                async sampleMethod(): Promise<number> {
+                    return 1;
+                }
+
+                async readFile(path: string): Promise<string> {
+                    return readFileSync(path, 'utf8');
+                }
+            }
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("main.ts")),
+        indoc! {
+            r#"
+            export const SHARED_IFS_MARKER = 'ifs-multi-agent-marker';
+            export * from './counter-agent';
+            export * from './sample-agent';
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+            manifestVersion: 1.5.0
+
+            app: test-app-component-level-ifs
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-component-level-ifs:ts-main:
+                templates: ts
+                presets:
+                  debug:
+                    files:
+                    - sourcePath: src/main.ts
+                      targetPath: /main.ts
+                      permissions: read-only
+        "},
+    )
+    .unwrap();
+
+    ctx.start_server().await;
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stderr_contains("Found duplicated IFS targets"));
+    assert!(outputs.stdout_contains("CounterAgent:"));
+    assert!(outputs.stdout_contains("SampleAgent:"));
+    assert!(outputs.stdout_contains("/main.ts:"));
+
+    let counter_read_main = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "CounterAgent(\"counter-1\")",
+            "readFile",
+            "\"/main.ts\"",
+        ])
+        .await;
+    assert!(counter_read_main.success_or_dump());
+    assert!(counter_read_main.stdout_contains("SHARED_IFS_MARKER"));
+    assert!(counter_read_main.stdout_contains("ifs-multi-agent-marker"));
+
+    let sample_read_main = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "SampleAgent(\"sample-1\")",
+            "readFile",
+            "\"/main.ts\"",
+        ])
+        .await;
+    assert!(sample_read_main.success_or_dump());
+    assert!(sample_read_main.stdout_contains("SHARED_IFS_MARKER"));
+    assert!(sample_read_main.stdout_contains("ifs-multi-agent-marker"));
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+            manifestVersion: 1.5.0
+
+            app: test-app-component-level-ifs
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-component-level-ifs:ts-main:
+                templates: ts
+
+            agents:
+              CounterAgent:
+                files:
+                - sourcePath: src/main.ts
+                  targetPath: /counter-main.ts
+                  permissions: read-only
+              SampleAgent:
+                files:
+                - sourcePath: src/main.ts
+                  targetPath: /sample-main.ts
+                  permissions: read-only
+        "},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stderr_contains("Found duplicated IFS targets"));
+    assert!(outputs.stdout_contains("/counter-main.ts:"));
+    assert!(outputs.stdout_contains("/sample-main.ts:"));
+
+    let counter_read_agent_target = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "CounterAgent(\"counter-2\")",
+            "readFile",
+            "\"/counter-main.ts\"",
+        ])
+        .await;
+    assert!(counter_read_agent_target.success_or_dump());
+    assert!(counter_read_agent_target.stdout_contains("SHARED_IFS_MARKER"));
+    assert!(counter_read_agent_target.stdout_contains("ifs-multi-agent-marker"));
+
+    let sample_read_agent_target = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "SampleAgent(\"sample-2\")",
+            "readFile",
+            "\"/sample-main.ts\"",
+        ])
+        .await;
+    assert!(sample_read_agent_target.success_or_dump());
+    assert!(sample_read_agent_target.stdout_contains("SHARED_IFS_MARKER"));
+    assert!(sample_read_agent_target.stdout_contains("ifs-multi-agent-marker"));
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+            manifestVersion: 1.5.0
+
+            app: test-app-component-level-ifs
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-component-level-ifs:ts-main:
+                templates: ts
+
+            agents:
+              CounterAgent:
+                files:
+                - sourcePath: src/main.ts
+                  targetPath: /shared.ts
+                  permissions: read-only
+              SampleAgent:
+                files:
+                - sourcePath: src/sample-agent.ts
+                  targetPath: /shared.ts
+                  permissions: read-only
+        "},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stderr_contains("Found duplicated IFS targets"));
+    assert!(outputs.stdout_contains("/shared.ts:"));
+
+    let counter_read_shared = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "CounterAgent(\"counter-3\")",
+            "readFile",
+            "\"/shared.ts\"",
+        ])
+        .await;
+    assert!(counter_read_shared.success_or_dump());
+    assert!(counter_read_shared.stdout_contains("SHARED_IFS_MARKER"));
+
+    let sample_read_shared = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "SampleAgent(\"sample-3\")",
+            "readFile",
+            "\"/shared.ts\"",
+        ])
+        .await;
+    assert!(sample_read_shared.success_or_dump());
+    assert!(sample_read_shared.stdout_contains("class SampleAgent"));
+}

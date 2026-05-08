@@ -26,6 +26,7 @@ const mockDriver: AgentDriver = {
   }),
   setWorkingDirectory: () => {},
   getActivatedSkills: () => undefined,
+  getDefaultIdleTimeoutSeconds: () => undefined,
   resetActivatedSkills: () => {},
 };
 
@@ -53,7 +54,7 @@ describe("Resume-from validation", () => {
       mockDriver,
       createMockWatcher(),
       "/tmp/fake-workspace",
-      "/tmp/bootstrap-skill",
+      ["/tmp/bootstrap-skill"],
       { resumeFromStepId: "nonexistent-step" },
     );
 
@@ -79,7 +80,7 @@ describe("Resume-from validation", () => {
       mockDriver,
       createMockWatcher(),
       "/tmp/fake-workspace-resume",
-      "/tmp/bootstrap-skill",
+      ["/tmp/bootstrap-skill"],
       { resumeFromStepId: "step-2" },
     );
 

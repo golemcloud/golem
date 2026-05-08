@@ -15,12 +15,14 @@
 use super::environment_share::environment_roles_from_bit_vector;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountSummary;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::ApplicationSummary;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::diff::DIFF_MODEL_VERSION;
 use golem_common::model::diff::Hashable;
 use golem_common::model::diff::{self};
 use golem_common::model::environment::{
@@ -111,13 +113,19 @@ impl EnvironmentRevisionRecord {
         }
     }
 
-    pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into_blake3().into()
+    pub fn update_hash(&mut self) -> Result<(), EnvironmentRepoError> {
+        self.hash = self
+            .to_diffable()
+            .hash()
+            .map_err(|err| EnvironmentRepoError::InternalError(anyhow!(err)))?
+            .into_blake3()
+            .into();
+        Ok(())
     }
 
-    pub fn with_updated_hash(mut self) -> Self {
-        self.update_hash();
-        self
+    pub fn with_updated_hash(mut self) -> Result<Self, EnvironmentRepoError> {
+        self.update_hash()?;
+        Ok(self)
     }
 }
 
@@ -145,6 +153,7 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
             revision: value.revision.revision_id.try_into()?,
             application_id: ApplicationId(value.application_id),
             name: EnvironmentName(value.revision.name),
+            diff_model_version: DIFF_MODEL_VERSION,
             compatibility_check: value.revision.compatibility_check,
             version_check: value.revision.version_check,
             security_overrides: value.revision.security_overrides,
@@ -283,6 +292,7 @@ impl TryFrom<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
                 id: EnvironmentId(value.environment_id),
                 revision: value.environment_revision_id.try_into()?,
                 name: EnvironmentName(value.environment_name),
+                diff_model_version: DIFF_MODEL_VERSION,
                 compatibility_check: value.environment_compatibility_check,
                 version_check: value.environment_version_check,
                 security_overrides: value.environment_security_overrides,

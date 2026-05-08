@@ -551,7 +551,7 @@ impl RpcAuthTester for RpcAuthTesterImpl {
         let arg = Schema::to_data_value(1u64)
             .expect("Failed to encode method parameter");
 
-        match rpc.invoke_and_await("inc-by", &arg) {
+        match rpc.invoke_and_await("inc_by", &arg) {
             Ok(_) => RpcCallOutcome::Ok,
             Err(e) => RpcCallOutcome::from(e),
         }

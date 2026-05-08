@@ -1,0 +1,16 @@
+{
+    "import": [
+        {
+          "path": "moonbitlang/x/internal/ffi",
+          "alias": "common_ffi"
+        }
+    ],
+    "targets": {
+        "sys_wasm.mbt": ["wasm", "wasm-gc"],
+        "sys_js.mbt": ["js"],
+        "sys_native.mbt": ["native","llvm"]
+    },
+    "native-stub": [
+        "native_stub.c"
+    ]
+}

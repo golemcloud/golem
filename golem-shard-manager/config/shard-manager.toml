@@ -115,6 +115,7 @@ without_time = false
 assign_shards_timeout = "5s"
 connect_timeout = "10s"
 health_check_timeout = "2s"
+max_message_size = 33554432
 revoke_shards_timeout = "5s"
 
 [worker_executors.retries]
@@ -255,6 +256,7 @@ type = "Disabled"
 # assign_shards_timeout = "5s"
 # connect_timeout = "10s"
 # health_check_timeout = "2s"
+# max_message_size = 33554432
 # revoke_shards_timeout = "5s"
 # 
 # [worker_executors.retries]

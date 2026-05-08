@@ -1079,14 +1079,12 @@ async fn component_env_variables_update(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
+    // Worker metadata env contains only per-worker overrides — agent-type defaults
+    // (FOO=bar is set on the component, not passed as a per-worker override) are
+    // not stored in the worker record; they are applied at runtime in get_environment.
     let AgentMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
-
     env.retain(|k, _| k == "FOO");
-
-    assert_eq!(
-        env,
-        HashMap::from_iter(vec![("FOO".to_string(), "bar".to_string())])
-    );
+    assert_eq!(env, HashMap::new());
 
     let updated_component = executor
         .update_component_with_env(
@@ -1117,7 +1115,7 @@ async fn component_env_variables_update(
 
     let env = get_env_result_from_value(env);
 
-    assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
+    assert_eq!(env.get("FOO"), None); // Only applied at runtime, not an ovveride
     assert_eq!(env.get("BAR"), Some(&"baz".to_string()));
     let worker_name = agent_id.to_string();
     assert_eq!(env.get("GOLEM_AGENT_ID"), Some(&worker_name));
@@ -1146,13 +1144,7 @@ async fn component_env_and_worker_env_priority(
     let worker_env = HashMap::from_iter(vec![("FOO".to_string(), "baz".to_string())]);
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            worker_env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), worker_env, Vec::new())
         .await?;
 
     let AgentMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
@@ -1599,7 +1591,6 @@ async fn recovering_an_old_worker_after_updating_a_component(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
-        .unique()
         .store()
         .await?;
 
@@ -1661,7 +1652,6 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
-        .unique()
         .store()
         .await?;
 
@@ -1871,13 +1861,7 @@ async fn long_running_poll_loop_works_as_expected(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -1978,13 +1962,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -2099,13 +2077,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -2174,13 +2146,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -2317,13 +2283,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2407,13 +2367,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2518,13 +2472,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2685,13 +2633,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2874,13 +2816,7 @@ async fn invocation_queue_is_persistent(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -3500,7 +3436,6 @@ async fn invoking_worker_while_its_getting_deleted_works(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .unique()
         .store()
         .await?;
 
@@ -3519,7 +3454,9 @@ async fn invoking_worker_while_its_getting_deleted_works(
         let agent_id = agent_id.clone();
         tokio::spawn(async move {
             let mut expected_counter: u64 = 0;
+            let mut iteration: u64 = 0;
             loop {
+                iteration += 1;
                 match executor
                     .invoke_and_await_agent(
                         &component_clone,
@@ -3532,7 +3469,9 @@ async fn invoking_worker_while_its_getting_deleted_works(
                     Ok(_) => {
                         expected_counter += 1;
                     }
-                    Err(e) => break Err(e),
+                    Err(error) => {
+                        break Err(error);
+                    }
                 }
 
                 match executor
@@ -3546,14 +3485,21 @@ async fn invoking_worker_while_its_getting_deleted_works(
                 {
                     Ok(result) => {
                         let value = result.into_return_value();
-                        if let Some(Value::U64(v)) = value {
-                            if v < expected_counter {
-                                break Ok(());
+                        match value {
+                            Some(Value::U64(v)) => {
+                                if v < expected_counter {
+                                    break Ok(());
+                                }
+                                expected_counter = v;
                             }
-                            expected_counter = v;
+                            other => {
+                                tracing::warn!(iteration, expected_counter, value = ?other, "Unexpected value while checking global counter")
+                            }
                         }
                     }
-                    Err(e) => break Err(e),
+                    Err(error) => {
+                        break Err(error);
+                    }
                 }
             }
         })
@@ -3568,22 +3514,22 @@ async fn invoking_worker_while_its_getting_deleted_works(
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = deleting_task_cancel_token.cancelled() => { break },
-                    _ = executor.delete_worker(&worker_id) => { }
+                    _ = deleting_task_cancel_token.cancelled() => {
+                        break
+                    },
+                    result = executor.delete_worker(&worker_id) => {
+                        let _ = result;
+                    }
                 }
             }
         })
     };
 
-    let invocation_result = invoking_task.await?;
+    let _invocation_result = invoking_task.await?;
     deleting_task_cancel_token.cancel();
 
     // Either the counter reset was detected (Ok) or the invocation failed (Err).
     // Both are valid outcomes of invoking while deleting.
-    if let Err(e) = invocation_result {
-        info!("Invocation failed during deletion as expected: {e}");
-    }
-
     Ok(())
 }
 
@@ -3648,7 +3594,6 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             component_owner_account_id: Some(component_owner_account_id.into()),
             environment_id: Some(component.environment_id.into()),
             env: Default::default(),
-            wasi_config: Default::default(),
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
@@ -3741,7 +3686,6 @@ async fn worker_environment_reflects_component_not_caller(
             component_owner_account_id: Some(caller_account_id.into()),
             environment_id: Some(caller_environment_id.into()),
             env: Default::default(),
-            wasi_config: Default::default(),
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
@@ -3878,7 +3822,6 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             component_owner_account_id: Some(component_owner_account_id.into()),
             environment_id: Some(component.environment_id.into()),
             env: Default::default(),
-            wasi_config: Default::default(),
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),

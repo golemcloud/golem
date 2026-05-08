@@ -98,7 +98,7 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
     sb.append(s"self.componentRevision=${self.componentRevision}\n")
     sb.append(s"self.args=${self.args}\n")
     sb.append(s"self.env.size=${self.env.size}\n")
-    sb.append(s"self.configVars.size=${self.configVars.size}\n")
+    sb.append(s"self.config.size=${self.config.size}\n")
 
     // getAgentMetadata for self
     val selfAgentMeta = HostApi.getAgentMetadata(self.agentId)

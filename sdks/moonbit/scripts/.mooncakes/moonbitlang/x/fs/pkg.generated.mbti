@@ -1,0 +1,38 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/fs"
+
+// Values
+pub fn create_dir(String) -> Unit raise IOError
+
+pub fn is_dir(String) -> Bool raise IOError
+
+pub fn is_file(String) -> Bool raise IOError
+
+pub fn path_exists(String) -> Bool
+
+pub fn read_dir(String) -> Array[String] raise IOError
+
+pub fn read_file_to_bytes(String) -> Bytes raise IOError
+
+pub fn read_file_to_string(String, encoding? : String) -> String raise IOError
+
+pub fn remove_dir(String) -> Unit raise IOError
+
+pub fn remove_file(String) -> Unit raise IOError
+
+pub fn write_bytes_to_file(String, Bytes) -> Unit raise IOError
+
+pub fn write_string_to_file(String, String, encoding? : String) -> Unit raise IOError
+
+// Errors
+pub(all) suberror IOError {
+  IOError(String)
+}
+pub impl Show for IOError
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

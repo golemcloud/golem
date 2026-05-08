@@ -16,7 +16,6 @@ use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
     EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream, build_ifs_archive,
-    rename_component_if_needed,
 };
 use crate::model::IFSEntry;
 use anyhow::{Context, anyhow};
@@ -55,7 +54,6 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
-use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -207,7 +205,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         environment_id: EnvironmentId,
         name: &str,
         unique: bool,
-        unverified: bool,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
@@ -218,17 +215,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             ComponentName(format!("{name}---{uuid}"))
         } else {
             ComponentName(name.to_string())
-        };
-
-        let source_path = if !unverified {
-            rename_component_if_needed(
-                self.deps.borrow().temp_directory(),
-                &source_path,
-                &component_name.0,
-            )
-            .expect("Failed to verify and change component metadata")
-        } else {
-            source_path
         };
 
         let client = self.deps.registry_service().client(&self.token).await;
@@ -302,14 +288,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let updated_wasm = if let Some(wasm_name) = wasm_name {
             let source_path: PathBuf = component_directory.join(format!("{wasm_name}.wasm"));
 
-            let component = client.get_component(&component_id.0).await?;
-
-            let source_path = rename_component_if_needed(
-                self.deps.borrow().temp_directory(),
-                &source_path,
-                &component.component_name.0,
-            )?;
-
             let agent_types = extract_agent_types(&source_path, false, true).await?;
 
             Some((File::open(source_path).await?, agent_types))
@@ -326,6 +304,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                         .as_ref()
                         .map(|(_wasm, agent_types)| agent_types.clone()),
                     agent_type_provision_config_updates,
+                    allow_incompatible_config: false,
                 },
                 updated_wasm.map(|(wasm, _agent_types)| wasm),
                 {
@@ -353,7 +332,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         component_id: &ComponentId,
         id: ParsedAgentId,
         env: HashMap<String, String>,
-        wasi_config: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
         let client = self
@@ -361,14 +339,12 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .worker_service()
             .worker_http_client(&self.token)
             .await;
-        let wasi_config: BTreeMap<String, String> = wasi_config.into_iter().collect();
         let response = client
             .launch_new_worker(
                 &component_id.0,
                 &golem_client::model::AgentCreationRequest {
                     name: id.to_string(),
                     env,
-                    wasi_config,
                     config,
                 },
             )
@@ -957,6 +933,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             agent_secret_defaults: Vec::new(),
             quota_resource_defaults: Vec::new(),
             retry_policy_defaults: Vec::new(),
+            replace_incompatible_agent_secrets: false,
         };
 
         modify_deployment(&mut deployment_creation);

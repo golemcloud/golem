@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{CompiledRoute, CompiledRoutes, OpenApiSpecBehaviour, RouteSecurity};
+use super::{
+    CompiledRoute, CompiledRoutes, OpenApiSpecBehaviour, OpenApiSpecFormat, RouteSecurity,
+};
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
@@ -190,6 +192,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .expected_agent_response
                     .ok_or("Missing expected_agent_response")?
                     .try_into()?,
+                method_description: call_agent.method_description,
             })),
             Kind::CorsPreflight(cors_preflight) => {
                 Ok(RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
@@ -225,7 +228,22 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                         .try_into()?,
                 }))
             }
-            Kind::OpenApiSpec(_) => Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {})),
+            Kind::OpenApiSpec(open_api_spec) => {
+                use proto::golem::customapi::route_behaviour::open_api_spec::Format;
+
+                let format = Format::try_from(open_api_spec.format)
+                    .map_err(|_| "Invalid OpenApiSpec.format".to_string())?;
+
+                let format = match format {
+                    Format::Unspecified => {
+                        return Err("OpenApiSpec.format missing".to_string());
+                    }
+                    Format::Json => OpenApiSpecFormat::Json,
+                    Format::Yaml => OpenApiSpecFormat::Yaml,
+                };
+
+                Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }))
+            }
         }
     }
 }
@@ -244,6 +262,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 method_name,
                 method_parameters,
                 expected_agent_response,
+                method_description,
             }) => Self {
                 kind: Some(Kind::CallAgent(
                     proto::golem::customapi::route_behaviour::CallAgent {
@@ -258,6 +277,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                         method_name,
                         method_parameters: method_parameters.into_iter().map(Into::into).collect(),
                         expected_agent_response: Some(expected_agent_response.into()),
+                        method_description,
                     },
                 )),
             },
@@ -293,11 +313,21 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     },
                 )),
             },
-            RouteBehaviour::OpenApiSpec(_) => Self {
-                kind: Some(Kind::OpenApiSpec(
-                    proto::golem::customapi::route_behaviour::OpenApiSpec {},
-                )),
-            },
+            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }) => {
+                use proto::golem::customapi::route_behaviour::open_api_spec::Format;
+
+                Self {
+                    kind: Some(Kind::OpenApiSpec(
+                        proto::golem::customapi::route_behaviour::OpenApiSpec {
+                            format: match format {
+                                OpenApiSpecFormat::Json => Format::Json,
+                                OpenApiSpecFormat::Yaml => Format::Yaml,
+                            }
+                            .into(),
+                        },
+                    )),
+                }
+            }
         }
     }
 }
@@ -429,6 +459,8 @@ impl TryFrom<proto::golem::customapi::MethodParameter> for MethodParameter {
             }),
 
             Kind::UnstructuredBinaryBody(_) => Ok(MethodParameter::UnstructuredBinaryBody),
+
+            Kind::UnstructuredTextBody(_) => Ok(MethodParameter::UnstructuredTextBody),
         }
     }
 }
@@ -487,6 +519,12 @@ impl From<MethodParameter> for proto::golem::customapi::MethodParameter {
                     proto::golem::customapi::method_parameter::UnstructuredBinaryBody {},
                 )),
             },
+
+            MethodParameter::UnstructuredTextBody => Self {
+                kind: Some(Kind::UnstructuredTextBody(
+                    proto::golem::customapi::method_parameter::UnstructuredTextBody {},
+                )),
+            },
         }
     }
 }
@@ -509,6 +547,12 @@ impl TryFrom<proto::golem::customapi::RequestBodySchema> for RequestBodySchema {
 
             Kind::RestrictedBinary(body) => Ok(RequestBodySchema::RestrictedBinary {
                 allowed_mime_types: body.allowed_mime_types,
+            }),
+
+            Kind::UnrestrictedText(_) => Ok(RequestBodySchema::UnrestrictedText),
+
+            Kind::RestrictedText(body) => Ok(RequestBodySchema::RestrictedText {
+                allowed_language_codes: body.allowed_language_codes,
             }),
         }
     }
@@ -543,6 +587,22 @@ impl From<RequestBodySchema> for proto::golem::customapi::RequestBodySchema {
                 kind: Some(Kind::RestrictedBinary(
                     proto::golem::customapi::request_body_schema::RestrictedBinary {
                         allowed_mime_types,
+                    },
+                )),
+            },
+
+            RequestBodySchema::UnrestrictedText => Self {
+                kind: Some(Kind::UnrestrictedText(
+                    proto::golem::customapi::request_body_schema::UnrestrictedText {},
+                )),
+            },
+
+            RequestBodySchema::RestrictedText {
+                allowed_language_codes,
+            } => Self {
+                kind: Some(Kind::RestrictedText(
+                    proto::golem::customapi::request_body_schema::RestrictedText {
+                        allowed_language_codes,
                     },
                 )),
             },

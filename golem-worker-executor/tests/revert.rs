@@ -282,7 +282,6 @@ async fn revert_auto_update(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");

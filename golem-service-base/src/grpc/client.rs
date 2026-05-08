@@ -23,7 +23,7 @@ use std::fmt::Write;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Code, Status};
@@ -31,19 +31,23 @@ use tonic_tracing_opentelemetry::middleware::client::{OtelGrpcLayer, OtelGrpcSer
 use tower::ServiceBuilder;
 use tracing::{Instrument, debug, debug_span, warn};
 
+use crate::metrics::grpc::{
+    record_internal_grpc_failure, record_internal_grpc_retry, record_internal_grpc_success,
+};
+
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
     endpoint: Uri,
     config: GrpcClientConfig,
     client: Arc<Mutex<Option<GrpcClientConnection<T>>>>,
-    client_factory: Arc<dyn Fn(OtelGrpcService<Channel>) -> T + Send + Sync + 'static>,
+    client_factory: Arc<dyn Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync + 'static>,
     target_name: String,
 }
 
 impl<T: Clone> GrpcClient<T> {
     pub fn new(
         target_name: impl AsRef<str>,
-        client_factory: impl Fn(OtelGrpcService<Channel>) -> T + Send + Sync + 'static,
+        client_factory: impl Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync + 'static,
         endpoint: Uri,
         config: GrpcClientConfig,
     ) -> Self {
@@ -73,8 +77,16 @@ impl<T: Clone> GrpcClient<T> {
                 .get()
                 .await
                 .map_err(|err| Status::from_error(Box::new(err)))?;
+            let attempt_start = Instant::now();
             match f(&mut entry.client).instrument(span.clone()).await {
-                Ok(result) => break Ok(result),
+                Ok(result) => {
+                    record_internal_grpc_success(
+                        &self.target_name,
+                        description.as_ref(),
+                        attempt_start.elapsed(),
+                    );
+                    break Ok(result);
+                }
                 Err(e) => {
                     if requires_reconnect(&e) {
                         let _ = self.client.lock().await.take();
@@ -82,17 +94,20 @@ impl<T: Clone> GrpcClient<T> {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
                             });
+                            record_internal_grpc_failure(&self.target_name, description.as_ref());
                             break Err(e);
                         } else {
                             span.in_scope(|| {
                                 debug!("gRPC call failed with {:?}, retrying", e);
                             });
+                            record_internal_grpc_retry(&self.target_name, description.as_ref());
                             continue; // retry
                         }
                     } else {
                         span.in_scope(|| {
                             warn!("gRPC call failed: {:?}, not retriable", e);
                         });
+                        record_internal_grpc_failure(&self.target_name, description.as_ref());
                         break Err(e);
                     }
                 }
@@ -119,7 +134,7 @@ impl<T: Clone> GrpcClient<T> {
 
                 let channel = endpoint.connect_lazy();
                 let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
-                let client = (self.client_factory)(channel);
+                let client = (self.client_factory)(channel, self.config.max_message_size);
                 let connection = GrpcClientConnection { client };
                 *entry = Some(connection.clone());
                 Ok(connection)
@@ -132,14 +147,14 @@ impl<T: Clone> GrpcClient<T> {
 pub struct MultiTargetGrpcClient<T: Clone> {
     config: GrpcClientConfig,
     clients: Arc<scc::HashMap<Uri, GrpcClientConnection<T>>>,
-    client_factory: Arc<dyn Fn(OtelGrpcService<Channel>) -> T + Send + Sync>,
+    client_factory: Arc<dyn Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync>,
     target_name: String,
 }
 
 impl<T: Clone> MultiTargetGrpcClient<T> {
     pub fn new(
         target_name: impl AsRef<str>,
-        client_factory: impl Fn(OtelGrpcService<Channel>) -> T + Send + Sync + 'static,
+        client_factory: impl Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync + 'static,
         config: GrpcClientConfig,
     ) -> Self {
         Self {
@@ -173,8 +188,16 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                 .get(endpoint.clone())
                 .await
                 .map_err(|err| Status::from_error(Box::new(err)))?;
+            let attempt_start = Instant::now();
             match f(&mut entry.client).instrument(span.clone()).await {
-                Ok(result) => break Ok(result),
+                Ok(result) => {
+                    record_internal_grpc_success(
+                        &self.target_name,
+                        description.as_ref(),
+                        attempt_start.elapsed(),
+                    );
+                    break Ok(result);
+                }
                 Err(e) => {
                     if requires_reconnect(&e) {
                         self.clients.remove_async(&endpoint).await;
@@ -182,17 +205,20 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
                             });
+                            record_internal_grpc_failure(&self.target_name, description.as_ref());
                             break Err(e);
                         } else {
                             span.in_scope(|| {
                                 debug!("gRPC call failed with {:?}, retrying", e);
                             });
+                            record_internal_grpc_retry(&self.target_name, description.as_ref());
                             continue; // retry
                         }
                     } else {
                         span.in_scope(|| {
                             warn!("gRPC call failed: {:?}, not retriable", e);
                         });
+                        record_internal_grpc_failure(&self.target_name, description.as_ref());
                         break Err(e);
                     }
                 }
@@ -222,7 +248,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
 
                 let channel = endpoint.connect_lazy();
                 let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
-                let client = (self.client_factory)(channel);
+                let client = (self.client_factory)(channel, self.config.max_message_size);
                 let connection = GrpcClientConnection { client };
                 entry.insert_entry(connection.clone());
                 Ok(connection)
@@ -244,6 +270,12 @@ pub struct GrpcClientConfig {
     pub request_timeout: Option<Duration>,
     pub retries_on_unavailable: RetryConfig,
     pub tls: GrpcClientTlsConfig,
+    #[serde(default = "default_max_message_size")]
+    pub max_message_size: usize,
+}
+
+fn default_max_message_size() -> usize {
+    32 * 1024 * 1024
 }
 
 impl GrpcClientConfig {
@@ -259,6 +291,7 @@ impl Default for GrpcClientConfig {
             request_timeout: None,
             retries_on_unavailable: RetryConfig::default(),
             tls: GrpcClientTlsConfig::Disabled(Empty {}),
+            max_message_size: default_max_message_size(),
         }
     }
 }
@@ -268,6 +301,7 @@ impl SafeDisplay for GrpcClientConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "connect_timeout: {:?}", self.connect_timeout);
         let _ = writeln!(&mut result, "request_timeout: {:?}", self.request_timeout);
+        let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
         let _ = writeln!(&mut result, "retries_on_unavailable:");
         let _ = writeln!(
             &mut result,

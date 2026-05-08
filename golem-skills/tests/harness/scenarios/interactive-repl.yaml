@@ -1,0 +1,32 @@
+name: "interactive-repl"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-via-repl-script"
+    prompt: >
+      I want to test my CounterAgent using a REPL script. Write a script file in the
+      test-app directory that gets a CounterAgent instance named "c1", calls increment
+      twice, then run it with golem repl in script mode.
+    expectedSkills:
+      rust:
+        - "golem-interactive-repl-rust"
+      ts:
+        - "golem-interactive-repl-ts"
+      scala:
+        - "golem-interactive-repl-scala"
+      moonbit:
+        - "golem-interactive-repl-moonbit"
+
+  - id: "verify-counter-incremented"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 3

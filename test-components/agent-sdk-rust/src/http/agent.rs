@@ -1,5 +1,5 @@
 use super::model::*;
-use golem_rust::{agent_definition, agent_implementation, endpoint, AllowedMimeTypes};
+use golem_rust::{agent_definition, agent_implementation, description, endpoint, AllowedMimeTypes};
 use golem_rust::agentic::{create_webhook, UnstructuredBinary};
 use serde::Deserialize;
 use serde::Serialize;
@@ -10,9 +10,11 @@ pub trait HttpAgent {
     fn new(agent_name: String) -> Self;
 
     #[endpoint(get = "/string-path-var/{path_var}")]
+    #[description("Returns the provided path variable as a response")]
     fn string_path_var(&self, path_var: String) -> StringPathVarResponse;
 
     #[endpoint(get = "/multi-path-vars/{first}/{second}")]
+    #[description("Combines two path variables with a colon separator")]
     fn multi_path_vars(
         &self,
         first: String,
@@ -20,9 +22,11 @@ pub trait HttpAgent {
     ) -> MultiPathVarsResponse;
 
     #[endpoint(get = "/rest/{*tail}")]
+    #[description("Returns the remaining path after the /rest prefix")]
     fn remaining_path(&self, tail: String) -> RemainingPathResponse;
 
     #[endpoint(get = "/path-and-query/{item_id}?limit={limit}")]
+    #[description("Combines a path variable with a query parameter in the response")]
     fn path_and_query(
         &self,
         item_id: String,
@@ -33,6 +37,7 @@ pub trait HttpAgent {
         get = "/path-and-header/{resource_id}",
         headers("x-request-id" = "request_id")
     )]
+    #[description("Combines a path variable with a header value in the response")]
     fn path_and_header(
         &self,
         resource_id: String,
@@ -40,6 +45,7 @@ pub trait HttpAgent {
     ) -> PathAndHeaderResponse;
 
     #[endpoint(post = "/json-body/{id}")]
+    #[description("Accepts JSON body parameters and returns a success response")]
     fn json_body(
         &self,
         id: String,
@@ -48,6 +54,7 @@ pub trait HttpAgent {
     ) -> JsonBodyResponse;
 
     #[endpoint(post = "/unrestricted-unstructured-binary/{bucket}")]
+    #[description("Accepts unrestricted binary data and returns the payload size")]
     fn unrestricted_unstructured_binary(
         &self,
         bucket: String,
@@ -55,6 +62,7 @@ pub trait HttpAgent {
     ) -> i64;
 
     #[endpoint(post = "/restricted-unstructured-binary/{bucket}")]
+    #[description("Accepts restricted binary data (image/gif only) and returns the payload size")]
     fn restricted_unstructured_binary(
         &self,
         bucket: String,
@@ -62,29 +70,45 @@ pub trait HttpAgent {
     ) -> i64;
 
     #[endpoint(get = "/resp/no-content")]
+    #[description("Returns a 204 No Content response")]
     fn no_content(&self);
 
     // https://github.com/golemcloud/golem/issues/2725
     #[endpoint(get = "/resp/json")]
+    #[description("Returns a JSON response with a value field")]
     fn json_response_func(&self) -> JsonResponse;
 
     #[endpoint(get = "/resp/optional/{found}")]
+    #[description("Returns an optional response based on the found parameter")]
     fn optional_response_func(&self, found: bool) -> Option<OptionalResponse>;
 
     #[endpoint(get = "/resp/result-json-json/{ok}")]
+    #[description("Returns either a success or error result based on the ok parameter")]
     fn result_ok_or_err(
         &self,
         ok: bool,
     ) -> Result<ResultOkResponse, ResultErrResponse>;
 
     #[endpoint(post = "/resp/result-void-json")]
+    #[description("Returns either unit success or a JSON error result")]
     fn result_void_err(&self) -> Result<(), ResultErrResponse>;
 
     #[endpoint(get = "/resp/result-json-void")]
+    #[description("Returns either a JSON success result or unit error")]
     fn result_json_void(&self) -> Result<ResultOkResponse, ()>;
 
     #[endpoint(get = "/resp/binary")]
+    #[description("Returns binary data as an unstructured binary response")]
     fn binary_response(&self) -> UnstructuredBinary<String>;
+
+    // PATCH method endpoints
+    #[endpoint(patch = "/resource/{id}")]
+    #[description("Updates a resource using PATCH method with provided update data")]
+    fn patch_resource(&self, id: String, update: ResourceUpdate) -> ResourceResponse;
+
+    #[endpoint(patch = "/resource/{id}/partial")]
+    #[description("Performs a partial update on a resource using PATCH method")]
+    fn patch_partial(&self, id: String) -> ResourceResponse;
 }
 
 #[derive(AllowedMimeTypes, Clone, Debug)]
@@ -226,6 +250,23 @@ impl HttpAgent for HttpAgentImpl {
         UnstructuredBinary::Inline {
             data: vec![1, 2, 3, 4],
             mime_type: "application/octet-stream".to_string(),
+        }
+    }
+
+    // PATCH method implementations
+    fn patch_resource(&self, id: String, update: ResourceUpdate) -> ResourceResponse {
+        ResourceResponse {
+            id: id.clone(),
+            updated: true,
+            method: "PATCH".to_string(),
+        }
+    }
+
+    fn patch_partial(&self, id: String) -> ResourceResponse {
+        ResourceResponse {
+            id: id.clone(),
+            updated: true,
+            method: "PATCH".to_string(),
         }
     }
 }

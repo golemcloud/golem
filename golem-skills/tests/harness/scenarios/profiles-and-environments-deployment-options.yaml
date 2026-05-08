@@ -1,0 +1,72 @@
+name: "profiles-and-environments-deployment-options"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-environment-with-options"
+    prompt: >
+      In the test-app project, edit `golem.yaml` to add two environments:
+
+      1. A `local` environment (marked as default) with:
+         - Server: `local`
+         - CLI options: enable `autoConfirm` and set `format` to `json`
+         - Deployment options: disable `compatibilityCheck`, disable `versionCheck`,
+           and enable `securityOverrides`
+
+      2. A `staging` environment with:
+         - Server: a custom server with URL `https://staging.golem.example.com`
+           and authentication using a static token `{{ STAGING_TOKEN }}`
+         - CLI options: enable `autoConfirm`
+         - Deployment options: enable `compatibilityCheck` and enable `versionCheck`
+         - Component presets: `staging`
+
+      Do not change any source code files. Only modify `golem.yaml`.
+    expectedSkills:
+      - "golem-profiles-and-environments"
+    verify:
+      build: true
+
+  - id: "verify-local-env-server"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*environments:[\\s\\S]*local:[\\s\\S]*server:\\s*local[\\s\\S]*"
+
+  - id: "verify-local-auto-confirm"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*local:[\\s\\S]*cli:[\\s\\S]*autoConfirm:\\s*true[\\s\\S]*"
+
+  - id: "verify-local-format-json"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*local:[\\s\\S]*cli:[\\s\\S]*format:\\s*json[\\s\\S]*"
+
+  - id: "verify-local-deployment-options"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*local:[\\s\\S]*deployment:[\\s\\S]*compatibilityCheck:\\s*false[\\s\\S]*"
+
+  - id: "verify-staging-server-url"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_contains: "https://staging.golem.example.com"
+
+  - id: "verify-staging-static-token"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*staging:[\\s\\S]*staticToken:[\\s\\S]*STAGING_TOKEN[\\s\\S]*"
+
+  - id: "verify-staging-presets"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*staging:[\\s\\S]*componentPresets:\\s*staging[\\s\\S]*"

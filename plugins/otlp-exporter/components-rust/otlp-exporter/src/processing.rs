@@ -275,6 +275,15 @@ fn worker_error_variant_name(e: &golem_rust::bindings::golem::api::oplog::Worker
         golem_rust::bindings::golem::api::oplog::WorkerError::AgentTerminatedByQuota(_) => {
             "AgentTerminatedByQuota".to_string()
         }
+        golem_rust::bindings::golem::api::oplog::WorkerError::EphemeralSleepTooLong(_) => {
+            "EphemeralSleepTooLong".to_string()
+        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::EphemeralFuelExhausted(_) => {
+            "EphemeralFuelExhausted".to_string()
+        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::EphemeralCannotSuspend(_) => {
+            "EphemeralCannotSuspend".to_string()
+        }
     }
 }
 

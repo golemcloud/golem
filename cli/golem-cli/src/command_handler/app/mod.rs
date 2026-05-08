@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::check::plan_dependency_fixes;
+use crate::app::build::check::{
+    create_claude_symlink_if_needed, plan_dependency_fixes, resolve_claude_skills_context,
+};
 use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
@@ -26,9 +28,9 @@ use crate::command_handler::app::deploy_diff::{
     DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
     RollbackEntityDetails, RollbackQuickDiff,
 };
-use crate::command_handler::app::template::{TemplateHandler, create_claude_symlink};
+use crate::command_handler::app::template::TemplateHandler;
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
@@ -37,13 +39,15 @@ use crate::log::{
     log_finished_ok, log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action,
     logged_failed_to, logged_finished_or_failed_to, logln,
 };
-use crate::model::GuestLanguage;
+use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
+    WithSource,
 };
+use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
-    PostDeploySummary,
+    PostDeploySummary, UpdateStagedComponentError,
 };
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
@@ -52,6 +56,7 @@ use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
+use crate::model::{GuestLanguage, TemplateDescription};
 use anyhow::{anyhow, bail};
 use applying::Apply;
 use colored::Colorize;
@@ -59,8 +64,9 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::schema_evolution::validate_schema_evolution;
+use golem_common::model::agent::{AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType};
+use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
@@ -71,8 +77,9 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_wasm::analysis::AnalysedType;
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -144,7 +151,13 @@ impl AppCommandHandler {
             .await;
 
         logln("");
-        logged_finished_or_failed_to(result, "building", "build application")
+        let outcome = logged_finished_or_failed_to(result, "building", "build application");
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::BuildResult { built: true });
+        }
+        outcome
     }
 
     pub async fn cmd_clean(&self, component_name: OptionalComponentNames) -> anyhow::Result<()> {
@@ -156,7 +169,13 @@ impl AppCommandHandler {
             .await;
 
         logln("");
-        logged_finished_or_failed_to(result, "cleaning", "clean application")
+        let outcome = logged_finished_or_failed_to(result, "cleaning", "clean application");
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::CleanResult { cleaned: true });
+        }
+        outcome
     }
 
     pub async fn cmd_deploy(
@@ -237,7 +256,7 @@ impl AppCommandHandler {
             }
         }
 
-        match deploy_result {
+        let outcome: anyhow::Result<()> = match deploy_result {
             Ok(ok) => match ok {
                 DeploySummary::PlanOk => {
                     log_finished_ok("planning");
@@ -294,7 +313,13 @@ impl AppCommandHandler {
                     Err(err)
                 }
             },
+        };
+        if outcome.is_ok() {
+            self.ctx
+                .log_handler()
+                .log_view(&crate::model::text::action_result::DeployResultView { deployed: true });
         }
+        outcome
     }
 
     pub async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
@@ -384,20 +409,33 @@ impl AppCommandHandler {
     }
 
     pub fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
-        match filter {
+        let templates = match filter {
             Some(filter) => {
                 if let Some(language) = GuestLanguage::from_string(filter.clone()) {
                     self.ctx
-                        .app_handler()
-                        .log_templates_help(Some(language), None)
+                        .app_template_repo()?
+                        .search_agent_templates(Some(language), None)
                 } else {
                     self.ctx
-                        .app_handler()
-                        .log_templates_help(None, Some(&filter))
+                        .app_template_repo()?
+                        .search_agent_templates(None, Some(&filter))
                 }
             }
-            None => self.ctx.app_handler().log_templates_help(None, None),
-        }
+            None => self
+                .ctx
+                .app_template_repo()?
+                .search_agent_templates(None, None),
+        };
+
+        let templates: Vec<TemplateDescription> = templates
+            .into_values()
+            .flat_map(|templates| templates.into_values())
+            .map(|template| TemplateDescription::from_template(&template.0))
+            .collect();
+
+        self.ctx.log_handler().log_view(&templates);
+
+        Ok(())
     }
 
     pub async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
@@ -410,6 +448,31 @@ impl AppCommandHandler {
         let agent_types = self.list_agent_types(&environment).await?;
 
         self.ctx.log_handler().log_view(&agent_types);
+
+        Ok(())
+    }
+
+    pub async fn cmd_get_agent_type(&self, agent_type_name: AgentTypeName) -> anyhow::Result<()> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
+        let Some(agent_type) = self
+            .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
+            .await?
+        else {
+            log_error(format!(
+                "Agent type {} not found",
+                agent_type_name.0.log_color_highlight()
+            ));
+            bail!(NonSuccessfulExit);
+        };
+
+        self.ctx
+            .log_handler()
+            .log_view(&AgentTypeView::new(&agent_type, true));
 
         Ok(())
     }
@@ -446,7 +509,8 @@ impl AppCommandHandler {
         environment
             .with_current_deployment_revision_or_default_warn(
                 |current_deployment_revision| async move {
-                    self.ctx
+                    Ok(self
+                        .ctx
                         .golem_clients()
                         .await?
                         .environment
@@ -456,7 +520,7 @@ impl AppCommandHandler {
                             agent_type_name,
                         )
                         .await
-                        .map_service_error_not_found_as_opt()
+                        .map_service_error_not_found_as_opt()?)
                 },
             )
             .await
@@ -490,7 +554,7 @@ impl AppCommandHandler {
             .list_deployments(&environment.environment_id.0, Some(&version))
             .await
             .map_service_error()
-            .map_err(DeployError::PrepareError)?
+            .map_err(|err| DeployError::PrepareError(err.into()))?
             .values;
 
         if deployments.is_empty() {
@@ -601,6 +665,10 @@ impl AppCommandHandler {
     }
 
     pub async fn deploy(&self, config: DeployConfig) -> DeployResult {
+        let allow_incompatible_changes_fallback = config
+            .post_deploy_args
+            .allow_incompatible_changes(self.ctx.deploy_args());
+
         let build_config = {
             let mut build_config = BuildConfig::new().with_skip_up_to_date_checks(
                 config
@@ -686,15 +754,19 @@ impl AppCommandHandler {
             .await
             .map_err(DeployError::EnvironmentCheckError)?;
 
-        self.apply_changes_to_stage(config.approve_staging_steps, &deploy_diff)
-            .await
-            .map_err(DeployError::StagingError)?;
+        self.apply_changes_to_stage(
+            config.approve_staging_steps,
+            allow_incompatible_changes_fallback,
+            &deploy_diff,
+        )
+        .await
+        .map_err(DeployError::StagingError)?;
         if config.stage {
             return Ok(DeploySummary::StagingOk);
         }
 
         let current_deployment = self
-            .apply_staged_changes_to_environment(&deploy_diff)
+            .apply_staged_changes_to_environment(&deploy_diff, allow_incompatible_changes_fallback)
             .await
             .map_err(DeployError::DeployError)?;
 
@@ -733,7 +805,7 @@ impl AppCommandHandler {
             let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
             debug!("detailed deploy_diff: {:#?}", deploy_diff);
 
-            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive());
+            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive())?;
             let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
 
             log_action(
@@ -884,7 +956,8 @@ impl AppCommandHandler {
                 diffable_local_http_api_deployments.insert(
                     domain.0.clone(),
                     diff::HttpApiDeployment {
-                        webhooks_url: http_api_deployment.webhooks_url.clone(),
+                        webhooks_prefix: http_api_deployment.webhooks_prefix.clone(),
+                        openapi_endpoint_prefix: http_api_deployment.openapi_prefix.clone(),
                         agents,
                     }
                     .into(),
@@ -914,7 +987,7 @@ impl AppCommandHandler {
             mcp_deployments: diffable_local_mcp_deployments,
         };
 
-        let local_deployment_hash = diffable_local_deployment.hash();
+        let local_deployment_hash = diffable_local_deployment.hash()?;
 
         Ok(DeployQuickDiff {
             environment,
@@ -952,7 +1025,7 @@ impl AppCommandHandler {
             .map(|d| d.to_diffable())
             .unwrap_or_default();
 
-        let current_deployment_hash = diffable_current_deployment.hash();
+        let current_deployment_hash = diffable_current_deployment.hash()?;
 
         let staged_deployment = clients
             .environment
@@ -962,18 +1035,18 @@ impl AppCommandHandler {
 
         let diffable_staged_deployment = staged_deployment.to_diffable();
 
-        let staged_deployment_hash = diffable_staged_deployment.hash();
+        let staged_deployment_hash = diffable_staged_deployment.hash()?;
 
-        let Some(diff) =
-            diffable_current_deployment.diff_with_new(&deploy_quick_diff.diffable_local_deployment)
+        let Some(diff) = diffable_current_deployment
+            .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?
         else {
             bail!(anyhow!(
                 "The environment was changed concurrently while diffing. Retry planning and deploying!"
             ))
         };
 
-        let diff_stage =
-            diffable_staged_deployment.diff_with_new(&deploy_quick_diff.diffable_local_deployment);
+        let diff_stage = diffable_staged_deployment
+            .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?;
 
         Ok(DeployDiff {
             environment: deploy_quick_diff.environment,
@@ -1014,7 +1087,7 @@ impl AppCommandHandler {
 
         debug!(
             "diffable_server_staged_deployment hash: {:#?}",
-            deploy_diff.diffable_staged_deployment.hash()
+            deploy_diff.diffable_staged_deployment.hash()?
         );
 
         Ok(deploy_diff)
@@ -1128,7 +1201,7 @@ impl AppCommandHandler {
         let rollback_diff = self.detailed_rollback_diff(rollback_diff).await?;
         debug!("detailed rollback_diff: {:#?}", rollback_diff);
 
-        let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive());
+        let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive())?;
 
         {
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
@@ -1194,7 +1267,8 @@ impl AppCommandHandler {
         let diffable_target_deployment = quick_diff.target_deployment.to_diffable();
         let diffable_current_deployment = current_deployment.to_diffable();
 
-        let Some(diff) = diffable_target_deployment.diff_with_current(&diffable_current_deployment)
+        let Some(diff) =
+            diffable_target_deployment.diff_with_current(&diffable_current_deployment)?
         else {
             bail!(
                 "Illegal state: empty diff between current and target deployment after fetching summaries"
@@ -1315,6 +1389,7 @@ impl AppCommandHandler {
     async fn apply_changes_to_stage(
         &self,
         approve_staging_steps: bool,
+        allow_incompatible_changes_fallback: bool,
         deploy_diff: &DeployDiff,
     ) -> anyhow::Result<()> {
         let Some(diff_stage) = &deploy_diff.diff_stage else {
@@ -1360,14 +1435,51 @@ impl AppCommandHandler {
                         .await?
                 }
                 diff::BTreeMapDiffValue::Update(component_diff) => {
-                    component_handler
-                        .update_staged_component(
-                            &deploy_diff.environment,
-                            deploy_diff.staged_component_identity(&component_name),
-                            deploy_diff.deployable_manifest_component(&component_name),
-                            component_diff,
-                        )
-                        .await?
+                    let mut reset_fallback_applied = false;
+                    let mut allow_incompatible_config = false;
+
+                    loop {
+                        match component_handler
+                            .update_staged_component(
+                                &deploy_diff.environment,
+                                deploy_diff.staged_component_identity(&component_name),
+                                deploy_diff.deployable_manifest_component(&component_name),
+                                component_diff,
+                                allow_incompatible_config,
+                            )
+                            .await
+                        {
+                            Ok(()) => break,
+                            Err(UpdateStagedComponentError::Service(err))
+                                if allow_incompatible_changes_fallback
+                                    && !reset_fallback_applied
+                                    && err.is_agent_config_old_config_invalid() =>
+                            {
+                                if !interactive_handler
+                                    .confirm_reset_allow_incompatible_component_update(
+                                        &component_name,
+                                    )?
+                                {
+                                    bail!(NonSuccessfulExit);
+                                }
+
+                                log_warn_action(
+                                    "Reset fallback",
+                                    format!(
+                                        "retrying staged update with incompatible config checks disabled for {}",
+                                        component_name.0.log_color_highlight()
+                                    ),
+                                );
+                                reset_fallback_applied = true;
+                                allow_incompatible_config = true;
+                                continue;
+                            }
+                            Err(UpdateStagedComponentError::Service(err)) => {
+                                return Err(err.into());
+                            }
+                            Err(UpdateStagedComponentError::Other(err)) => return Err(err),
+                        }
+                    }
                 }
             }
         }
@@ -1471,14 +1583,46 @@ impl AppCommandHandler {
     async fn apply_staged_changes_to_environment(
         &self,
         deploy_diff: &DeployDiff,
+        allow_incompatible_changes_fallback: bool,
     ) -> anyhow::Result<CurrentDeployment> {
         let app_ctx = self.ctx.app_context_lock().await;
 
-        let agent_secret_defaults = app_ctx
+        let raw_agent_secret_defaults = app_ctx
             .some_or_err()?
             .application()
-            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name)
-            .apply(resolve_secret_defaults)?;
+            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
+
+        let declared_secret_paths = collect_declared_agent_secret_paths(deploy_diff)?;
+
+        let (agent_secret_defaults, unused_secret_default_paths) =
+            materialize_agent_secret_defaults(
+                raw_agent_secret_defaults.as_ref(),
+                &declared_secret_paths,
+            );
+
+        if !unused_secret_default_paths.is_empty() {
+            let rendered_unused_secret_default_paths = unused_secret_default_paths
+                .iter()
+                .map(|path| path.join("."))
+                .collect::<Vec<_>>();
+
+            log_warn_action(
+                "Ignoring unused secret default paths",
+                rendered_unused_secret_default_paths.join(", "),
+            );
+
+            if !self
+                .ctx
+                .interactive_handler()
+                .confirm_ignore_unused_agent_secret_defaults(
+                    &rendered_unused_secret_default_paths,
+                )?
+            {
+                bail!(NonSuccessfulExit);
+            }
+        }
+
+        let agent_secret_defaults = agent_secret_defaults.apply(resolve_secret_defaults)?;
 
         let retry_policy_defaults = app_ctx
             .some_or_err()?
@@ -1494,21 +1638,58 @@ impl AppCommandHandler {
 
         log_action("Deploying", "staged changes to the environment");
 
-        let result = clients
-            .environment
-            .deploy_environment(
-                &deploy_diff.environment.environment_id.0,
-                &DeploymentCreation {
-                    current_revision: deploy_diff.current_deployment_revision(),
-                    expected_deployment_hash: deploy_diff.local_deployment_hash,
-                    version: DeploymentVersion("".to_string()), // TODO: atomic
-                    agent_secret_defaults,
-                    quota_resource_defaults,
-                    retry_policy_defaults,
-                },
-            )
-            .await
-            .map_service_error()?;
+        let mut reset_fallback_applied = false;
+        let mut replace_incompatible_agent_secrets = false;
+        let result = loop {
+            let deploy_result = clients
+                .environment
+                .deploy_environment(
+                    &deploy_diff.environment.environment_id.0,
+                    &DeploymentCreation {
+                        current_revision: deploy_diff.current_deployment_revision(),
+                        expected_deployment_hash: deploy_diff.local_deployment_hash,
+                        version: DeploymentVersion("".to_string()), // TODO: atomic
+                        agent_secret_defaults: agent_secret_defaults.clone(),
+                        quota_resource_defaults: quota_resource_defaults.clone(),
+                        retry_policy_defaults: retry_policy_defaults.clone(),
+                        replace_incompatible_agent_secrets,
+                    },
+                )
+                .await;
+
+            match deploy_result {
+                Ok(result) => break result,
+                Err(err) => {
+                    let service_err: ServiceError = err.into();
+
+                    if allow_incompatible_changes_fallback
+                        && !reset_fallback_applied
+                        && service_err.is_agent_secret_not_compatible()
+                    {
+                        if !self
+                            .ctx
+                            .interactive_handler()
+                            .confirm_reset_replace_incompatible_agent_secrets(
+                                &deploy_diff.environment.environment_name,
+                            )?
+                        {
+                            bail!(NonSuccessfulExit);
+                        }
+
+                        log_warn_action(
+                            "Reset fallback",
+                            "retrying deployment with incompatible secret replacement enabled",
+                        );
+
+                        reset_fallback_applied = true;
+                        replace_incompatible_agent_secrets = true;
+                        continue;
+                    }
+
+                    return Err(service_err.into());
+                }
+            }
+        };
 
         log_action("Deployed", "all changes");
 
@@ -1588,13 +1769,13 @@ impl AppCommandHandler {
             .list_deployment_components(&environment_id.0, deployment_revision.into())
             .await
             .map_service_error()
-            .map_err(PostDeployError::PrepareError)?
+            .map_err(|err| PostDeployError::PrepareError(err.into()))?
             .values;
 
-        if let Some(update_mode) = &post_deploy_args.update_agents {
+        if let Some(update_mode) = post_deploy_args.update_agents_mode(env_deploy_args) {
             self.ctx
                 .component_handler()
-                .update_workers_by_components(&components, *update_mode, true, false)
+                .update_workers_by_components(&components, update_mode, true, false)
                 .await
                 .map(|()| PostDeploySummary::AgentUpdateOk)
                 .map_err(PostDeployError::AgentUpdateError)
@@ -1622,13 +1803,14 @@ impl AppCommandHandler {
         account_id: &AccountId,
         application_name: &ApplicationName,
     ) -> anyhow::Result<Option<golem_client::model::Application>> {
-        self.ctx
+        Ok(self
+            .ctx
             .golem_clients()
             .await?
             .application
             .get_account_application(&account_id.0, &application_name.0)
             .await
-            .map_service_error_not_found_as_opt()
+            .map_service_error_not_found_as_opt()?)
     }
 
     pub async fn get_server_application_or_err(
@@ -1710,7 +1892,9 @@ impl AppCommandHandler {
     }
 
     fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-        let plan = plan_dependency_fixes(build_ctx)?;
+        let claude_skills_ctx =
+            resolve_claude_skills_context(build_ctx.application().app_root_dir())?;
+        let plan = plan_dependency_fixes(build_ctx, &claude_skills_ctx)?;
 
         for warning in &plan.warnings {
             logln("");
@@ -1719,7 +1903,10 @@ impl AppCommandHandler {
         }
 
         if plan.is_empty() {
-            create_claude_symlink(build_ctx.application().app_root_dir())?;
+            create_claude_symlink_if_needed(
+                build_ctx.application().app_root_dir(),
+                &claude_skills_ctx,
+            )?;
             return Ok(());
         }
 
@@ -1773,7 +1960,10 @@ impl AppCommandHandler {
             }
         }
 
-        create_claude_symlink(build_ctx.application().app_root_dir())?;
+        create_claude_symlink_if_needed(
+            build_ctx.application().app_root_dir(),
+            &claude_skills_ctx,
+        )?;
 
         Ok(())
     }
@@ -1965,96 +2155,6 @@ impl AppCommandHandler {
         Ok(true)
     }
 
-    // TODO: FCL
-    /*
-    pub fn get_templates(
-        &self,
-        requested_template_name: &str,
-    ) -> anyhow::Result<(Option<&AppTemplateCommon>, &AppTemplateComponent)> {
-        let segments = requested_template_name.split("/").collect::<Vec<_>>();
-        let (language, template_name): (String, Option<String>) = match segments.len() {
-            1 => (segments[0].to_string(), None),
-            2 => (segments[0].to_string(), {
-                let template_name = segments[1].to_string();
-                if template_name.is_empty() {
-                    None
-                } else {
-                    Some(template_name)
-                }
-            }),
-            _ => {
-                log_error("Failed to parse template name");
-                self.log_templates_help(None, None)?;
-                bail!(NonSuccessfulExit);
-            }
-        };
-
-        let language = match GuestLanguage::from_string(language) {
-            Some(language) => language,
-            None => {
-                log_error("Failed to parse language part of the template!");
-                self.log_templates_help(None, None)?;
-                bail!(NonSuccessfulExit);
-            }
-        };
-
-        let template_name = template_name
-            .map(AppTemplateName::from)
-            .unwrap_or_else(|| AppTemplateName::from("default"));
-
-        let app_template_repo = self.ctx.app_template_repo()?;
-
-        let common_template = match app_template_repo.common_template(language) {
-            Ok(common_template) => common_template.as_ref(),
-            Err(err) => {
-                log_anyhow_error(&err);
-                self.log_templates_help(None, None)?;
-                bail!(NonSuccessfulExit);
-            }
-        };
-
-        let component_template =
-            match app_template_repo.component_template(language, &template_name) {
-                Ok(component_template) => component_template,
-                Err(err) => {
-                    log_anyhow_error(&err);
-                    self.log_templates_help(None, None)?;
-                    bail!(NonSuccessfulExit);
-                }
-            };
-
-        Ok((common_template, component_template))
-    }
-
-    pub fn generate_component(
-        &self,
-        template_apply_plan: &mut TemplateApplyPlan,
-        application_name: &ApplicationName,
-        component_name: &ComponentName,
-        app_dir: &Path,
-        template_name: &str,
-    ) -> anyhow::Result<()> {
-        let (common_template, component_template) = self.get_templates(template_name)?;
-
-        if let Some(common_template) = common_template {
-            template_apply_plan.add(
-                common_template.0.name.as_str(),
-                &common_template.generate(application_name, app_dir)?,
-            )?;
-        }
-
-        template_apply_plan.add(
-            component_template.0.name.as_str(),
-            &component_template.generate(
-                application_name,
-                component_name,
-                app_dir
-            )?,
-        )?;
-
-        Ok(())
-    }*/
-
     pub fn log_languages_help(&self) {
         logln(format!("\n{}", "Available languages:".underline().bold(),));
         for language in GuestLanguage::iter() {
@@ -2144,4 +2244,75 @@ fn resolve_secret_defaults(
             })
         })
         .collect()
+}
+
+fn collect_declared_agent_secret_paths(
+    deploy_diff: &DeployDiff,
+) -> anyhow::Result<BTreeSet<Vec<String>>> {
+    let mut declared_secret_types = BTreeMap::<Vec<String>, (AnalysedType, String)>::new();
+
+    for component in deploy_diff.deployable_components.values() {
+        for agent_type in &component.agent_types {
+            for config in &agent_type.config {
+                if config.source != AgentConfigSource::Secret {
+                    continue;
+                }
+
+                if let Some((existing_type, existing_agent_type)) =
+                    declared_secret_types.get(&config.path)
+                {
+                    if existing_type != &config.value_type {
+                        bail!(
+                            "Conflicting secret declaration for path '{}' across agents '{}' and '{}': declared types differ ({:?} vs {:?}).",
+                            config.path.join(".").log_color_error_highlight(),
+                            existing_agent_type.log_color_highlight(),
+                            agent_type.type_name.0.log_color_highlight(),
+                            existing_type,
+                            config.value_type,
+                        );
+                    }
+                } else {
+                    declared_secret_types.insert(
+                        config.path.clone(),
+                        (config.value_type.clone(), agent_type.type_name.0.clone()),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(declared_secret_types.into_keys().collect())
+}
+
+fn materialize_agent_secret_defaults(
+    raw_default: Option<&WithSource<serde_json::Value>>,
+    declared_secret_paths: &BTreeSet<Vec<String>>,
+) -> (Vec<DeploymentAgentSecretDefault>, Vec<Vec<String>>) {
+    let mut materialized_defaults = Vec::new();
+    let mut unused_paths = Vec::new();
+
+    if let Some(raw_default) = raw_default {
+        let mut consumed_paths = Vec::new();
+
+        for declared_path in declared_secret_paths {
+            if let Some(secret_value) = value_at_path(&raw_default.value, declared_path) {
+                materialized_defaults.push(DeploymentAgentSecretDefault {
+                    path: AgentSecretPath(declared_path.clone()),
+                    secret_value: secret_value.clone(),
+                });
+                consumed_paths.push(declared_path.clone());
+            }
+        }
+
+        unused_paths.extend(collect_unused_leaf_paths(&raw_default.value, |leaf_path| {
+            consumed_paths
+                .iter()
+                .any(|consumed_path| leaf_path.starts_with(consumed_path))
+        }));
+    }
+
+    unused_paths.sort();
+    unused_paths.dedup();
+
+    (materialized_defaults, unused_paths)
 }

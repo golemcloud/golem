@@ -18,6 +18,7 @@ import {
   QuotaToken as RawQuotaToken,
   Reservation as RawReservation,
 } from 'golem:quota/types@1.5.0';
+import { isPromiseLike } from './guard';
 import { Result } from './result';
 
 export type { FailedReservation, QuotaTokenRecord };
@@ -127,9 +128,22 @@ export function acquireQuotaToken(resourceName: string, expectedUse: bigint): Qu
   return new QuotaToken(new RawQuotaToken(resourceName, expectedUse));
 }
 
+export function withReservation<R>(
+  token: QuotaToken,
+  amount: bigint,
+  fn: (reservation: Reservation) => Promise<{ used: bigint; value: R }>,
+): Promise<Result<R, FailedReservation>>;
+
+export function withReservation<R>(
+  token: QuotaToken,
+  amount: bigint,
+  fn: (reservation: Reservation) => { used: bigint; value: R },
+): Result<R, FailedReservation>;
+
 /**
  * Reserve `amount` units, run `fn`, then commit the actual usage returned
- * by `fn`.  Commits zero if `fn` throws.
+ * by `fn`. Commits zero if `fn` throws or the returned Promise rejects.
+ * Supports both sync and async callbacks.
  *
  * Returns `Result.ok(value)` on success, or `Result.err(failedReservation)`
  * if the reservation could not be granted.
@@ -137,19 +151,33 @@ export function acquireQuotaToken(resourceName: string, expectedUse: bigint): Qu
  * @param token  - The token to reserve against.
  * @param amount - Units to reserve.
  * @param fn     - Work to perform; must return the actual units consumed.
- */
-export function withReservation<T>(
+ */ export function withReservation<R>(
   token: QuotaToken,
   amount: bigint,
-  fn: (reservation: Reservation) => { used: bigint; value: T },
-): Result<T, FailedReservation> {
+  fn: (
+    reservation: Reservation,
+  ) => { used: bigint; value: R } | Promise<{ used: bigint; value: R }>,
+): Result<R, FailedReservation> | Promise<Result<R, FailedReservation>> {
   const reserveResult = token.reserve(amount);
   if (reserveResult.isErr()) {
     return Result.err(reserveResult.unwrapErr());
   }
   const reservation = reserveResult.unwrap();
   try {
-    const { used, value } = fn(reservation);
+    const result = fn(reservation);
+    if (isPromiseLike(result)) {
+      return result.then(
+        ({ used, value }) => {
+          reservation.commit(used);
+          return Result.ok(value);
+        },
+        (e) => {
+          reservation.commit(0n);
+          throw e;
+        },
+      );
+    }
+    const { used, value } = result;
     reservation.commit(used);
     return Result.ok(value);
   } catch (e) {

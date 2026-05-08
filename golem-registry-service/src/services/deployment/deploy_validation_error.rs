@@ -89,11 +89,13 @@ pub enum DeployValidationError {
     )]
     HttpApiDeploymentInvalidAgentWebhookSegmentType { agent_type: AgentTypeName },
     #[error(
-        "Agent type {agent_type} has an invalid final webhook url {url}. (Protocol is a placeholder)"
+        "Http api deployment {domain} contains and invalid route {rendered_path} (protocol is a placeholder): {error}",
+        rendered_path = itertools::join(path.iter().map(|p| p.to_string()), "/")
     )]
-    HttpApiDeploymentInvalidWebhookUrl {
-        agent_type: AgentTypeName,
-        url: String,
+    HttpApiDeploymentInvalidRoute {
+        domain: Domain,
+        path: Vec<PathSegment>,
+        error: String,
     },
     #[error("Overriding security scheme is only allowed if the environment level option is set")]
     SecurityOverrideDisabled,
@@ -137,6 +139,10 @@ pub enum DeployValidationError {
     ConflictingResourceDefinitions { name: ResourceName },
     #[error("Multiple retry policy defaults with the same name: {name}")]
     ConflictingRetryPolicyDefaults { name: String },
+    #[error(
+        "Reset override flags are only allowed when environment compatibility_check is disabled"
+    )]
+    ResetOverrideRequiresCompatibilityCheckDisabled,
 }
 
 impl SafeDisplay for DeployValidationError {

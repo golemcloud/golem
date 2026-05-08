@@ -67,6 +67,7 @@ mod cmd {
     pub static NO_ARGS: &[&str] = &[];
 
     pub static AGENT: &str = "agent";
+    pub static AGENT_TYPE: &str = "agent-type";
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
     pub static COMPONENT: &str = "component";
@@ -75,7 +76,6 @@ mod cmd {
     pub static GET: &str = "get";
     pub static INVOKE: &str = "invoke";
     pub static LIST: &str = "list";
-    pub static LIST_AGENT_TYPES: &str = "list-agent-types";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
     pub static REGISTER: &str = "register";
@@ -89,6 +89,7 @@ mod flag {
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
     pub static LANGUAGE: &str = "--language";
+    pub static RESET: &str = "--reset";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
     pub static STEP: &str = "--step";

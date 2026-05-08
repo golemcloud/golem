@@ -435,12 +435,19 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
       wasmRpc.scheduleInvocation(ts, methodInfo.name, inputDataValue);
     }
 
+    function invokeScheduleCancelable(ts: Datetime, ...fnArgs: any[]) {
+      const inputDataValue = serializeArgs(methodInfo.params, fnArgs);
+      return wasmRpc.scheduleCancelableInvocation(ts, methodInfo.name, inputDataValue);
+    }
+
     const methodFn: any = (...args: any[]) => invokeAndAwaitInternal(args);
 
     methodFn.abortable = (signal: AbortSignal, ...args: any[]) =>
       invokeAndAwaitInternal(args, signal);
     methodFn.trigger = (...args: any[]) => invokeFireAndForget(...args);
     methodFn.schedule = (ts: Datetime, ...args: any[]) => invokeSchedule(ts, ...args);
+    methodFn.scheduleCancelable = (ts: Datetime, ...args: any[]) =>
+      invokeScheduleCancelable(ts, ...args);
 
     return methodFn as RemoteMethod<any[], any>;
   }
@@ -523,7 +530,9 @@ function serializeRpcConfigObject(
   const result: TypedAgentConfigValue[] = [];
 
   if (rpcValue === null || typeof rpcValue !== 'object') {
-    throw new Error('rpcValue must be an object');
+    throw new Error(
+      `Expected an object for config parameter \`${configProperties[0]?.path[0] ?? 'config'}\`, got ${typeof rpcValue}`,
+    );
   }
 
   for (const prop of configProperties) {
@@ -556,7 +565,10 @@ function serializeRpcConfigObject(
 
     const [witType, analysedType] = Either.getOrThrowWith(
       WitType.fromTsType(expectedType, undefined),
-      (err) => new Error(`Failed to construct analysed type for rpc agent config: ${err}`),
+      (err) =>
+        new Error(
+          `Failed to construct type for rpc config property \`${prop.path.join('.')}\`: ${err}`,
+        ),
     );
 
     const witValue = WitValue.fromTsValueDefault(current, analysedType);

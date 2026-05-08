@@ -1,0 +1,105 @@
+name: "add-webhook"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-webhook-agents"
+    prompt: >
+      In the test-app project, build a webhook integration demo using two new durable
+      agent types: `WebhookAgent` and `SenderAgent`. Both are identified by a single
+      name constructor parameter.
+
+      Give `WebhookAgent` an HTTP mount under `/webhooks/{name}` and `SenderAgent`
+      an HTTP mount under `/senders/{name}`. Make sure both are exposed through the
+      app HTTP API on `test-app.localhost:9006`.
+
+      **WebhookAgent** must have mutable state fields for a `webhook_url` (string,
+      initially empty) and a `result` (string, initially empty). It must expose
+      these HTTP endpoints:
+
+      - `POST /start` — creates a Golem webhook, stores the webhook handler so
+        the agent can await it later, and stores the webhook URL in the
+        `webhook_url` state field. Then hand off the URL to a `SenderAgent`
+        (identified by the same name) via RPC by calling `receive_url` on it.
+        After that, await the webhook handler to get the incoming POST payload.
+        Decode the payload as a string and store it in the `result` state field.
+        Return the result.
+
+      - `GET /result` — returns the current value of `result` as a plain string.
+
+      **SenderAgent** must be able to receive and store a URL string. It must expose
+      these HTTP endpoints:
+
+      - `POST /receive-url` — receives a `url` string parameter and stores it
+        in agent state. This is called by `WebhookAgent` via RPC. Returns nothing.
+
+      - `POST /send` — accepts a JSON body with a `message` field (a string).
+        Makes an outgoing HTTP POST request to the stored webhook URL with the
+        message string as the plain text request body. Returns a boolean
+        indicating success (true if the POST returned a successful status code).
+
+      The expected flow is: WebhookAgent creates a webhook, hands off the URL to
+      SenderAgent, and suspends while awaiting the webhook. Later, someone calls
+      SenderAgent's send endpoint with a message, which POSTs to the webhook URL
+      and wakes up WebhookAgent.
+
+      Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-webhook-rust"
+      ts:
+        - "golem-add-webhook-ts"
+      scala:
+        - "golem-add-webhook-scala"
+      moonbit:
+        - "golem-add-webhook-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "trigger-webhook-start"
+    trigger:
+      agent: 'WebhookAgent("w1")'
+      method: "start"
+
+  - id: "wait-for-webhook-setup"
+    sleep: 5
+
+  - id: "verify-webhook-agent-suspended"
+    shell:
+      command: "golem"
+      args: ["agent", "get", "WebhookAgent(\"w1\")"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "Suspended"
+
+  - id: "send-webhook-message"
+    http:
+      url: "http://test-app.localhost:9006/senders/w1/send"
+      method: "POST"
+      body: '{"message": "hello from webhook"}'
+      headers:
+        Content-Type: "application/json"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: true
+
+  - id: "wait-for-completion"
+    sleep: 3
+
+  - id: "verify-result"
+    http:
+      url: "http://test-app.localhost:9006/webhooks/w1/result"
+      method: "GET"
+    expect:
+      status: 200
+      body_contains: "hello from webhook"

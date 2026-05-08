@@ -50,8 +50,8 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex, OwnedAgentId,
-    PredicateValue, RetryContext, RetryProperties, ScheduledAction,
+    AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
+    OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
 
@@ -59,7 +59,6 @@ use golem_wasm::{
     CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, ValueAndType, WasmRpcEntry,
 };
 use std::any::Any;
-use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
@@ -95,8 +94,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let mut env =
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
-
-        let wasi_config = self.state.wasi_config.clone();
 
         let agent_type = crate::preview2::golem::agent::host::Host::get_agent_type(
             self,
@@ -138,7 +135,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        construct_wasm_rpc_resource(self, remote_agent_id, &env, wasi_config, config).await
+        construct_wasm_rpc_resource(self, remote_agent_id, &env, config).await
     }
 
     async fn invoke_and_await(
@@ -153,7 +150,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config = self.state.wasi_config.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
         let entry = self.table().get(&self_)?;
@@ -231,7 +227,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         created_by,
                         &agent_id,
                         &env,
-                        wasi_config.clone(),
                         stack,
                     ),
                     interrupt_signal,
@@ -296,7 +291,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config = self.state.wasi_config.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
         let entry = self.table().get(&self_)?;
@@ -362,7 +356,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         self.created_by(),
                         self.agent_id(),
                         &env,
-                        wasi_config.clone(),
                         stack,
                     )
                     .await;
@@ -410,7 +403,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config = self.state.wasi_config.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
         let entry = self.table().get(&this)?;
@@ -508,7 +500,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 created_by,
                 agent_id,
                 env,
-                wasi_config,
                 stack,
                 retry_params,
             );
@@ -531,7 +522,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self_agent_id: agent_id,
                     self_created_by: created_by,
                     env,
-                    wasi_config_vars: wasi_config,
                     method_name,
                     method_parameters: input_untyped,
                     idempotency_key,
@@ -583,6 +573,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let entry = self.table().get(&this)?;
             let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
             let remote_agent_id = payload.remote_agent_id.clone();
+            let target_worker_fingerprint = payload.target_fingerprint;
 
             let input_untyped: UntypedDataValue = input.into();
 
@@ -621,6 +612,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     invocation_context: stack,
                     principal: Principal::anonymous(),
                 }),
+                target_worker_fingerprint,
             };
 
             let result = self
@@ -1162,7 +1154,6 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: AgentId,
     env: &[(String, String)],
-    wasi_config: std::collections::BTreeMap<String, String>,
     config: Vec<AgentConfigEntryDto>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let span = create_rpc_connection_span(ctx, &remote_agent_id).await?;
@@ -1184,16 +1175,17 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             ctx.created_by(),
             ctx.agent_id(),
             env,
-            wasi_config,
             stack,
             config,
         )
         .await?;
+    let target_fingerprint = demand.fingerprint();
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
             demand,
             remote_agent_id,
             span_id: span.span_id().clone(),
+            target_fingerprint,
         }),
     })?;
     Ok(entry)
@@ -1221,7 +1213,6 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     created_by: AccountId,
     agent_id: AgentId,
     env: Vec<(String, String)>,
-    wasi_config: BTreeMap<String, String>,
     stack: InvocationContextStack,
     retry_params: Option<TaskRetryParams<Ctx>>,
 ) -> AbortOnDropJoinHandle<Result<Result<UntypedDataValue, InternalRpcError>, Error>> {
@@ -1234,7 +1225,6 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let created_by = created_by;
         let agent_id = agent_id.clone();
         let env = env.clone();
-        let wasi_config = wasi_config.clone();
         let stack = stack.clone();
         async move {
             rpc.invoke_and_await(
@@ -1245,7 +1235,6 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 created_by,
                 &agent_id,
                 &env,
-                wasi_config,
                 stack,
             )
             .await
@@ -1380,7 +1369,6 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         self_agent_id,
         self_created_by,
         env,
-        wasi_config_vars: wasi_config,
         method_name,
         method_parameters,
         idempotency_key,
@@ -1434,7 +1422,6 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         *self_created_by,
         self_agent_id.clone(),
         env.clone(),
-        wasi_config.clone(),
         stack,
         retry_params,
     );
@@ -1460,6 +1447,7 @@ pub struct WasmRpcEntryPayload {
     pub demand: Box<dyn RpcDemand>,
     pub remote_agent_id: OwnedAgentId,
     pub span_id: SpanId,
+    pub target_fingerprint: AgentFingerprint,
 }
 
 impl Debug for WasmRpcEntryPayload {
@@ -1537,7 +1525,6 @@ enum FutureInvokeResultState {
         self_agent_id: AgentId,
         self_created_by: AccountId,
         env: Vec<(String, String)>,
-        wasi_config_vars: BTreeMap<String, String>,
         method_name: String,
         method_parameters: UntypedDataValue,
         idempotency_key: IdempotencyKey,

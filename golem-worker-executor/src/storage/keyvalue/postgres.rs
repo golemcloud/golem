@@ -18,11 +18,14 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::FutureExt;
 use golem_common::SafeDisplay;
+use golem_common::metrics::db::record_db_serialized_size;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::include_dir;
 use sqlx::{Postgres, QueryBuilder};
+
+const DB_TYPE: &str = "postgres";
 
 static DB_MIGRATIONS: include_dir::Dir =
     include_dir!("$CARGO_MANIFEST_DIR/db/migration/postgres/keyvalue");
@@ -83,11 +86,12 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        _entity_name: &'static str,
+        entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
+        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let query =
             sqlx::query("INSERT INTO kv_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key) DO UPDATE SET value = EXCLUDED.value;")
                 .bind(Self::namespace(namespace))
@@ -106,7 +110,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        _entity_name: &'static str,
+        entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String> {
@@ -117,7 +121,10 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         let namespace = Self::namespace(namespace);
         let pairs: Vec<(String, Vec<u8>)> = pairs
             .iter()
-            .map(|(key, value)| ((*key).to_string(), (*value).to_vec()))
+            .map(|(key, value)| {
+                record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
+                ((*key).to_string(), (*value).to_vec())
+            })
             .collect();
 
         self.pool
@@ -151,11 +158,12 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        _entity_name: &'static str,
+        entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
     ) -> Result<bool, String> {
+        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let query = sqlx::query(
             "INSERT INTO kv_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key) DO NOTHING;",
         )

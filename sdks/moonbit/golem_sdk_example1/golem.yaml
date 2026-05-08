@@ -1,0 +1,49 @@
+manifestVersion: 1.5.0
+
+app: golem-sdk-example1
+
+httpApi:
+  deployments:
+    local:
+      - domain: localhost:9006
+        agents:
+          WeatherAgent: {}
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release
+
+componentTemplates:
+  moonbit:
+    presets:
+      debug:
+        default: true
+        build:
+          - command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/{{ component_name | to_snake_case }}
+            dir: ../golem_sdk_tools
+          - command: moon run cmd -- agents ../golem_sdk_example1
+            dir: ../golem_sdk_tools
+          - command: moon build --target wasm --release
+          - command: mkdir -p _build/wasm/debug
+          - command: wasm-tools component embed wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/debug/{{ component_name | to_snake_case }}.embed.wasm
+          - command: wasm-tools component new _build/wasm/debug/{{ component_name | to_snake_case }}.embed.wasm --output _build/wasm/debug/{{ component_name | to_snake_case }}.agent.wasm
+        componentWasm: _build/wasm/debug/{{ component_name | to_snake_case }}.agent.wasm
+      release:
+        build:
+          - command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/{{ component_name | to_snake_case }}
+            dir: ../golem_sdk_tools
+          - command: moon run cmd -- agents ../golem_sdk_example1
+            dir: ../golem_sdk_tools
+          - command: moon build --target wasm --release
+          - command: wasm-tools component embed wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm
+          - command: wasm-tools component new _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm --output _build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm
+        componentWasm: _build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm
+
+components:
+  golem:moonbit-examples:
+    templates: moonbit
+    dir: ""

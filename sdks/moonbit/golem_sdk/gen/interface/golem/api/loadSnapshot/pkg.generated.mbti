@@ -1,0 +1,18 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/gen/interface/golem/api/loadSnapshot"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/api/host",
+}
+
+// Values
+pub fn load(@host.Snapshot) -> Result[Unit, String]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

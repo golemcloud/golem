@@ -229,13 +229,12 @@ pub use bindings::golem::api::host::{
     complete_promise, create_promise, fork, get_promise, oplog_commit,
 };
 
-pub use bindings::golem::websocket::client::{
-    CloseInfo as WebSocketCloseInfo, Error as WebSocketError, Message as WebSocketMessage,
-    WebsocketConnection,
-};
+pub mod websocket;
 pub use checkpoint::*;
 pub use quota::*;
+pub mod retry;
 pub use transaction::*;
+pub use websocket::{WebSocketCloseInfo, WebSocketError, WebSocketMessage, WebsocketConnection};
 
 #[cfg(feature = "macro")]
 pub use golem_rust_macro::*;
@@ -261,86 +260,6 @@ pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
     let pollable = promise.subscribe();
     wstd::io::AsyncPollable::new(pollable).wait_for().await;
     promise.get().unwrap()
-}
-
-pub mod retry {
-    use crate::bindings::golem::api::retry as retry_api;
-
-    pub use retry_api::{NamedRetryPolicy, PredicateValue, RetryPolicy, RetryPredicate};
-
-    /// Get all retry policies active for this agent.
-    pub fn get_retry_policies() -> Vec<NamedRetryPolicy> {
-        retry_api::get_retry_policies()
-    }
-
-    /// Get a specific retry policy by name.
-    pub fn get_retry_policy_by_name(name: &str) -> Option<NamedRetryPolicy> {
-        retry_api::get_retry_policy_by_name(name)
-    }
-
-    /// Resolve the matching retry policy for a given operation context.
-    /// Evaluates named policies in descending priority order; returns the
-    /// policy from the first rule whose predicate matches, or none.
-    pub fn resolve_retry_policy(
-        verb: &str,
-        noun_uri: &str,
-        properties: &[(String, PredicateValue)],
-    ) -> Option<RetryPolicy> {
-        let props: Vec<(String, PredicateValue)> = properties.to_vec();
-        retry_api::resolve_retry_policy(verb, noun_uri, &props)
-    }
-
-    /// Add or overwrite a named retry policy (persisted to oplog).
-    /// If a policy with the same name exists, it is replaced.
-    pub fn set_retry_policy(policy: &NamedRetryPolicy) {
-        retry_api::set_retry_policy(policy);
-    }
-
-    /// Remove a named retry policy by name (persisted to oplog).
-    pub fn remove_retry_policy(name: &str) {
-        retry_api::remove_retry_policy(name);
-    }
-
-    /// Guard that restores the previous state of a named retry policy on drop.
-    /// If the policy existed before, it is restored; if it was newly added, it is removed.
-    pub struct RetryPolicyGuard {
-        previous: Option<NamedRetryPolicy>,
-        name: String,
-    }
-
-    impl Drop for RetryPolicyGuard {
-        fn drop(&mut self) {
-            match self.previous.take() {
-                Some(original) => set_retry_policy(&original),
-                None => remove_retry_policy(&self.name),
-            }
-        }
-    }
-
-    /// Temporarily sets a named retry policy. When the returned guard is dropped,
-    /// the previous policy with the same name is restored (or removed if it didn't exist).
-    #[must_use]
-    pub fn use_retry_policy(policy: NamedRetryPolicy) -> RetryPolicyGuard {
-        let previous = get_retry_policy_by_name(&policy.name);
-        let name = policy.name.clone();
-        set_retry_policy(&policy);
-        RetryPolicyGuard { previous, name }
-    }
-
-    /// Executes the given function with a named retry policy temporarily set.
-    pub fn with_retry_policy<R>(policy: NamedRetryPolicy, f: impl FnOnce() -> R) -> R {
-        let _guard = use_retry_policy(policy);
-        f()
-    }
-
-    /// Executes the given async function with a named retry policy temporarily set.
-    pub async fn with_retry_policy_async<R, F: std::future::Future<Output = R>>(
-        policy: NamedRetryPolicy,
-        f: impl FnOnce() -> F,
-    ) -> R {
-        let _guard = use_retry_policy(policy);
-        f().await
-    }
 }
 
 pub struct PersistenceLevelGuard {
@@ -426,14 +345,21 @@ pub struct AtomicOperationGuard {
 
 impl Drop for AtomicOperationGuard {
     fn drop(&mut self) {
-        mark_end_operation(self.begin);
+        // If we're unwinding from a panic, leave the atomic region open so the
+        // worker recovery + replay-time fallback in `mark_begin_operation`
+        // re-executes the block from the begin marker. WASM panics are wasm
+        // traps, so the executor will recover the worker.
+        if !std::thread::panicking() {
+            mark_end_operation(self.begin);
+        }
     }
 }
 
 /// Marks a block as an atomic operation
 ///
-/// When the returned guard is dropped, the operation gets committed.
-/// In case of a failure, the whole operation will be re-executed during retry.
+/// When the returned guard is dropped, the operation gets committed —
+/// unless the current thread is panicking, in which case the region is left
+/// open so worker recovery re-executes the block.
 #[must_use]
 pub fn mark_atomic_operation() -> AtomicOperationGuard {
     let begin = mark_begin_operation();
@@ -442,7 +368,10 @@ pub fn mark_atomic_operation() -> AtomicOperationGuard {
 
 /// Executes the given function as an atomic operation.
 ///
-/// In case of a failure, the whole operation will be re-executed during retry.
+/// On panic the region is left open and the worker recovers + re-executes
+/// the block. Use [`atomically_result`] when the body returns a `Result` so
+/// that error returns also force a trap rather than silently committing the
+/// region.
 pub fn atomically<T>(f: impl FnOnce() -> T) -> T {
     let _guard = mark_atomic_operation();
     f()
@@ -450,8 +379,50 @@ pub fn atomically<T>(f: impl FnOnce() -> T) -> T {
 
 /// Executes the given async function as an atomic operation.
 ///
-/// In case of a failure, the whole operation will be re-executed during retry.
+/// On panic the region is left open and the worker recovers + re-executes
+/// the block.
 pub async fn atomically_async<T, F: Future<Output = T>>(f: impl FnOnce() -> F) -> T {
     let _guard = mark_atomic_operation();
     f().await
+}
+
+/// Executes the given fallible function as an atomic operation.
+///
+/// On `Ok` the region is committed.
+/// On `Err` the SDK calls the host `trap` function, which surfaces as an
+/// uncatchable wasm trap so the failure cannot be observed by user code.
+/// The atomic region is intentionally left open so the existing replay-time
+/// fallback in `mark_begin_operation` deletes the partial inner side effects
+/// and re-executes the block.
+pub fn atomically_result<T, E>(f: impl FnOnce() -> Result<T, E>) -> Result<T, E>
+where
+    E: core::fmt::Display,
+{
+    let guard = mark_atomic_operation();
+    match f() {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            // Skip the Drop closing the region — the trap is the terminator.
+            core::mem::forget(guard);
+            bindings::golem::api::host::trap(&format!("atomic block failed: {e}"));
+            unreachable!("trap host call must not return")
+        }
+    }
+}
+
+/// Async version of [`atomically_result`].
+pub async fn atomically_result_async<T, E, F>(f: impl FnOnce() -> F) -> Result<T, E>
+where
+    E: core::fmt::Display,
+    F: Future<Output = Result<T, E>>,
+{
+    let guard = mark_atomic_operation();
+    match f().await {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            core::mem::forget(guard);
+            bindings::golem::api::host::trap(&format!("atomic block failed: {e}"));
+            unreachable!("trap host call must not return")
+        }
+    }
 }

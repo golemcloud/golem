@@ -21,6 +21,7 @@ type = "Enabled"
 [component_compilation.config]
 connect_timeout = "10s"
 host = "localhost"
+max_message_size = 33554432
 port = 9091
 
 [component_compilation.config.retries_on_unavailable]
@@ -60,7 +61,7 @@ type = "Disabled"
 
 [grpc.tls.config]
 
-[initial_accounts.builtin-plugin-owner]
+[initial_accounts.builtin_plugin_owner]
 email = "builtin-plugin-owner@golem.cloud"
 id = "adb2694f-cd9f-425d-905d-ca2888c9c5de"
 name = "Builtin Plugin Owner"
@@ -112,8 +113,8 @@ client_secret = "GITHUB_CLIENT_SECRET"
 redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback"
 
 [login.config.oauth2]
-private_key = "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
-public_key = "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg="
+allowed_redirect_domains = ["localhost", "golem.cloud"]
+cli_redirect = "https://golem.cloud/"
 webflow_state_expiry = "5m"
 
 [security_scheme]

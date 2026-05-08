@@ -59,9 +59,9 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
+use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry};
 use golem_common::model::{
-    AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
+    AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
     OwnedAgentId, ScanCursor, ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation,
 };
@@ -72,6 +72,7 @@ use golem_service_base::grpc::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -161,6 +162,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn ensure_not_failed(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         metadata: &AgentMetadata,
     ) -> Result<(), WorkerExecutorError> {
         match &metadata.last_known_status.status {
@@ -168,6 +170,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     self,
                     owned_agent_id,
+                    agent_mode,
                     &metadata.last_known_status,
                 )
                 .await;
@@ -188,6 +191,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     self,
                     owned_agent_id,
+                    agent_mode,
                     &metadata.last_known_status,
                 )
                 .await;
@@ -248,10 +252,53 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
+    /// Checks whether a create-worker request carries the same per-worker override
+    /// parameters that an already-persisted worker was created with. When this returns
+    /// `true` the request is treated as an idempotent duplicate and execution falls
+    /// through to `get_or_create_suspended` which handles the already-existing worker.
+    ///
+    /// All three fields store only per-worker overrides — agent-type defaults are
+    /// applied at runtime and not stored. Direct equality is therefore used for all three.
+    fn is_same_worker_creation_request(
+        existing: &AgentMetadata,
+        request_env: &[(String, String)],
+        request_config: &[AgentConfigEntryDto],
+    ) -> bool {
+        // env — both sides hold only per-worker overrides; compare order-independently
+        let existing_env: HashMap<&str, &str> = existing
+            .env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let request_env_map: HashMap<&str, &str> = request_env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        if existing_env != request_env_map {
+            return false;
+        }
+
+        // config — both sides hold only per-worker overrides; compare path and value
+        if existing.config.len() != request_config.len() {
+            return false;
+        }
+        for (existing_entry, request_entry) in existing.config.iter().zip(request_config.iter()) {
+            if existing_entry.path != request_entry.path {
+                return false;
+            }
+            let existing_json = existing_entry.value.to_json_value().ok();
+            if existing_json.as_ref() != Some(&request_entry.value.0) {
+                return false;
+            }
+        }
+
+        true
+    }
+
     async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<AgentFingerprint, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
@@ -259,22 +306,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let existing_worker = self.worker_service().get(&owned_agent_id).await;
-        if existing_worker.is_some() && !request.ignore_already_existing {
-            return Err(WorkerExecutorError::worker_already_exists(
-                owned_agent_id.agent_id(),
-            ));
-        }
-
         let principal = extract_principal(&request.principal);
 
-        let env = request
+        let env: Vec<(String, String)> = request
             .env
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-
-        let wasi_config = request.wasi_config.into_iter().collect();
 
         let config = request
             .config
@@ -287,13 +325,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
+        // NOTE: to return creation (limit) errors, we still "get_or_create",
+        //       even if the worker already exists with ignore_already_existing requested
+        let existing_worker = self.worker_service().get(&owned_agent_id).await;
+        if let Some(existing) = existing_worker
+            && !request.ignore_already_existing
+            && !Self::is_same_worker_creation_request(
+                &existing.initial_worker_metadata,
+                &env,
+                &config,
+            )
+        {
+            return Err(WorkerExecutorError::worker_already_exists(
+                owned_agent_id.agent_id(),
+            ));
+        }
+
         let invocation_context = from_proto_invocation_context(&request.invocation_context);
 
         let worker = Worker::get_or_create_suspended(
             self,
             &owned_agent_id,
             Some(env),
-            Some(wasi_config),
             config,
             None,
             None,
@@ -301,6 +354,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             principal,
         )
         .await?;
+
+        let fingerprint = worker.get_initial_worker_metadata().fingerprint;
 
         let mut subscription = self.events().subscribe();
         Worker::start_if_needed(worker.clone()).await?;
@@ -316,7 +371,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 })
                 .await
             {
-                Ok(Ok(())) => Ok(()),
+                Ok(Ok(())) => Ok(fingerprint),
                 Ok(Err(e)) => Err(e),
                 Err(RecvError::Closed) => {
                     Err(WorkerExecutorError::unknown("Events subscription closed"))
@@ -326,7 +381,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 )),
             }
         } else {
-            Ok(())
+            Ok(fingerprint)
         }
     }
 
@@ -383,7 +438,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = Worker::get_or_create_suspended(
             self,
             &owned_agent_id,
-            None,
             None,
             Vec::new(),
             None,
@@ -497,7 +551,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self,
                     &owned_agent_id,
                     None,
-                    None,
                     Vec::new(),
                     None,
                     None,
@@ -548,7 +601,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let worker = Worker::get_or_create_suspended(
                 self,
                 &owned_agent_id,
-                None,
                 None,
                 Vec::new(),
                 None,
@@ -604,7 +656,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         self,
                         &owned_agent_id,
                         None,
-                        None,
                         Vec::new(),
                         None,
                         None,
@@ -627,7 +678,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         self,
                         &owned_agent_id,
                         None,
-                        None,
                         Vec::new(),
                         None,
                         None,
@@ -648,7 +698,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let worker = Worker::get_or_create_suspended(
                         self,
                         &owned_agent_id,
-                        None,
                         None,
                         Vec::new(),
                         None,
@@ -696,7 +745,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_agent_id, &metadata).await?;
+        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
+            .await?;
 
         match &metadata.last_known_status.status {
             AgentStatus::Suspended | AgentStatus::Interrupted | AgentStatus::Idle => {
@@ -707,7 +757,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let _ = Worker::get_or_create_running(
                     &self.services,
                     &owned_agent_id,
-                    None,
                     None,
                     Vec::new(),
                     None,
@@ -726,7 +775,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let _ = Worker::get_or_create_running(
                     &self.services,
                     &owned_agent_id,
-                    None,
                     None,
                     Vec::new(),
                     None,
@@ -779,7 +827,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             request.env(),
-            request.wasi_config()?,
             request.config(),
             None,
             request.parent(),
@@ -804,7 +851,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await;
 
         if let Some(metadata) = &metadata {
-            self.ensure_not_failed(&owned_agent_id, metadata).await?;
+            self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, metadata)
+                .await?;
         }
 
         let invocation_context = request
@@ -815,7 +863,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             request.env(),
-            request.wasi_config()?,
             request.config(),
             None,
             request.parent(),
@@ -877,9 +924,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        let last_error_and_retry_count =
-            Ctx::get_last_error_and_retry_count(self, &owned_agent_id, &metadata.last_known_status)
-                .await;
+        let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
+            self,
+            &owned_agent_id,
+            metadata.agent_mode,
+            &metadata.last_known_status,
+        )
+        .await;
 
         Self::create_proto_metadata(metadata, last_error_and_retry_count)
     }
@@ -955,6 +1006,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
                 self,
                 &worker_metadata.owned_agent_id(),
+                worker_metadata.agent_mode,
                 &worker_metadata.last_known_status,
             )
             .await;
@@ -1023,6 +1075,43 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
+        // Reject mode-changing updates: the target component revision must keep the worker's
+        // agent type at the same `agent_mode` that the worker was created with. Changing the
+        // mode would route subsequent oplog reads/writes to a different namespace and silently
+        // lose the worker's history.
+        //
+        // If the target revision cannot be resolved (e.g. it does not exist yet), we skip the
+        // check and let the update be queued; the worker's update loop is the canonical place
+        // that records a FailedUpdate for unknown revisions, and we must not bypass that path
+        // by failing synchronously here.
+        if let Ok(target_component_metadata) = self
+            .component_service()
+            .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
+            .await
+            && let Ok(agent_id) = ParsedAgentId::parse(
+                &owned_agent_id.agent_id.agent_id,
+                &target_component_metadata.metadata,
+            )
+            && let Some(target_agent_type) = target_component_metadata
+                .metadata
+                .find_agent_type_by_name(&agent_id.agent_type)
+        {
+            let persisted_mode = metadata.agent_mode;
+            if target_agent_type.mode != persisted_mode {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Cannot update worker {} from {:?} to component revision {}: the agent type \
+                     '{}' has mode {:?} in the target revision but the worker was created with \
+                     mode {:?}. Changing an agent type's mode across revisions is not supported.",
+                    owned_agent_id,
+                    persisted_mode,
+                    target_revision,
+                    agent_id.agent_type,
+                    target_agent_type.mode,
+                    persisted_mode,
+                )));
+            }
+        }
+
         let disable_wakeup = request.disable_wakeup;
 
         match request.mode() {
@@ -1055,7 +1144,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             self,
                             &owned_agent_id,
                             None,
-                            None,
                             Vec::new(),
                             Some(metadata.last_known_status.component_revision),
                             None,
@@ -1081,7 +1169,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let worker = Worker::get_or_create_suspended(
                             self,
                             &owned_agent_id,
-                            None,
                             None,
                             Vec::new(),
                             None,
@@ -1118,7 +1205,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let worker = Worker::get_or_create_suspended(
                     self,
                     &owned_agent_id,
-                    None,
                     None,
                     Vec::new(),
                     None,
@@ -1158,13 +1244,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_agent_id, &metadata).await?;
+        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
+            .await?;
 
         if metadata.last_known_status.status != AgentStatus::Interrupted {
             let event_service = Worker::get_or_create_suspended(
                 self,
                 &owned_agent_id,
-                None,
                 None,
                 Vec::new(),
                 None,
@@ -1201,6 +1287,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name =
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
+        let component_service = self.component_service();
+        let agent_mode = self
+            .worker_service()
+            .get_agent_mode(&owned_agent_id)
+            .await
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "agent {owned_agent_id} does not exist"
+                ))
+            })?;
+
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1211,9 +1308,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     })?;
 
                 get_public_oplog_chunk(
-                    self.component_service(),
+                    component_service.clone(),
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1227,14 +1325,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             None => {
                 let start = OplogIndex::from_u64(request.from_oplog_index);
-                let initial_component_revision =
-                    find_component_revision_at(self.oplog_service(), &owned_agent_id, start)
-                        .await?;
-
-                get_public_oplog_chunk(
-                    self.component_service(),
+                let initial_component_revision = find_component_revision_at(
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
+                    start,
+                )
+                .await?;
+
+                get_public_oplog_chunk(
+                    component_service.clone(),
+                    self.oplog_service(),
+                    &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
@@ -1288,6 +1391,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name =
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
+        let component_service = self.component_service();
+        let agent_mode = self
+            .worker_service()
+            .get_agent_mode(&owned_agent_id)
+            .await
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "agent {owned_agent_id} does not exist"
+                ))
+            })?;
+
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1298,9 +1412,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     })?;
 
                 search_public_oplog(
-                    self.component_service(),
+                    component_service.clone(),
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1315,13 +1430,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             None => {
                 let start = OplogIndex::INITIAL;
-                let initial_component_revision =
-                    find_component_revision_at(self.oplog_service(), &owned_agent_id, start)
-                        .await?;
-                search_public_oplog(
-                    self.component_service(),
+                let initial_component_revision = find_component_revision_at(
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
+                    start,
+                )
+                .await?;
+                search_public_oplog(
+                    component_service.clone(),
+                    self.oplog_service(),
+                    &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
@@ -1542,7 +1662,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 self,
                                 &owned_agent_id,
                                 None,
-                                None,
                                 Vec::new(),
                                 None,
                                 None,
@@ -1614,7 +1733,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let worker = Worker::get_or_create_suspended(
                         self,
                         &owned_agent_id,
-                        None,
                         None,
                         Vec::new(),
                         None,
@@ -1736,6 +1854,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
                 match schedule_at {
                     Some(scheduled_time) => {
+                        let worker = self.get_or_create_pending(&request).await?;
+                        let target_worker_fingerprint =
+                            worker.get_initial_worker_metadata().fingerprint;
                         self.scheduler_service()
                             .schedule(
                                 scheduled_time,
@@ -1743,6 +1864,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     account_id,
                                     owned_agent_id,
                                     invocation: Box::new(invocation),
+                                    target_worker_fingerprint,
                                 },
                             )
                             .await;
@@ -1805,7 +1927,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_id: metadata_dto.agent_id,
             args: vec![],
             env: metadata_dto.env.into_iter().collect(),
-            wasi_config: metadata_dto.wasi_config,
+            config: TypedAgentConfigEntry::to_flat_map(&metadata_dto.config),
             status: metadata_dto.status,
             component_revision: metadata_dto.component_revision,
             retry_count: metadata_dto.retry_count as u64,
@@ -1824,7 +1946,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = Worker::get_or_create_running(
             self,
             &owned_agent_id,
-            None,
             None,
             Vec::new(),
             Some(component_revision),
@@ -1915,7 +2036,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_id: Some(metadata.agent_id.into()),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
-            wasi_config: metadata.wasi_config.into_iter().collect(),
             config: metadata.config.into_iter().map(Into::into).collect(),
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),
@@ -1981,11 +2101,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await
         {
-            Ok(_) => record.succeed(Ok(Response::new(
+            Ok(fingerprint) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::v1::CreateWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::create_worker_response::Result::Success(
-                            golem::common::Empty {},
+                            golem::workerexecutor::v1::CreateWorkerSuccessResponse {
+                                instance_id: Some(fingerprint.0.into()),
+                            },
                         ),
                     ),
                 },

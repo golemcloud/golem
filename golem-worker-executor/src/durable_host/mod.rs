@@ -38,6 +38,7 @@ use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
+use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::storage::{
     STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
 };
@@ -46,7 +47,6 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
-use crate::services::HasOplogService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -68,6 +68,7 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
+use crate::services::{HasComponentService, HasOplogService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
@@ -122,7 +123,7 @@ use golem_service_base::model::{
 use golem_wasm::Uri;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use replay_state::ReplayEvent;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -269,7 +270,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Worker {} starting replay from component revision {}",
             owned_agent_id.agent_id, worker_config.component_revision_for_replay
         );
-
         let component_metadata = component_service
             .get_metadata(
                 owned_agent_id.component_id(),
@@ -284,7 +284,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .get(&agent_id.agent_type)
                 .cloned()
         });
-
         let files = prepare_filesystem(
             &file_loader,
             owned_agent_id.environment_id,
@@ -323,14 +322,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }
 
-        let wasi_config = effective_config_vars(
-            worker_config.initial_wasi_config.clone(),
-            agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.wasi_config.clone())
-                .unwrap_or_default(),
-        );
-
         let agent_config = if agent_id.is_some() {
             effective_agent_config(
                 worker_config.initial_agent_config.clone(),
@@ -346,7 +337,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
         let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
-
+        let suspend_threshold = match execution_status.read().unwrap().agent_mode() {
+            AgentMode::Durable => config.suspend.suspend_after,
+            AgentMode::Ephemeral => config.suspend.ephemeral_max_sleep,
+        };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
             worker_dir.path().to_path_buf(),
@@ -354,7 +348,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             stdout,
             stderr,
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
-            config.suspend.suspend_after,
+            suspend_threshold,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
         let mut wasi_http = WasiHttpCtx::new();
@@ -401,8 +395,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 TRwLock::new(files),
                 file_loader,
                 worker_config.created_by,
-                worker_config.initial_wasi_config,
-                wasi_config,
                 worker_config.initial_agent_config,
                 agent_config,
                 shard_service,
@@ -752,6 +744,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => RetryDecision::None,
             TrapType::Error {
+                error:
+                    AgentError::EphemeralSleepTooLong(_)
+                    | AgentError::EphemeralFuelExhausted(_)
+                    | AgentError::EphemeralCannotSuspend(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
                 error: AgentError::InternalError(_),
                 ..
             } => RetryDecision::None,
@@ -833,6 +832,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::Unknown(_) => "unknown",
             AgentError::TransientError(_) => "transient-error",
             AgentError::AgentTerminatedByQuota(_) => "agent-terminated-by-quota",
+            AgentError::EphemeralSleepTooLong(_) => "ephemeral-sleep-too-long",
+            AgentError::EphemeralFuelExhausted(_) => "ephemeral-fuel-exhausted",
+            AgentError::EphemeralCannotSuspend(_) => "ephemeral-cannot-suspend",
         }
     }
 
@@ -958,6 +960,42 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } = &entry
         {
+            // Oplog processor plugin logs are emitted into the server log because
+            // they cannot be easily watched with CLI tools.
+            if self.state.component_metadata.metadata.has_oplog_processor() {
+                let agent_id = &self.owned_agent_id;
+                match level {
+                    LogLevel::Stdout | LogLevel::Debug | LogLevel::Trace => {
+                        tracing::debug!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Stderr | LogLevel::Info => {
+                        tracing::info!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Warn => {
+                        tracing::warn!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Error | LogLevel::Critical => {
+                        tracing::error!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                }
+            }
+
             match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
                 LogEventEmitBehaviour::LiveOnly => {
                     // Stdout and stderr writes are persistent and overwritten by sending the data to the event
@@ -1527,6 +1565,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             }
                         };
 
+                        let invocation_context = InvocationContextStack::fresh();
+                        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+                        if let Err(err) = store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
+                            .set_current_invocation_context(invocation_context)
+                            .await
+                        {
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .on_worker_update_failed(
+                                    target_revision,
+                                    Some(format!(
+                                        "Manual update failed to install invocation context: {err}"
+                                    )),
+                                )
+                                .await;
+                            return Some(RetryDecision::Immediate);
+                        }
+
                         store
                             .as_context_mut()
                             .data_mut()
@@ -1536,7 +1596,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            &component_metadata,
                             InvocationMode::Replay,
                         )
                         .await;
@@ -1545,6 +1604,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .as_context_mut()
                             .data_mut()
                             .end_call_snapshotting_function();
+
+                        for span_id in local_span_ids {
+                            let _ = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .remove_span(&span_id);
+                        }
+                        for span_id in inherited_span_ids {
+                            let _ = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .remove_span(&span_id);
+                        }
 
                         let failed = match load_result {
                             Err(error) => {
@@ -1745,24 +1819,46 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         };
 
+        let invocation_context = InvocationContextStack::fresh();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+        if let Err(err) = store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_invocation_context(invocation_context)
+            .await
+        {
+            warn!("Snapshot recovery failed to install invocation context: {err}");
+            return SnapshotRecoveryResult::Failed;
+        }
+
         store
             .as_context_mut()
             .data_mut()
             .begin_call_snapshotting_function();
 
-        let load_result = invoke_observed_and_traced(
-            lowered,
-            store,
-            instance,
-            &component_metadata,
-            InvocationMode::Replay,
-        )
-        .await;
+        let load_result =
+            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
 
         store
             .as_context_mut()
             .data_mut()
             .end_call_snapshotting_function();
+
+        for span_id in local_span_ids {
+            let _ = store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .remove_span(&span_id);
+        }
+        for span_id in inherited_span_ids {
+            let _ = store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .remove_span(&span_id);
+        }
 
         let failed = match load_result {
             Err(error) => Some(format!(
@@ -1956,14 +2052,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
 
-        self.state.wasi_config = effective_config_vars(
-            self.state.initial_config_vars.clone(),
-            new_agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.wasi_config.clone())
-                .unwrap_or_default(),
-        );
-
         if let Some(agent_id) = self.parsed_agent_id() {
             let agent_type = new_metadata
                 .metadata
@@ -2153,6 +2241,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         trap_type: &TrapType,
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
+
+        if let TrapType::Error { error, .. } = trap_type {
+            match error {
+                AgentError::EphemeralSleepTooLong(_) => {
+                    record_non_suspending_failure("sleep-too-long")
+                }
+                AgentError::EphemeralFuelExhausted(_) => {
+                    record_non_suspending_failure("fuel-exhausted")
+                }
+                AgentError::EphemeralCannotSuspend(_) => {
+                    record_non_suspending_failure("cannot-suspend")
+                }
+                _ => {}
+            }
+        }
 
         // Special case: jumping is always immediate and may not have a non-detached status.
         if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
@@ -2490,13 +2593,17 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
 
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if &self.state.current_span_id == span_id {
-            self.state.current_span_id = self
+            // Walk up to the parent if it still exists in the invocation context;
+            // otherwise fall back to the root.
+            let parent_id = self
                 .state
                 .invocation_context
                 .get(span_id)
-                .unwrap()
-                .parent()
-                .map(|p| p.span_id().clone())
+                .ok()
+                .and_then(|span| span.parent().map(|p| p.span_id().clone()));
+
+            self.state.current_span_id = parent_id
+                .filter(|id| self.state.invocation_context.get(id).is_ok())
                 .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
         }
         let _ = self
@@ -2579,9 +2686,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError> {
-        last_error(this, owned_agent_id, latest_worker_status).await
+        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
     }
 
     async fn resume_replay(
@@ -2704,7 +2812,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            &component_metadata,
                             InvocationMode::Replay,
                         )
                         .instrument(span)
@@ -2755,6 +2862,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     Err(error) => Some(TrapType::from_error::<Ctx>(
                                         &anyhow!(error),
                                         OplogIndex::INITIAL,
+                                        store.as_context().data().agent_mode(),
                                     )),
                                 };
                                 let decision = match trap_type {
@@ -2982,47 +3090,98 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-
-        info!("Recovering workers");
-
         let workers = this.worker_service().get_running_workers_in_shards().await;
 
-        debug!("Recovering running workers: {:?}", workers);
+        debug!(workers = ?workers, "Recovering running workers");
 
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
             let latest_worker_status = calculate_last_known_status_for_existing_worker(
                 this,
                 &owned_agent_id,
+                worker.initial_worker_metadata.agent_mode,
                 worker.last_known_status,
             )
             .await;
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
-            match latest_worker_status.status {
-                AgentStatus::Running
-                | AgentStatus::Idle
-                | AgentStatus::Retrying
-                | AgentStatus::Interrupted => {
-                    let _ = Worker::get_or_create_running(
-                        this,
-                        &owned_agent_id,
-                        None,
-                        None,
-                        Vec::new(),
-                        None,
-                        None,
-                        &InvocationContextStack::fresh(),
-                        Principal::anonymous(),
-                    )
-                    .await?;
-                }
-                _ => {}
+            if should_restart_after_shard_assignment_change(&latest_worker_status) {
+                let _ = Worker::get_or_create_running(
+                    this,
+                    &owned_agent_id,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    &InvocationContextStack::fresh(),
+                    Principal::anonymous(),
+                )
+                .await?;
             }
         }
 
-        info!("Finished recovering workers");
         Ok(())
+    }
+}
+
+fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
+    matches!(
+        status.status,
+        AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying | AgentStatus::Interrupted
+    ) || status.has_pending_work()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::AgentInvocation;
+    use golem_common::model::TimestampedAgentInvocation;
+    use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+    use test_r::test;
+
+    #[test]
+    fn shard_assignment_recovery_restarts_idle_workers_with_pending_invocations() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Idle,
+            ..AgentStatusRecord::default()
+        };
+        status.pending_invocations.push(TimestampedAgentInvocation {
+            timestamp: Timestamp::now_utc(),
+            invocation: AgentInvocation::ManualUpdate {
+                target_revision: ComponentRevision::INITIAL,
+            },
+        });
+
+        assert!(should_restart_after_shard_assignment_change(&status));
+    }
+
+    #[test]
+    fn shard_assignment_recovery_restarts_idle_workers_with_pending_updates() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Idle,
+            ..AgentStatusRecord::default()
+        };
+        status
+            .pending_updates
+            .push_back(TimestampedUpdateDescription {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::INITIAL,
+                description: UpdateDescription::Automatic {
+                    target_revision: ComponentRevision::INITIAL,
+                },
+            });
+
+        assert!(should_restart_after_shard_assignment_change(&status));
+    }
+
+    #[test]
+    fn shard_assignment_recovery_skips_suspended_workers_without_pending_work() {
+        let status = AgentStatusRecord {
+            status: AgentStatus::Suspended,
+            ..AgentStatusRecord::default()
+        };
+
+        assert!(!should_restart_after_shard_assignment_change(&status));
     }
 }
 
@@ -3188,9 +3347,13 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
 async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     latest_worker_status: &AgentStatusRecord,
 ) -> Option<LastError> {
-    let mut idx = this.oplog_service().get_last_index(owned_agent_id).await;
+    let mut idx = this
+        .oplog_service()
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
     if idx == OplogIndex::NONE {
         None
     } else {
@@ -3209,7 +3372,10 @@ async fn last_error<T: HasOplogService + HasConfig>(
                     break;
                 }
             } else {
-                let oplog_entry = this.oplog_service().read(owned_agent_id, idx, 1).await;
+                let oplog_entry = this
+                    .oplog_service()
+                    .read(owned_agent_id, agent_mode, idx, 1)
+                    .await;
                 match oplog_entry.first_key_value() {
                     Some((
                         _,
@@ -3271,7 +3437,8 @@ async fn last_error<T: HasOplogService + HasConfig>(
         match first_error {
             Some(error) => Some(LastError {
                 error,
-                stderr: recover_stderr_logs(this, owned_agent_id, last_error_index).await,
+                stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index)
+                    .await,
                 retry_from: first_retry_from,
             }),
             None => None,
@@ -3284,6 +3451,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
 pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     last_oplog_idx: OplogIndex,
 ) -> String {
     let max_count = this.config().limits.event_history_size;
@@ -3298,7 +3466,10 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
 
     loop {
         // TODO: this could be read in batches to speed up the process
-        let oplog_entry = this.oplog_service().read(owned_agent_id, idx, 1).await;
+        let oplog_entry = this
+            .oplog_service()
+            .read(owned_agent_id, agent_mode, idx, 1)
+            .await;
 
         // Because of retries we might have multiple invocation start entries.
         // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
@@ -3311,25 +3482,24 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     context,
                     ..
                 },
-            )) if level == &LogLevel::Warn
+            )) if (level == &LogLevel::Warn
                 || level == &LogLevel::Error
                 || level == &LogLevel::Critical
-                || level == &LogLevel::Stderr =>
+                || level == &LogLevel::Stderr)
+                && collected_count < max_count =>
             {
-                if collected_count < max_count {
-                    if level == &LogLevel::Stderr {
-                        current_stderr_entries_batch.push(message.clone());
-                    } else {
-                        let line = format!(
-                            "[{}] [{}] {}\n",
-                            format!("{level:?}").to_uppercase(),
-                            context,
-                            message
-                        );
-                        current_stderr_entries_batch.push(line);
-                    }
-                    collected_count += 1;
+                if level == &LogLevel::Stderr {
+                    current_stderr_entries_batch.push(message.clone());
+                } else {
+                    let line = format!(
+                        "[{}] [{}] {}\n",
+                        format!("{level:?}").to_uppercase(),
+                        context,
+                        message
+                    );
+                    current_stderr_entries_batch.push(line);
                 }
+                collected_count += 1;
             }
             Some((
                 _,
@@ -3571,11 +3741,6 @@ struct PrivateDurableWorkerState {
 
     shard_service: Arc<dyn ShardService>,
 
-    /// The initial config vars that the worker was configured with
-    initial_config_vars: BTreeMap<String, String>,
-    /// The current config vars of the worker, taking into account component version, etc.
-    wasi_config: BTreeMap<String, String>,
-
     // The initial local agent config that the worker was configured with
     initial_agent_config: Vec<TypedAgentConfigEntry>,
     /// The current local agent config of the worker, taking the component revision into account
@@ -3667,8 +3832,6 @@ impl PrivateDurableWorkerState {
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
-        initial_config_vars: BTreeMap<String, String>,
-        wasi_config: BTreeMap<String, String>,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
         shard_service: Arc<dyn ShardService>,
@@ -3691,7 +3854,6 @@ impl PrivateDurableWorkerState {
         } else {
             deleted_regions
         };
-
         let replay_state =
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await;
         let invocation_context = InvocationContext::new(None);
@@ -3745,8 +3907,6 @@ impl PrivateDurableWorkerState {
             files,
             file_loader,
             created_by,
-            initial_config_vars,
-            wasi_config,
             initial_agent_config,
             config,
             cached_agent_config_retry_policies: None,
@@ -4067,6 +4227,12 @@ impl HasOplog for PrivateDurableWorkerState {
 impl HasConfig for PrivateDurableWorkerState {
     fn config(&self) -> Arc<GolemConfig> {
         self.config.clone()
+    }
+}
+
+impl HasComponentService for PrivateDurableWorkerState {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
+        self.component_service.clone()
     }
 }
 
@@ -4471,23 +4637,6 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
         _ => None,
     });
     HashSet::from_iter(ro_paths)
-}
-
-fn effective_config_vars(
-    worker_config_vars: BTreeMap<String, String>,
-    component_config_vars: BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut result = BTreeMap::new();
-
-    for (k, v) in component_config_vars {
-        result.insert(k, v);
-    }
-
-    for (k, v) in worker_config_vars {
-        result.insert(k, v);
-    }
-
-    result
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

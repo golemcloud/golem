@@ -14,6 +14,7 @@
 
 use crate::base_model::AgentId;
 use crate::base_model::account::AccountId;
+use crate::base_model::application::ApplicationId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use crate::base_model::diff::Hash as DiffHash;
@@ -150,7 +151,7 @@ pub struct ResolvedAgentType {
     pub registered_agent_type: RegisteredAgentType,
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
-    // Present only when resolving at the latest current deployment (no explicit deployment
+    // Present only when resolving at the current deployment (no explicit deployment
     // revision requested).
     pub current_deployment_revision: Option<CurrentDeploymentRevision>,
 }
@@ -164,8 +165,8 @@ pub enum RegistryInvalidationEvent {
     DeploymentChanged {
         event_id: u64,
         environment_id: EnvironmentId,
-        deployment_revision: u64,
-        current_deployment_revision: u64,
+        deployment_revision: DeploymentRevision,
+        current_deployment_revision: CurrentDeploymentRevision,
     },
     /// Domain registrations changed (created/deleted).
     DomainRegistrationChanged {
@@ -206,6 +207,30 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         environment_id: EnvironmentId,
     },
+    /// An application was deleted. Subscribers should flush any cache entries
+    /// keyed on the application's name so that a subsequent same-name recreation
+    /// resolves through a fresh lookup rather than returning stale identifiers
+    /// for the now-orphaned environments/components.
+    ApplicationDeleted {
+        event_id: u64,
+        application_id: ApplicationId,
+        account_id: AccountId,
+        /// Human-readable application name (matches AgentResolutionCache key).
+        app_name: String,
+        /// All non-deleted environment UUIDs under this application at deletion time.
+        environment_ids: Vec<EnvironmentId>,
+    },
+    /// An environment was deleted. Subscribers should flush any cache entries
+    /// scoped to this environment so that a same-name recreation does not serve
+    /// stale resolutions pointing at the deleted environment's components.
+    EnvironmentDeleted {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        /// Human-readable application name (matches AgentResolutionCache key).
+        app_name: String,
+        /// Human-readable environment name (matches AgentResolutionCache key).
+        env_name: String,
+    },
 }
 
 impl RegistryInvalidationEvent {
@@ -220,16 +245,53 @@ impl RegistryInvalidationEvent {
             Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
             Self::AgentSecretChanged { event_id, .. } => *event_id,
+            Self::ApplicationDeleted { event_id, .. } => *event_id,
+            Self::EnvironmentDeleted { event_id, .. } => *event_id,
         }
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(i32)]
+#[wit(name = "agent-mode", owner = "golem:api@1.5.0/oplog")]
 pub enum AgentMode {
     Durable = 0,
     Ephemeral = 1,
+}
+
+impl Display for AgentMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentMode::Durable => write!(f, "Durable"),
+            AgentMode::Ephemeral => write!(f, "Ephemeral"),
+        }
+    }
+}
+
+impl FromStr for AgentMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "durable" => Ok(AgentMode::Durable),
+            "ephemeral" => Ok(AgentMode::Ephemeral),
+            _ => Err(format!("Unknown agent mode: {s}")),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

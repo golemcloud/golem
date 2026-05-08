@@ -17,6 +17,7 @@ test_r::enable!();
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 #[test_r::sequential]
+#[allow(clippy::disallowed_names)]
 mod tests {
     use golem_rust::agentic::{
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
@@ -531,6 +532,33 @@ mod tests {
         }
     }
 
+    mod aliased_agent_api {
+        use super::agent_definition;
+
+        #[agent_definition]
+        pub trait CanonicallyNamedAgent {
+            fn new(id: String) -> Self;
+            fn ping(&self) -> String;
+        }
+    }
+
+    use aliased_agent_api::CanonicallyNamedAgent as RenamedAgent;
+
+    struct AliasedAgentImplementation {
+        id: String,
+    }
+
+    #[agent_implementation]
+    impl RenamedAgent for AliasedAgentImplementation {
+        fn new(id: String) -> Self {
+            Self { id }
+        }
+
+        fn ping(&self) -> String {
+            self.id.clone()
+        }
+    }
+
     #[derive(Schema, MultimodalSchema)]
     enum TextOrImage {
         Text(String),
@@ -548,6 +576,26 @@ mod tests {
         assert!(true);
     }
 
+    #[test]
+    fn test_aliased_agent_implementation_uses_canonical_agent_name() {
+        use golem_rust::agentic::{get_agent_type_by_name, with_agent_initiator};
+
+        AliasedAgentImplementation::__register_agent_type();
+
+        let canonical_name = AgentTypeName("CanonicallyNamedAgent".to_string());
+        let alias_name = AgentTypeName("RenamedAgent".to_string());
+
+        let agent = AliasedAgentImplementation::new("id".to_string());
+
+        assert!(get_agent_type_by_name(&canonical_name).is_some());
+        assert!(get_agent_type_by_name(&alias_name).is_none());
+        assert_eq!(agent.get_definition().type_name, canonical_name.0);
+
+        let initiator_registered_under_canonical_name =
+            with_agent_initiator(|_| async { true }, &canonical_name);
+        assert!(initiator_registered_under_canonical_name);
+    }
+
     #[agent_definition]
     #[description("a descriptive agent")]
     pub trait DescriptiveAgent {
@@ -562,6 +610,7 @@ mod tests {
 
     struct DescriptiveAgentImpl {}
 
+    #[agent_implementation]
     impl DescriptiveAgent for DescriptiveAgentImpl {
         fn new(_name: String) -> Self {
             DescriptiveAgentImpl {}
@@ -1533,5 +1582,98 @@ mod tests {
             .get(multi_tuple_idx as usize)
             .expect("missing MultiTuple payload node");
         assert_eq!(multi_tuple_node.name.as_deref(), Some("MultiTuple"));
+    }
+
+    #[agent_definition(mount = "/test")]
+    trait AllHttpMethodsAgent {
+        fn new() -> Self;
+
+        #[endpoint(get = "/get")]
+        fn get_method(&self) -> String;
+
+        #[endpoint(post = "/post")]
+        fn post_method(&self) -> String;
+
+        #[endpoint(put = "/put")]
+        fn put_method(&self) -> String;
+
+        #[endpoint(delete = "/delete")]
+        fn delete_method(&self) -> String;
+
+        #[endpoint(patch = "/patch")]
+        fn patch_method(&self) -> String;
+    }
+
+    struct AllHttpMethodsAgentImpl;
+
+    #[agent_implementation]
+    impl AllHttpMethodsAgent for AllHttpMethodsAgentImpl {
+        fn new() -> Self {
+            AllHttpMethodsAgentImpl
+        }
+
+        fn get_method(&self) -> String {
+            "GET".to_string()
+        }
+
+        fn post_method(&self) -> String {
+            "POST".to_string()
+        }
+
+        fn put_method(&self) -> String {
+            "PUT".to_string()
+        }
+
+        fn delete_method(&self) -> String {
+            "DELETE".to_string()
+        }
+
+        fn patch_method(&self) -> String {
+            "PATCH".to_string()
+        }
+    }
+
+    #[test]
+    fn test_all_http_methods_supported() {
+        use golem_rust::agentic::get_all_agent_types;
+
+        let agent_types = get_all_agent_types();
+
+        let agent = agent_types
+            .iter()
+            .find(|a| a.type_name == "AllHttpMethodsAgent")
+            .expect("AllHttpMethodsAgent not found");
+
+        let expected_methods = vec![
+            ("get_method", "HttpMethod::Get"),
+            ("post_method", "HttpMethod::Post"),
+            ("put_method", "HttpMethod::Put"),
+            ("delete_method", "HttpMethod::Delete"),
+            ("patch_method", "HttpMethod::Patch"),
+        ];
+
+        for (method_name, expected_http_method) in expected_methods {
+            let method = agent
+                .methods
+                .iter()
+                .find(|m| m.name == method_name)
+                .unwrap_or_else(|| panic!("Method {} not found", method_name));
+
+            assert_eq!(
+                method.http_endpoint.len(),
+                1,
+                "Method {} should have exactly one HTTP endpoint",
+                method_name
+            );
+
+            let endpoint = &method.http_endpoint[0];
+            // Convert HttpMethod enum to string representation for comparison
+            let method_str = format!("{:?}", endpoint.http_method);
+            assert_eq!(
+                method_str, expected_http_method,
+                "HTTP method mismatch for {}",
+                method_name
+            );
+        }
     }
 }

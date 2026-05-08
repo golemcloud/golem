@@ -1,0 +1,296 @@
+name: Skill Harness
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly on Monday at 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  checks: write
+  pull-requests: write
+  actions: read
+  contents: read
+
+env:
+  BUILD_TARGET: "x86_64-unknown-linux-gnu"
+  WASM_RQUICKJS_VERSION: "0.2.4"
+  WASI_SDK_VERSION: "25"
+  WASI_SDK_PATH: /opt/wasi-sdk
+
+jobs:
+  build-and-store-release:
+    env:
+      CARGO_BUILD_JOBS: 20
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-save-if: 'true'
+          cache-shared-key: 'release'
+      - name: Building all executables (release)
+        env:
+          QUIET: true
+        run: cargo make --profile ci build-release-full
+        timeout-minutes: 30
+      - name: Package release binaries
+        run: |
+          mkdir -pv tmp/golem-release-binaries
+          cp target/release/golem tmp/golem-release-binaries/ 2>/dev/null || true          
+          find tmp/golem-release-binaries -type f | sort
+        timeout-minutes: 5
+      - name: Save release binaries to cache
+        uses: actions/cache/save@v5
+        with:
+          path: tmp/golem-release-binaries
+          key: golem-release-binaries-${{ github.run_id }}
+
+  build-golem-ts:
+    runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
+
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Install dependencies
+        working-directory: sdks/ts
+        run: pnpm install
+
+      - name: Build the package
+        working-directory: sdks/ts
+        run: pnpm run build
+
+      - name: Build the agent template WASM binary
+        working-directory: sdks/ts
+        run: pnpm run build-agent-template
+
+      - name: Save built TS SDK
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            sdks/ts/packages/golem-ts-sdk/dist
+            sdks/ts/packages/golem-ts-sdk/types
+            sdks/ts/packages/golem-ts-sdk/wasm
+            sdks/ts/packages/golem-ts-typegen/dist
+            sdks/ts/packages/golem-ts-types-core/dist
+            sdks/ts/packages/golem-ts-bridge/dist
+            sdks/ts/packages/golem-ts-repl/dist
+          key: golem-ts-sdk-skill-harness-${{ github.run_id }}
+
+  # Provider-grouped jobs: jobs within each group run sequentially (max-parallel: 1)
+  # to avoid rate limiting, while different provider groups run in parallel.
+
+  skill-harness-anthropic:
+    name: skills/anthropic ${{ matrix.agent }}/${{ matrix.language }}${{ matrix.model && format(' [{0}]', matrix.model) || '' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs:
+      - build-and-store-release
+      - build-golem-ts
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - agent: claude-code
+            language: ts
+          - agent: claude-code
+            language: rust
+          - agent: claude-code
+            language: scala
+          - agent: claude-code
+            language: moonbit
+          - agent: opencode
+            language: ts
+            model: anthropic/claude-opus-4-6
+          - agent: opencode
+            language: rust
+            model: anthropic/claude-opus-4-6
+          - agent: opencode
+            language: scala
+            model: anthropic/claude-opus-4-6
+          - agent: opencode
+            language: moonbit
+            model: anthropic/claude-opus-4-6
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/run-skill-harness
+        with:
+          agent: ${{ matrix.agent }}
+          language: ${{ matrix.language }}
+          model: ${{ matrix.model || '' }}
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  skill-harness-openai:
+    name: skills/openai ${{ matrix.agent }}/${{ matrix.language }}${{ matrix.model && format(' [{0}]', matrix.model) || '' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs:
+      - build-and-store-release
+      - build-golem-ts
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - agent: codex
+            language: ts
+          - agent: codex
+            language: rust
+          - agent: codex
+            language: scala
+          - agent: codex
+            language: moonbit
+          - agent: opencode
+            language: ts
+            model: openai/gpt-5.4
+          - agent: opencode
+            language: rust
+            model: openai/gpt-5.4
+          - agent: opencode
+            language: scala
+            model: openai/gpt-5.4
+          - agent: opencode
+            language: moonbit
+            model: openai/gpt-5.4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/run-skill-harness
+        with:
+          agent: ${{ matrix.agent }}
+          language: ${{ matrix.language }}
+          model: ${{ matrix.model || '' }}
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  skill-harness-google:
+    name: skills/google ${{ matrix.agent }}/${{ matrix.language }}
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs:
+      - build-and-store-release
+      - build-golem-ts
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - agent: gemini
+            language: ts
+          - agent: gemini
+            language: rust
+          - agent: gemini
+            language: scala
+          - agent: gemini
+            language: moonbit
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/run-skill-harness
+        with:
+          agent: ${{ matrix.agent }}
+          language: ${{ matrix.language }}
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  merge-skill-reports:
+    name: Merge Skill Reports
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - skill-harness-anthropic
+      - skill-harness-openai
+      - skill-harness-google
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+          cache-dependency-path: golem-skills/tests/harness/package.json
+
+      - name: Install and Build Harness
+        working-directory: golem-skills/tests/harness
+        run: |
+          npm install
+          npm run build
+          npm install -g tsx
+
+      - name: Download all results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: skill-results-*
+          path: tmp/all-results
+          merge-multiple: false
+
+      - name: Merge reports
+        working-directory: golem-skills/tests/harness
+        run: tsx src/run.ts --merge-reports ${{ github.workspace }}/tmp/all-results --output ${{ github.workspace }}/tmp/merged-report
+
+      - name: Upload merged HTML report
+        uses: actions/upload-artifact@v6
+        with:
+          name: skill-harness-merged-report
+          path: |
+            tmp/merged-report/report.html
+            tmp/merged-report/merged-summary.json
+            tmp/merged-report/scenario-reports.json
+          retention-days: 30
+
+      - name: Checkout benchmark-results repository
+        uses: actions/checkout@v5
+        with:
+          repository: golemcloud/benchmark-results
+          token: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
+          path: benchmark-results
+
+      - name: Publish to GitHub Pages
+        run: |
+          mkdir -p benchmark-results/public/skills
+          cp tmp/merged-report/report.html benchmark-results/public/skills/index.html
+          cp tmp/merged-report/merged-summary.json benchmark-results/public/skills/merged-summary.json
+          cp tmp/merged-report/scenario-reports.json benchmark-results/public/skills/scenario-reports.json
+          cd benchmark-results
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add public/skills/
+          git diff --staged --quiet || (git commit -m "Update skill harness report $(date -u +%Y-%m-%d)" && git push)

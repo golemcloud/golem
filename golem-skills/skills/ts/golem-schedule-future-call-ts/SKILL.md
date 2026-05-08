@@ -49,6 +49,22 @@ const dt: Datetime = {
 
 Note: `seconds` is a `BigInt` in the TypeScript binding.
 
+## Cancelable Variant
+
+Every method also has a `.scheduleCancelable()` variant that returns a `CancellationToken`. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
+
+```typescript
+import { CancellationToken } from '@golemcloud/golem-ts-sdk';
+
+const token: CancellationToken = counter.increment.scheduleCancelable({
+    seconds: nowSecs + 60n,
+    nanoseconds: 0,
+});
+
+// Later, to cancel the pending invocation:
+token.cancel();
+```
+
 ## Use Cases
 
 - **Periodic tasks**: Schedule the next run at the end of each invocation

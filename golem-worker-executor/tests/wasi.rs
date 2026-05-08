@@ -21,7 +21,9 @@ use bytes::Bytes;
 use futures::stream;
 use golem_common::agent_id;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
-use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
+};
 use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_test_framework::dsl::{TestDsl, drain_connection, stderr_events, stdout_events};
 use golem_test_framework::model::IFSEntry;
@@ -320,7 +322,6 @@ async fn initial_file_read_write(
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
-        .unique()
         .with_files(
             "FileReadWrite",
             &[
@@ -343,13 +344,7 @@ async fn initial_file_read_write(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let agent_id = agent_id!("FileReadWrite", "initial-file-read-write-1");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let result = executor
@@ -389,7 +384,6 @@ async fn initial_file_listing_through_api(
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
-        .unique()
         .with_files(
             "FileReadWrite",
             &[
@@ -523,7 +517,6 @@ async fn initial_file_reading_through_api(
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
-        .unique()
         .with_files(
             "FileReadWrite",
             &[
@@ -546,13 +539,7 @@ async fn initial_file_reading_through_api(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let agent_id = agent_id!("FileReadWrite", "initial-file-read-write-3");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // run the agent so it can update the files.
@@ -797,7 +784,6 @@ async fn file_update_1(
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
-        .unique()
         .with_files(
             "IfsUpdate",
             &[IFSEntry {
@@ -1000,7 +986,6 @@ async fn file_update_in_the_middle_of_exported_function(
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
-        .unique()
         .with_files(
             "IfsUpdateInsideExportedFunction",
             &[IFSEntry {
@@ -1104,13 +1089,7 @@ async fn environment_variables(
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let result = executor
@@ -1202,13 +1181,7 @@ async fn http_client_response_persisted_between_invocations(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
     let rx = executor.capture_output(&worker_id).await?;
 
@@ -1297,13 +1270,7 @@ async fn http_client_interrupting_response_stream(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
@@ -1429,13 +1396,7 @@ async fn http_client_interrupting_response_stream_async(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
@@ -3065,11 +3026,16 @@ async fn wasi_config_initial_worker_config(
             &component.id,
             agent_id.clone(),
             HashMap::new(),
-            HashMap::from_iter(vec![
-                ("k1".to_string(), "v1".to_string()),
-                ("k2".to_string(), "v2".to_string()),
-            ]),
-            Vec::new(),
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["k1".to_string()],
+                    value: serde_json::Value::String("v1".to_string()).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["k2".to_string()],
+                    value: serde_json::Value::String("v2".to_string()).into(),
+                },
+            ],
         )
         .await?;
 
@@ -3144,11 +3110,17 @@ async fn wasi_config_component_update(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_config_vars(
+        .with_agent_config(
             "WasiConfig",
             vec![
-                ("k1".to_string(), "v0".to_string()),
-                ("k3".to_string(), "v3".to_string()),
+                AgentConfigEntryDto {
+                    path: vec!["k1".to_string()],
+                    value: serde_json::Value::String("v0".to_string()).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["k3".to_string()],
+                    value: serde_json::Value::String("v3".to_string()).into(),
+                },
             ],
         )
         .store()
@@ -3161,11 +3133,16 @@ async fn wasi_config_component_update(
             &component.id,
             agent_id.clone(),
             HashMap::new(),
-            HashMap::from_iter(vec![
-                ("k1".to_string(), "v1".to_string()),
-                ("k2".to_string(), "v2".to_string()),
-            ]),
-            Vec::new(),
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["k1".to_string()],
+                    value: serde_json::Value::String("v1".to_string()).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["k2".to_string()],
+                    value: serde_json::Value::String("v2".to_string()).into(),
+                },
+            ],
         )
         .await?;
 
@@ -3203,11 +3180,20 @@ async fn wasi_config_component_update(
             Some(BTreeMap::from([(
                 golem_common::model::agent::AgentTypeName("WasiConfig".to_string()),
                 golem_common::model::component::AgentTypeProvisionConfigUpdate {
-                    wasi_config: Some(BTreeMap::from_iter(vec![
-                        ("k1".to_string(), "v2".to_string()),
-                        ("k3".to_string(), "v4".to_string()),
-                        ("k4".to_string(), "v4".to_string()),
-                    ])),
+                    config: Some(vec![
+                        AgentConfigEntryDto {
+                            path: vec!["k1".to_string()],
+                            value: serde_json::Value::String("v2".to_string()).into(),
+                        },
+                        AgentConfigEntryDto {
+                            path: vec!["k3".to_string()],
+                            value: serde_json::Value::String("v4".to_string()).into(),
+                        },
+                        AgentConfigEntryDto {
+                            path: vec!["k4".to_string()],
+                            value: serde_json::Value::String("v4".to_string()).into(),
+                        },
+                    ]),
                     ..Default::default()
                 },
             )])),
@@ -3556,18 +3542,11 @@ async fn http_connection_pool_contention_between_agents(
             &component.id,
             agent_id_slow.clone(),
             env.clone(),
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
     let worker_id_fast = executor
-        .start_agent_with(
-            &component.id,
-            agent_id_fast.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id_fast.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id_slow).await?;
@@ -3736,18 +3715,11 @@ async fn http_connection_pool_contention_with_restart(
             &component.id,
             agent_id_slow.clone(),
             env.clone(),
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
     let worker_id_fast = executor
-        .start_agent_with(
-            &component.id,
-            agent_id_fast.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id_fast.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id_slow).await?;
@@ -3918,13 +3890,7 @@ async fn http_timeout_and_restart(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -4058,13 +4024,7 @@ async fn oplog_replay_after_streaming_http_read(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -4168,13 +4128,7 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -4277,13 +4231,7 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -4385,13 +4333,7 @@ async fn oplog_replay_after_raw_streaming_http_read(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -4501,13 +4443,7 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;

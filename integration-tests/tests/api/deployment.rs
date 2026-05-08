@@ -28,6 +28,7 @@ use golem_common::model::deployment::{
 use golem_common::model::diff::Hash;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
+use golem_common::model::environment::EnvironmentUpdate;
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
@@ -65,6 +66,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
         )
         .await?;
@@ -99,6 +101,109 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
 
 #[test]
 #[tracing::instrument]
+async fn deploy_rejects_reset_secret_override_when_compatibility_check_enabled(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let env = client
+        .update_environment(
+            &env.id.0,
+            &EnvironmentUpdate {
+                current_revision: env.revision,
+                name: None,
+                compatibility_check: Some(true),
+                version_check: None,
+                security_overrides: None,
+            },
+        )
+        .await?;
+
+    user.component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+
+    let result = client
+        .deploy_environment(
+            &env.id.0,
+            &DeploymentCreation {
+                current_revision: None,
+                expected_deployment_hash: plan.deployment_hash,
+                version: DeploymentVersion("0.0.1".to_string()),
+                agent_secret_defaults: Vec::new(),
+                quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: true,
+            },
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceDeployEnvironmentError::Error400(_)
+        ))
+    ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn deploy_allows_reset_secret_override_when_compatibility_check_disabled(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let env = client
+        .update_environment(
+            &env.id.0,
+            &EnvironmentUpdate {
+                current_revision: env.revision,
+                name: None,
+                compatibility_check: Some(false),
+                version_check: None,
+                security_overrides: None,
+            },
+        )
+        .await?;
+
+    user.component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+
+    let deployment = client
+        .deploy_environment(
+            &env.id.0,
+            &DeploymentCreation {
+                current_revision: None,
+                expected_deployment_hash: plan.deployment_hash,
+                version: DeploymentVersion("0.0.1".to_string()),
+                agent_secret_defaults: Vec::new(),
+                quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: true,
+            },
+        )
+        .await?;
+
+    assert_eq!(deployment.deployment_hash, plan.deployment_hash);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn fail_with_409_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
@@ -120,6 +225,7 @@ async fn fail_with_409_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyh
                     agent_secret_defaults: Vec::new(),
                     quota_resource_defaults: Vec::new(),
                     retry_policy_defaults: Vec::new(),
+                    replace_incompatible_agent_secrets: false,
                 },
             )
             .await;
@@ -162,6 +268,7 @@ async fn get_component_version_from_previous_deployment(
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
         )
         .await?;
@@ -173,7 +280,7 @@ async fn get_component_version_from_previous_deployment(
                 current_revision: component.revision,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
-                    AgentTypeName("CounterAgent".to_string()),
+                    AgentTypeName("Counter".to_string()),
                     AgentTypeProvisionConfigUpdate {
                         env: Some(BTreeMap::from_iter(vec![(
                             "ENV_VAR".to_string(),
@@ -182,6 +289,7 @@ async fn get_component_version_from_previous_deployment(
                         ..Default::default()
                     },
                 )])),
+                allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
@@ -200,6 +308,7 @@ async fn get_component_version_from_previous_deployment(
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
         )
         .await?;
@@ -260,7 +369,8 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             AgentTypeName("HttpAgent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
+        openapi_endpoint_prefix: HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
     };
 
     let http_api_deployment = client
@@ -296,6 +406,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
         )
         .await?;
@@ -430,7 +541,7 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
                 current_revision: component.revision,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
-                    AgentTypeName("CounterAgent".to_string()),
+                    AgentTypeName("Counter".to_string()),
                     AgentTypeProvisionConfigUpdate {
                         env: Some(BTreeMap::from_iter(vec![(
                             "ENV_VAR".to_string(),
@@ -439,6 +550,7 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
                         ..Default::default()
                     },
                 )])),
+                allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
@@ -496,13 +608,14 @@ async fn deploy_creates_missing_secret_from_default(
                 }],
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
         )
         .await?;
 
     let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
-    assert_eq!(secrets.values.len(), 3);
+    assert_eq!(secrets.values.len(), 4);
     let secret = secrets
         .values
         .iter()
@@ -558,13 +671,14 @@ async fn deploy_ignores_default_if_secret_already_exists(
                 }],
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
         )
         .await?;
 
     let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
-    assert_eq!(secrets.values.len(), 3);
+    assert_eq!(secrets.values.len(), 4);
     let secret = secrets
         .values
         .iter()
@@ -622,13 +736,14 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
                 }],
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
         )
         .await?;
 
     let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
-    assert_eq!(secrets.values.len(), 3);
+    assert_eq!(secrets.values.len(), 4);
     let secret = secrets
         .values
         .iter()
@@ -685,6 +800,7 @@ async fn deploy_fails_if_existing_secret_type_mismatches_default(
                 }],
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
         )
         .await;
@@ -730,6 +846,7 @@ async fn deploy_fails_if_secret_default_mismatches_component(
                 }],
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
+                replace_incompatible_agent_secrets: false,
             },
         )
         .await;

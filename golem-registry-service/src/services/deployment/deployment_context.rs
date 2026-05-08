@@ -21,9 +21,12 @@ use super::route_compilation::{
     add_webhook_callback_routes, build_agent_http_api_deployment_details,
     make_invalid_agent_mount_error_maker,
 };
-use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
+use crate::model::agent_secret::{
+    DeploymentAgentSecretCreation, DeploymentAgentSecretReplacement, DeploymentAgentSecretUpdate,
+};
 use crate::model::api_definition::UnboundCompiledRoute;
 use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
+use crate::services::deployment::route_compilation::validate_path_segments;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentType, AgentTypeName, DeployedRegisteredAgentType,
@@ -110,7 +113,7 @@ impl DeploymentContext {
         })
     }
 
-    pub fn hash(&self) -> diff::Hash {
+    pub fn hash(&self) -> Result<diff::Hash, diff::DiffError> {
         let diffable = diff::Deployment {
             components: self
                 .components
@@ -216,11 +219,7 @@ impl DeploymentContext {
                 );
             }
 
-            add_openapi_spec_routes(
-                &deployment.domain,
-                &mut current_route_id,
-                &mut deployment_routes,
-            );
+            add_openapi_spec_routes(deployment, &mut current_route_id, &mut deployment_routes);
 
             add_cors_preflight_http_routes(
                 deployment,
@@ -315,10 +314,12 @@ impl DeploymentContext {
         &self,
         agent_secrets_in_environment: Vec<AgentSecret>,
         agent_secret_defaults_as_part_of_deployment: Vec<DeploymentAgentSecretDefault>,
+        replace_incompatible_agent_secrets: bool,
         errors: &mut Vec<DeployValidationError>,
     ) -> (
         Vec<DeploymentAgentSecretCreation>,
         Vec<DeploymentAgentSecretUpdate>,
+        Vec<DeploymentAgentSecretReplacement>,
     ) {
         let env_secrets: HashMap<&CanonicalAgentSecretPath, &AgentSecret> =
             agent_secrets_in_environment
@@ -334,6 +335,7 @@ impl DeploymentContext {
 
         let mut creations = Vec::new();
         let mut updates = Vec::new();
+        let mut replacements = Vec::new();
         let mut seen_secrets = HashMap::new();
 
         for agent_type in self.registered_agent_types.values() {
@@ -368,15 +370,46 @@ impl DeploymentContext {
                 {
                     // secret does exist in environment, we need to check that types are compatible with deployment
                     if environment_agent_secret_declaration.secret_type != config.value_type {
-                        errors.push(
-                            DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
+                        if replace_incompatible_agent_secrets {
+                            let agent_secret_default = defaults.get(&canonical_agent_secret_path);
+
+                            let agent_secret_value = ok_or_continue!(
+                                agent_secret_default
+                                    .map(|sd| ValueAndType::parse_with_type(
+                                        &sd.secret_value,
+                                        &config.value_type
+                                    ))
+                                    .transpose()
+                                    .map_err(|errors| {
+                                        DeployValidationError::AgentSecretDefaultTypeMismatch {
+                                            path: canonical_agent_secret_path.clone(),
+                                            errors,
+                                        }
+                                    }),
+                                errors
+                            )
+                            .map(|vat| vat.value);
+
+                            replacements.push(DeploymentAgentSecretReplacement {
+                                agent_secret_id: environment_agent_secret_declaration.id,
+                                current_revision: environment_agent_secret_declaration.revision,
                                 path: canonical_agent_secret_path.clone(),
-                                agent_secret_type: config.value_type.clone(),
-                                environment_secret_type: environment_agent_secret_declaration
-                                    .secret_type
-                                    .clone(),
-                            },
-                        );
+                                secret_type: config.value_type.clone(),
+                                secret_value: agent_secret_value,
+                            });
+                        } else {
+                            errors.push(
+                                DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
+                                    path: canonical_agent_secret_path.clone(),
+                                    agent_secret_type: config.value_type.clone(),
+                                    environment_secret_type: environment_agent_secret_declaration
+                                        .secret_type
+                                        .clone(),
+                                },
+                            );
+                        }
+
+                        continue;
                     }
 
                     // declaration exists in environment but has no value.
@@ -439,7 +472,7 @@ impl DeploymentContext {
             }
         }
 
-        (creations, updates)
+        (creations, updates, replacements)
     }
 
     pub fn deployment_resource_definition_creations(
@@ -481,7 +514,7 @@ impl DeploymentContext {
         retry_policy_defaults_in_deployment: Vec<DeploymentRetryPolicyDefault>,
         actor: AccountId,
         errors: &mut Vec<DeployValidationError>,
-    ) -> Vec<RetryPolicyCreationRecord> {
+    ) -> Result<Vec<RetryPolicyCreationRecord>, DeploymentWriteError> {
         let existing_names: HashSet<String> = retry_policies_in_environment
             .iter()
             .map(|p| p.name.clone())
@@ -508,26 +541,24 @@ impl DeploymentContext {
                 continue;
             }
 
-            // Convert API types back to core types for DB storage
-            let predicate: golem_common::model::retry_policy::Predicate = rpd.predicate.into();
-            let policy: golem_common::model::retry_policy::RetryPolicy = rpd.policy.into();
-            let predicate_json =
-                serde_json::to_string(&predicate).expect("Predicate serialization cannot fail");
-            let policy_json =
-                serde_json::to_string(&policy).expect("RetryPolicy serialization cannot fail");
-
             creations.push(RetryPolicyCreationRecord::new(
                 RetryPolicyId::new(),
                 self.environment.id,
                 rpd.name,
                 rpd.priority,
-                predicate_json,
-                policy_json,
+                serde_json::to_string(&golem_common::model::retry_policy::Predicate::from(
+                    rpd.predicate,
+                ))
+                .map_err(|e| DeploymentWriteError::InternalError(e.into()))?,
+                serde_json::to_string(&golem_common::model::retry_policy::RetryPolicy::from(
+                    rpd.policy,
+                ))
+                .map_err(|e| DeploymentWriteError::InternalError(e.into()))?,
                 actor,
             ));
         }
 
-        creations
+        Ok(creations)
     }
 }
 
@@ -618,6 +649,17 @@ fn validate_final_http_api_router(
                     method: compiled_route.method.clone(),
                 }
             }),
+            errors
+        );
+
+        ok_or_continue!(
+            validate_path_segments(&compiled_route.path, domain).map_err(|e| {
+                DeployValidationError::HttpApiDeploymentInvalidRoute {
+                    domain: domain.clone(),
+                    path: compiled_route.path.clone(),
+                    error: e.to_string(),
+                }
+            },),
             errors
         );
 

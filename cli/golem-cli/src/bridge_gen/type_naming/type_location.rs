@@ -30,6 +30,13 @@ impl TypeLocation {
                 }
                 segments
             }
+            TypeLocationRoot::AgentConfig { config_name } => {
+                let mut segments = vec![vec!["AgentConfig", config_name.as_str()]];
+                if let Some(path) = &self.path {
+                    segments.extend(path.to_type_naming_segments());
+                }
+                segments
+            }
             TypeLocationRoot::AgentMethodInput {
                 method_name,
                 input_name,
@@ -70,6 +77,9 @@ pub enum TypeLocationRoot {
     AgentConstructorInput {
         input_name: String,
     },
+    AgentConfig {
+        config_name: String,
+    },
     AgentMethodInput {
         method_name: String,
         input_name: String,
@@ -85,6 +95,9 @@ impl Display for TypeLocationRoot {
         match self {
             TypeLocationRoot::AgentConstructorInput { input_name } => {
                 write!(f, "AgentConstructorInput<{}>", input_name)
+            }
+            TypeLocationRoot::AgentConfig { config_name } => {
+                write!(f, "AgentConfig<{}>", config_name)
             }
             TypeLocationRoot::AgentMethodInput {
                 method_name,

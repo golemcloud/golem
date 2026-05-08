@@ -389,7 +389,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                         user_account_id,
                         http_api_deployment_id,
                         revision_id,
-                    ),
+                    )?,
                 )
                 .await?;
 

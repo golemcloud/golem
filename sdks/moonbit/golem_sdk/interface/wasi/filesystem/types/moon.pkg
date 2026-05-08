@@ -1,0 +1,8 @@
+import {
+  "golemcloud/golem_sdk/ffi" @ffi,
+  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
+  "golemcloud/golem_sdk/interface/wasi/io/error" @error,
+  "golemcloud/golem_sdk/interface/wasi/io/streams" @streams,
+}
+
+warnings = "-44"

@@ -1,0 +1,25 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/keyvalue/eventual"
+
+import {
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/types",
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError",
+}
+
+// Values
+pub fn delete(@types.Bucket, String) -> Result[Unit, @wasiKeyvalueError.Error_]
+
+pub fn exists(@types.Bucket, String) -> Result[Bool, @wasiKeyvalueError.Error_]
+
+pub fn get(@types.Bucket, String) -> Result[@types.IncomingValue?, @wasiKeyvalueError.Error_]
+
+pub fn set(@types.Bucket, String, @types.OutgoingValue) -> Result[Unit, @wasiKeyvalueError.Error_]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

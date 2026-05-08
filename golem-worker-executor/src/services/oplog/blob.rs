@@ -13,11 +13,14 @@
 // limitations under the License.
 
 use crate::services::oplog::multilayer::OplogArchive;
-use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService};
+use crate::services::oplog::{
+    CompressedOplogChunk, OplogArchiveService, cursor_value, next_scan_cursor, scan_modes,
+};
 use anyhow::anyhow;
 use async_lock::RwLockUpgradableReadGuard;
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -53,10 +56,15 @@ impl BlobOplogArchiveService {
 
 #[async_trait]
 impl OplogArchiveService for BlobOplogArchiveService {
-    async fn open(&self, owned_agent_id: &OwnedAgentId) -> Arc<dyn OplogArchive + Send + Sync> {
+    async fn open(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
         Arc::new(
             BlobOplogArchive::new(
                 owned_agent_id.clone(),
+                agent_mode,
                 self.blob_storage.clone(),
                 self.level,
             )
@@ -64,7 +72,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         )
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId) {
+    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
         self.blob_storage
             .delete_dir(
                 "blob_oplog",
@@ -72,6 +80,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
                 BlobStorageNamespace::CompressedOplog {
                     environment_id: owned_agent_id.environment_id(),
                     component_id: owned_agent_id.component_id(),
+                    agent_mode,
                     level: self.level,
                 },
                 Path::new(&owned_agent_id.agent_name()),
@@ -88,20 +97,22 @@ impl OplogArchiveService for BlobOplogArchiveService {
     async fn read(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let archive = self.open(owned_agent_id).await;
+        let archive = self.open(owned_agent_id, agent_mode).await;
         archive.read(idx, n).await
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
+    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
         self.blob_storage
             .with("blob_oplog", "exists")
             .exists(
                 BlobStorageNamespace::CompressedOplog {
                     environment_id: owned_agent_id.environment_id(),
                     component_id: owned_agent_id.component_id(),
+                    agent_mode,
                     level: self.level,
                 },
                 Path::new(&owned_agent_id.agent_name()),
@@ -120,68 +131,77 @@ impl OplogArchiveService for BlobOplogArchiveService {
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
+        modes: Option<AgentMode>,
         cursor: ScanCursor,
         _count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
-        if cursor.cursor == 0 {
-            let blob_storage = self.blob_storage.with("blob_oplog", "scan_for_component");
-            let owned_agent_ids = if blob_storage.exists(
-                BlobStorageNamespace::CompressedOplog {
-                    environment_id: *environment_id,
-                    component_id: *component_id,
-                    level: self.level,
-                },
-                Path::new(""),
-            ).await.map_err(|err| {
-                WorkerExecutorError::unknown(format!("Failed to check if compressed oplog root for component {component_id} exists in blob storage: {err}"))
-            })? == ExistsResult::Directory
-            {
-                let paths = blob_storage
-                    .list_dir(
-                    BlobStorageNamespace::CompressedOplog {
-                    environment_id: *environment_id,
-                    component_id: *component_id,
-                    level: self.level,
-                },
-                Path::new(""),
-            ).await.map_err(|err| {
-                WorkerExecutorError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
-            })?;
+        let layer = cursor.layer;
+        let (active_mode, next_mode) = scan_modes(modes, cursor.cursor);
+        let cursor_val = cursor_value(cursor.cursor);
 
-                paths
-                    .into_iter()
-                    .map(|path| {
-                        let agent_name = path.file_name().unwrap().to_str().unwrap();
-                        OwnedAgentId {
-                            environment_id: *environment_id,
-                            agent_id: AgentId {
-                                component_id: *component_id,
-                                agent_id: agent_name.to_string(),
-                            },
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-
-            Ok((
-                ScanCursor {
-                    cursor: 0,
-                    layer: cursor.layer,
-                },
-                owned_agent_ids,
-            ))
-        } else {
-            Err(WorkerExecutorError::unknown(
+        if cursor_val != 0 {
+            return Err(WorkerExecutorError::unknown(
                 "Cannot use cursor with blob oplog archive",
-            ))
+            ));
         }
+
+        let blob_storage = self.blob_storage.with("blob_oplog", "scan_for_component");
+        let owned_agent_ids = if blob_storage.exists(
+            BlobStorageNamespace::CompressedOplog {
+                environment_id: *environment_id,
+                component_id: *component_id,
+                agent_mode: active_mode,
+                level: self.level,
+            },
+            Path::new(""),
+        ).await.map_err(|err| {
+            WorkerExecutorError::unknown(format!("Failed to check if compressed oplog root for component {component_id} exists in blob storage: {err}"))
+        })? == ExistsResult::Directory
+        {
+            let paths = blob_storage
+                .list_dir(
+                BlobStorageNamespace::CompressedOplog {
+                environment_id: *environment_id,
+                component_id: *component_id,
+                agent_mode: active_mode,
+                level: self.level,
+            },
+            Path::new(""),
+        ).await.map_err(|err| {
+            WorkerExecutorError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
+        })?;
+
+            paths
+                .into_iter()
+                .map(|path| {
+                    let agent_name = path.file_name().unwrap().to_str().unwrap();
+                    OwnedAgentId {
+                        environment_id: *environment_id,
+                        agent_id: AgentId {
+                            component_id: *component_id,
+                            agent_id: agent_name.to_string(),
+                        },
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Storage cursor is always 0 (single-page scan), so let next_scan_cursor
+        // advance to the next mode if there is one.
+        let next_cursor = next_scan_cursor(0, active_mode, next_mode, layer);
+        Ok((next_cursor, owned_agent_ids))
     }
 
-    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
+    async fn get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogIndex {
         if BlobOplogArchive::exists(
             owned_agent_id.clone(),
+            agent_mode,
             self.blob_storage.clone(),
             self.level,
         )
@@ -189,6 +209,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         {
             let entries = BlobOplogArchive::entries(
                 owned_agent_id.clone(),
+                agent_mode,
                 self.blob_storage.clone(),
                 self.level,
             )
@@ -203,6 +224,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
 #[derive(Debug)]
 struct BlobOplogArchive {
     owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     level: usize,
     entries: Arc<RwLock<BTreeMap<OplogIndex, PathBuf>>>,
@@ -221,19 +243,33 @@ struct BlobOplogArchive {
 impl BlobOplogArchive {
     pub async fn new(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         level: usize,
     ) -> Self {
-        let exists = Self::exists(owned_agent_id.clone(), blob_storage.clone(), level).await;
+        let exists = Self::exists(
+            owned_agent_id.clone(),
+            agent_mode,
+            blob_storage.clone(),
+            level,
+        )
+        .await;
         let created = Arc::new(async_lock::RwLock::new(exists));
         let entries = Arc::new(RwLock::new(if exists {
-            Self::entries(owned_agent_id.clone(), blob_storage.clone(), level).await
+            Self::entries(
+                owned_agent_id.clone(),
+                agent_mode,
+                blob_storage.clone(),
+                level,
+            )
+            .await
         } else {
             BTreeMap::new()
         }));
 
         BlobOplogArchive {
             owned_agent_id,
+            agent_mode,
             blob_storage,
             level,
             created,
@@ -252,6 +288,7 @@ impl BlobOplogArchive {
                     BlobStorageNamespace::CompressedOplog {
                         environment_id: self.owned_agent_id.environment_id(),
                         component_id: self.owned_agent_id.component_id(),
+                        agent_mode: self.agent_mode,
                         level: self.level,
                     },
                     Path::new(&self.owned_agent_id.agent_name()),
@@ -270,6 +307,7 @@ impl BlobOplogArchive {
 
     pub(crate) async fn exists(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         level: usize,
     ) -> bool {
@@ -279,6 +317,7 @@ impl BlobOplogArchive {
                 BlobStorageNamespace::CompressedOplog {
                     environment_id: owned_agent_id.environment_id(),
                     component_id: owned_agent_id.component_id(),
+                    agent_mode,
                     level,
                 },
                 Path::new(&owned_agent_id.agent_name()),
@@ -295,6 +334,7 @@ impl BlobOplogArchive {
 
     pub(crate) async fn entries(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         level: usize,
     ) -> BTreeMap<OplogIndex, PathBuf> {
@@ -304,6 +344,7 @@ impl BlobOplogArchive {
                 BlobStorageNamespace::CompressedOplog {
                     environment_id: owned_agent_id.environment_id(),
                     component_id: owned_agent_id.component_id(),
+                    agent_mode,
                     level,
                 },
                 Path::new(&owned_agent_id.agent_name()),
@@ -365,6 +406,7 @@ impl BlobOplogArchive {
                 BlobStorageNamespace::CompressedOplog {
                     environment_id: self.owned_agent_id.environment_id(),
                     component_id: self.owned_agent_id.component_id(),
+                    agent_mode: self.agent_mode,
                     level: self.level,
                 },
                 &self.oplog_index_to_path(*last_idx),
@@ -375,10 +417,10 @@ impl BlobOplogArchive {
         let entries = chunk.decompress()?;
         let mut cache = self.cache.write().await;
 
-        let mut current_idx = Into::<u64>::into(*last_idx) - chunk.count + 1;
         let mut collected = Vec::new();
 
-        for entry in entries {
+        for (current_idx, entry) in (Into::<u64>::into(*last_idx) - chunk.count + 1..).zip(entries)
+        {
             let oplog_index = OplogIndex::from_u64(current_idx);
 
             cache.insert(oplog_index, entry.clone());
@@ -386,8 +428,6 @@ impl BlobOplogArchive {
             if oplog_index >= beginning_of_range && oplog_index <= end_of_range {
                 collected.push((oplog_index, entry));
             }
-
-            current_idx += 1;
         }
 
         if collected.is_empty() {
@@ -476,6 +516,7 @@ impl OplogArchive for BlobOplogArchive {
                     BlobStorageNamespace::CompressedOplog {
                         environment_id: self.owned_agent_id.environment_id(),
                         component_id: self.owned_agent_id.component_id(),
+                        agent_mode: self.agent_mode,
                         level: self.level,
                     },
                     &path,
@@ -529,6 +570,7 @@ impl OplogArchive for BlobOplogArchive {
         let ns = BlobStorageNamespace::CompressedOplog {
             environment_id: self.owned_agent_id.environment_id(),
             component_id: self.owned_agent_id.component_id(),
+            agent_mode: self.agent_mode,
             level: self.level,
         };
 
@@ -555,6 +597,7 @@ impl OplogArchive for BlobOplogArchive {
                 .delete_dir(BlobStorageNamespace::CompressedOplog {
                     environment_id: self.owned_agent_id.environment_id(),
                     component_id: self.owned_agent_id.component_id(),
+                    agent_mode: self.agent_mode,
                     level: self.level,
                 },
                 Path::new(&self.owned_agent_id.agent_name())).await.unwrap_or_else(|err| {

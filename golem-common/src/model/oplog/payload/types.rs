@@ -20,9 +20,10 @@ use crate::model::invocation_context::{AttributeValue, InvocationContextStack, T
 use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
+use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountId, AgentId, AgentInvocation, AgentMetadata, AgentStatus, IdempotencyKey, OwnedAgentId,
-    RdbmsPoolKey, ScheduleId, ScheduledAction,
+    AccountId, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata, AgentStatus,
+    IdempotencyKey, OwnedAgentId, RdbmsPoolKey, ScheduleId, ScheduledAction,
 };
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
@@ -1135,7 +1136,7 @@ pub struct AgentMetadataForGuests {
     pub agent_id: AgentId,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
-    pub wasi_config: BTreeMap<String, String>,
+    pub config: BTreeMap<String, String>,
     pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u64,
@@ -1148,7 +1149,7 @@ impl From<AgentMetadata> for AgentMetadataForGuests {
             agent_id: value.agent_id,
             args: vec![],
             env: value.env,
-            wasi_config: value.wasi_config,
+            config: TypedAgentConfigEntry::to_flat_map(&value.config),
             status: value.last_known_status.status,
             component_revision: value.last_known_status.component_revision,
             retry_count: value
@@ -1354,6 +1355,7 @@ pub struct SerializableScheduledInvocation {
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub spans: Vec<Vec<PublicSpanData>>,
+    pub target_worker_fingerprint: AgentFingerprint,
 }
 
 impl SerializableScheduledInvocation {
@@ -1363,6 +1365,7 @@ impl SerializableScheduledInvocation {
                 account_id,
                 owned_agent_id,
                 invocation,
+                target_worker_fingerprint,
             } => match *invocation {
                 AgentInvocation::AgentMethod {
                     idempotency_key,
@@ -1382,6 +1385,7 @@ impl SerializableScheduledInvocation {
                     spans: encode_span_data(&invocation_context.to_oplog_data()),
                     trace_id: invocation_context.trace_id,
                     trace_states: invocation_context.trace_states,
+                    target_worker_fingerprint,
                 }),
                 other => Err(format!(
                     "ScheduleId contains a non-method invocation: {:?}",
@@ -1413,6 +1417,7 @@ impl SerializableScheduledInvocation {
                     invocation_context,
                     principal: self.principal,
                 }),
+                target_worker_fingerprint: self.target_worker_fingerprint,
             },
         }
     }

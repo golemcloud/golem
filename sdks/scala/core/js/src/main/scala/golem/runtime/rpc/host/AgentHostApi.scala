@@ -50,7 +50,7 @@ object AgentHostApi {
   type AgentVersionFilter     = JsAgentVersionFilter
   type AgentCreatedAtFilter   = JsAgentCreatedAtFilter
   type AgentEnvFilter         = JsAgentEnvFilter
-  type AgentConfigVarsFilter  = JsAgentConfigVarsFilter
+  type AgentConfigFilter      = JsAgentConfigFilter
   type AgentAllFilter         = JsAgentAllFilter
   type AgentAnyFilter         = JsAgentAnyFilter
 
@@ -170,6 +170,9 @@ object AgentHostApi {
 
   def markEndOperation(begin: OplogIndex): Unit =
     HostModule.markEndOperation(begin)
+
+  def trap(reason: String): Unit =
+    HostModule.trap(reason)
 
   def oplogCommit(replicas: Int): Unit =
     HostModule.oplogCommit(replicas)
@@ -302,9 +305,9 @@ object AgentHostApi {
       JsAgentEnvFilter(name, comparator, value)
   }
 
-  object AgentConfigVarsFilter {
-    def apply(name: String, comparator: StringFilterComparator, value: String): AgentConfigVarsFilter =
-      JsAgentConfigVarsFilter(name, comparator, value)
+  object AgentConfigFilter {
+    def apply(name: String, comparator: StringFilterComparator, value: String): AgentConfigFilter =
+      JsAgentConfigFilter(name, comparator, value)
   }
 
   object AgentPropertyFilter {
@@ -323,8 +326,8 @@ object AgentHostApi {
     def env(filter: AgentEnvFilter): AgentPropertyFilter =
       JsAgentPropertyFilter.env(filter)
 
-    def wasiConfigVars(filter: AgentConfigVarsFilter): AgentPropertyFilter =
-      JsAgentPropertyFilter.wasiConfigVars(filter)
+    def config(filter: AgentConfigFilter): AgentPropertyFilter =
+      JsAgentPropertyFilter.config(filter)
   }
 
   object AgentAllFilter {
@@ -391,6 +394,8 @@ object AgentHostApi {
     def markBeginOperation(): OplogIndex = js.native
 
     def markEndOperation(begin: OplogIndex): Unit = js.native
+
+    def trap(reason: String): Unit = js.native
 
     def oplogCommit(replicas: Int): Unit = js.native
 

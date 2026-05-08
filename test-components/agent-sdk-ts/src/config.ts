@@ -72,8 +72,14 @@ export class LocalConfigAgent extends BaseAgent {
   }
 }
 
+type ComplexSecret = {
+  foo: string,
+  bar: number
+};
+
 type SharedConfigAgentConfig = {
   secret: Secret<string>,
+  complexSecret: Secret<ComplexSecret>
 };
 
 @agent()
@@ -86,6 +92,7 @@ export class SharedConfigAgent extends BaseAgent {
     const config = this.config.value;
     return JSON.stringify({
       secret: config.secret.get(),
+      complexSecret: config.complexSecret.get()
     })
   }
 }
@@ -105,6 +112,77 @@ export class LocalCasingSharedConfigAgent extends BaseAgent {
     return JSON.stringify({
       secretPath: config.secretPath.get(),
     })
+  }
+}
+
+type OptionalGroupConfigAgentConfig = {
+  required: string;
+  optionalGroup?: {
+    a: number;
+    b?: string;
+  };
+};
+
+@agent()
+export class OptionalGroupConfigAgent extends BaseAgent {
+  constructor(_name: string, readonly config: Config<OptionalGroupConfigAgentConfig>) {
+    super();
+  }
+
+  echoLocalConfig(): string {
+    const config = this.config.value;
+    return JSON.stringify({
+      required: config.required,
+      optionalGroup: config.optionalGroup
+        ? { a: config.optionalGroup.a, b: config.optionalGroup.b }
+        : undefined,
+    });
+  }
+}
+
+type AllOptionalGroupConfigAgentConfig = {
+  allOptionalGroup?: {
+    x?: number;
+    y?: string;
+  };
+};
+
+@agent()
+export class AllOptionalGroupConfigAgent extends BaseAgent {
+  constructor(_name: string, readonly config: Config<AllOptionalGroupConfigAgentConfig>) {
+    super();
+  }
+
+  echoLocalConfig(): string {
+    const config = this.config.value;
+    return JSON.stringify({
+      allOptionalGroup: config.allOptionalGroup ?? null,
+    });
+  }
+}
+
+type NestedRequiredGroupConfigAgentConfig = {
+  outer?: {
+    required: string;
+    inner: {
+      a: number;
+    };
+  };
+};
+
+@agent()
+export class NestedRequiredGroupConfigAgent extends BaseAgent {
+  constructor(_name: string, readonly config: Config<NestedRequiredGroupConfigAgentConfig>) {
+    super();
+  }
+
+  echoLocalConfig(): string {
+    const config = this.config.value;
+    return JSON.stringify({
+      outer: config.outer
+        ? { required: config.outer.required, inner: { a: config.outer.inner.a } }
+        : undefined,
+    });
   }
 }
 

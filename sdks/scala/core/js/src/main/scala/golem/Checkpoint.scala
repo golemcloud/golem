@@ -22,8 +22,9 @@ import scala.concurrent.{ExecutionContext, Future}
  * A checkpoint that captures the current oplog index and can revert execution
  * to that point.
  *
- * Use [[Checkpoint.apply]] to create a new checkpoint, or [[Checkpoint.withCheckpoint]]
- * / [[Checkpoint.withCheckpointTry]] to execute a block with automatic revert on failure.
+ * Use [[Checkpoint.apply]] to create a new checkpoint, or
+ * [[Checkpoint.withCheckpoint]] / [[Checkpoint.withCheckpointTry]] to execute a
+ * block with automatic revert on failure.
  */
 final class Checkpoint private (private val oplogIndex: HostApi.OplogIndex) {
 
@@ -39,8 +40,8 @@ final class Checkpoint private (private val oplogIndex: HostApi.OplogIndex) {
   }
 
   /**
-   * Returns the successful value, or reverts to the checkpoint if the result
-   * is a `Left`.
+   * Returns the successful value, or reverts to the checkpoint if the result is
+   * a `Left`.
    */
   def unwrapOrRevert[T](result: Either[_, T]): T =
     result match {
@@ -81,7 +82,8 @@ object Checkpoint {
    * Creates a checkpoint and executes the given function. If the function
    * returns a `Left`, reverts to the checkpoint.
    *
-   * @return A `Future` of the successful value.
+   * @return
+   *   A `Future` of the successful value.
    */
   def withCheckpoint[T](fn: Checkpoint => Future[Either[_, T]]): Future[T] = {
     val cp = Checkpoint()
@@ -92,7 +94,8 @@ object Checkpoint {
    * Creates a checkpoint and executes the given function. If the `Future`
    * fails, reverts to the checkpoint.
    *
-   * @return A `Future` of the result.
+   * @return
+   *   A `Future` of the result.
    */
   def withCheckpointTry[T](fn: Checkpoint => Future[T]): Future[T] = {
     val cp = Checkpoint()

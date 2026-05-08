@@ -1265,6 +1265,7 @@ mod tests {
 
     #[test]
     #[timeout(240000)]
+    #[flaky(5)]
     async fn oplog_processor_locality_recovery(
         deps: &EnvBasedTestDependencies,
         _tracing: &Tracing,

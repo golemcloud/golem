@@ -192,6 +192,30 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_ignore_unused_agent_secret_defaults(
+        &self,
+        paths: &[String],
+    ) -> anyhow::Result<bool> {
+        let rendered = paths
+            .iter()
+            .map(|path| format!(" - {}", path.log_color_warn()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        self.confirm(
+            true,
+            format!(
+                concat!(
+                    "The following secret default paths do not match any declared secret config path and will be ignored:\n\n",
+                    "{}\n\n",
+                    "Do you want to continue?"
+                ),
+                rendered
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_deleting_agents(&self, number_of_agents: usize) -> anyhow::Result<bool> {
         self.confirm(
             true,
@@ -204,17 +228,61 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_interrupt_ephemeral_agent(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            "The target agent is ephemeral. Interrupting it will stop the current invocation and it cannot be resumed. Continue?",
+            None,
+        )
+    }
+
+    pub fn confirm_reset_allow_incompatible_component_update(
+        &self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "Reset fallback detected an incompatible staged component update for {}. Retry with incompatible config checks disabled?",
+                component_name.0.log_color_highlight()
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_reset_replace_incompatible_agent_secrets(
+        &self,
+        environment_name: &EnvironmentName,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "Reset fallback detected incompatible agent secret types while deploying to {}. Retry deployment with incompatible secret replacement enabled?",
+                environment_name.0.log_color_highlight()
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
         agent_name: &RawAgentId,
+        parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentId>,
+        source_language: &crate::agent_id_display::SourceLanguage,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
+        let rendered_agent_name = match parsed_agent_id {
+            Some(parsed) if source_language.is_known() => {
+                crate::agent_id_display::render_agent_id(parsed, source_language)
+            }
+            _ => agent_name.0.clone(),
+        };
         self.confirm(
             true,
             format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
-                    agent_name.0.log_color_highlight(),
+                    rendered_agent_name.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()
             ),
             None,
@@ -456,19 +524,28 @@ impl InteractiveHandler {
             })
             .collect::<Vec<_>>();
 
-        let Some(selected) = MultiSelect::new("Select templates:", template_options)
-            .prompt()
-            .none_if_not_interactive_logged()?
-        else {
-            return Ok(None);
-        };
+        loop {
+            let Some(selected) = MultiSelect::new("Select templates:", template_options.clone())
+                .with_help_message("Use Space to select templates, then Enter to confirm")
+                .prompt()
+                .none_if_not_interactive_logged()?
+            else {
+                return Ok(None);
+            };
 
-        Ok(Some(
-            selected
-                .into_iter()
-                .map(|template| template.template_name)
-                .collect(),
-        ))
+            if selected.is_empty() {
+                log_warn("Please select at least one template using Space before pressing Enter");
+                logln("");
+                continue;
+            }
+
+            return Ok(Some(
+                selected
+                    .into_iter()
+                    .map(|template| template.template_name)
+                    .collect(),
+            ));
+        }
     }
 
     pub fn select_component_for_template(

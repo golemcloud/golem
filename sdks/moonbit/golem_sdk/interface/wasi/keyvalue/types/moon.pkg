@@ -1,0 +1,6 @@
+import {
+  "golemcloud/golem_sdk/interface/wasi/io/streams" @streams,
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError" @wasiKeyvalueError,
+}
+
+warnings = "-44"

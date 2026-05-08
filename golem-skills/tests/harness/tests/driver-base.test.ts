@@ -29,16 +29,17 @@ class TestDriver extends BaseAgentDriver {
 describe("BaseAgentDriver bootstrap skill setup", () => {
   let tmpDir: string;
   let workspace: string;
-  let bootstrapSkillSourceDir: string;
+  let bootstrapSkillSourceDirs: string[];
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "driver-base-"));
     workspace = path.join(tmpDir, "workspace");
-    bootstrapSkillSourceDir = path.join(tmpDir, "bootstrap");
+    const bootstrapDir = path.join(tmpDir, "golem-new-project");
     await fs.mkdir(workspace, { recursive: true });
-    await fs.mkdir(bootstrapSkillSourceDir, { recursive: true });
-    await fs.writeFile(path.join(bootstrapSkillSourceDir, "SKILL.md"), "bootstrap");
-    await fs.writeFile(path.join(bootstrapSkillSourceDir, "README.md"), "extra");
+    await fs.mkdir(bootstrapDir, { recursive: true });
+    await fs.writeFile(path.join(bootstrapDir, "SKILL.md"), "bootstrap");
+    await fs.writeFile(path.join(bootstrapDir, "README.md"), "extra");
+    bootstrapSkillSourceDirs = [bootstrapDir];
   });
 
   afterEach(async () => {
@@ -48,7 +49,7 @@ describe("BaseAgentDriver bootstrap skill setup", () => {
   it("copies the bootstrap skill into the agent skill directory", async () => {
     const driver = new TestDriver();
 
-    await driver.setup(workspace, bootstrapSkillSourceDir);
+    await driver.setup(workspace, bootstrapSkillSourceDirs);
 
     const skillPath = path.join(workspace, ".agents/skills/golem-new-project/SKILL.md");
     assert.equal(await fs.readFile(skillPath, "utf8"), "bootstrap");

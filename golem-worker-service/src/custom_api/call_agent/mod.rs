@@ -28,7 +28,8 @@ use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::agent::{
     BinaryReference, BinaryReferenceValue, ComponentModelElementValue, DataValue, ElementValue,
-    ElementValues, OidcPrincipal, ParsedAgentId, Principal, UntypedDataValue, UntypedElementValue,
+    ElementValues, OidcPrincipal, ParsedAgentId, Principal, TextReference, TextReferenceValue,
+    UntypedDataValue, UntypedElementValue,
 };
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
@@ -72,7 +73,6 @@ impl CallAgentHandler {
         let invocation_context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
             parent: None,
             env: Default::default(),
-            wasi_config: Default::default(),
             tracing: Some(request.invocation_context().into()),
         });
 
@@ -248,6 +248,26 @@ impl CallAgentHandler {
                     _ => {
                         return Err(RequestHandlerError::invariant_violated(
                             "Binary body parameter used but no binary body schema",
+                        ));
+                    }
+                },
+
+                MethodParameter::UnstructuredTextBody => match &mut body {
+                    ParsedRequestBody::UnstructuredText(text_source) => {
+                        let text_source = text_source.take().ok_or_else(|| {
+                            RequestHandlerError::invariant_violated(
+                                "Parsed body was already consumed",
+                            )
+                        })?;
+
+                        UntypedElementValue::UnstructuredText(TextReferenceValue {
+                            value: TextReference::Inline(text_source),
+                        })
+                    }
+
+                    _ => {
+                        return Err(RequestHandlerError::invariant_violated(
+                            "Text body parameter used but no text body schema",
                         ));
                     }
                 },

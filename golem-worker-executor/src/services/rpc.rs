@@ -45,12 +45,12 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
 
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::EnvironmentAction;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -65,7 +65,6 @@ pub trait Rpc: Send + Sync {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
@@ -79,7 +78,6 @@ pub trait Rpc: Send + Sync {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError>;
 
@@ -92,7 +90,6 @@ pub trait Rpc: Send + Sync {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError>;
 }
@@ -222,7 +219,10 @@ impl From<RpcError> for crate::preview2::golem::agent::host::RpcError {
     }
 }
 
-pub trait RpcDemand: Send + Sync {}
+pub trait RpcDemand: Send + Sync {
+    /// The fingerprint of the target worker this demand was established for.
+    fn fingerprint(&self) -> AgentFingerprint;
+}
 
 pub struct RemoteInvocationRpc {
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -240,16 +240,24 @@ impl RemoteInvocationRpc {
 
 struct LoggingDemand {
     agent_id: AgentId,
+    fingerprint: AgentFingerprint,
 }
 
 impl LoggingDemand {
-    pub fn new(agent_id: AgentId) -> Self {
+    pub fn new(agent_id: AgentId, fingerprint: AgentFingerprint) -> Self {
         log::debug!("Initializing RPC connection for worker {agent_id}");
-        Self { agent_id }
+        Self {
+            agent_id,
+            fingerprint,
+        }
     }
 }
 
-impl RpcDemand for LoggingDemand {}
+impl RpcDemand for LoggingDemand {
+    fn fingerprint(&self) -> AgentFingerprint {
+        self.fingerprint
+    }
+}
 
 impl Drop for LoggingDemand {
     fn drop(&mut self) {
@@ -266,21 +274,19 @@ impl Rpc for RemoteInvocationRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         debug!("Ensuring remote target worker exists");
 
         let principal = caller_agent_principal(self_agent_id);
-        let demand = LoggingDemand::new(owned_agent_id.agent_id());
 
-        self.worker_proxy
+        let fingerprint = self
+            .worker_proxy
             .start(
                 owned_agent_id,
                 self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
-                self_config,
                 self_stack,
                 self_created_by,
                 config,
@@ -288,7 +294,10 @@ impl Rpc for RemoteInvocationRpc {
             )
             .await?;
 
-        Ok(Box::new(demand))
+        Ok(Box::new(LoggingDemand::new(
+            owned_agent_id.agent_id(),
+            fingerprint,
+        )))
     }
 
     async fn invoke_and_await(
@@ -300,7 +309,6 @@ impl Rpc for RemoteInvocationRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError> {
         let principal = caller_agent_principal(self_agent_id);
@@ -316,7 +324,6 @@ impl Rpc for RemoteInvocationRpc {
                 idempotency_key,
                 self_agent_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
-                self_config,
                 self_stack,
                 self_created_by,
                 principal,
@@ -343,7 +350,6 @@ impl Rpc for RemoteInvocationRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         let principal = caller_agent_principal(self_agent_id);
@@ -358,7 +364,6 @@ impl Rpc for RemoteInvocationRpc {
                 idempotency_key,
                 self_agent_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
-                self_config,
                 self_stack,
                 self_created_by,
                 principal,
@@ -765,7 +770,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
@@ -786,11 +790,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
-            let _worker = Worker::get_or_create_running(
+            let worker = Worker::get_or_create_running(
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
-                Some(self_config),
                 config,
                 None,
                 Some(self_agent_id.clone()),
@@ -801,8 +804,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             )
             .await?;
 
-            let demand = LoggingDemand::new(owned_agent_id.agent_id());
-            Ok(Box::new(demand))
+            let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+            Ok(Box::new(LoggingDemand::new(
+                owned_agent_id.agent_id(),
+                fingerprint,
+            )))
         } else {
             self.remote_rpc
                 .create_demand(
@@ -810,7 +816,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_created_by,
                     self_agent_id,
                     self_env,
-                    self_config,
                     self_stack,
                     config,
                 )
@@ -827,7 +832,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
@@ -852,7 +856,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
-                Some(self_config),
                 Vec::new(),
                 None,
                 Some(self_agent_id.clone()),
@@ -889,7 +892,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_created_by,
                     self_agent_id,
                     self_env,
-                    self_config,
                     self_stack,
                 )
                 .await
@@ -905,7 +907,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
@@ -930,7 +931,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
-                Some(self_config),
                 Vec::new(),
                 None,
                 Some(self_agent_id.clone()),
@@ -961,12 +961,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_created_by,
                     self_agent_id,
                     self_env,
-                    self_config,
                     self_stack,
                 )
                 .await
         }
     }
 }
-
-impl RpcDemand for () {}

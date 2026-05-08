@@ -17,6 +17,7 @@ use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
 use golem_common::base_model::Empty;
+use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::agent::{
     AgentConstructor, AgentMode, AgentType, AgentTypeName, DataSchema, NamedElementSchemas,
     Snapshotting,
@@ -234,7 +235,8 @@ pub async fn test_application_delete(deps: &Deps) {
         ..app.revision.clone()
     };
 
-    deps.application_repo
+    let _ = deps
+        .application_repo
         .delete(deleted_app.clone())
         .await
         .unwrap();
@@ -305,7 +307,8 @@ pub async fn test_environment_create(deps: &Deps) {
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let env = deps
         .environment_repo
@@ -401,7 +404,8 @@ pub async fn test_environment_update(deps: &Deps) {
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let revision_1_created = deps
         .environment_repo
@@ -457,7 +461,8 @@ pub async fn test_environment_update(deps: &Deps) {
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let revision_2_created = deps
         .environment_repo
@@ -608,7 +613,7 @@ pub async fn test_component_stage(deps: &Deps) {
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         size: 10.into(),
         metadata: Blob::new(ComponentMetadata::from_parts(
-            vec![],
+            KnownExports::default(),
             vec![],
             Some("test".to_string()),
             Some("1.0".to_string()),
@@ -619,7 +624,8 @@ pub async fn test_component_stage(deps: &Deps) {
         object_store_key: "xys".to_string(),
         binary_hash: blake3::hash("test".as_bytes()).into(),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_revision_0 = deps
         .component_repo
@@ -681,7 +687,8 @@ pub async fn test_component_stage(deps: &Deps) {
         binary_hash: SqlBlake3Hash::empty(),
         ..revision_0.clone()
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_revision_1 = deps
         .component_repo
@@ -710,7 +717,8 @@ pub async fn test_component_stage(deps: &Deps) {
         component_id: other_component_id,
         ..revision_0.clone()
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_other_component_0 = deps
         .component_repo
@@ -771,7 +779,8 @@ pub async fn test_component_stage(deps: &Deps) {
         revision_id: 3,
         ..revision_after_delete
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
     let_assert!(created_after_delete = created_after_delete);
     assert!(created_after_delete.revision == revision_after_delete);
 }
@@ -793,10 +802,12 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
                 AgentTypeName("test-agent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             )]),
-            webhooks_url: "/webhooks/".to_string(),
+            webhooks_prefix: "/webhooks/".to_string(),
+            openapi_endpoint_prefix: "/".to_string(),
         }),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_revision_0 = deps
         .http_api_deployment_repo
@@ -850,7 +861,8 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         ..revision_0.clone()
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_revision_1 = deps
         .http_api_deployment_repo
@@ -884,7 +896,8 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         http_api_deployment_id: other_deployment_id,
         ..revision_0.clone()
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_other_deployment_0 = deps
         .http_api_deployment_repo
@@ -1077,7 +1090,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     size: 0.into(),
                     metadata: Blob::new(ComponentMetadata::from_parts(
-                        vec![],
+                        KnownExports::default(),
                         vec![],
                         None,
                         None,
@@ -1202,7 +1215,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
                 audit: DeletableRevisionAuditFields::new(owner_account_id),
                 size: 0.into(),
                 metadata: Blob::new(ComponentMetadata::from_parts(
-                    vec![],
+                    KnownExports::default(),
                     vec![],
                     None,
                     None,
@@ -1247,6 +1260,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         registered_agent_types: vec![agent_type_record],
         created_agent_secrets: vec![],
         updated_agent_secrets: vec![],
+        replaced_agent_secrets: vec![],
         created_resource_definitions: vec![],
         created_retry_policies: vec![],
         user_account_id: owner_account_id,

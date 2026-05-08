@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::{AgentStatus, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -89,7 +90,7 @@ impl AgentRevisionFilter {
 
 impl Display for AgentRevisionFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "version {} {}", self.comparator, self.value)
+        write!(f, "revision {} {}", self.comparator, self.value)
     }
 }
 
@@ -174,11 +175,7 @@ impl AgentConfigVarsFilter {
 
 impl Display for AgentConfigVarsFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "wasi_config.{} {} {}",
-            self.name, self.comparator, self.value
-        )
+        write!(f, "config.{} {} {}", self.name, self.comparator, self.value)
     }
 }
 
@@ -254,6 +251,31 @@ impl Display for AgentOrFilter {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+pub struct AgentModeFilter {
+    pub comparator: FilterComparator,
+    pub value: AgentMode,
+}
+
+impl AgentModeFilter {
+    pub fn new(comparator: FilterComparator, value: AgentMode) -> Self {
+        Self { comparator, value }
+    }
+}
+
+impl Display for AgentModeFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "mode {} {}", self.comparator, self.value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct AgentNotFilter {
     pub filter: Box<AgentFilter>,
 }
@@ -289,7 +311,8 @@ pub enum AgentFilter {
     And(AgentAndFilter),
     Or(AgentOrFilter),
     Not(AgentNotFilter),
-    WasiConfig(AgentConfigVarsFilter),
+    Config(AgentConfigVarsFilter),
+    Mode(AgentModeFilter),
 }
 
 impl AgentFilter {
@@ -335,12 +358,8 @@ impl AgentFilter {
         AgentFilter::Env(AgentEnvFilter::new(name, comparator, value))
     }
 
-    pub fn new_wasi_config(
-        name: String,
-        comparator: StringFilterComparator,
-        value: String,
-    ) -> Self {
-        AgentFilter::WasiConfig(AgentConfigVarsFilter::new(name, comparator, value))
+    pub fn new_config(name: String, comparator: StringFilterComparator, value: String) -> Self {
+        AgentFilter::Config(AgentConfigVarsFilter::new(name, comparator, value))
     }
 
     pub fn new_revision(comparator: FilterComparator, value: ComponentRevision) -> Self {
@@ -353,6 +372,10 @@ impl AgentFilter {
 
     pub fn new_created_at(comparator: FilterComparator, value: Timestamp) -> Self {
         AgentFilter::CreatedAt(AgentCreatedAtFilter::new(comparator, value))
+    }
+
+    pub fn new_mode(comparator: FilterComparator, value: AgentMode) -> Self {
+        AgentFilter::Mode(AgentModeFilter::new(comparator, value))
     }
 
     pub fn from(filters: Vec<String>) -> Result<AgentFilter, String> {
@@ -382,7 +405,7 @@ impl Display for AgentFilter {
             AgentFilter::Env(filter) => {
                 write!(f, "{filter}")
             }
-            AgentFilter::WasiConfig(filter) => {
+            AgentFilter::Config(filter) => {
                 write!(f, "{filter}")
             }
             AgentFilter::Not(filter) => {
@@ -392,6 +415,9 @@ impl Display for AgentFilter {
                 write!(f, "{filter}")
             }
             AgentFilter::Or(filter) => {
+                write!(f, "{filter}")
+            }
+            AgentFilter::Mode(filter) => {
                 write!(f, "{filter}")
             }
         }
@@ -420,6 +446,14 @@ impl FromStr for AgentFilter {
                         .map_err(|e| format!("Invalid filter value: {e}"))?,
                 )),
                 "status" => Ok(AgentFilter::new_status(comparator.parse()?, value.parse()?)),
+                "mode" => {
+                    let mode = match value.to_lowercase().as_str() {
+                        "durable" => AgentMode::Durable,
+                        "ephemeral" => AgentMode::Ephemeral,
+                        _ => value.parse()?,
+                    };
+                    Ok(AgentFilter::new_mode(comparator.parse()?, mode))
+                }
                 "created_at" | "createdAt" => Ok(AgentFilter::new_created_at(
                     comparator.parse()?,
                     value.parse()?,
@@ -427,6 +461,14 @@ impl FromStr for AgentFilter {
                 _ if arg.starts_with("env.") => {
                     let name = &arg[4..];
                     Ok(AgentFilter::new_env(
+                        name.to_string(),
+                        comparator.parse()?,
+                        value.to_string(),
+                    ))
+                }
+                _ if arg.starts_with("config.") => {
+                    let name = &arg[7..];
+                    Ok(AgentFilter::new_config(
                         name.to_string(),
                         comparator.parse()?,
                         value.to_string(),

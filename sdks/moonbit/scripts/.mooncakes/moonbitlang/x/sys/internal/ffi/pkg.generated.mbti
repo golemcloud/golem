@@ -1,0 +1,24 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/sys/internal/ffi"
+
+// Values
+pub fn exit(Int) -> Unit
+
+pub fn get_cli_args() -> Array[String]
+
+pub fn get_env_var(String) -> String?
+
+pub fn get_env_vars() -> Map[String, String]
+
+pub fn set_env_var(String, String) -> Unit
+
+pub fn unset_env_var(String) -> Unit
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

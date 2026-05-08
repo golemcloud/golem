@@ -47,7 +47,9 @@ impl GolemServer {
     pub fn url(&self) -> reqwest::Url {
         match self {
             GolemServer::Local => reqwest::Url::parse("http://localhost:9881").unwrap(),
-            GolemServer::Cloud { .. } => reqwest::Url::parse("https://api.golem.cloud").unwrap(),
+            GolemServer::Cloud { .. } => {
+                reqwest::Url::parse("https://release.api.golem.cloud").unwrap()
+            }
             GolemServer::Custom { url, .. } => url.clone(),
         }
     }

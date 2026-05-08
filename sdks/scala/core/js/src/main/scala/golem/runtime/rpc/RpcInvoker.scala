@@ -19,10 +19,18 @@ package golem.runtime.rpc
 import golem.Datetime
 import golem.host.js._
 
+import scala.concurrent.Future
+
 private[rpc] trait RpcInvoker {
   def invokeAndAwait(functionName: String, input: JsDataValue): Either[String, JsDataValue]
+
+  def asyncInvokeAndAwait(functionName: String, input: JsDataValue): Future[JsDataValue]
+
+  def cancelableAsyncInvokeAndAwait(functionName: String, input: JsDataValue): (Future[JsDataValue], CancellationToken)
 
   def invoke(functionName: String, input: JsDataValue): Either[String, Unit]
 
   def scheduleInvocation(datetime: Datetime, functionName: String, input: JsDataValue): Either[String, Unit]
+
+  def scheduleCancelableInvocation(datetime: Datetime, functionName: String, input: JsDataValue): Either[String, CancellationToken]
 }

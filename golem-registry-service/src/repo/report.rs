@@ -106,7 +106,7 @@ impl ReportRepo for DbReportRepo<PostgresPool> {
                                 AND e.deleted_at IS NULL
                                 AND c.deleted_at IS NULL
                         ) as components_count,
-                        0 as workers_count
+                        CAST(0 AS NUMERIC) as workers_count
                     FROM accounts a
                     JOIN account_revisions r
                         ON r.account_id = a.account_id

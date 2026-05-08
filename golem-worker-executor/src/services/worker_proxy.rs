@@ -36,13 +36,13 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
-    AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, InvocationStatus,
-    OwnedAgentId, PromiseId,
+    AgentFingerprint, AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
+    InvocationStatus, OwnedAgentId, PromiseId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::GrpcClient;
 use golem_service_base::model::auth::AuthCtx;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use tonic::codec::CompressionEncoding;
@@ -57,12 +57,11 @@ pub trait WorkerProxy: Send + Sync {
         owned_agent_id: &OwnedAgentId,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
-        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
-    ) -> Result<(), WorkerProxyError>;
+    ) -> Result<AgentFingerprint, WorkerProxyError>;
 
     async fn invoke_agent(
         &self,
@@ -74,7 +73,6 @@ pub trait WorkerProxy: Send + Sync {
         idempotency_key: Option<IdempotencyKey>,
         caller_agent_id: AgentId,
         caller_env: HashMap<String, String>,
-        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
@@ -246,10 +244,12 @@ impl RemoteWorkerProxy {
         Self {
             worker_service_client: GrpcClient::new(
                 "worker_service",
-                |channel| {
+                |channel, max_message_size| {
                     WorkerServiceClient::new(channel)
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
+                        .max_decoding_message_size(max_message_size)
+                        .max_encoding_message_size(max_message_size)
                 },
                 config.uri(),
                 config.client_config.clone(),
@@ -269,12 +269,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         owned_agent_id: &OwnedAgentId,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
-        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         config: Vec<AgentConfigEntryDto>,
         principal: Principal,
-    ) -> Result<(), WorkerProxyError> {
+    ) -> Result<AgentFingerprint, WorkerProxyError> {
         debug!(owned_agent_id=%owned_agent_id, "Starting remote worker");
 
         let auth_ctx = self.get_auth_ctx(caller_account_id);
@@ -283,19 +282,16 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("launch_new_worker", move |client| {
                 let caller_env = caller_env.clone();
-                let caller_config_vars = caller_config_vars.clone();
                 Box::pin(client.launch_new_worker(LaunchNewWorkerRequest {
                     component_id: Some(owned_agent_id.component_id().into()),
                     name: owned_agent_id.agent_name(),
                     env: caller_env.clone(),
-                    wasi_config: caller_config_vars.clone().into_iter().collect(),
                     config: config.clone().into_iter().map(Into::into).collect(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),
                         env: caller_env,
-                        wasi_config: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     principal: Some(principal.clone().into()),
@@ -305,9 +301,16 @@ impl WorkerProxy for RemoteWorkerProxy {
             .into_inner();
 
         match response.result {
-            Some(launch_new_worker_response::Result::Success(_)) => Ok(()),
+            Some(launch_new_worker_response::Result::Success(success)) => {
+                let instance_id = success.instance_id.ok_or_else(|| {
+                    WorkerProxyError::InternalError(WorkerExecutorError::unknown(
+                        "Missing instance_id in LaunchNewWorker response",
+                    ))
+                })?;
+                Ok(AgentFingerprint(instance_id.into()))
+            }
             Some(launch_new_worker_response::Result::Error(error)) => match error.error {
-                Some(agent_error::Error::AlreadyExists(_)) => Ok(()),
+                Some(agent_error::Error::AlreadyExists(_)) => Ok(AgentFingerprint::new()),
                 _ => Err(error.into()),
             },
             None => Err(WorkerProxyError::InternalError(
@@ -326,7 +329,6 @@ impl WorkerProxy for RemoteWorkerProxy {
         idempotency_key: Option<IdempotencyKey>,
         caller_agent_id: AgentId,
         caller_env: HashMap<String, String>,
-        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
@@ -360,7 +362,6 @@ impl WorkerProxy for RemoteWorkerProxy {
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),
                         env: caller_env.clone(),
-                        wasi_config: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),

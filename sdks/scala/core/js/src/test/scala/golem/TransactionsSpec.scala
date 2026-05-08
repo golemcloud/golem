@@ -103,7 +103,7 @@ object TransactionsSpec extends ZIOSpecDefault {
     test("FallibleTransaction.onFailure runs compensations and returns complete rollback") {
       var compensated = false
       val tx          = new FallibleTransaction[String]
-      val op = Operation[Int, Int, String](
+      val op          = Operation[Int, Int, String](
         run = i => f(Right(i)),
         compensateFn = (_, _) => { compensated = true; f(Right(())) }
       )
@@ -130,7 +130,7 @@ object TransactionsSpec extends ZIOSpecDefault {
     test("FallibleTransaction.onFailure compensates in reverse order (synchronous)") {
       var order = List.empty[Int]
       val tx    = new FallibleTransaction[String]
-      val op1 = Operation[Int, Int, String](
+      val op1   = Operation[Int, Int, String](
         run = i => f(Right(i)),
         compensateFn = (_, _) => { order = order :+ 1; f(Right(())) }
       )

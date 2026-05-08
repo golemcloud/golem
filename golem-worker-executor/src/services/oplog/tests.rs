@@ -27,8 +27,10 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{AgentError, LogLevel};
 use golem_common::model::regions::OplogRegion;
+use golem_common::model::{
+    AgentFingerprint, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+};
 use golem_common::model::{AgentInvocationPayload, RetryConfig};
-use golem_common::model::{AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId};
 use golem_common::redis::RedisPool;
 use golem_common::tracing::{TracingConfig, init_tracing};
 use golem_service_base::db::sqlite::SqlitePool;
@@ -57,6 +59,26 @@ impl Tracing {
 #[test_dep]
 fn tracing() -> Tracing {
     Tracing::init()
+}
+
+fn make_agent_metadata(
+    agent_id: AgentId,
+    created_by: AccountId,
+    environment_id: EnvironmentId,
+) -> AgentMetadata {
+    AgentMetadata {
+        agent_id,
+        env: vec![],
+        environment_id,
+        created_by,
+        config: Vec::new(),
+        created_at: Timestamp::now_utc(),
+        parent: None,
+        last_known_status: AgentStatusRecord::default(),
+        original_phantom_id: None,
+        fingerprint: AgentFingerprint::new(),
+        agent_mode: AgentMode::Durable,
+    }
 }
 
 fn default_last_known_status() -> read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord> {
@@ -97,8 +119,9 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
     let oplog = oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -127,7 +150,12 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
     assert_eq!(r3, entry3);
 
     let entries = oplog_service
-        .read(&owned_agent_id, last_oplog_idx.next(), 3)
+        .read(
+            &owned_agent_id,
+            AgentMode::Durable,
+            last_oplog_idx.next(),
+            3,
+        )
         .await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
@@ -158,8 +186,9 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let oplog = oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -226,8 +255,9 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     let oplog = oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -256,7 +286,12 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     assert_eq!(r3, entry3);
 
     let entries = oplog_service
-        .read(&owned_agent_id, last_oplog_idx.next(), 3)
+        .read(
+            &owned_agent_id,
+            AgentMode::Durable,
+            last_oplog_idx.next(),
+            3,
+        )
         .await;
     assert_eq!(
         entries.into_values().collect::<Vec<_>>(),
@@ -301,8 +336,9 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
     let oplog = oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -333,6 +369,407 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
 }
 
 #[test]
+async fn ephemeral_read_many_committed_only(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    let entry1 = OplogEntry::suspend().rounded();
+    let entry2 = OplogEntry::exited().rounded();
+    let entry3 = OplogEntry::interrupted().rounded();
+
+    oplog.add(entry1.clone()).await;
+    oplog.add(entry2.clone()).await;
+    oplog.add(entry3.clone()).await;
+    oplog.commit(CommitLevel::Always).await;
+
+    // All committed, no buffer entries
+    let entries = oplog
+        .read_many(OplogIndex::INITIAL, 3)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+
+    assert_eq!(entries, vec![entry1, entry2, entry3]);
+}
+
+#[test]
+async fn ephemeral_read_many_uncommitted_only(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        1000, // high limit so nothing auto-commits
+        1000,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    let entry1 = OplogEntry::suspend().rounded();
+    let entry2 = OplogEntry::exited().rounded();
+
+    oplog.add(entry1.clone()).await;
+    oplog.add(entry2.clone()).await;
+    // No commit — entries only in the buffer
+
+    let entries = oplog
+        .read_many(OplogIndex::INITIAL, 2)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+
+    assert_eq!(entries, vec![entry1, entry2]);
+}
+
+#[test]
+async fn ephemeral_read_many_partial_range(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        1000, // high ephemeral limit so nothing auto-commits from buffer
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    let timestamp = Timestamp::now_utc();
+    let mut entries = Vec::new();
+    for i in 0..10 {
+        let entry = OplogEntry::Error {
+            timestamp,
+            error: AgentError::Unknown(i.to_string()),
+            retry_from: OplogIndex::NONE,
+            inside_atomic_region: false,
+            retry_policy_state: None,
+        }
+        .rounded();
+        oplog.add(entry.clone()).await;
+        entries.push(entry);
+    }
+    oplog.commit(CommitLevel::Always).await;
+
+    // Add 2 more uncommitted
+    let uncommitted1 = OplogEntry::interrupted().rounded();
+    let uncommitted2 = OplogEntry::suspend().rounded();
+    oplog.add(uncommitted1.clone()).await;
+    oplog.add(uncommitted2.clone()).await;
+    entries.push(uncommitted1);
+    entries.push(uncommitted2);
+
+    // Read a sub-range from the middle spanning committed and uncommitted
+    let mid_entries = oplog
+        .read_many(OplogIndex::from_u64(8), 4)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+    assert_eq!(mid_entries, entries[7..11].to_vec());
+
+    // Read just the first 3
+    let first3 = oplog
+        .read_many(OplogIndex::INITIAL, 3)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+    assert_eq!(first3, entries[0..3].to_vec());
+
+    // Read the last 2 (uncommitted only)
+    let last2 = oplog
+        .read_many(OplogIndex::from_u64(11), 2)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+    assert_eq!(last2, entries[10..12].to_vec());
+
+    // Read all
+    let all = oplog
+        .read_many(OplogIndex::INITIAL, 12)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+    assert_eq!(all, entries);
+}
+
+#[test]
+async fn ephemeral_read_many_across_archive_layers(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    let timestamp = Timestamp::now_utc();
+    let mut entries: Vec<OplogEntry> = (0..100)
+        .map(|i| {
+            OplogEntry::Error {
+                timestamp,
+                error: AgentError::Unknown(i.to_string()),
+                retry_from: OplogIndex::NONE,
+                inside_atomic_region: false,
+                retry_policy_state: None,
+            }
+            .rounded()
+        })
+        .collect();
+
+    let initial_oplog_idx = oplog.current_oplog_index().await;
+
+    for entry in &entries {
+        oplog.add(entry.clone()).await;
+    }
+    oplog.commit(CommitLevel::Always).await;
+
+    // Add 2 uncommitted entries
+    let uncommitted1 = OplogEntry::interrupted().rounded();
+    let uncommitted2 = OplogEntry::suspend().rounded();
+    oplog.add(uncommitted1.clone()).await;
+    oplog.add(uncommitted2.clone()).await;
+    entries.push(uncommitted1);
+    entries.push(uncommitted2);
+
+    // Wait for background archiving to move entries between layers
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let secondary_length = secondary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
+    let tertiary_length = tertiary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
+
+    info!("secondary_length: {}", secondary_length);
+    info!("tertiary_length: {}", tertiary_length);
+
+    // Read first 10 — should come from lower layers
+    let first10 = oplog
+        .read_many(initial_oplog_idx.next(), 10)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+    assert_eq!(first10, entries[..10].to_vec());
+
+    // Read last 10 — includes uncommitted entries from buffer
+    let last10 = oplog
+        .read_many(oplog.current_oplog_index().await.subtract(10).next(), 10)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+    let original_last10 = entries
+        .iter()
+        .rev()
+        .take(10)
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(last10, original_last10);
+
+    // Read all entries
+    let all = oplog
+        .read_many(initial_oplog_idx.next(), entries.len() as u64)
+        .await
+        .into_values()
+        .collect::<Vec<_>>();
+    assert_eq!(all, entries);
+}
+
+#[test]
+async fn ephemeral_read_many_zero_returns_empty(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    oplog.add(OplogEntry::suspend().rounded()).await;
+
+    let entries = oplog.read_many(OplogIndex::INITIAL, 0).await;
+    assert!(entries.is_empty());
+}
+
+#[test]
 async fn entries_with_small_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -356,8 +793,9 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let oplog = oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -435,7 +873,12 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     assert_eq!(r4, entry4);
 
     let entries = oplog_service
-        .read(&owned_agent_id, last_oplog_idx.next(), 4)
+        .read(
+            &owned_agent_id,
+            AgentMode::Durable,
+            last_oplog_idx.next(),
+            4,
+        )
         .await;
     assert_eq!(
         entries
@@ -453,7 +896,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let p1 = match entry1 {
         OplogEntry::HostCall { response, .. } => {
             let response = oplog_service
-                .download_payload(&owned_agent_id, response)
+                .download_payload(&owned_agent_id, AgentMode::Durable, response)
                 .await
                 .unwrap();
             match response {
@@ -466,7 +909,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let p2 = match entry2 {
         OplogEntry::AgentInvocationStarted { payload, .. } => {
             let payload: AgentInvocationPayload = oplog_service
-                .download_payload(&owned_agent_id, payload)
+                .download_payload(&owned_agent_id, AgentMode::Durable, payload)
                 .await
                 .unwrap();
             match payload {
@@ -487,7 +930,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let p3 = match entry3 {
         OplogEntry::AgentInvocationFinished { result, .. } => {
             let result: AgentInvocationResult = oplog_service
-                .download_payload(&owned_agent_id, result)
+                .download_payload(&owned_agent_id, AgentMode::Durable, result)
                 .await
                 .unwrap();
             match result {
@@ -541,8 +984,9 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let oplog = oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -625,7 +1069,12 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     assert_eq!(r4, entry4);
 
     let entries = oplog_service
-        .read(&owned_agent_id, last_oplog_idx.next(), 4)
+        .read(
+            &owned_agent_id,
+            AgentMode::Durable,
+            last_oplog_idx.next(),
+            4,
+        )
         .await;
     assert_eq!(
         entries
@@ -643,7 +1092,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let p1 = match entry1 {
         OplogEntry::HostCall { response, .. } => {
             let response = oplog_service
-                .download_payload(&owned_agent_id, response)
+                .download_payload(&owned_agent_id, AgentMode::Durable, response)
                 .await
                 .unwrap();
             match response {
@@ -656,7 +1105,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let p2 = match entry2 {
         OplogEntry::AgentInvocationStarted { payload, .. } => {
             let payload: AgentInvocationPayload = oplog_service
-                .download_payload(&owned_agent_id, payload)
+                .download_payload(&owned_agent_id, AgentMode::Durable, payload)
                 .await
                 .unwrap();
             match payload {
@@ -677,7 +1126,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let p3 = match entry3 {
         OplogEntry::AgentInvocationFinished { result, .. } => {
             let result: AgentInvocationResult = oplog_service
-                .download_payload(&owned_agent_id, result)
+                .download_payload(&owned_agent_id, AgentMode::Durable, result)
                 .await
                 .unwrap();
             match result {
@@ -803,8 +1252,9 @@ async fn multilayer_transfers_entries_after_limit_reached(
     let oplog = oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -831,8 +1281,9 @@ async fn multilayer_transfers_entries_after_limit_reached(
         let primary_length = primary_oplog_service
             .open(
                 &owned_agent_id,
+                AgentMode::Durable,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -840,7 +1291,11 @@ async fn multilayer_transfers_entries_after_limit_reached(
             .length()
             .await;
 
-        let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
+        let secondary_length = secondary_layer
+            .open(&owned_agent_id, AgentMode::Durable)
+            .await
+            .length()
+            .await;
         if primary_length == expected_1 && secondary_length == expected_2 {
             break;
         }
@@ -857,19 +1312,33 @@ async fn multilayer_transfers_entries_after_limit_reached(
     let primary_length = primary_oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
+    let secondary_length = secondary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
+    let tertiary_length = tertiary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
 
     let all_entries = oplog_service
-        .read(&owned_agent_id, OplogIndex::NONE, n + 100)
+        .read(
+            &owned_agent_id,
+            AgentMode::Durable,
+            OplogIndex::NONE,
+            n + 100,
+        )
         .await;
 
     assert_eq!(all_entries.len(), entries.len());
@@ -942,8 +1411,9 @@ async fn read_from_archive_impl(use_blob: bool) {
     let oplog = oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -982,23 +1452,37 @@ async fn read_from_archive_impl(use_blob: bool) {
     let primary_length = primary_oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
+    let secondary_length = secondary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
+    let tertiary_length = tertiary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
 
     info!("primary_length: {}", primary_length);
     info!("secondary_length: {}", secondary_length);
     info!("tertiary_length: {}", tertiary_length);
 
     let first10 = oplog_service
-        .read(&owned_agent_id, initial_oplog_idx.next(), 10)
+        .read(
+            &owned_agent_id,
+            AgentMode::Durable,
+            initial_oplog_idx.next(),
+            10,
+        )
         .await;
     let original_first10 = entries.iter().take(10).cloned().collect::<Vec<_>>();
 
@@ -1077,9 +1561,9 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "test".to_string(),
         },
+        agent_mode: AgentMode::Durable,
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![],
-        config_vars: BTreeMap::new(),
         local_agent_config: Vec::new(),
         environment_id,
         created_by: account_id,
@@ -1088,14 +1572,16 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         initial_total_linear_memory_size: 0,
         initial_active_plugins: HashSet::new(),
         original_phantom_id: None,
+        instance_id: Uuid::new_v4(),
     }
     .rounded();
 
     let oplog = oplog_service
         .create(
             &owned_agent_id,
+            AgentMode::Durable,
             create_entry.clone(),
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1103,33 +1589,39 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
 
     // The create entry is in the primary oplog now
     let read1 = oplog_service
-        .read(&owned_agent_id, OplogIndex::INITIAL, 1)
+        .read(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
         .await
         .into_iter()
         .next();
-    let last_index_1 = oplog_service.get_last_index(&owned_agent_id).await;
+    let last_index_1 = oplog_service
+        .get_last_index(&owned_agent_id, AgentMode::Durable)
+        .await;
 
     // Archiving it to the secondary
     let more = MultiLayerOplog::try_archive_blocking(&oplog).await;
 
     // Reading it again, now it needs to be fetched from the secondary layer
     let read2 = oplog_service
-        .read(&owned_agent_id, OplogIndex::INITIAL, 1)
+        .read(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
         .await
         .into_iter()
         .next();
-    let last_index_2 = oplog_service.get_last_index(&owned_agent_id).await;
+    let last_index_2 = oplog_service
+        .get_last_index(&owned_agent_id, AgentMode::Durable)
+        .await;
 
     // Archiving it to the tertiary
     MultiLayerOplog::try_archive_blocking(&oplog).await;
 
     // Reading it again, now it needs to be fetched from the tertiary layer
     let read3 = oplog_service
-        .read(&owned_agent_id, OplogIndex::INITIAL, 1)
+        .read(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
         .await
         .into_iter()
         .next();
-    let last_index_3 = oplog_service.get_last_index(&owned_agent_id).await;
+    let last_index_3 = oplog_service
+        .get_last_index(&owned_agent_id, AgentMode::Durable)
+        .await;
 
     assert_eq!(more, Some(true));
     assert_eq!(read1, Some((OplogIndex::INITIAL, create_entry.clone())));
@@ -1228,8 +1720,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     let oplog = oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1261,16 +1754,25 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     let primary_length = primary_oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
+    let secondary_length = secondary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
+    let tertiary_length = tertiary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
 
     info!("initial oplog index: {}", initial_oplog_idx);
     info!("primary_length: {}", primary_length);
@@ -1282,8 +1784,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         oplog_service
             .open(
                 &owned_agent_id,
+                AgentMode::Durable,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1310,8 +1813,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         oplog_service
             .open(
                 &owned_agent_id,
+                AgentMode::Durable,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1345,16 +1849,25 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     let primary_length = primary_oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
+    let secondary_length = secondary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
+    let tertiary_length = tertiary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
 
     info!("initial oplog index: {}", initial_oplog_idx);
     info!("primary_length: {}", primary_length);
@@ -1366,8 +1879,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         oplog_service
             .open(
                 &owned_agent_id,
+                AgentMode::Durable,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1394,8 +1908,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         oplog_service
             .open(
                 &owned_agent_id,
+                AgentMode::Durable,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1420,16 +1935,31 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     drop(oplog);
 
     let entry1 = oplog_service
-        .read(&owned_agent_id, OplogIndex::INITIAL, 1)
+        .read(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
         .await;
     let entry2 = oplog_service
-        .read(&owned_agent_id, OplogIndex::from_u64(100), 1)
+        .read(
+            &owned_agent_id,
+            AgentMode::Durable,
+            OplogIndex::from_u64(100),
+            1,
+        )
         .await;
     let entry3 = oplog_service
-        .read(&owned_agent_id, OplogIndex::from_u64(1000), 1)
+        .read(
+            &owned_agent_id,
+            AgentMode::Durable,
+            OplogIndex::from_u64(1000),
+            1,
+        )
         .await;
     let entry4 = oplog_service
-        .read(&owned_agent_id, OplogIndex::from_u64(1001), 1)
+        .read(
+            &owned_agent_id,
+            AgentMode::Durable,
+            OplogIndex::from_u64(1001),
+            1,
+        )
         .await;
 
     assert_eq!(entry1.len(), 1);
@@ -1542,8 +2072,9 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
     let oplog = oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1577,23 +2108,38 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
 
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let primary_exists = primary_oplog_service.exists(&owned_agent_id).await;
-    let secondary_exists = secondary_layer.exists(&owned_agent_id).await;
-    let tertiary_exists = tertiary_layer.exists(&owned_agent_id).await;
+    let primary_exists = primary_oplog_service
+        .exists(&owned_agent_id, AgentMode::Durable)
+        .await;
+    let secondary_exists = secondary_layer
+        .exists(&owned_agent_id, AgentMode::Durable)
+        .await;
+    let tertiary_exists = tertiary_layer
+        .exists(&owned_agent_id, AgentMode::Durable)
+        .await;
 
     let primary_length = primary_oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
+    let secondary_length = secondary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
+    let tertiary_length = tertiary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
 
     info!("primary_length: {}", primary_length);
     info!("secondary_length: {}", secondary_length);
@@ -1683,8 +2229,9 @@ async fn scheduled_archive_impl(use_blob: bool) {
         let oplog = oplog_service
             .open(
                 &owned_agent_id,
+                AgentMode::Durable,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1699,23 +2246,34 @@ async fn scheduled_archive_impl(use_blob: bool) {
         result
     };
 
-    let last_oplog_index_1 = oplog_service.get_last_index(&owned_agent_id).await;
+    let last_oplog_index_1 = oplog_service
+        .get_last_index(&owned_agent_id, AgentMode::Durable)
+        .await;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
+    let secondary_length = secondary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
+    let tertiary_length = tertiary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
 
     info!("primary_length: {}", primary_length);
     info!("secondary_length: {}", secondary_length);
@@ -1726,7 +2284,9 @@ async fn scheduled_archive_impl(use_blob: bool) {
     assert_eq!(tertiary_length, 0);
     assert_eq!(archive_result, Some(true));
 
-    let last_oplog_index_2 = oplog_service.get_last_index(&owned_agent_id).await;
+    let last_oplog_index_2 = oplog_service
+        .get_last_index(&owned_agent_id, AgentMode::Durable)
+        .await;
 
     assert_eq!(last_oplog_index_1, last_oplog_index_2);
 
@@ -1735,8 +2295,9 @@ async fn scheduled_archive_impl(use_blob: bool) {
         let oplog = oplog_service
             .open(
                 &owned_agent_id,
+                AgentMode::Durable,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1751,16 +2312,25 @@ async fn scheduled_archive_impl(use_blob: bool) {
     let primary_length = primary_oplog_service
         .open(
             &owned_agent_id,
+            AgentMode::Durable,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
-    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
+    let secondary_length = secondary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
+    let tertiary_length = tertiary_layer
+        .open(&owned_agent_id, AgentMode::Durable)
+        .await
+        .length()
+        .await;
 
     info!("primary_length 2: {}", primary_length);
     info!("secondary_length 2: {}", secondary_length);
@@ -1771,7 +2341,9 @@ async fn scheduled_archive_impl(use_blob: bool) {
     assert_eq!(tertiary_length, 1);
     assert_eq!(archive_result2, Some(false));
 
-    let last_oplog_index_3 = oplog_service.get_last_index(&owned_agent_id).await;
+    let last_oplog_index_3 = oplog_service
+        .get_last_index(&owned_agent_id, AgentMode::Durable)
+        .await;
 
     assert_eq!(last_oplog_index_2, last_oplog_index_3);
 }
@@ -1818,6 +2390,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         };
         let create_entry = OplogEntry::create(
             agent_id.clone(),
+            AgentMode::Durable,
             ComponentRevision::new(1).unwrap(),
             Vec::new(),
             environment_id,
@@ -1826,17 +2399,18 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             100,
             100,
             HashSet::new(),
-            BTreeMap::new(),
             Vec::new(),
             None,
+            Uuid::new_v4(),
         );
 
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
         let oplog = oplog_service
             .create(
                 &owned_agent_id,
+                AgentMode::Durable,
                 create_entry,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1910,7 +2484,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
     let page_size = 10;
     loop {
         let (new_cursor, ids) = oplog_service
-            .scan_for_component(&environment_id, &component_id, cursor, page_size)
+            .scan_for_component(&environment_id, &component_id, None, cursor, page_size)
             .await
             .unwrap();
         debug!("Got {} elements, new cursor is {}", ids.len(), new_cursor);
@@ -1969,11 +2543,12 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
     let initial_oplog = oplog_service
         .create(
             &owned_agent_id,
+            AgentMode::Durable,
             OplogEntry::jump(OplogRegion {
                 start: OplogIndex::from_u64(0),
                 end: OplogIndex::from_u64(0),
             }),
-            AgentMetadata::default(worker_id.clone(), account_id, environment_id),
+            make_agent_metadata(worker_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -2010,8 +2585,9 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
                 let oplog = oplog_service
                     .open(
                         &owned_agent_id,
+                        AgentMode::Durable,
                         None,
-                        AgentMetadata::default(worker_id.clone(), account_id, environment_id),
+                        make_agent_metadata(worker_id.clone(), account_id, environment_id),
                         default_last_known_status(),
                         default_execution_status(AgentMode::Durable),
                     )
@@ -2060,4 +2636,501 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
         "Got {failures} unique key violations from concurrent oplog access — \
          the get_or_open initial flag race caused duplicate oplog instances"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Step 8: Scan-cursor mode-bit encoding helpers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scan_cursor_helpers_initial_cursor_starts_in_durable_phase() {
+    // A freshly-constructed ScanCursor has cursor == 0 and the active
+    // phase must be `Durable` with `Ephemeral` queued as next.
+    let (active, next) = scan_modes(None, 0);
+    assert_eq!(active, AgentMode::Durable);
+    assert_eq!(next, Some(AgentMode::Ephemeral));
+    assert_eq!(cursor_value(0), 0);
+}
+
+#[test]
+fn scan_cursor_helpers_high_bit_marks_ephemeral_phase() {
+    let (active, next) = scan_modes(None, SCAN_CURSOR_EPHEMERAL_BIT);
+    assert_eq!(active, AgentMode::Ephemeral);
+    assert_eq!(next, None);
+    // The high bit must not leak into the storage cursor value.
+    assert_eq!(cursor_value(SCAN_CURSOR_EPHEMERAL_BIT), 0);
+}
+
+#[test]
+fn scan_cursor_helpers_value_mask_strips_only_high_bit() {
+    let raw = SCAN_CURSOR_EPHEMERAL_BIT | 0x42;
+    let (active, next) = scan_modes(None, raw);
+    assert_eq!(active, AgentMode::Ephemeral);
+    assert_eq!(next, None);
+    assert_eq!(cursor_value(raw), 0x42);
+}
+
+#[test]
+fn scan_cursor_helpers_explicit_single_mode_does_not_phase_transition() {
+    let (active, next) = scan_modes(Some(AgentMode::Durable), 0);
+    assert_eq!(active, AgentMode::Durable);
+    assert_eq!(next, None);
+
+    let (active, next) = scan_modes(Some(AgentMode::Ephemeral), 0);
+    assert_eq!(active, AgentMode::Ephemeral);
+    assert_eq!(next, None);
+
+    // The high bit is only meaningful for `modes == None`; with an explicit
+    // mode the helper must ignore it.
+    let (active, next) = scan_modes(Some(AgentMode::Durable), SCAN_CURSOR_EPHEMERAL_BIT);
+    assert_eq!(active, AgentMode::Durable);
+    assert_eq!(next, None);
+}
+
+#[test]
+fn scan_cursor_helpers_durable_phase_in_progress_is_round_trip_stable() {
+    // While the durable phase is still in progress (cursor_val != 0) the
+    // returned cursor must keep the high bit clear and round-trip back to
+    // the same active mode.
+    let cur = next_scan_cursor(123, AgentMode::Durable, Some(AgentMode::Ephemeral), 2);
+    assert_eq!(cur.layer, 2);
+    assert_eq!(cur.cursor & SCAN_CURSOR_EPHEMERAL_BIT, 0);
+    assert_eq!(cursor_value(cur.cursor), 123);
+    let (active, next) = scan_modes(None, cur.cursor);
+    assert_eq!(active, AgentMode::Durable);
+    assert_eq!(next, Some(AgentMode::Ephemeral));
+}
+
+#[test]
+fn scan_cursor_helpers_durable_phase_finished_advances_to_ephemeral() {
+    // When the durable phase finishes (cursor_val == 0) and there is a next
+    // phase, the helper must hand control over to that phase by setting
+    // the high bit. The resulting cursor must NOT be `is_finished`.
+    let cur = next_scan_cursor(0, AgentMode::Durable, Some(AgentMode::Ephemeral), 0);
+    assert_eq!(cur.cursor, SCAN_CURSOR_EPHEMERAL_BIT);
+    assert_eq!(cur.layer, 0);
+    assert!(!cur.is_finished());
+    let (active, next) = scan_modes(None, cur.cursor);
+    assert_eq!(active, AgentMode::Ephemeral);
+    assert_eq!(next, None);
+}
+
+#[test]
+fn scan_cursor_helpers_ephemeral_phase_in_progress_keeps_high_bit_set() {
+    let cur = next_scan_cursor(7, AgentMode::Ephemeral, None, 0);
+    assert_eq!(
+        cur.cursor & SCAN_CURSOR_EPHEMERAL_BIT,
+        SCAN_CURSOR_EPHEMERAL_BIT
+    );
+    assert_eq!(cursor_value(cur.cursor), 7);
+    assert!(!cur.is_finished());
+    let (active, next) = scan_modes(None, cur.cursor);
+    assert_eq!(active, AgentMode::Ephemeral);
+    assert_eq!(next, None);
+}
+
+#[test]
+fn scan_cursor_helpers_both_phases_finished_yields_terminal_cursor() {
+    // After the ephemeral phase (the last one) finishes, the returned
+    // cursor must compare equal to the default and be `is_finished`.
+    let cur = next_scan_cursor(0, AgentMode::Ephemeral, None, 0);
+    assert_eq!(cur, ScanCursor::default());
+    assert!(cur.is_finished());
+}
+
+// ---------------------------------------------------------------------------
+// Step 8: Durable / ephemeral oplog isolation
+// ---------------------------------------------------------------------------
+
+#[test]
+async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "isolation-test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    let durable_create = OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Durable,
+        ComponentRevision::new(1).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::now_v7(),
+    )
+    .rounded();
+    let ephemeral_create = OplogEntry::create(
+        agent_id.clone(),
+        AgentMode::Ephemeral,
+        ComponentRevision::new(2).unwrap(),
+        Vec::new(),
+        environment_id,
+        account_id,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        Uuid::now_v7(),
+    )
+    .rounded();
+
+    let durable_oplog = oplog_service
+        .create(
+            &owned_agent_id,
+            AgentMode::Durable,
+            durable_create.clone(),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let ephemeral_oplog = oplog_service
+        .create(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            ephemeral_create.clone(),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+    durable_oplog.commit(CommitLevel::Always).await;
+    ephemeral_oplog.commit(CommitLevel::Always).await;
+
+    // Both namespaces report the oplog exists, independently.
+    assert!(
+        oplog_service
+            .exists(&owned_agent_id, AgentMode::Durable)
+            .await
+    );
+    assert!(
+        oplog_service
+            .exists(&owned_agent_id, AgentMode::Ephemeral)
+            .await
+    );
+
+    // Each namespace returns its own initial entry, not the other's.
+    let durable_first = oplog_service
+        .read(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
+        .await
+        .into_values()
+        .next()
+        .expect("expected one durable entry");
+    let ephemeral_first = oplog_service
+        .read(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            1,
+        )
+        .await
+        .into_values()
+        .next()
+        .expect("expected one ephemeral entry");
+    assert_eq!(durable_first, durable_create);
+    assert_eq!(ephemeral_first, ephemeral_create);
+    assert_ne!(durable_first, ephemeral_first);
+
+    // Deleting one namespace must not affect the other.
+    oplog_service
+        .delete(&owned_agent_id, AgentMode::Durable)
+        .await;
+    assert!(
+        !oplog_service
+            .exists(&owned_agent_id, AgentMode::Durable)
+            .await
+    );
+    assert!(
+        oplog_service
+            .exists(&owned_agent_id, AgentMode::Ephemeral)
+            .await
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Step 8: Multi-mode scan_for_component pagination
+// ---------------------------------------------------------------------------
+
+async fn make_workers(
+    oplog_service: &PrimaryOplogService,
+    environment_id: EnvironmentId,
+    component_id: ComponentId,
+    account_id: AccountId,
+    mode: AgentMode,
+    n: usize,
+    name_prefix: &str,
+) -> Vec<OwnedAgentId> {
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let agent_id = AgentId {
+            component_id,
+            agent_id: format!("{name_prefix}-{i}"),
+        };
+        let create_entry = OplogEntry::create(
+            agent_id.clone(),
+            mode,
+            ComponentRevision::new(1).unwrap(),
+            Vec::new(),
+            environment_id,
+            account_id,
+            None,
+            100,
+            100,
+            HashSet::new(),
+            Vec::new(),
+            None,
+            Uuid::now_v7(),
+        );
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let oplog = oplog_service
+            .create(
+                &owned_agent_id,
+                mode,
+                create_entry,
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
+                default_last_known_status(),
+                default_execution_status(mode),
+            )
+            .await;
+        oplog.commit(CommitLevel::Always).await;
+        out.push(owned_agent_id);
+    }
+    out
+}
+
+#[test]
+async fn scan_for_component_only_returns_matching_mode_when_specified(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+
+    let durable = make_workers(
+        &oplog_service,
+        environment_id,
+        component_id,
+        account_id,
+        AgentMode::Durable,
+        3,
+        "dur",
+    )
+    .await;
+    let ephemeral = make_workers(
+        &oplog_service,
+        environment_id,
+        component_id,
+        account_id,
+        AgentMode::Ephemeral,
+        4,
+        "eph",
+    )
+    .await;
+
+    let drain = async |modes: Option<AgentMode>| {
+        let mut cursor = ScanCursor::default();
+        let mut acc: Vec<OwnedAgentId> = Vec::new();
+        loop {
+            let (next_cursor, ids) = oplog_service
+                .scan_for_component(&environment_id, &component_id, modes, cursor, 100)
+                .await
+                .unwrap();
+            acc.extend(ids);
+            if next_cursor.is_finished() {
+                break;
+            }
+            cursor = next_cursor;
+        }
+        acc.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+        acc
+    };
+
+    let mut expected_durable = durable.clone();
+    expected_durable.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    let mut expected_ephemeral = ephemeral.clone();
+    expected_ephemeral.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    let mut expected_both: Vec<OwnedAgentId> = durable.into_iter().chain(ephemeral).collect();
+    expected_both.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+
+    assert_eq!(drain(Some(AgentMode::Durable)).await, expected_durable);
+    assert_eq!(drain(Some(AgentMode::Ephemeral)).await, expected_ephemeral);
+    assert_eq!(drain(None).await, expected_both);
+}
+
+#[test]
+async fn scan_for_component_paginates_across_mode_boundary(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+
+    let durable = make_workers(
+        &oplog_service,
+        environment_id,
+        component_id,
+        account_id,
+        AgentMode::Durable,
+        7,
+        "dur",
+    )
+    .await;
+    let ephemeral = make_workers(
+        &oplog_service,
+        environment_id,
+        component_id,
+        account_id,
+        AgentMode::Ephemeral,
+        5,
+        "eph",
+    )
+    .await;
+    let total = durable.len() + ephemeral.len();
+
+    // Use a very small page size so pagination must cross the durable→ephemeral boundary.
+    let page_size = 3u64;
+    let mut cursor = ScanCursor::default();
+    let mut all_ids: Vec<OwnedAgentId> = Vec::new();
+    let mut iterations = 0;
+    let mut saw_ephemeral_phase = false;
+    let mut saw_durable_phase = false;
+    loop {
+        iterations += 1;
+        // The cursor passed in must encode the active mode for the next page.
+        let (active_in, _) = scan_modes(None, cursor.cursor);
+        match active_in {
+            AgentMode::Durable => saw_durable_phase = true,
+            AgentMode::Ephemeral => saw_ephemeral_phase = true,
+        }
+
+        let (next_cursor, ids) = oplog_service
+            .scan_for_component(&environment_id, &component_id, None, cursor, page_size)
+            .await
+            .unwrap();
+
+        // Each page is bounded by the storage backend's contract; we never get
+        // more than `page_size` items per page from PrimaryOplogService.
+        assert!(
+            ids.len() as u64 <= page_size,
+            "page returned {} > {page_size} items",
+            ids.len()
+        );
+
+        all_ids.extend(ids);
+
+        if next_cursor.is_finished() {
+            break;
+        }
+        cursor = next_cursor;
+
+        // Defensive: prevent runaway loops if pagination is broken.
+        assert!(
+            iterations < (total as u64) + 4,
+            "pagination did not terminate after {iterations} iterations"
+        );
+    }
+
+    // Both phases must have been visited at least once during the scan.
+    assert!(saw_durable_phase, "durable scanning phase never observed");
+    assert!(
+        saw_ephemeral_phase,
+        "ephemeral scanning phase never observed"
+    );
+
+    // No duplicates across pages and no losses.
+    let mut sorted = all_ids.clone();
+    sorted.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    sorted.dedup();
+    assert_eq!(sorted.len(), all_ids.len(), "scan produced duplicate ids");
+    assert_eq!(all_ids.len(), total);
+
+    let mut expected: Vec<OwnedAgentId> = durable.into_iter().chain(ephemeral).collect();
+    expected.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    let mut got = all_ids;
+    got.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    assert_eq!(got, expected);
+}
+
+#[test]
+async fn scan_for_component_with_no_workers_terminates_immediately(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+
+    let mut cursor = ScanCursor::default();
+    let mut iterations = 0;
+    loop {
+        iterations += 1;
+        let (next_cursor, ids) = oplog_service
+            .scan_for_component(&environment_id, &component_id, None, cursor, 10)
+            .await
+            .unwrap();
+        assert!(ids.is_empty());
+        if next_cursor.is_finished() {
+            break;
+        }
+        cursor = next_cursor;
+        // Even with both-modes scanning the empty case must finish quickly:
+        // it should take at most one extra iteration to advance past the
+        // empty durable phase into the ephemeral phase, and one more to
+        // observe ephemeral is also empty.
+        assert!(
+            iterations < 4,
+            "empty scan did not terminate within 3 iterations"
+        );
+    }
 }

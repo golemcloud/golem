@@ -20,11 +20,12 @@ mod snippet;
 #[allow(clippy::module_inception)]
 mod template;
 
+pub use generator::InMemoryFs;
 pub use metadata::AppTemplateMetadata;
 pub use plan::{
     MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
-    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TemplatePlanStep, UnsafeTemplatePlan,
-    UnsafeTemplatePlanStep,
+    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TemplatePlanStep, TextEdit,
+    UnsafeTemplatePlan, UnsafeTemplatePlanStep,
 };
 pub use repo::AppTemplateRepo;
 pub use repo::TEMPLATES_DIR;

@@ -105,7 +105,7 @@ async updateItem(id: string, name: string, count: number): Promise<Item> { ... }
 
 Each unmapped parameter becomes a top-level field in the expected JSON body object. Field names use the original camelCase parameter names.
 
-> **⚠️ Important for callers:** When making HTTP requests *to* a Golem agent endpoint, always send a JSON object with the parameter names as keys — even for a single `string` body parameter. For example, calling the `updateItem` endpoint above requires `{"name": "Widget", "count": 5}`, **not** a raw text string. See the `golem-make-http-request-ts` skill for examples.
+> **⚠️ Important:** The request body is **always** a JSON object with parameter names as keys — even when there is only a single body parameter. For example, an endpoint `decide(decision: string)` expects `{"decision": "approved"}`, **never** a bare string like `"approved"`. Sending a non-object JSON value or plain text will fail with `REQUEST_JSON_BODY_PARSING_FAILED`.
 
 ## Binary Request and Response Bodies
 
@@ -138,6 +138,55 @@ async download(): Promise<UnstructuredBinary> {
 }
 ```
 
+## Plain Text Request and Response Bodies
+
+Use `UnstructuredText` from the SDK for raw `text/plain` payloads. Like
+`UnstructuredBinary`, a method using `UnstructuredText` may have **only one
+body parameter**, and that parameter cannot be bound to a path/query/header/mount
+variable. The body is decoded as UTF-8.
+
+```typescript
+import { UnstructuredText } from '@golemcloud/golem-ts-sdk';
+
+// Accepting any text/plain content
+@endpoint({ post: '/notes/{id}' })
+async addNote(id: string, body: UnstructuredText): Promise<number> {
+  if (body.tag === 'url') return 0;
+  return body.val.length;
+}
+
+// Restricting to specific language codes
+@endpoint({ post: '/translate/{id}' })
+async translate(
+  id: string,
+  body: UnstructuredText<['en', 'de']>,
+): Promise<string> { ... }
+
+// Returning text/plain
+@endpoint({ get: '/notes/{id}' })
+async getNote(id: string): Promise<UnstructuredText> {
+  return UnstructuredText.fromInline('hello', 'en');
+}
+```
+
+HTTP-level rules:
+- The request must have either no `Content-Type`, `text/plain`, or
+  `text/plain; charset=utf-8` (case-insensitive). Any other content type is
+  rejected with `415 Unsupported Media Type`.
+- `Content-Language` is **always optional**, even when language codes are
+  restricted. If present, it must be a single value (multi-valued or
+  comma-separated headers are rejected with `400 Bad Request`).
+- When restricted, the supplied `Content-Language` is matched
+  case-insensitively against the allowed list; otherwise `415 Unsupported Media Type`.
+- A non-UTF-8 request body is rejected with `400 Bad Request`.
+- `Content-Language` cannot also be bound as an endpoint header parameter when
+  the body is `UnstructuredText` — that header is reserved for declaring the
+  body language.
+
+The response is sent as `Content-Type: text/plain; charset=utf-8`. If the
+returned `UnstructuredText` (inline form) has a `languageCode`, it is
+forwarded as the `Content-Language` response header.
+
 ## Return Type to HTTP Response Mapping
 
 | Return Type | HTTP Status | Response Body |
@@ -149,6 +198,7 @@ async download(): Promise<UnstructuredBinary> {
 | `Result<void, E>` | 204 No Content if `Ok`, 500 if `Err` | empty or JSON `E` |
 | `Result<T, void>` | 200 OK if `Ok`, 500 if `Err` | JSON `T` or empty |
 | `UnstructuredBinary` | 200 OK | Raw binary with Content-Type |
+| `UnstructuredText` | 200 OK | `text/plain; charset=utf-8` (+ optional `Content-Language`) |
 
 ## Data Type to JSON Mapping
 

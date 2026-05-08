@@ -49,10 +49,6 @@ pub enum ComponentError {
     },
     #[error("Invalid file path: {0}")]
     InvalidFilePath(String),
-    #[error(
-        "The component name {actual} did not match the component's root package name: {expected}"
-    )]
-    InvalidComponentName { expected: String, actual: String },
     #[error("Plugin does not implement golem:api/oplog-processor")]
     InvalidOplogProcessorPlugin,
     #[error("Invalid plugin scope for {plugin_name}@{plugin_version} {details}")]
@@ -110,11 +106,20 @@ pub enum ComponentError {
         agent: AgentTypeName,
         path: Vec<String>,
     },
+    #[error("Config path for agent {agent} at key {rendered_key} contains '.' in a segment, which is not allowed", rendered_key = key.join("."))]
+    AgentConfigPathSegmentContainsDot {
+        agent: AgentTypeName,
+        key: Vec<String>,
+    },
     #[error("Old config value for agent {agent} at config key {rendered_key} is no longer valid due to an updated agent.", rendered_key = key.join("."))]
     AgentConfigOldConfigNotValid {
         agent: AgentTypeName,
         key: Vec<String>,
     },
+    #[error(
+        "Reset override flags are only allowed when environment compatibility_check is disabled"
+    )]
+    ResetOverrideRequiresCompatibilityCheckDisabled,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -132,7 +137,6 @@ impl SafeDisplay for ComponentError {
             Self::MalformedComponentArchive { .. } => self.to_string(),
             Self::AgentFileNotFoundInArchive { .. } => self.to_string(),
             Self::InvalidFilePath(_) => self.to_string(),
-            Self::InvalidComponentName { .. } => self.to_string(),
             Self::LimitExceeded(inner) => inner.to_safe_string(),
             Self::InvalidOplogProcessorPlugin => self.to_string(),
             Self::EnvironmentPluginNotFound(_) => self.to_string(),
@@ -151,7 +155,9 @@ impl SafeDisplay for ComponentError {
             Self::AgentConfigTypeMismatch { .. } => self.to_string(),
             Self::AgentConfigProvidedSecretWhereOnlyLocalAllowed { .. } => self.to_string(),
             Self::AgentConfigDuplicateValue { .. } => self.to_string(),
+            Self::AgentConfigPathSegmentContainsDot { .. } => self.to_string(),
             Self::AgentConfigOldConfigNotValid { .. } => self.to_string(),
+            Self::ResetOverrideRequiresCompatibilityCheckDisabled => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }

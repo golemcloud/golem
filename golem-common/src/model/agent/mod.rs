@@ -52,7 +52,6 @@ use golem_wasm_derive::{FromValue, IntoValue};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::str::FromStr;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
@@ -66,28 +65,6 @@ impl TryFrom<i32> for AgentMode {
             0 => Ok(AgentMode::Durable),
             1 => Ok(AgentMode::Ephemeral),
             _ => Err(format!("Unknown AgentMode: {value}")),
-        }
-    }
-}
-
-impl Display for AgentMode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            AgentMode::Durable => "Durable",
-            AgentMode::Ephemeral => "Ephemeral",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl FromStr for AgentMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Durable" => Ok(AgentMode::Durable),
-            "Ephemeral" => Ok(AgentMode::Ephemeral),
-            _ => Err(format!("Unknown AgentMode: {s}")),
         }
     }
 }
@@ -341,6 +318,21 @@ impl ParsedAgentId {
             phantom_id,
             as_string,
         })
+    }
+
+    pub fn new_auto_phantom(
+        agent_type: AgentTypeName,
+        parameters: DataValue,
+        phantom_id: Option<Uuid>,
+        mode: AgentMode,
+    ) -> Result<Self, String> {
+        let phantom_id = match (mode, phantom_id) {
+            (_, Some(id)) => Some(id),
+            (AgentMode::Ephemeral, None) => Some(Uuid::new_v4()),
+            (AgentMode::Durable, None) => None,
+        };
+
+        Self::new(agent_type, parameters, phantom_id)
     }
 
     pub fn parse(s: impl AsRef<str>, resolver: impl AgentTypeResolver) -> Result<Self, String> {

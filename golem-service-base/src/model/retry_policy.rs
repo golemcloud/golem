@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
+use golem_common::model::retry_policy::{RetryPolicyDto, RetryPolicyId, RetryPolicyRevision};
+use golem_common::model::{NamedRetryPolicy, UntypedJsonBody};
 
 #[derive(Debug, Clone)]
 pub struct StoredRetryPolicy {
@@ -26,21 +27,34 @@ pub struct StoredRetryPolicy {
     pub policy_json: String,
 }
 
-impl From<StoredRetryPolicy> for golem_common::model::retry_policy::RetryPolicyDto {
-    fn from(value: StoredRetryPolicy) -> Self {
-        Self {
+impl TryFrom<StoredRetryPolicy> for RetryPolicyDto {
+    type Error = String;
+
+    fn try_from(value: StoredRetryPolicy) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: value.id,
             environment_id: value.environment_id,
             name: value.name,
             revision: value.revision,
             priority: value.priority,
-            predicate_json: value.predicate_json,
-            policy_json: value.policy_json,
-        }
+            predicate: UntypedJsonBody(
+                serde_json::from_str::<serde_json::Value>(&value.predicate_json).map_err(|e| {
+                    format!(
+                        "Invalid predicate JSON for retry policy '{}': {e}",
+                        value.id
+                    )
+                })?,
+            ),
+            policy: UntypedJsonBody(
+                serde_json::from_str::<serde_json::Value>(&value.policy_json).map_err(|e| {
+                    format!("Invalid policy JSON for retry policy '{}': {e}", value.id)
+                })?,
+            ),
+        })
     }
 }
 
-impl TryFrom<StoredRetryPolicy> for golem_common::model::retry_policy::NamedRetryPolicy {
+impl TryFrom<StoredRetryPolicy> for NamedRetryPolicy {
     type Error = String;
 
     fn try_from(value: StoredRetryPolicy) -> Result<Self, Self::Error> {

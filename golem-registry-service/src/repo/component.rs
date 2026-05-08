@@ -445,7 +445,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             async move {
                 let revision: ComponentRevisionRecord = Self::insert_revision(
                     tx,
-                    ComponentRevisionRecord::deletion(user_account_id, component_id, revision_id),
+                    ComponentRevisionRecord::deletion(user_account_id, component_id, revision_id)?,
                 )
                 .await?;
 
@@ -796,7 +796,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         tx: &mut Self::Tx,
         revision: ComponentRevisionRecord,
     ) -> Result<ComponentRevisionRecord, ComponentRepoError> {
-        let revision = revision.with_updated_hash();
+        let revision = revision.with_updated_hash()?;
 
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"

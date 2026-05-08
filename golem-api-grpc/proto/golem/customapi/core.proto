@@ -90,6 +90,8 @@ message RequestBodySchema {
     JsonBody json_body = 2;
     UnrestrictedBinary unrestricted_binary = 3;
     RestrictedBinary restricted_binary = 4;
+    UnrestrictedText unrestricted_text = 5;
+    RestrictedText restricted_text = 6;
   }
 
   message Unused {}
@@ -102,6 +104,12 @@ message RequestBodySchema {
 
   message RestrictedBinary {
     repeated string allowed_mime_types = 1;
+  };
+
+  message UnrestrictedText { };
+
+  message RestrictedText {
+    repeated string allowed_language_codes = 1;
   };
 }
 
@@ -123,6 +131,7 @@ message MethodParameter {
     Header header = 3;
     JsonObjectBodyField json_object_body_field = 4;
     UnstructuredBinaryBody unstructured_binary_body = 5;
+    UnstructuredTextBody unstructured_text_body = 6;
   }
 
   message Path {
@@ -145,6 +154,8 @@ message MethodParameter {
   }
 
   message UnstructuredBinaryBody { }
+
+  message UnstructuredTextBody { }
 }
 
 
@@ -183,6 +194,7 @@ message RouteBehaviour {
     string method_name = 6;
     repeated MethodParameter method_parameters = 7;
     golem.component.DataSchema expected_agent_response = 8;
+    optional string method_description = 9;
   }
 
   message CorsPreflight {
@@ -199,7 +211,15 @@ message RouteBehaviour {
     golem.component.ComponentId component_id = 1;
   }
 
-  message OpenApiSpec { }
+  message OpenApiSpec {
+    enum Format {
+      FORMAT_UNSPECIFIED = 0;
+      JSON = 1;
+      YAML = 2;
+    }
+
+    Format format = 1;
+  }
 }
 
 message RouteSecurity {

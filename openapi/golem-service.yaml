@@ -135,6 +135,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -210,6 +222,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -307,6 +331,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -378,6 +414,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -469,6 +517,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -553,6 +613,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -652,6 +724,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -723,6 +807,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -805,6 +901,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -917,6 +1025,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -996,6 +1116,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1081,6 +1213,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1175,6 +1319,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1264,6 +1420,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1347,6 +1515,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1425,6 +1605,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1515,6 +1707,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1582,6 +1786,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1655,6 +1871,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '422':
           description: ''
           content:
@@ -1713,6 +1941,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -6661,163 +6901,29 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v1/login/oauth2/device/start:
-    post:
-      tags:
-      - RegistryService
-      - Login
-      summary: Start OAuth2 interactive flow
-      description: |-
-        Starts an interactive authorization flow.
-        The user must open the returned url and enter the userCode in a form before the expires deadline.
-        Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
-      operationId: start_oauth2_device_flow
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/OAuth2DeviceflowStart'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/OAuth2DeviceflowData'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-  /v1/login/oauth2/device/complete:
-    post:
-      tags:
-      - RegistryService
-      - Login
-      summary: Finish GitHub OAuth2 interactive flow
-      description: |-
-        Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
-        Returns a JSON string containing the encodedSession from the start endpoint's response.
-      operationId: complete_oauth2_device_flow
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              type: string
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/TokenWithSecret'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
   /v1/login/oauth2/web/authorize:
-    get:
+    post:
       tags:
       - RegistryService
       - Login
       summary: Initiate OAuth2 Web Flow
-      description: Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
+      description: |-
+        Starts the OAuth2 web flow. Two flow kinds are supported:
+
+        - `browser`: The callback will immediately redirect to the given URL with the
+        Golem token secret appended as a `token` query parameter. Intended for
+        browser-based frontends.
+
+        - `cli`: The callback stores the token in the session. The client polls the
+        poll endpoint with the returned state id to retrieve the token once available.
+        Intended for CLI tools and headless environments.
       operationId: start_oauth2_webflow
-      parameters:
-      - in: query
-        name: provider
-        description: Currently only `github` is supported.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/OAuth2WebflowStart'
         required: true
-        deprecated: false
-        schema:
-          $ref: '#/components/schemas/OAuth2Provider'
-        explode: true
-        style: form
-      - in: query
-        name: redirect
-        description: The redirect URL to redirect to after the user has authorized the application
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
       responses:
         '200':
           description: ''
@@ -6899,7 +7005,7 @@ paths:
         style: form
       responses:
         '302':
-          description: Redirect to the given URL specified in the web flow start
+          description: Redirect to the given URL after completing the OAuth flow
           headers:
             LOCATION:
               style: simple
@@ -6907,12 +7013,6 @@ paths:
               deprecated: false
               schema:
                 type: string
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Empty'
-        '200':
-          description: OAuth flow has completed
           content:
             application/json; charset=utf-8:
               schema:
@@ -9709,11 +9809,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfig:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
         config:
           default: []
           type: array
@@ -9778,7 +9873,8 @@ components:
           And: '#/components/schemas/AgentFilter_AgentAndFilter'
           Or: '#/components/schemas/AgentFilter_AgentOrFilter'
           Not: '#/components/schemas/AgentFilter_AgentNotFilter'
-          WasiConfig: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+          Config: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+          Mode: '#/components/schemas/AgentFilter_AgentModeFilter'
       type: object
       oneOf:
       - $ref: '#/components/schemas/AgentFilter_AgentNameFilter'
@@ -9790,6 +9886,7 @@ components:
       - $ref: '#/components/schemas/AgentFilter_AgentOrFilter'
       - $ref: '#/components/schemas/AgentFilter_AgentNotFilter'
       - $ref: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentModeFilter'
     AgentFilter_AgentAndFilter:
       allOf:
       - type: object
@@ -9807,10 +9904,10 @@ components:
       - type: object
         properties:
           type:
-            example: WasiConfig
+            example: Config
             type: string
             enum:
-            - WasiConfig
+            - Config
         required:
         - type
       - $ref: '#/components/schemas/AgentConfigVarsFilter'
@@ -9838,6 +9935,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/AgentEnvFilter'
+    AgentFilter_AgentModeFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Mode
+            type: string
+            enum:
+            - Mode
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentModeFilter'
     AgentFilter_AgentNameFilter:
       allOf:
       - type: object
@@ -9992,11 +10101,15 @@ components:
       title: AgentInvocationResult
       type: object
       properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
         componentRevision:
           type: integer
           format: uint64
+      required:
+      - agentId
     AgentMetadataDto:
       title: AgentMetadataDto
       type: object
@@ -10010,10 +10123,6 @@ components:
           type: string
           format: uuid
         env:
-          type: object
-          additionalProperties:
-            type: string
-        wasiConfig:
           type: object
           additionalProperties:
             type: string
@@ -10074,7 +10183,6 @@ components:
       - environmentId
       - createdBy
       - env
-      - wasiConfig
       - config
       - status
       - componentRevision
@@ -10117,6 +10225,22 @@ components:
       - traceId
       - traceStates
       - invocationContext
+    AgentMode:
+      type: string
+      enum:
+      - Durable
+      - Ephemeral
+    AgentModeFilter:
+      title: AgentModeFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          $ref: '#/components/schemas/AgentMode'
+      required:
+      - comparator
+      - value
     AgentNameFilter:
       title: AgentNameFilter
       type: object
@@ -13756,6 +13880,8 @@ components:
           format: date-time
         agentId:
           $ref: '#/components/schemas/AgentId'
+        agentMode:
+          $ref: '#/components/schemas/AgentMode'
         componentRevision:
           type: integer
           format: uint64
@@ -13781,10 +13907,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-        configVars:
-          type: object
-          additionalProperties:
-            type: string
         localAgentConfig:
           type: array
           items:
@@ -13792,9 +13914,13 @@ components:
         originalPhantomId:
           type: string
           format: uuid
+        instanceId:
+          type: string
+          format: uuid
       required:
       - timestamp
       - agentId
+      - agentMode
       - componentRevision
       - env
       - createdBy
@@ -13802,8 +13928,8 @@ components:
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
-      - configVars
       - localAgentConfig
+      - instanceId
     r#CreateResourceParams:
       title: r#CreateResourceParams
       type: object
@@ -14495,11 +14621,6 @@ components:
       - inputSchema
       - outputSchema
       - httpEndpoint
-    AgentMode:
-      type: string
-      enum:
-      - Durable
-      - Ephemeral
     AgentSecretCreation:
       title: AgentSecretCreation
       type: object
@@ -14607,11 +14728,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfig:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
         config:
           default: []
           type: array
@@ -14632,11 +14748,6 @@ components:
       type: object
       properties:
         env:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
-        wasiConfig:
           default: {}
           type: object
           additionalProperties:
@@ -14665,10 +14776,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfig:
-          type: object
-          additionalProperties:
-            type: string
         config:
           type: array
           items:
@@ -14694,87 +14801,6 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentFilePermissions'
-    AnalysedExport:
-      discriminator:
-        propertyName: type
-        mapping:
-          Function: '#/components/schemas/AnalysedExport_AnalysedFunction'
-          Instance: '#/components/schemas/AnalysedExport_AnalysedInstance'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/AnalysedExport_AnalysedFunction'
-      - $ref: '#/components/schemas/AnalysedExport_AnalysedInstance'
-    AnalysedExport_AnalysedFunction:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Function
-            type: string
-            enum:
-            - Function
-        required:
-        - type
-      - $ref: '#/components/schemas/AnalysedFunction'
-    AnalysedExport_AnalysedInstance:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Instance
-            type: string
-            enum:
-            - Instance
-        required:
-        - type
-      - $ref: '#/components/schemas/AnalysedInstance'
-    AnalysedFunction:
-      title: AnalysedFunction
-      type: object
-      properties:
-        name:
-          type: string
-        parameters:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedFunctionParameter'
-        result:
-          $ref: '#/components/schemas/AnalysedFunctionResult'
-      required:
-      - name
-      - parameters
-    AnalysedFunctionParameter:
-      title: AnalysedFunctionParameter
-      type: object
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - name
-      - typ
-    AnalysedFunctionResult:
-      title: AnalysedFunctionResult
-      type: object
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - typ
-    AnalysedInstance:
-      title: AnalysedInstance
-      type: object
-      properties:
-        name:
-          type: string
-        functions:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedFunction'
-      required:
-      - name
-      - functions
     Application:
       title: Application
       type: object
@@ -14895,10 +14921,8 @@ components:
       title: ComponentMetadata
       type: object
       properties:
-        exports:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedExport'
+        knownExports:
+          $ref: '#/components/schemas/KnownExports'
         producers:
           type: array
           items:
@@ -14907,10 +14931,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
-        binaryWit:
-          default: ''
-          type: string
-          format: bytes
         rootPackageName:
           type: string
         rootPackageVersion:
@@ -14922,14 +14942,14 @@ components:
             $ref: '#/components/schemas/AgentType'
         agentTypeProvisionConfigs:
           description: |-
-            Per-agent-type provisioning configuration: env, wasi_config, config, plugins, files.
+            Per-agent-type provisioning configuration: env, config, plugins, files.
             Kept separate from agent type declarations so AgentType stays a pure declaration type.
           default: {}
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfig'
       required:
-      - exports
+      - knownExports
       - producers
       - memories
     ComponentModelElementSchema:
@@ -14955,6 +14975,9 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfigUpdate'
+        allowIncompatibleConfig:
+          default: false
+          type: boolean
       required:
       - currentRevision
     CorsOptions:
@@ -15108,6 +15131,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentRetryPolicyDefault'
+        replaceIncompatibleAgentSecrets:
+          default: false
+          type: boolean
       required:
       - expectedDeploymentHash
       - version
@@ -15356,6 +15382,9 @@ components:
           format: uuid
         name:
           type: string
+        diffModelVersion:
+          type: integer
+          format: uint32
         compatibilityCheck:
           type: boolean
         versionCheck:
@@ -15379,6 +15408,7 @@ components:
       - revision
       - applicationId
       - name
+      - diffModelVersion
       - compatibilityCheck
       - versionCheck
       - securityOverrides
@@ -15538,6 +15568,9 @@ components:
           format: uint64
         name:
           type: string
+        diffModelVersion:
+          type: integer
+          format: uint32
         compatibilityCheck:
           type: boolean
         versionCheck:
@@ -15554,6 +15587,7 @@ components:
       - id
       - revision
       - name
+      - diffModelVersion
       - compatibilityCheck
       - versionCheck
       - securityOverrides
@@ -15646,7 +15680,9 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
-        webhooksUrl:
+        webhooksPrefix:
+          type: string
+        openapiEndpointPrefix:
           type: string
         createdAt:
           type: string
@@ -15658,7 +15694,8 @@ components:
       - domain
       - hash
       - agents
-      - webhooksUrl
+      - webhooksPrefix
+      - openapiEndpointPrefix
       - createdAt
     HttpApiDeploymentAgentOptions:
       title: HttpApiDeploymentAgentOptions
@@ -15713,7 +15750,9 @@ components:
       properties:
         domain:
           type: string
-        webhooksUrl:
+        webhooksPrefix:
+          type: string
+        openapiEndpointPrefix:
           type: string
         agents:
           type: object
@@ -15721,7 +15760,8 @@ components:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
       required:
       - domain
-      - webhooksUrl
+      - webhooksPrefix
+      - openapiEndpointPrefix
       - agents
     HttpApiDeploymentUpdate:
       title: HttpApiDeploymentUpdate
@@ -15730,7 +15770,9 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        webhookUrl:
+        webhookPrefix:
+          type: string
+        openapiEndpointPrefix:
           type: string
         agents:
           type: object
@@ -15896,6 +15938,26 @@ components:
       - pluginRegistrationId
       - pluginName
       - pluginVersion
+    KnownExports:
+      title: KnownExports
+      description: |-
+        Compact index of known exported interfaces in a component.
+        Instead of persisting the full `AnalysedExport` tree, we store only
+        the exact versioned interface name for each supported capability.
+      type: object
+      properties:
+        agentGuestInterface:
+          description: Exact exported interface name for `golem:agent/guest`, e.g. `golem:agent/guest@1.5.0`
+          type: string
+        saveSnapshotInterface:
+          description: Exact exported interface name for `golem:api/save-snapshot`
+          type: string
+        loadSnapshotInterface:
+          description: Exact exported interface name for `golem:api/load-snapshot`
+          type: string
+        oplogProcessorInterface:
+          description: Exact exported interface name for `golem:api/oplog-processor`
+          type: string
     LinearMemory:
       title: LinearMemory
       type: object
@@ -16004,32 +16066,6 @@ components:
             $ref: '#/components/schemas/NamedElementSchema'
       required:
       - elements
-    OAuth2DeviceflowData:
-      title: OAuth2DeviceflowData
-      type: object
-      properties:
-        url:
-          type: string
-        userCode:
-          type: string
-        expires:
-          type: string
-          format: date-time
-        encodedSession:
-          type: string
-      required:
-      - url
-      - userCode
-      - expires
-      - encodedSession
-    OAuth2DeviceflowStart:
-      title: OAuth2DeviceflowStart
-      type: object
-      properties:
-        provider:
-          $ref: '#/components/schemas/OAuth2Provider'
-      required:
-      - provider
     OAuth2Provider:
       type: string
       enum:
@@ -16046,6 +16082,67 @@ components:
       required:
       - url
       - state
+    OAuth2WebflowStart:
+      discriminator:
+        propertyName: type
+        mapping:
+          Browser: '#/components/schemas/OAuth2WebflowStart_OAuth2WebflowStartBrowser'
+          Cli: '#/components/schemas/OAuth2WebflowStart_OAuth2WebflowStartCli'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/OAuth2WebflowStart_OAuth2WebflowStartBrowser'
+      - $ref: '#/components/schemas/OAuth2WebflowStart_OAuth2WebflowStartCli'
+    OAuth2WebflowStartBrowser:
+      title: OAuth2WebflowStartBrowser
+      description: |-
+        Starts the browser-based flow.
+        The callback will redirect to `redirect` with the token secret appended as `token=<secret>`.
+      type: object
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
+        redirect:
+          type: string
+          format: url
+      required:
+      - provider
+      - redirect
+    OAuth2WebflowStartCli:
+      title: OAuth2WebflowStartCli
+      description: |-
+        Starts the CLI polling flow.
+        The callback stores the token for retrieval via the poll endpoint.
+        The browser is redirected to the server's configured CLI redirect URL.
+      type: object
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
+      required:
+      - provider
+    OAuth2WebflowStart_OAuth2WebflowStartBrowser:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Browser
+            type: string
+            enum:
+            - Browser
+        required:
+        - type
+      - $ref: '#/components/schemas/OAuth2WebflowStartBrowser'
+    OAuth2WebflowStart_OAuth2WebflowStartCli:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Cli
+            type: string
+            enum:
+            - Cli
+        required:
+        - type
+      - $ref: '#/components/schemas/OAuth2WebflowStartCli'
     OplogProcessorPluginSpec:
       title: OplogProcessorPluginSpec
       type: object
@@ -16833,15 +16930,15 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - name
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
     RetryPolicyDto:
       title: RetryPolicyDto
       type: object
@@ -16860,18 +16957,18 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - id
       - environmentId
       - name
       - revision
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
     RetryPolicyUpdate:
       title: RetryPolicyUpdate
       type: object
@@ -16882,10 +16979,10 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - currentRevision
     SecuritySchemeAgentSecurity:
@@ -17168,6 +17265,9 @@ components:
       - accountId
       - createdAt
       - expiresAt
+    UntypedJsonBody:
+      description: A json body without a static schema
+      type: object
     VersionedName:
       title: VersionedName
       type: object

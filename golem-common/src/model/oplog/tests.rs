@@ -67,12 +67,12 @@ fn create_serialization_poem_serde_equivalence() {
             ),
             agent_id: "test1".to_string(),
         },
+        agent_mode: crate::base_model::agent::AgentMode::Durable,
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![("x".to_string(), "y".to_string())]
             .into_iter()
             .collect(),
         created_by: AccountId::new(),
-        config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]),
         local_agent_config: vec![TypedAgentConfigEntry {
             path: vec!["foo".to_string(), "bar".to_string()],
             value: 1.into_value_and_type(),
@@ -94,6 +94,7 @@ fn create_serialization_poem_serde_equivalence() {
             parameters: BTreeMap::new(),
         }]),
         original_phantom_id: None,
+        instance_id: Uuid::new_v4(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

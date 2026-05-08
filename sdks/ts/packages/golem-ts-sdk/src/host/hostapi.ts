@@ -43,6 +43,7 @@ export {
   oplogCommit,
   markBeginOperation,
   markEndOperation,
+  trap,
   getOplogPersistenceLevel,
   setOplogPersistenceLevel,
   getIdempotenceMode,
@@ -101,7 +102,7 @@ export type AgentMetadata = {
   agentId: AgentId;
   args: string[];
   env: [string, string][];
-  configVars: [string, string][];
+  config: [string, string][];
   status: string;
   componentRevision: bigint;
   retryCount: bigint;
@@ -120,7 +121,7 @@ function wrapAgentMetadata(raw: RawAgentMetadata): AgentMetadata {
     agentId: wrapAgentId(raw.agentId),
     args: raw.args,
     env: raw.env,
-    configVars: raw.configVars,
+    config: raw.config,
     status: raw.status,
     componentRevision: raw.componentRevision,
     retryCount: raw.retryCount,

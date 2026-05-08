@@ -58,7 +58,8 @@ pub fn extract_http_endpoints(
                     if nv.path.is_ident("get")
                         || nv.path.is_ident("post")
                         || nv.path.is_ident("put")
-                        || nv.path.is_ident("delete") =>
+                        || nv.path.is_ident("delete")
+                        || nv.path.is_ident("patch") =>
                 {
                     if let syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Str(s),

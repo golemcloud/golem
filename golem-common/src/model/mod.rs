@@ -59,6 +59,7 @@ use self::component::ComponentId;
 use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
 use self::worker::TypedAgentConfigEntry;
+use crate::base_model::agent::AgentMode;
 use crate::base_model::agent::ParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -81,7 +82,7 @@ use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::Add;
@@ -327,18 +328,27 @@ pub enum ScheduledAction {
     /// Archives all entries from the first non-empty layer of an oplog to the next layer,
     /// if the last oplog index did not change. If there are more layers below, schedules
     /// a next action to archive the next layer.
+    #[desert(evolution(FieldAdded("agent_mode", AgentMode::Durable)))]
     ArchiveOplog {
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         last_oplog_index: OplogIndex,
         next_after: Duration,
     },
     /// Invoke the given action on the worker. The invocation will only
     /// be persisted in the oplog when it's actually getting scheduled.
+    ///
+    /// `target_worker_fingerprint` guards against stale invocations: when `Some(fp)`, the
+    /// scheduler compares `fp` against the current worker's `fingerprint` before firing. A
+    /// mismatch means the original worker was deleted and a new one was created with the same
+    /// ID — the invocation is silently dropped. `None` means fire unconditionally (used for
+    /// legacy entries and non-wasm-rpc invocations).
     Invoke {
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
         invocation: Box<AgentInvocation>,
+        target_worker_fingerprint: AgentFingerprint,
     },
     /// Resume the agent
     Resume {
@@ -506,41 +516,22 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-#[desert(evolution())]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
-    pub wasi_config: BTreeMap<String, String>,
     pub config: Vec<TypedAgentConfigEntry>,
     pub created_at: Timestamp,
     pub parent: Option<AgentId>,
     pub last_known_status: AgentStatusRecord,
     pub original_phantom_id: Option<Uuid>,
+    pub fingerprint: AgentFingerprint,
+    pub agent_mode: AgentMode,
 }
 
 impl AgentMetadata {
-    pub fn default(
-        agent_id: AgentId,
-        created_by: AccountId,
-        environment_id: EnvironmentId,
-    ) -> AgentMetadata {
-        AgentMetadata {
-            agent_id,
-            env: vec![],
-            environment_id,
-            created_by,
-            wasi_config: BTreeMap::new(),
-            config: Vec::new(),
-            created_at: Timestamp::now_utc(),
-            parent: None,
-            last_known_status: AgentStatusRecord::default(),
-            original_phantom_id: None,
-        }
-    }
-
     pub fn owned_agent_id(&self) -> OwnedAgentId {
         OwnedAgentId::new(self.environment_id, &self.agent_id)
     }
@@ -572,13 +563,18 @@ impl AgentFilter {
                 }
                 result
             }
-            AgentFilter::WasiConfig(AgentConfigVarsFilter {
+            AgentFilter::Config(AgentConfigVarsFilter {
                 name,
                 comparator,
                 value,
             }) => {
-                let env_value = metadata.wasi_config.get(&name);
-                env_value
+                let config_value = metadata.config.iter().find_map(|entry| {
+                    entry
+                        .to_flat_pair()
+                        .and_then(|(key, rendered_value)| (key == name).then_some(rendered_value))
+                });
+                config_value
+                    .as_ref()
                     .map(|ev| comparator.matches(ev, &value))
                     .unwrap_or(false)
             }
@@ -587,6 +583,9 @@ impl AgentFilter {
             }
             AgentFilter::Status(AgentStatusFilter { comparator, value }) => {
                 comparator.matches(&metadata.last_known_status.status, &value)
+            }
+            AgentFilter::Mode(AgentModeFilter { comparator, value }) => {
+                comparator.matches(&metadata.agent_mode, &value)
             }
             AgentFilter::Not(AgentNotFilter { filter }) => !filter.matches(metadata),
             AgentFilter::And(AgentAndFilter { filters }) => {
@@ -700,7 +699,7 @@ impl SafeDisplay for RetryConfig {
 /// By having an associated oplog_idx, the cached information can be used together with the
 /// tail of the oplog to determine the actual status of the worker.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
-#[desert(evolution())]
+#[desert(evolution(FieldAdded("agent_mode", AgentMode::Durable)))]
 pub struct AgentStatusRecord {
     pub status: AgentStatus,
     pub skipped_regions: DeletedRegions,
@@ -735,6 +734,11 @@ pub struct AgentStatusRecord {
     pub last_automatic_snapshot_index: Option<OplogIndex>,
     /// Timestamp of the last automatic snapshot entry in the oplog.
     pub last_automatic_snapshot_timestamp: Option<Timestamp>,
+    /// The agent mode the worker was created with. Decided at create time and persisted in the
+    /// `Create` oplog entry; immutable for the life of the worker. Recorded here so that out-of-band
+    /// callers (e.g. `WorkerService::get_agent_mode`) can resolve the worker's oplog namespace
+    /// directly from the cached status record without a separate KV lookup.
+    pub agent_mode: AgentMode,
 }
 
 impl Default for AgentStatusRecord {
@@ -763,7 +767,14 @@ impl Default for AgentStatusRecord {
             last_manual_update_snapshot_index: None,
             last_automatic_snapshot_index: None,
             last_automatic_snapshot_timestamp: None,
+            agent_mode: AgentMode::Durable,
         }
+    }
+}
+
+impl AgentStatusRecord {
+    pub fn has_pending_work(&self) -> bool {
+        !self.pending_invocations.is_empty() || !self.pending_updates.is_empty()
     }
 }
 

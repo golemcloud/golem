@@ -17,7 +17,7 @@ use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::schema::{McpToolSchema, get_input_mcp_schema, get_mcp_tool_schema};
 use golem_common::base_model::account::AccountId;
 use golem_common::base_model::agent::{
-    AgentMethod, AgentTypeName, DataSchema, ElementSchema, NamedElementSchemas,
+    AgentMethod, AgentMode, AgentTypeName, DataSchema, ElementSchema, NamedElementSchemas,
 };
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
@@ -37,6 +37,7 @@ impl McpAgentCapability {
         account_id: &AccountId,
         environment_id: &EnvironmentId,
         agent_type_name: &AgentTypeName,
+        agent_mode: AgentMode,
         method: &AgentMethod,
         constructor: &AgentConstructor,
         component_id: ComponentId,
@@ -82,6 +83,7 @@ impl McpAgentCapability {
                 tool,
                 component_id,
                 agent_type_name: agent_type_name.clone(),
+                agent_mode,
             }))
         } else {
             tracing::debug!(
@@ -140,6 +142,7 @@ impl McpAgentCapability {
                 raw_method: method.clone(),
                 component_id,
                 agent_type_name: agent_type_name.clone(),
+                agent_mode,
             }))
         }
     }

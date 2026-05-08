@@ -76,7 +76,9 @@ pub async fn start_grpc_server(
             .add_service(
                 WorkerServiceServer::new(WorkerGrpcApi::new(services.worker_service.clone()))
                     .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip),
+                    .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(config.max_message_size)
+                    .max_encoding_message_size(config.max_message_size),
             )
             .serve_with_incoming(TcpListenerStream::new(listener))
             .map_err(anyhow::Error::from)
@@ -184,8 +186,8 @@ pub fn error_to_status(error: AgentError) -> Status {
                     "Component Parsing Failed: Component ID = {:?}, Version: {}, Reason: {}",
                     err.component_id, err.component_revision, err.reason
                 ),
-                worker_execution_error::Error::GetLatestVersionOfComponentFailed(err) => format!(
-                    "Get Latest Version Of Component Failed: Component ID = {:?}, Reason: {}",
+                worker_execution_error::Error::GetCurrentVersionOfComponentFailed(err) => format!(
+                    "Get Current Version Of Component Failed: Component ID = {:?}, Reason: {}",
                     err.component_id, err.reason
                 ),
                 worker_execution_error::Error::PromiseNotFound(err) => {

@@ -18,9 +18,9 @@ use crate::model::component::{AgentFilePath, InitialAgentFile};
 use crate::model::oplog::{AgentResourceId, OplogIndex};
 use crate::model::{
     AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilePermissions, AgentFilter, AgentId,
-    AgentNameFilter, AgentNotFilter, AgentRevisionFilter, AgentStatus, AgentStatusFilter,
-    FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable,
-    RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
+    AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentRevisionFilter, AgentStatus,
+    AgentStatusFilter, FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod, PromiseId,
+    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
 };
 use applying::Apply;
 use golem_api_grpc::proto::golem;
@@ -295,13 +295,11 @@ impl TryFrom<golem::worker::AgentFilter> for AgentFilter {
                     filter.comparator.try_into()?,
                     filter.value,
                 )),
-                golem::worker::agent_filter::Filter::WasiConfig(filter) => {
-                    Ok(AgentFilter::new_wasi_config(
-                        filter.name,
-                        filter.comparator.try_into()?,
-                        filter.value,
-                    ))
-                }
+                golem::worker::agent_filter::Filter::Config(filter) => Ok(AgentFilter::new_config(
+                    filter.name,
+                    filter.comparator.try_into()?,
+                    filter.value,
+                )),
                 golem::worker::agent_filter::Filter::Not(filter) => {
                     let filter = *filter.filter.ok_or_else(|| "Missing filter".to_string())?;
                     Ok(AgentFilter::new_not(filter.try_into()?))
@@ -327,6 +325,16 @@ impl TryFrom<golem::worker::AgentFilter> for AgentFilter {
                     )?;
 
                     Ok(AgentFilter::new_or(filters))
+                }
+                golem::worker::agent_filter::Filter::Mode(filter) => {
+                    let mode_proto: golem::component::AgentMode =
+                        golem::component::AgentMode::try_from(filter.value).map_err(|err| {
+                            format!("Invalid AgentMode in AgentModeFilter: {err}")
+                        })?;
+                    Ok(AgentFilter::new_mode(
+                        filter.comparator.try_into()?,
+                        mode_proto.into(),
+                    ))
                 }
             },
             None => Err("Missing filter".to_string()),
@@ -358,17 +366,17 @@ impl From<AgentFilter> for golem::worker::AgentFilter {
                 comparator: comparator.into(),
                 value,
             }),
-            AgentFilter::WasiConfig(AgentConfigVarsFilter {
+            AgentFilter::Config(AgentConfigVarsFilter {
                 name,
                 comparator,
                 value,
-            }) => golem::worker::agent_filter::Filter::WasiConfig(
-                golem::worker::AgentConfigVarsFilter {
+            }) => {
+                golem::worker::agent_filter::Filter::Config(golem::worker::AgentConfigVarsFilter {
                     name,
                     comparator: comparator.into(),
                     value,
-                },
-            ),
+                })
+            }
             AgentFilter::Status(AgentStatusFilter { comparator, value }) => {
                 golem::worker::agent_filter::Filter::Status(golem::worker::AgentStatusFilter {
                     comparator: comparator.into(),
@@ -397,6 +405,13 @@ impl From<AgentFilter> for golem::worker::AgentFilter {
             AgentFilter::Or(filter) => {
                 golem::worker::agent_filter::Filter::Or(golem::worker::AgentOrFilter {
                     filters: filter.filters.into_iter().map(|f| f.into()).collect(),
+                })
+            }
+            AgentFilter::Mode(AgentModeFilter { comparator, value }) => {
+                let mode_proto: golem::component::AgentMode = value.into();
+                golem::worker::agent_filter::Filter::Mode(golem::worker::AgentModeFilter {
+                    comparator: comparator.into(),
+                    value: mode_proto as i32,
                 })
             }
         };

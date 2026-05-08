@@ -1433,3 +1433,62 @@ fn source_language_protobuf_roundtrip() {
         );
     }
 }
+
+#[test]
+fn new_auto_phantom_durable_none() {
+    let agent_type = AgentTypeName("test-agent".to_string());
+    let params = DataValue::Tuple(ElementValues { elements: vec![] });
+    let id = ParsedAgentId::new_auto_phantom(agent_type, params, None, AgentMode::Durable).unwrap();
+    assert_eq!(
+        id.phantom_id, None,
+        "Durable agent with no phantom_id should remain None"
+    );
+}
+
+#[test]
+fn new_auto_phantom_durable_some() {
+    let supplied = Uuid::new_v4();
+    let agent_type = AgentTypeName("test-agent".to_string());
+    let params = DataValue::Tuple(ElementValues { elements: vec![] });
+    let id =
+        ParsedAgentId::new_auto_phantom(agent_type, params, Some(supplied), AgentMode::Durable)
+            .unwrap();
+    assert_eq!(
+        id.phantom_id,
+        Some(supplied),
+        "Durable agent should preserve supplied phantom_id"
+    );
+}
+
+#[test]
+fn new_auto_phantom_ephemeral_none() {
+    let agent_type = AgentTypeName("test-agent".to_string());
+    let params = DataValue::Tuple(ElementValues { elements: vec![] });
+    let id =
+        ParsedAgentId::new_auto_phantom(agent_type, params, None, AgentMode::Ephemeral).unwrap();
+    assert!(
+        id.phantom_id.is_some(),
+        "Ephemeral agent with no phantom_id should auto-generate one"
+    );
+    // Verify it appears in the string representation
+    let s = id.to_string();
+    assert!(
+        s.contains('['),
+        "Ephemeral auto-phantom ID should appear in string: {s}"
+    );
+}
+
+#[test]
+fn new_auto_phantom_ephemeral_some() {
+    let supplied = Uuid::new_v4();
+    let agent_type = AgentTypeName("test-agent".to_string());
+    let params = DataValue::Tuple(ElementValues { elements: vec![] });
+    let id =
+        ParsedAgentId::new_auto_phantom(agent_type, params, Some(supplied), AgentMode::Ephemeral)
+            .unwrap();
+    assert_eq!(
+        id.phantom_id,
+        Some(supplied),
+        "Ephemeral agent should preserve supplied phantom_id"
+    );
+}

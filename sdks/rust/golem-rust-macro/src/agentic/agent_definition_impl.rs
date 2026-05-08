@@ -40,6 +40,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
     let AgentDefinitionAttributes {
         agent_mode,
+        agent_is_durable,
         http_mount,
         snapshotting,
     } = match parse_agent_definition_attributes(attrs) {
@@ -62,6 +63,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
     match get_agent_type_with_remote_client(
         &agent_definition_trait,
         agent_mode,
+        agent_is_durable,
         http_mount,
         snapshotting,
         &type_parameters,
@@ -103,10 +105,17 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
             let load_snapshot_item = get_load_snapshot_item();
             let save_snapshot_item = get_save_snapshot_item();
+            let agent_type_name_item =
+                get_agent_type_name_item(&agent_definition_trait.ident.to_string());
+            let agent_implementation_annotation_item = get_agent_implementation_annotation_item();
 
             agent_definition_trait.items.push(load_snapshot_item);
             agent_definition_trait.items.push(save_snapshot_item);
             agent_definition_trait.items.push(registration_function);
+            agent_definition_trait.items.push(agent_type_name_item);
+            agent_definition_trait
+                .items
+                .push(agent_implementation_annotation_item);
 
             AgentConfigAttrRemover.visit_item_trait_mut(&mut agent_definition_trait);
 
@@ -139,6 +148,22 @@ fn get_save_snapshot_item() -> syn::TraitItem {
     }
 }
 
+fn get_agent_implementation_annotation_item() -> syn::TraitItem {
+    syn::parse_quote! {
+        #[doc(hidden)]
+        fn agent_implementation_annotation() where Self: Sized;
+    }
+}
+
+fn get_agent_type_name_item(agent_type_name: &str) -> syn::TraitItem {
+    syn::parse_quote! {
+        #[doc(hidden)]
+        fn __golem_agent_type_name() -> &'static str where Self: Sized {
+            #agent_type_name
+        }
+    }
+}
+
 struct AgentTypeWithRemoteClient {
     agent_type: proc_macro2::TokenStream,
     remote_client: proc_macro2::TokenStream,
@@ -147,6 +172,7 @@ struct AgentTypeWithRemoteClient {
 fn get_agent_type_with_remote_client(
     agent_definition_trait: &ItemTrait,
     mode_value: proc_macro2::TokenStream,
+    agent_is_durable: bool,
     http_options: Option<proc_macro2::TokenStream>,
     snapshotting_value: proc_macro2::TokenStream,
     type_parameters: &[String],
@@ -506,6 +532,7 @@ fn get_agent_type_with_remote_client(
         &client_agent_config_param_defs,
         &client_agent_config_param_idents,
         type_parameters,
+        agent_is_durable,
     );
 
     let constructor_prompt_hint = if constructor_prompt.is_empty() {

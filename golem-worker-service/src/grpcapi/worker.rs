@@ -32,7 +32,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::proto_agent_id_string;
 use golem_service_base::model::auth::AuthCtx;
@@ -62,10 +62,11 @@ impl GrpcWorkerService for WorkerGrpcApi {
             .instrument(record.span.clone())
             .await
         {
-            Ok((agent_id, component_version)) => record.succeed(
+            Ok((agent_id, component_version, fingerprint)) => record.succeed(
                 launch_new_worker_response::Result::Success(LaunchNewWorkerSuccessResponse {
                     agent_id: Some(agent_id.into()),
                     component_version: component_version.into(),
+                    instance_id: Some(fingerprint.0.into()),
                 }),
             ),
             Err(error) => record.fail(
@@ -306,7 +307,7 @@ impl WorkerGrpcApi {
     async fn launch_new_worker(
         &self,
         request: LaunchNewWorkerRequest,
-    ) -> Result<(AgentId, ComponentRevision), GrpcAgentError> {
+    ) -> Result<(AgentId, ComponentRevision, AgentFingerprint), GrpcAgentError> {
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
@@ -330,12 +331,11 @@ impl WorkerGrpcApi {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| bad_request_error(format!("failed converting config: {e}")))?;
 
-        let latest_component_revision = self
+        let (latest_component_revision, fingerprint) = self
             .worker_service
             .create(
                 &agent_id,
                 request.env,
-                request.wasi_config.into_iter().collect(),
                 config,
                 request.ignore_already_existing,
                 auth,
@@ -344,7 +344,7 @@ impl WorkerGrpcApi {
             )
             .await?;
 
-        Ok((agent_id, latest_component_revision))
+        Ok((agent_id, latest_component_revision, fingerprint))
     }
 
     async fn complete_promise(

@@ -25,7 +25,7 @@ import scala.scalajs.js
 object OplogApiCompileSpec extends ZIOSpecDefault {
   import OplogApi._
 
-  private val ts        = ContextApi.DateTime(BigInt(1700000000L), 500000000L)
+  private val ts        = ContextApi.DateTime(BigInt(1700000000L), 500000000)
   private val attr      = ContextApi.Attribute("k", ContextApi.AttributeValue.StringValue("v"))
   private val sampleVat = WitValueTypes.ValueAndType(
     WitValueTypes.WitValue(List(WitValueTypes.WitNode.PrimString("test"))),
@@ -130,7 +130,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   private val mockCompId  = AgentHostApi.ComponentIdLiteral(mockUuid)
   private val mockAgentId = AgentHostApi.AgentIdLiteral(mockCompId, "test-agent")
 
-  private val allEntries: List[OplogEntry] = {
+  private val allEntries: List[OplogEntry] =
     List(
       OplogEntry.Create(
         CreateParameters(
@@ -143,8 +143,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           None,
           BigInt(1024),
           BigInt(65536),
-          List(pluginDesc),
-          Map("cfg" -> "v")
+          List(pluginDesc)
         )
       ),
       OplogEntry.Suspend(ts),
@@ -210,7 +209,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         SetSpanAttributeParameters(ts, "span-1", "key", ContextApi.AttributeValue.StringValue("v"))
       )
     )
-  }
 
   def spec = suite("OplogApiCompileSpec")(
     test("all 38 OplogEntry variants constructed") {

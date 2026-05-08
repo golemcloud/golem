@@ -250,7 +250,6 @@ impl Default for RegistryInvalidationEventSubscriberConfig {
 pub struct GrpcRegistryServiceConfig {
     pub host: String,
     pub port: u16,
-    pub max_message_size: usize,
     #[serde(flatten)]
     pub client_config: GrpcClientConfig,
     #[serde(default)]
@@ -268,7 +267,6 @@ impl SafeDisplay for GrpcRegistryServiceConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
         let _ = writeln!(
             &mut result,
             "invalidation_event_subscriber.initial_backoff: {:?}",
@@ -289,9 +287,11 @@ impl Default for GrpcRegistryServiceConfig {
         Self {
             host: "localhost".to_string(),
             port: 8080,
-            max_message_size: 50 * 1024 * 1024,
             invalidation_event_subscriber: RegistryInvalidationEventSubscriberConfig::default(),
-            client_config: GrpcClientConfig::default(),
+            client_config: GrpcClientConfig {
+                max_message_size: 50 * 1024 * 1024,
+                ..GrpcClientConfig::default()
+            },
         }
     }
 }
@@ -310,14 +310,14 @@ pub struct GrpcRegistryService {
 
 impl GrpcRegistryService {
     pub fn new(config: &GrpcRegistryServiceConfig) -> Self {
-        let max_message_size = config.max_message_size;
         let client = GrpcClient::new(
             "registry",
-            move |channel| {
+            |channel, max_message_size| {
                 RegistryServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
                     .max_decoding_message_size(max_message_size)
+                    .max_encoding_message_size(max_message_size)
             },
             config.uri(),
             config.client_config.clone(),
@@ -1079,8 +1079,8 @@ fn proto_registry_event_to_model(
                 golem_common::model::agent::RegistryInvalidationEvent::DeploymentChanged {
                     event_id,
                     environment_id,
-                    deployment_revision: dc.deployment_revision,
-                    current_deployment_revision: dc.current_deployment_revision,
+                    deployment_revision: dc.deployment_revision.try_into()?,
+                    current_deployment_revision: dc.current_deployment_revision.try_into()?,
                 },
             )
         }
@@ -1205,6 +1205,62 @@ fn proto_registry_event_to_model(
                     environment_id,
                     resource_definition_id,
                     resource_name: golem_common::model::quota::ResourceName(rdc.resource_name),
+                },
+            )
+        }
+        Some(Payload::ApplicationDeleted(ad)) => {
+            let application_id = ad
+                .application_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing application_id in ApplicationDeleted",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            let account_id = ad
+                .account_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing account_id in ApplicationDeleted",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            let environment_ids = ad
+                .environment_ids
+                .into_iter()
+                .map(|id| {
+                    id.try_into()
+                        .map_err(|e: String| RegistryServiceError::internal_client_error(e))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::ApplicationDeleted {
+                    event_id,
+                    application_id,
+                    account_id,
+                    app_name: ad.app_name,
+                    environment_ids,
+                },
+            )
+        }
+        Some(Payload::EnvironmentDeleted(ed)) => {
+            let environment_id = ed
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in EnvironmentDeleted",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::EnvironmentDeleted {
+                    event_id,
+                    environment_id,
+                    app_name: ed.app_name,
+                    env_name: ed.env_name,
                 },
             )
         }

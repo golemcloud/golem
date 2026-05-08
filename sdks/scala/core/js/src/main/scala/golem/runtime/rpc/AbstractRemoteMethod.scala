@@ -40,9 +40,15 @@ abstract class AbstractRemoteMethod[Trait, In, Out] protected (
   protected final def awaitWith(input: In): Future[Out] =
     resolved.await(method, input)
 
+  protected final def cancelableAwaitWith(input: In): (Future[Out], CancellationToken) =
+    resolved.cancelableAwait(method, input)
+
   protected final def triggerWith(input: In): Future[Unit] =
     resolved.trigger(method, input)
 
   protected final def scheduleWith(input: In, when: Datetime): Future[Unit] =
     resolved.schedule(method, when, input)
+
+  protected final def scheduleCancelableWith(input: In, when: Datetime): Future[CancellationToken] =
+    resolved.scheduleCancelable(method, when, input)
 }

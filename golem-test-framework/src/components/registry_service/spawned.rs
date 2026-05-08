@@ -38,6 +38,7 @@ pub struct SpawnedRegistryService {
     admin_account_id: AccountId,
     admin_account_email: AccountEmail,
     admin_account_token: TokenSecret,
+    builtin_plugin_owner_account_id: AccountId,
     default_plan_id: PlanId,
     low_fuel_plan_id: PlanId,
     low_disk_space_plan_id: PlanId,
@@ -70,6 +71,10 @@ impl SpawnedRegistryService {
         let admin_account_email = AccountEmail::new("admin@golem.cloud");
         let admin_account_token =
             TokenSecret::trusted("lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28".to_string());
+
+        let builtin_plugin_owner_account_id =
+            AccountId(uuid!("b7d3b9fb-ca74-4f75-8d20-c2ce03f5871d"));
+
         let default_plan_id = PlanId(uuid!("8e3e354a-e45e-4e30-bae4-27c30c74d9ee"));
         let low_fuel_plan_id = PlanId(uuid!("301fd75c-dcc5-48e3-967e-e7c33df52493"));
         let low_disk_space_plan_id = PlanId(uuid!("a2f3b4c5-d6e7-8901-abcd-ef0123456789"));
@@ -93,15 +98,16 @@ impl SpawnedRegistryService {
                     false,
                     component_compilation_service,
                     verbosity,
-                    &admin_plan_id,
-                    &admin_account_id,
+                    admin_plan_id,
+                    admin_account_id,
                     &admin_account_email,
                     &admin_account_token,
-                    &default_plan_id,
-                    &low_fuel_plan_id,
-                    &low_disk_space_plan_id,
-                    &low_http_calls_plan_id,
-                    &low_rpc_calls_plan_id,
+                    builtin_plugin_owner_account_id,
+                    default_plan_id,
+                    low_fuel_plan_id,
+                    low_disk_space_plan_id,
+                    low_http_calls_plan_id,
+                    low_rpc_calls_plan_id,
                     otlp,
                     otlp_wasm_path,
                 )
@@ -137,6 +143,7 @@ impl SpawnedRegistryService {
             admin_account_id,
             admin_account_email,
             admin_account_token,
+            builtin_plugin_owner_account_id,
             default_plan_id,
             low_fuel_plan_id,
             low_disk_space_plan_id,
@@ -171,6 +178,10 @@ impl RegistryService for SpawnedRegistryService {
     }
     fn admin_account_token(&self) -> TokenSecret {
         self.admin_account_token.clone()
+    }
+
+    fn builtin_plugin_owner_account_id(&self) -> AccountId {
+        self.builtin_plugin_owner_account_id
     }
 
     fn default_plan(&self) -> PlanId {

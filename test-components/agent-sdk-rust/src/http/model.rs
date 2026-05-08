@@ -70,5 +70,60 @@ pub struct PreflightRequest {
 #[derive(Schema)]
 pub struct WebhookResponse {
     pub payload_length: u64,
+}
 
+// New response types for comprehensive HTTP method testing
+
+#[derive(Schema)]
+pub struct ResourceUpdate {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Schema)]
+pub struct ResourceResponse {
+    pub id: String,
+    pub updated: bool,
+    pub method: String,
+}
+
+#[derive(Schema)]
+pub struct ResourceMetadata {
+    pub id: String,
+    pub exists: bool,
+    pub content_length: Option<u64>,
+}
+
+#[derive(Schema)]
+pub struct OptionsResponse {
+    pub allowed_methods: Vec<String>,
+    pub allowed_headers: Vec<String>,
+    pub max_age: u64,
+}
+
+#[derive(Schema)]
+pub struct ApiOptionsResponse {
+    pub version: String,
+    pub endpoints: Vec<String>,
+}
+
+#[derive(Schema)]
+pub struct TunnelResponse {
+    pub host: String,
+    pub port: u16,
+    pub connected: bool,
+}
+
+#[derive(Schema)]
+pub struct ProxyResponse {
+    pub target: String,
+    pub proxy_active: bool,
+}
+
+#[derive(Schema)]
+pub struct TraceResponse {
+    pub path: String,
+    pub received_headers: Vec<String>,
+    pub timestamp: u64,
 }

@@ -139,6 +139,9 @@ impl TextView for DeploymentDiff {
                             if diff.webhooks_url_changed {
                                 logln("    - webhooks_url");
                             }
+                            if diff.openapi_endpoint_changed {
+                                logln("    - openapi_endpoint");
+                            }
                             if !diff.agents_changes.is_empty() {
                                 logln("    - agents");
                                 for (agent_name, agent_diff) in &diff.agents_changes {
@@ -212,9 +215,6 @@ fn log_provision_config_diff(diff: &AgentTypeProvisionConfigDiff) {
     if !diff.env_changes.is_empty() {
         logln("        - env");
     }
-    if !diff.wasi_config_changes.is_empty() {
-        logln("        - wasi config");
-    }
     if !diff.config_changes.is_empty() {
         logln("        - agent config");
     }
@@ -268,11 +268,18 @@ pub fn log_unified_diff(diff: &str) {
 }
 
 pub fn log_unified_diff_for_path(path: &Path, diff: &str) {
-    if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md") {
+    if is_compact_diff_path(path) {
         log_unified_diff_compact(diff);
     } else {
         log_unified_diff(diff);
     }
+}
+
+fn is_compact_diff_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("md"))
+        .unwrap_or(false)
 }
 
 fn log_unified_diff_compact(diff: &str) {

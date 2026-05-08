@@ -3,11 +3,17 @@ import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as yaml from "yaml";
 import { z } from "zod";
-import { AgentDriver, killProcessTree, type DriverTimeoutOptions } from "./driver/base.js";
+import {
+  AgentDriver,
+  killProcessTree,
+  type DriverTimeoutOptions,
+  type UsageStats,
+} from "./driver/base.js";
 import { SkillWatcher } from "./watcher.js";
 import { evaluate, ExpectSchema, type AssertionContext } from "./assertions.js";
 import { classifyFailure, type FailureClassification } from "./failure-classification.js";
 import { findGolemAppDir } from "./workspace.js";
+import { startPrerequisiteServices, type PrerequisiteServiceName } from "./services.js";
 import * as log from "./log.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 1800;
@@ -16,7 +22,7 @@ const WATCHER_SNAPSHOT_SETTLE_MS = 25;
 
 // --- Language-conditional resolution ---
 
-const SUPPORTED_LANG_KEYS = new Set(["ts", "rust", "scala"]);
+const SUPPORTED_LANG_KEYS = new Set(["ts", "rust", "scala", "moonbit"]);
 
 /**
  * Checks if a value is a language-keyed map (e.g., { ts: "...", rust: "...", scala: "..." }).
@@ -110,6 +116,16 @@ const GetAgentTypeSchema = z.object({
 
 const ListAgentTypesSchema = z.object({});
 
+const CheckFileSchema = z.object({
+  path: z.string(),
+});
+
+const McpCallSchema = z.object({
+  url: z.string(),
+  method: z.string(),
+  params: z.record(z.unknown()).optional(),
+});
+
 const InvokeSchema = z.object({
   agent: z.string(),
   method: langConditional(z.string()),
@@ -118,7 +134,7 @@ const InvokeSchema = z.object({
 
 const ShellSchema = z.object({
   command: z.string(),
-  args: z.array(z.string()).optional(),
+  args: langConditional(z.array(z.string())).optional(),
   cwd: z.string().optional(),
 });
 
@@ -131,7 +147,7 @@ const TriggerSchema = z.object({
 const CreateAgentSchema = z.object({
   name: z.string(),
   env: z.record(z.string()).optional(),
-  config: z.record(z.string()).optional(),
+  config: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
 });
 
 const DeleteAgentSchema = z.object({
@@ -157,6 +173,8 @@ const ACTION_FIELDS = [
   "http",
   "get_agent_type",
   "list_agent_types",
+  "check_file",
+  "mcp_call",
 ] as const;
 
 // Language-conditional: accepts either T or { ts: T, rust: T, scala: T, ... }
@@ -197,6 +215,8 @@ const StepSpecSchema = z
     http: HttpSchema.optional(),
     get_agent_type: GetAgentTypeSchema.optional(),
     list_agent_types: ListAgentTypesSchema.optional(),
+    check_file: CheckFileSchema.optional(),
+    mcp_call: McpCallSchema.optional(),
     retry: RetrySchema.optional(),
     only_if: StepConditionSchema.optional(),
     skip_if: StepConditionSchema.optional(),
@@ -235,18 +255,22 @@ const SettingsSchema = z
     cleanup: z.boolean().optional(),
   })
   .optional();
+const ServiceNameSchema = z.enum(["postgres", "mysql", "ignite", "openai-mock"]);
 const PrerequisitesSchema = z
   .object({
     env: z.record(z.string()).optional(),
+    services: z.array(ServiceNameSchema).optional(),
   })
   .optional();
 
 const ScenarioSpecSchema = z.object({
   name: z.string({ required_error: 'Scenario must have a "name" field' }),
+  languageAgnostic: z.boolean().optional(),
   settings: SettingsSchema,
   prerequisites: PrerequisitesSchema,
   skip_if: StepConditionSchema.optional(),
   steps: z.array(StepSpecSchema).min(1, "Scenario must have at least one step"),
+  finally: z.array(StepSpecSchema).optional(),
 });
 
 type LangConditional<T> = T | Record<string, T>;
@@ -274,7 +298,8 @@ type InvokeSpec = {
   method: LangConditional<string>;
   args?: LangConditional<string>;
 };
-type ShellSpec = { command: string; args?: string[]; cwd?: string };
+type ShellSpec = { command: string; args?: LangConditional<string[]>; cwd?: string };
+type ResolvedShellSpec = { command: string; args?: string[]; cwd?: string };
 type TriggerSpec = {
   agent: string;
   method: LangConditional<string>;
@@ -285,7 +310,7 @@ type ResolvedTriggerSpec = { agent: string; method: string; args?: string };
 type CreateAgentSpec = {
   name: string;
   env?: Record<string, string>;
-  config?: Record<string, string>;
+  config?: Record<string, string | number | boolean>;
 };
 type DeleteAgentSpec = { name: string };
 type CreateProjectSpec = { name: string; presets?: LangConditional<string[]> };
@@ -315,6 +340,10 @@ type ListAgentTypesStep = StepCommon & {
   tag: "list_agent_types";
   list_agent_types: ListAgentTypesSpec;
 };
+type CheckFileSpec = { path: string };
+type CheckFileStep = StepCommon & { tag: "check_file"; check_file: CheckFileSpec };
+type McpCallSpec = { url: string; method: string; params?: Record<string, unknown> };
+type McpCallStep = StepCommon & { tag: "mcp_call"; mcp_call: McpCallSpec };
 
 export type StepSpec =
   | PromptStep
@@ -328,10 +357,13 @@ export type StepSpec =
   | SleepStep
   | HttpStep
   | GetAgentTypeStep
-  | ListAgentTypesStep;
+  | ListAgentTypesStep
+  | CheckFileStep
+  | McpCallStep;
 
 export interface ScenarioSpec {
   name: string;
+  languageAgnostic?: boolean;
   settings?: {
     timeout_per_subprompt?: number;
     golem_server?: {
@@ -342,9 +374,11 @@ export interface ScenarioSpec {
   };
   prerequisites?: {
     env?: Record<string, string>;
+    services?: PrerequisiteServiceName[];
   };
   skip_if?: StepCondition;
   steps: StepSpec[];
+  finally?: StepSpec[];
 }
 
 export function parseStep(raw: RawStepSpec): StepSpec {
@@ -390,6 +424,10 @@ export function parseStep(raw: RawStepSpec): StepSpec {
       return { ...common, tag, get_agent_type: raw.get_agent_type! };
     case "list_agent_types":
       return { ...common, tag, list_agent_types: raw.list_agent_types ?? {} };
+    case "check_file":
+      return { ...common, tag, check_file: raw.check_file! };
+    case "mcp_call":
+      return { ...common, tag, mcp_call: raw.mcp_call! };
   }
 }
 
@@ -406,7 +444,8 @@ export class ScenarioLoader {
     }
     const data = result.data;
     const steps = data.steps.map(parseStep);
-    return { ...data, steps } as ScenarioSpec;
+    const finallySteps = data.finally?.map(parseStep);
+    return { ...data, steps, ...(finallySteps && { finally: finallySteps }) } as ScenarioSpec;
   }
 }
 
@@ -418,6 +457,7 @@ export interface StepAttemptResult {
   activatedSkills: string[];
   timedOut?: boolean;
   timeoutKind?: "step" | "idle";
+  usage?: UsageStats;
 }
 
 export interface StepResult {
@@ -431,6 +471,7 @@ export interface StepResult {
   classification?: FailureClassification;
   timedOut?: boolean;
   timeoutKind?: "step" | "idle";
+  usage?: UsageStats;
 }
 
 export interface ScenarioRunResult {
@@ -439,6 +480,9 @@ export interface ScenarioRunResult {
   stepResults: StepResult[];
   artifactPaths: string[];
   workspace: string;
+  /** True when a step detected a credit-balance-too-low error from the LLM provider. */
+  creditInsufficient?: boolean;
+  usage?: UsageStats;
 }
 
 interface LocalCommandResult {
@@ -509,7 +553,7 @@ export class ScenarioExecutor {
   private watcherStarted = false;
   private currentSkillSessionBaseline: number | undefined;
   private workspace: string;
-  private bootstrapSkillSourceDir: string;
+  private bootstrapSkillSourceDirs: string[];
   private options: ScenarioExecutorOptions;
   private routerPort: number = 9881;
 
@@ -517,29 +561,33 @@ export class ScenarioExecutor {
     driver: AgentDriver,
     watcher: SkillWatcher,
     workspace: string,
-    bootstrapSkillSourceDir: string,
+    bootstrapSkillSourceDirs: string[],
     options?: ScenarioExecutorOptions,
   ) {
     this.driver = driver;
     this.watcher = watcher;
     this.workspace = workspace;
-    this.bootstrapSkillSourceDir = bootstrapSkillSourceDir;
+    this.bootstrapSkillSourceDirs = bootstrapSkillSourceDirs;
     this.options = options ?? {};
   }
 
-  private buildVariables(scenarioName: string): Record<string, string> {
+  private buildVariables(
+    scenarioName: string,
+    extraVariables?: Record<string, string>,
+  ): Record<string, string> {
     const vars: Record<string, string> = {
       workspace: this.workspace,
       scenario: scenarioName,
     };
     if (this.options.agent) vars["agent"] = this.options.agent;
     if (this.options.language) vars["language"] = this.options.language;
+    if (extraVariables) Object.assign(vars, extraVariables);
     return vars;
   }
 
   private substituteStepVariables(step: StepSpec, variables: Record<string, string>): StepSpec {
     const sub = (s: string | undefined) => (s ? substituteVariables(s, variables) : s);
-    const subArr = (arr: string[] | undefined) =>
+    const _subArr = (arr: string[] | undefined) =>
       arr?.map((s) => substituteVariables(s, variables));
     const subLangStr = (v: LangConditional<string>): LangConditional<string> =>
       typeof v === "string"
@@ -550,6 +598,18 @@ export class ScenarioExecutor {
     const subLangStrOpt = (
       v: LangConditional<string> | undefined,
     ): LangConditional<string> | undefined => (v === undefined ? undefined : subLangStr(v));
+    const subLangArr = (v: LangConditional<string[]>): LangConditional<string[]> =>
+      Array.isArray(v)
+        ? v.map((s) => substituteVariables(s, variables))
+        : Object.fromEntries(
+            Object.entries(v).map(([k, arr]) => [
+              k,
+              arr.map((s: string) => substituteVariables(s, variables)),
+            ]),
+          );
+    const subLangArrOpt = (
+      v: LangConditional<string[]> | undefined,
+    ): LangConditional<string[]> | undefined => (v === undefined ? undefined : subLangArr(v));
 
     switch (step.tag) {
       case "prompt":
@@ -577,7 +637,7 @@ export class ScenarioExecutor {
           ...step,
           shell: {
             command: substituteVariables(step.shell.command, variables),
-            args: subArr(step.shell.args),
+            args: subLangArrOpt(step.shell.args),
             cwd: sub(step.shell.cwd),
           },
         };
@@ -637,6 +697,22 @@ export class ScenarioExecutor {
         };
       case "list_agent_types":
         return { ...step };
+      case "check_file":
+        return {
+          ...step,
+          check_file: {
+            ...step.check_file,
+            path: substituteVariables(step.check_file.path, variables),
+          },
+        };
+      case "mcp_call":
+        return {
+          ...step,
+          mcp_call: {
+            ...step.mcp_call,
+            url: substituteVariables(step.mcp_call.url, variables),
+          },
+        };
     }
   }
 
@@ -695,6 +771,16 @@ export class ScenarioExecutor {
         },
       } as StepSpec;
     }
+    if (step.tag === "shell") {
+      return {
+        ...resolved,
+        tag: "shell",
+        shell: {
+          ...step.shell,
+          args: resolveByLanguage(step.shell.args, lang),
+        },
+      } as StepSpec;
+    }
     if (step.tag === "http") {
       return {
         ...resolved,
@@ -720,6 +806,16 @@ export class ScenarioExecutor {
       ...invoke,
       method: invoke.method,
       args: invoke.args as string | undefined,
+    };
+  }
+
+  private ensureResolvedShellSpec(shell: ShellSpec): ResolvedShellSpec {
+    if (shell.args !== undefined && !Array.isArray(shell.args)) {
+      throw new Error("Shell args must resolve to a string array for the current language");
+    }
+    return {
+      ...shell,
+      args: shell.args as string[] | undefined,
     };
   }
 
@@ -810,6 +906,7 @@ export class ScenarioExecutor {
 
     const results: StepResult[] = [];
     const savedEnv: Record<string, string | undefined> = {};
+    const startedServices = await startPrerequisiteServices(spec.prerequisites?.services);
     // Validate resumeFromStepId if set
     if (this.options.resumeFromStepId) {
       const found = spec.steps.some((s) => s.id === this.options.resumeFromStepId);
@@ -820,34 +917,46 @@ export class ScenarioExecutor {
       }
     }
 
+    // Set prerequisite service env vars first, then scenario-provided env vars so
+    // the scenario can override defaults when needed.
+    for (const [key, value] of Object.entries(startedServices.env)) {
+      if (!(key in savedEnv)) {
+        savedEnv[key] = process.env[key];
+      }
+      process.env[key] = value;
+    }
+
     // Set prerequisites env vars
     if (spec.prerequisites?.env) {
       for (const [key, value] of Object.entries(spec.prerequisites.env)) {
-        savedEnv[key] = process.env[key];
+        if (!(key in savedEnv)) {
+          savedEnv[key] = process.env[key];
+        }
         process.env[key] = value;
       }
     }
 
-    // Setup workspace (each run gets a unique ID so no cleanup needed)
-    this.currentSkillSessionBaseline = undefined;
-    await fs.mkdir(this.workspace, { recursive: true });
-    await this.driver.setup(this.workspace, this.bootstrapSkillSourceDir);
-    await this.verifyGolemConnectivity(spec);
-
-    // Build extra env for commands from settings
-    const commandEnv = this.buildCommandEnv(spec);
-    this.routerPort = spec.settings?.golem_server?.router_port ?? 9881;
-    const variables = this.buildVariables(spec.name);
-    const conditionContext = {
-      agent: this.options.agent,
-      language: this.options.language,
-      os: process.platform,
-    };
-
     const startTime = Date.now();
     let isFirstPrompt = true;
     let resumeReached = !this.options.resumeFromStepId;
+    let creditInsufficient = false;
+    // Build env and variables early so finalizers can use them even if setup fails
+    const commandEnv = this.buildCommandEnv(spec, startedServices.env);
+    this.routerPort = spec.settings?.golem_server?.router_port ?? 9881;
+    const variables = this.buildVariables(spec.name, startedServices.variables);
+
     try {
+      // Setup workspace (each run gets a unique ID so no cleanup needed)
+      this.currentSkillSessionBaseline = undefined;
+      await fs.mkdir(this.workspace, { recursive: true });
+      await this.driver.setup(this.workspace, this.bootstrapSkillSourceDirs);
+      await this.verifyGolemConnectivity(spec);
+      const conditionContext = {
+        agent: this.options.agent,
+        language: this.options.language,
+        os: process.platform,
+      };
+
       for (const originalStep of spec.steps) {
         // Check abort signal
         if (this.options.abortSignal?.aborted) break;
@@ -899,6 +1008,8 @@ export class ScenarioExecutor {
               isFirstPrompt: boolean;
               timedOut?: boolean;
               timeoutKind?: "step" | "idle";
+              creditInsufficient?: boolean;
+              usage?: UsageStats;
             }
           | undefined;
 
@@ -921,9 +1032,14 @@ export class ScenarioExecutor {
             activatedSkills: bodyResult.activatedSkills,
             timedOut: bodyResult.timedOut,
             timeoutKind: bodyResult.timeoutKind,
+            usage: bodyResult.usage,
           });
 
           finalResult = bodyResult;
+          if (bodyResult.creditInsufficient) {
+            creditInsufficient = true;
+            break;
+          }
           if (bodyResult.success) break;
         }
 
@@ -944,11 +1060,29 @@ export class ScenarioExecutor {
           classification,
           timedOut: finalResult!.timedOut,
           timeoutKind: finalResult!.timeoutKind,
+          usage: finalResult!.usage,
         });
 
         if (!finalResult!.success) break; // Stop on failure
       }
     } finally {
+      // Run finalizer steps (best-effort: all run even if some fail, abort signal is ignored)
+      if (spec.finally?.length) {
+        const savedAbortSignal = this.options.abortSignal;
+        this.options.abortSignal = undefined;
+        try {
+          await this.executeFinalizers(spec, commandEnv, variables, results);
+        } finally {
+          this.options.abortSignal = savedAbortSignal;
+        }
+      }
+
+      try {
+        await startedServices.stopAll();
+      } catch (err) {
+        log.stepAction("finally", `failed to stop services: ${err}`);
+      }
+
       // Restore env vars
       for (const [key, value] of Object.entries(savedEnv)) {
         if (value === undefined) {
@@ -958,10 +1092,21 @@ export class ScenarioExecutor {
         }
       }
 
-      await this.watcher.stop();
+      try {
+        await this.watcher.stop();
+      } catch (err) {
+        log.stepAction("finally", `failed to stop watcher: ${err}`);
+      }
       this.watcherStarted = false;
-      await this.driver.teardown();
+
+      try {
+        await this.driver.teardown();
+      } catch (err) {
+        log.stepAction("finally", `failed to teardown driver: ${err}`);
+      }
     }
+
+    const aggregatedUsage = this.aggregateUsage(results);
 
     return {
       status: results.every((result) => result.success) ? "pass" : "fail",
@@ -969,7 +1114,74 @@ export class ScenarioExecutor {
       stepResults: results,
       artifactPaths: [this.workspace],
       workspace: this.workspace,
+      creditInsufficient,
+      usage: aggregatedUsage,
     };
+  }
+
+  private aggregateUsage(results: StepResult[]): UsageStats | undefined {
+    let hasAny = false;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let costUsd = 0;
+    let numTurns = 0;
+    for (const r of results) {
+      if (r.usage) {
+        hasAny = true;
+        inputTokens += r.usage.inputTokens ?? 0;
+        outputTokens += r.usage.outputTokens ?? 0;
+        costUsd += r.usage.costUsd ?? 0;
+        numTurns += r.usage.numTurns ?? 0;
+      }
+    }
+    if (!hasAny) return undefined;
+    return {
+      ...(inputTokens > 0 && { inputTokens }),
+      ...(outputTokens > 0 && { outputTokens }),
+      ...(costUsd > 0 && { costUsd }),
+      ...(numTurns > 0 && { numTurns }),
+    };
+  }
+
+  private async executeFinalizers(
+    spec: ScenarioSpec,
+    commandEnv: Record<string, string>,
+    variables: Record<string, string>,
+    results: StepResult[],
+  ): Promise<void> {
+    log.stepAction("finally", "running finalizer steps");
+    for (const originalStep of spec.finally!) {
+      const stepLabel = `finally:${originalStep.id ?? "(unnamed)"}`;
+      const stepStart = Date.now();
+      try {
+        const step = this.resolveLanguageFields(
+          this.substituteStepVariables(originalStep, variables),
+        );
+        const bodyResult = await this.executeStepBody(step, spec, commandEnv, false);
+        results.push({
+          step: originalStep,
+          success: bodyResult.success,
+          durationSeconds: (Date.now() - stepStart) / 1000,
+          expectedSkills: [],
+          activatedSkills: bodyResult.activatedSkills,
+          error: bodyResult.errors.length > 0 ? bodyResult.errors.join("\n") : undefined,
+        });
+        if (!bodyResult.success) {
+          log.stepAction(stepLabel, `finalizer failed: ${bodyResult.errors.join(", ")}`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.stepAction(stepLabel, `finalizer threw: ${msg}`);
+        results.push({
+          step: originalStep,
+          success: false,
+          durationSeconds: (Date.now() - stepStart) / 1000,
+          expectedSkills: [],
+          activatedSkills: [],
+          error: `FINALIZER_ERROR: ${msg}`,
+        });
+      }
+    }
   }
 
   private async executeStepBody(
@@ -984,11 +1196,15 @@ export class ScenarioExecutor {
     isFirstPrompt: boolean;
     timedOut?: boolean;
     timeoutKind?: "step" | "idle";
+    creditInsufficient?: boolean;
+    usage?: UsageStats;
   }> {
     const errors: string[] = [];
     let success = true;
     let stepTimedOut: boolean | undefined;
     let stepTimeoutKind: "step" | "idle" | undefined;
+    let stepCreditInsufficient: boolean | undefined;
+    let stepUsage: UsageStats | undefined;
     const stepTimeoutSeconds =
       step.timeout ??
       spec.settings?.timeout_per_subprompt ??
@@ -1044,7 +1260,7 @@ export class ScenarioExecutor {
       case "shell":
         await this.executeShell(
           stepLabel,
-          step.shell,
+          this.ensureResolvedShellSpec(step.shell),
           step.expect,
           stepTimeoutSeconds,
           commandEnv,
@@ -1060,7 +1276,10 @@ export class ScenarioExecutor {
         );
         break;
       case "prompt": {
-        const idleTimeout = this.options.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
+        const idleTimeout =
+          this.options.idleTimeoutSeconds ??
+          this.driver.getDefaultIdleTimeoutSeconds() ??
+          DEFAULT_IDLE_TIMEOUT_SECONDS;
         const promptResult = await this.executePrompt(
           stepLabel,
           step.prompt as string,
@@ -1072,6 +1291,8 @@ export class ScenarioExecutor {
         );
         stepTimedOut = promptResult.timedOut;
         stepTimeoutKind = promptResult.timeoutKind;
+        stepCreditInsufficient = promptResult.creditInsufficient;
+        stepUsage = promptResult.usage;
         break;
       }
       case "invoke":
@@ -1116,6 +1337,12 @@ export class ScenarioExecutor {
           fail,
         );
         break;
+      case "check_file":
+        await this.executeCheckFile(stepLabel, step.check_file, step.expect, fail);
+        break;
+      case "mcp_call":
+        await this.executeMcpCall(stepLabel, step.mcp_call, step.expect, stepTimeoutSeconds, fail);
+        break;
     }
 
     // Verify skills activation
@@ -1156,6 +1383,8 @@ export class ScenarioExecutor {
       isFirstPrompt: step.tag === "prompt" && success ? false : isFirstPrompt,
       timedOut: stepTimedOut,
       timeoutKind: stepTimeoutKind,
+      creditInsufficient: stepCreditInsufficient,
+      usage: stepUsage,
     };
   }
 
@@ -1191,7 +1420,7 @@ export class ScenarioExecutor {
     }
     if (spec.config) {
       for (const [k, v] of Object.entries(spec.config)) {
-        args.push("-c", `${k}=${v}`);
+        args.push("-c", `${k}=${JSON.stringify(v)}`);
       }
     }
     const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);
@@ -1246,7 +1475,7 @@ export class ScenarioExecutor {
 
   private async executeShell(
     stepLabel: string,
-    shell: ShellSpec,
+    shell: ResolvedShellSpec,
     expect: StepCommon["expect"],
     timeout: number,
     commandEnv: Record<string, string>,
@@ -1278,6 +1507,41 @@ export class ScenarioExecutor {
     }
   }
 
+  private async executeCheckFile(
+    stepLabel: string,
+    spec: CheckFileSpec,
+    expect: StepCommon["expect"],
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    let baseDir: string;
+    try {
+      baseDir = await this.findGolemProjectDir();
+    } catch {
+      baseDir = this.workspace;
+    }
+    const resolvedPath = path.resolve(baseDir, spec.path);
+    log.stepAction(stepLabel, `checking file: ${resolvedPath}`);
+
+    let content: string;
+    try {
+      content = await fs.readFile(resolvedPath, "utf-8");
+    } catch (err) {
+      fail(`FILE_CHECK_FAILED: could not read file "${resolvedPath}": ${err}`);
+      return;
+    }
+
+    log.stepAction(stepLabel, `file size: ${content.length} bytes`);
+
+    if (expect) {
+      this.evaluateAssertions(
+        { stdout: content, stderr: "", exitCode: 0 },
+        expect,
+        fail,
+        stepLabel,
+      );
+    }
+  }
+
   private async executeTrigger(
     stepLabel: string,
     trigger: ResolvedTriggerSpec,
@@ -1301,7 +1565,12 @@ export class ScenarioExecutor {
     timeout: number,
     idleTimeout: number | undefined,
     fail: (msg: string) => void,
-  ): Promise<{ timedOut?: boolean; timeoutKind?: "step" | "idle" }> {
+  ): Promise<{
+    timedOut?: boolean;
+    timeoutKind?: "step" | "idle";
+    creditInsufficient?: boolean;
+    usage?: UsageStats;
+  }> {
     const opts: DriverTimeoutOptions = {
       stepTimeoutSeconds: timeout,
       idleTimeoutSeconds: idleTimeout,
@@ -1311,12 +1580,22 @@ export class ScenarioExecutor {
       log.stepPrompt(stepLabel, prompt, "followup");
       const result = await this.driver.sendFollowup(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
-      return { timedOut: result.timedOut, timeoutKind: result.timeoutKind };
+      return {
+        timedOut: result.timedOut,
+        timeoutKind: result.timeoutKind,
+        creditInsufficient: result.creditInsufficient,
+        usage: result.usage,
+      };
     } else {
       log.stepPrompt(stepLabel, prompt, "initial");
       const result = await this.driver.sendPrompt(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
-      return { timedOut: result.timedOut, timeoutKind: result.timeoutKind };
+      return {
+        timedOut: result.timedOut,
+        timeoutKind: result.timeoutKind,
+        creditInsufficient: result.creditInsufficient,
+        usage: result.usage,
+      };
     }
   }
 
@@ -1618,6 +1897,98 @@ export class ScenarioExecutor {
     }
   }
 
+  private async executeMcpCall(
+    stepLabel: string,
+    spec: McpCallSpec,
+    expect: StepCommon["expect"],
+    timeoutSeconds: number,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    log.stepAction(stepLabel, `MCP ${spec.method} → ${spec.url}`);
+
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { StreamableHTTPClientTransport } =
+      await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+    const { CallToolResultSchema } = await import("@modelcontextprotocol/sdk/types.js");
+
+    const client = new Client(
+      { name: "golem-skill-harness", version: "1.0.0" },
+      { capabilities: {} },
+    );
+    const transport = new StreamableHTTPClientTransport(new URL(spec.url));
+    let connected = false;
+
+    try {
+      await Promise.race([
+        client.connect(transport),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("MCP connect timed out")), timeoutSeconds * 1000),
+        ),
+      ]);
+      connected = true;
+
+      let body: string;
+
+      if (spec.method === "tools/list") {
+        const result = await client.listTools();
+        body = JSON.stringify(result);
+      } else if (spec.method === "tools/call") {
+        const params = spec.params ?? {};
+        const result = await client.callTool(
+          {
+            name: params.name as string,
+            arguments: (params.arguments as Record<string, unknown>) ?? {},
+          },
+          CallToolResultSchema,
+        );
+        body = JSON.stringify(result);
+      } else if (spec.method === "resources/list") {
+        const result = await client.listResources();
+        body = JSON.stringify(result);
+      } else if (spec.method === "prompts/list") {
+        const result = await client.listPrompts();
+        body = JSON.stringify(result);
+      } else {
+        log.mcpFailure(stepLabel, `unsupported MCP method: ${spec.method}`);
+        fail(`MCP_CALL_FAILED: unsupported method "${spec.method}"`);
+        return;
+      }
+
+      log.mcpResponse(stepLabel, spec.method, 200, body);
+
+      if (expect) {
+        this.evaluateAssertions(
+          { stdout: body, stderr: "", exitCode: 0, body, status: 200, headers: {} },
+          expect,
+          fail,
+          stepLabel,
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.mcpFailure(stepLabel, message);
+      fail(`MCP_CALL_FAILED: ${message}`);
+    } finally {
+      try {
+        if (connected) {
+          await client.close();
+        }
+      } catch {
+        // ignore client close errors
+      }
+      try {
+        await transport.terminateSession();
+      } catch {
+        // ignore terminateSession errors — server may not support it
+      }
+      try {
+        await transport.close();
+      } catch {
+        // ignore transport close errors
+      }
+    }
+  }
+
   // --- Shared helpers ---
 
   private evaluateAssertions(
@@ -1807,8 +2178,11 @@ export class ScenarioExecutor {
     return undefined;
   }
 
-  private buildCommandEnv(spec: ScenarioSpec): Record<string, string> {
-    const env: Record<string, string> = {};
+  private buildCommandEnv(
+    spec: ScenarioSpec,
+    serviceEnv?: Record<string, string>,
+  ): Record<string, string> {
+    const env: Record<string, string> = { ...(serviceEnv ?? {}) };
     if (spec.settings?.golem_server?.router_port) {
       env["GOLEM_ROUTER_PORT"] = String(spec.settings.golem_server.router_port);
     }

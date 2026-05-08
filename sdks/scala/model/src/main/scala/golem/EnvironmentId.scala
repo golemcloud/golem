@@ -19,7 +19,7 @@ package golem
 import zio.blocks.schema.Schema
 
 final case class EnvironmentId(
-  uuid: Uuid,
+  uuid: Uuid
 )
 
 object EnvironmentId {

@@ -71,6 +71,7 @@ min_delay = "100ms"
 multiplier = 2.0
 
 [limits]
+ephemeral_fuel_overdraft_multiplier = 100
 epoch_interval = "10ms"
 epoch_ticks = 1
 event_broadcast_capacity = 1024
@@ -123,6 +124,7 @@ count = 10
 [public_worker_api]
 connect_timeout = "10s"
 host = "localhost"
+max_message_size = 33554432
 port = 9007
 
 [public_worker_api.retries_on_unavailable]
@@ -186,6 +188,7 @@ multiplier = 3.0
 refresh_interval = "2s"
 
 [suspend]
+ephemeral_max_sleep = "1m"
 suspend_after = "10s"
 
 [tracing]
@@ -313,6 +316,7 @@ without_time = false
 # multiplier = 2.0
 # 
 # [limits]
+# ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
 # epoch_ticks = 1
 # event_broadcast_capacity = 1024
@@ -365,6 +369,7 @@ without_time = false
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
+# max_message_size = 33554432
 # port = 9007
 # 
 # [public_worker_api.retries_on_unavailable]
@@ -428,6 +433,7 @@ without_time = false
 # refresh_interval = "2s"
 # 
 # [suspend]
+# ephemeral_max_sleep = "1m"
 # suspend_after = "10s"
 # 
 # [tracing]

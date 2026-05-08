@@ -20,8 +20,8 @@ use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
-    AgentConfigDeclaration, AgentConfigSource, AgentMethod, AgentType, BinaryType, DataSchema,
-    ElementSchema, NamedElementSchemas, TextType,
+    AgentConfigDeclaration, AgentConfigSource, AgentMethod, AgentMode, AgentType, BinaryType,
+    DataSchema, ElementSchema, NamedElementSchemas, TextType,
 };
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
@@ -165,6 +165,7 @@ impl RustBridgeGenerator {
         doc["dependencies"]["nonempty-collections"] = dep("0.3.1", &[]);
         doc["dependencies"]["reqwest"] = dep("0.13", &["rustls"]);
         doc["dependencies"]["reqwest-middleware"] = dep("0.5", &[]);
+        doc["dependencies"]["serde"] = dep("1", &["derive"]);
         doc["dependencies"]["serde_json"] = dep("1", &[]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 
@@ -295,13 +296,13 @@ impl RustBridgeGenerator {
                 if let Some(value) = #param_name {
                     agent_config.push(golem_client::model::AgentConfigEntryDto {
                         path: vec![#(#path_segments),*],
-                        value: serde_json::to_value(value).unwrap(),
+                        value: serde_json::to_value(value).unwrap().into(),
                     });
                 }
             });
         }
 
-        let with_config_methods = if !local_configs.is_empty() {
+        let get_with_config_method = if self.agent_type.mode == AgentMode::Durable {
             quote! {
                 pub async fn get_with_config(#(#constructor_params,)* #(#config_param_defs,)*) -> Result<Self, golem_client::bridge::ClientError> {
                     #constructor_params_to_data_value
@@ -311,6 +312,14 @@ impl RustBridgeGenerator {
                     #(#config_encode_stmts)*
                     Self::__create(constructor_parameters, None, agent_config).await
                 }
+            }
+        } else {
+            quote! {}
+        };
+
+        let with_config_methods = if !local_configs.is_empty() {
+            quote! {
+                #get_with_config_method
 
                 pub async fn get_phantom_with_config(uuid: uuid::Uuid, #(#constructor_params,)* #(#config_param_defs,)*) -> Result<Self, golem_client::bridge::ClientError> {
                     #constructor_params_to_data_value
@@ -347,6 +356,19 @@ impl RustBridgeGenerator {
             quote! { use crate::multimodal::MultimodalEnum; }
         };
 
+        let get_method = if self.agent_type.mode == AgentMode::Durable {
+            quote! {
+                pub async fn get(#(#constructor_params),*) -> Result<Self, golem_client::bridge::ClientError> {
+                    #constructor_params_to_data_value
+                    let constructor_parameters: golem_common::model::agent::UntypedJsonDataValue =
+                        typed_constructor_parameters.into();
+                    Self::__create(constructor_parameters, None, vec![]).await
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         let tokens = quote! {
             #![allow(unused)]
 
@@ -377,12 +399,7 @@ impl RustBridgeGenerator {
 
             #[cfg(feature = "client")]
             impl #client_struct_name {
-                pub async fn get(#(#constructor_params),*) -> Result<Self, golem_client::bridge::ClientError> {
-                    #constructor_params_to_data_value
-                    let constructor_parameters: golem_common::model::agent::UntypedJsonDataValue =
-                        typed_constructor_parameters.into();
-                    Self::__create(constructor_parameters, None, vec![]).await
-                }
+                #get_method
 
                 pub async fn get_phantom(uuid: uuid::Uuid, #(#constructor_params),*) -> Result<Self, golem_client::bridge::ClientError> {
                     #constructor_params_to_data_value

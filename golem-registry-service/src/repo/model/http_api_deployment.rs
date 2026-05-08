@@ -14,6 +14,7 @@
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use anyhow::anyhow;
 use desert_rust::BinaryCodec;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
@@ -49,7 +50,8 @@ error_forwarding!(HttpApiDeploymentRepoError, RepoError);
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct HttpApiDeploymentData {
-    pub webhooks_url: String,
+    pub webhooks_prefix: String,
+    pub openapi_endpoint_prefix: String,
     pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
 }
 
@@ -91,59 +93,69 @@ impl HttpApiDeploymentRevisionRecord {
 
     pub fn creation(
         http_api_deployment_id: HttpApiDeploymentId,
-        webhooks_url: String,
+        webhooks_prefix: String,
+        openapi_endpoint_prefix: String,
         agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
         actor: AccountId,
-    ) -> Self {
+    ) -> Result<Self, HttpApiDeploymentRepoError> {
         let mut value = Self {
             http_api_deployment_id: http_api_deployment_id.0,
             revision_id: HttpApiDeploymentRevision::INITIAL.into(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
             data: Blob::new(HttpApiDeploymentData {
-                webhooks_url,
+                webhooks_prefix,
+                openapi_endpoint_prefix,
                 agents,
             }),
         };
-        value.update_hash();
-        value
+        value.update_hash()?;
+        Ok(value)
     }
 
-    pub fn from_model(value: HttpApiDeployment, audit: DeletableRevisionAuditFields) -> Self {
+    pub fn from_model(
+        value: HttpApiDeployment,
+        audit: DeletableRevisionAuditFields,
+    ) -> Result<Self, HttpApiDeploymentRepoError> {
         let mut value = Self {
             http_api_deployment_id: value.id.0,
             revision_id: value.revision.into(),
             hash: SqlBlake3Hash::empty(),
             audit,
             data: Blob::new(HttpApiDeploymentData {
-                webhooks_url: value.webhooks_url,
+                webhooks_prefix: value.webhooks_prefix,
+                openapi_endpoint_prefix: value.openapi_endpoint_prefix,
                 agents: value.agents,
             }),
         };
-        value.update_hash();
-        value
+        value.update_hash()?;
+        Ok(value)
     }
 
     pub fn deletion(
         created_by: Uuid,
         http_api_deployment_id: Uuid,
         current_revision_id: i64,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, HttpApiDeploymentRepoError> {
+        let mut value = Self {
             http_api_deployment_id,
             revision_id: current_revision_id,
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
             data: Blob::new(HttpApiDeploymentData {
-                webhooks_url: "".to_string(),
+                webhooks_prefix: "".to_string(),
+                openapi_endpoint_prefix: "".to_string(),
                 agents: BTreeMap::new(),
             }),
-        }
+        };
+        value.update_hash()?;
+        Ok(value)
     }
 
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
-            webhooks_url: self.data.value().webhooks_url.clone(),
+            webhooks_prefix: self.data.value().webhooks_prefix.clone(),
+            openapi_endpoint_prefix: self.data.value().openapi_endpoint_prefix.clone(),
             agents: self
                 .data
                 .value()
@@ -154,13 +166,19 @@ impl HttpApiDeploymentRevisionRecord {
         }
     }
 
-    pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into_blake3().into();
+    pub fn update_hash(&mut self) -> Result<(), HttpApiDeploymentRepoError> {
+        self.hash = self
+            .to_diffable()
+            .hash()
+            .map_err(|err| HttpApiDeploymentRepoError::InternalError(anyhow!(err)))?
+            .into_blake3()
+            .into();
+        Ok(())
     }
 
-    pub fn with_updated_hash(mut self) -> Self {
-        self.update_hash();
-        self
+    pub fn with_updated_hash(mut self) -> Result<Self, HttpApiDeploymentRepoError> {
+        self.update_hash()?;
+        Ok(self)
     }
 }
 
@@ -185,7 +203,8 @@ impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
             hash: value.revision.hash.into(),
-            webhooks_url: data.webhooks_url,
+            webhooks_prefix: data.webhooks_prefix,
+            openapi_endpoint_prefix: data.openapi_endpoint_prefix,
             agents: data.agents,
             created_at: value.entity_created_at.into(),
         })

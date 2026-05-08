@@ -17,13 +17,13 @@
 use clap_verbosity_flag::Verbosity;
 use golem_common::tracing::directive;
 use golem_common::tracing::directive::{debug, warn};
-use lenient_bool::LenientBool;
 use shadow_rs::shadow;
 use std::future::Future;
 use std::process::ExitCode;
 use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
+pub mod agent_help_hints;
 pub mod agent_id_display;
 pub mod app;
 pub mod args;
@@ -31,12 +31,13 @@ pub mod auth;
 pub mod bridge_gen;
 pub mod client;
 pub mod command;
+pub mod command_examples;
+pub mod command_glossary;
 pub mod command_handler;
 pub mod composition;
 pub mod config;
 pub mod context;
 pub mod error;
-pub mod evcxr_repl;
 pub mod fs;
 pub mod fuzzy;
 pub mod log;
@@ -129,23 +130,9 @@ pub fn main_wrapper<F>(golem_main: impl FnOnce() -> F) -> ExitCode
 where
     F: Future<Output = ExitCode>,
 {
-    if is_golem_evcxr_repl_set() {
-        evcxr_repl::main()
-    } else {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to build tokio runtime")
-            .block_on(golem_main())
-    }
-}
-
-pub const GOLEM_EVCXR_REPL: &str = "GOLEM_EVCXR_REPL";
-
-fn is_golem_evcxr_repl_set() -> bool {
-    std::env::var(GOLEM_EVCXR_REPL)
-        .ok()
-        .and_then(|s| s.parse::<LenientBool>().ok())
-        .map(|b| b.into())
-        .unwrap_or(false)
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build tokio runtime")
+        .block_on(golem_main())
 }

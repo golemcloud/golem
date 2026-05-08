@@ -310,31 +310,31 @@ fn validate_analysed_type(
                 }
             }
         }
-        (AnalysedType::Enum(old_enum), AnalysedType::Enum(new_enum)) => {
-            if new_enum.cases.len() < old_enum.cases.len() {
-                warnings.push(SchemaEvolutionWarning {
-                    agent_type_name: name.clone(),
-                    path: path.to_string(),
-                    description: format!(
-                        "Enum cases removed (was {}, now {})",
-                        old_enum.cases.len(),
-                        new_enum.cases.len()
-                    ),
-                });
-            }
+        (AnalysedType::Enum(old_enum), AnalysedType::Enum(new_enum))
+            if new_enum.cases.len() < old_enum.cases.len() =>
+        {
+            warnings.push(SchemaEvolutionWarning {
+                agent_type_name: name.clone(),
+                path: path.to_string(),
+                description: format!(
+                    "Enum cases removed (was {}, now {})",
+                    old_enum.cases.len(),
+                    new_enum.cases.len()
+                ),
+            });
         }
-        (AnalysedType::Flags(old_flags), AnalysedType::Flags(new_flags)) => {
-            if new_flags.names.len() < old_flags.names.len() {
-                warnings.push(SchemaEvolutionWarning {
-                    agent_type_name: name.clone(),
-                    path: path.to_string(),
-                    description: format!(
-                        "Flags removed (was {}, now {})",
-                        old_flags.names.len(),
-                        new_flags.names.len()
-                    ),
-                });
-            }
+        (AnalysedType::Flags(old_flags), AnalysedType::Flags(new_flags))
+            if new_flags.names.len() < old_flags.names.len() =>
+        {
+            warnings.push(SchemaEvolutionWarning {
+                agent_type_name: name.clone(),
+                path: path.to_string(),
+                description: format!(
+                    "Flags removed (was {}, now {})",
+                    old_flags.names.len(),
+                    new_flags.names.len()
+                ),
+            });
         }
         (AnalysedType::List(old_list), AnalysedType::List(new_list)) => {
             validate_analysed_type(name, path, &old_list.inner, &new_list.inner, warnings);

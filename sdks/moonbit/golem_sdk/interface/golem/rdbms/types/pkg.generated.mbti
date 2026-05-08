@@ -1,0 +1,54 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/rdbms/types"
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) struct Date {
+  year : Int
+  month : Byte
+  day : Byte
+} derive(Eq, Show)
+
+pub(all) enum IpAddress {
+  Ipv4((Byte, Byte, Byte, Byte))
+  Ipv6((UInt, UInt, UInt, UInt, UInt, UInt, UInt, UInt))
+} derive(Eq, Show)
+
+pub(all) struct MacAddress {
+  octets : (Byte, Byte, Byte, Byte, Byte, Byte)
+} derive(Eq, Show)
+
+pub(all) struct Time {
+  hour : Byte
+  minute : Byte
+  second : Byte
+  nanosecond : UInt
+} derive(Eq, Show)
+
+pub(all) struct Timestamp {
+  date : Date
+  time : Time
+} derive(Eq, Show)
+
+pub(all) struct Timestamptz {
+  timestamp : Timestamp
+  offset : Int
+} derive(Eq, Show)
+
+pub(all) struct Timetz {
+  time : Time
+  offset : Int
+} derive(Eq, Show)
+
+pub(all) struct Uuid {
+  high_bits : UInt64
+  low_bits : UInt64
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+

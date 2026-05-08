@@ -18,7 +18,7 @@ use crate::services::agent_secret::AgentSecretError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
-use crate::services::deployment::{DeploymentError, DeploymentWriteError};
+use crate::services::deployment::{DeployValidationError, DeploymentError, DeploymentWriteError};
 use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
@@ -120,6 +120,86 @@ impl ApiError {
             code: code.to_string(),
             cause,
         }))
+    }
+}
+
+fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str {
+    match error {
+        DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret { .. } => {
+            api::error_code::deployment_validation::AGENT_SECRET_NOT_COMPATIBLE
+        }
+        DeployValidationError::AgentSecretTypeConflict { .. } => {
+            api::error_code::deployment_validation::AGENT_SECRET_TYPE_CONFLICT
+        }
+        DeployValidationError::AgentSecretDefaultTypeMismatch { .. } => {
+            api::error_code::deployment_validation::AGENT_SECRET_DEFAULT_TYPE_MISMATCH
+        }
+        DeployValidationError::NoSecuritySchemeConfigured(_) => {
+            api::error_code::deployment_validation::NO_SECURITY_SCHEME_CONFIGURED
+        }
+        DeployValidationError::McpDeploymentConflictingSecuritySchemes { .. } => {
+            api::error_code::deployment_validation::MCP_CONFLICTING_SECURITY_SCHEMES
+        }
+        DeployValidationError::McpDeploymentUnknownSecurityScheme { .. } => {
+            api::error_code::deployment_validation::MCP_UNKNOWN_SECURITY_SCHEME
+        }
+        DeployValidationError::SecurityOverrideDisabled => {
+            api::error_code::deployment_validation::SECURITY_OVERRIDE_DISABLED
+        }
+        DeployValidationError::HttpApiDefinitionInvalidPathPattern(_) => {
+            api::error_code::deployment_validation::HTTP_API_INVALID_PATH_PATTERN
+        }
+        DeployValidationError::InvalidHttpCorsBindingExpr(_) => {
+            api::error_code::deployment_validation::INVALID_HTTP_CORS_BINDING_EXPR
+        }
+        DeployValidationError::HttpApiDeploymentAgentMethodInvalid { .. } => {
+            api::error_code::deployment_validation::HTTP_API_AGENT_METHOD_INVALID
+        }
+        DeployValidationError::HttpApiDeploymentAgentConstructorInvalid { .. } => {
+            api::error_code::deployment_validation::HTTP_API_AGENT_CONSTRUCTOR_INVALID
+        }
+        DeployValidationError::HttpApiDeploymentInvalidRoute { .. } => {
+            api::error_code::deployment_validation::HTTP_API_INVALID_ROUTE
+        }
+        DeployValidationError::RouteIsAmbiguous { .. } => {
+            api::error_code::deployment_validation::ROUTE_IS_AMBIGUOUS
+        }
+        DeployValidationError::InvalidHttpMethod { .. } => {
+            api::error_code::deployment_validation::INVALID_HTTP_METHOD
+        }
+        DeployValidationError::HttpApiDeploymentMissingAgentType { .. } => {
+            api::error_code::deployment_validation::HTTP_API_MISSING_AGENT_TYPE
+        }
+        DeployValidationError::McpDeploymentMissingAgentType { .. } => {
+            api::error_code::deployment_validation::MCP_MISSING_AGENT_TYPE
+        }
+        DeployValidationError::ComponentNotFound(_) => {
+            api::error_code::deployment_validation::COMPONENT_NOT_FOUND
+        }
+        DeployValidationError::HttpApiDeploymentMultipleDeploymentsForAgentType { .. } => {
+            api::error_code::deployment_validation::HTTP_API_MULTIPLE_DEPLOYMENTS_FOR_AGENT_TYPE
+        }
+        DeployValidationError::HttpApiDeploymentAgentTypeMissingHttpMount { .. } => {
+            api::error_code::deployment_validation::HTTP_API_AGENT_TYPE_MISSING_HTTP_MOUNT
+        }
+        DeployValidationError::HttpApiDeploymentInvalidAgentWebhookSegmentType { .. } => {
+            api::error_code::deployment_validation::HTTP_API_INVALID_AGENT_WEBHOOK_SEGMENT_TYPE
+        }
+        DeployValidationError::AmbiguousAgentTypeName(_) => {
+            api::error_code::deployment_validation::AMBIGUOUS_AGENT_TYPE_NAME
+        }
+        DeployValidationError::ConflictingAgentTypeNames { .. } => {
+            api::error_code::deployment_validation::CONFLICTING_AGENT_TYPE_NAMES
+        }
+        DeployValidationError::ConflictingResourceDefinitions { .. } => {
+            api::error_code::deployment_validation::CONFLICTING_RESOURCE_DEFINITIONS
+        }
+        DeployValidationError::ConflictingRetryPolicyDefaults { .. } => {
+            api::error_code::deployment_validation::CONFLICTING_RETRY_POLICY_DEFAULTS
+        }
+        DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled => {
+            api::error_code::deployment_validation::RESET_OVERRIDE_REQUIRES_COMPATIBILITY_CHECK_DISABLED
+        }
     }
 }
 
@@ -345,11 +425,6 @@ impl From<ComponentError> for ApiError {
                 code: api::error_code::INVALID_FILE_PATH.to_string(),
                 cause: None,
             })),
-            ComponentError::InvalidComponentName { .. } => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                code: api::error_code::INVALID_COMPONENT_NAME.to_string(),
-                cause: None,
-            })),
             ComponentError::InvalidOplogProcessorPlugin => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![error],
                 code: api::error_code::INVALID_OPLOG_PROCESSOR_PLUGIN.to_string(),
@@ -378,6 +453,13 @@ impl From<ComponentError> for ApiError {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],
                     code: api::error_code::AGENT_CONFIG_DUPLICATE_VALUE.to_string(),
+                    cause: None,
+                }))
+            }
+            ComponentError::AgentConfigPathSegmentContainsDot { .. } => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    code: api::error_code::AGENT_CONFIG_NOT_DECLARED.to_string(),
                     cause: None,
                 }))
             }
@@ -412,6 +494,10 @@ impl From<ComponentError> for ApiError {
             ComponentError::AgentConfigOldConfigNotValid { .. } => {
                 Self::conflict(api::error_code::AGENT_CONFIG_OLD_CONFIG_INVALID, error)
             }
+            ComponentError::ResetOverrideRequiresCompatibilityCheckDisabled => Self::conflict(
+                api::error_code::RESET_OVERRIDE_REQUIRES_COMPATIBILITY_CHECK_DISABLED,
+                error,
+            ),
             ComponentError::ConcurrentUpdate => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
@@ -476,8 +562,8 @@ impl From<OAuth2Error> for ApiError {
     fn from(value: OAuth2Error) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            OAuth2Error::InvalidSession(_) => {
-                Self::bad_request(api::error_code::INVALID_OAUTH_SESSION, error)
+            OAuth2Error::InvalidRedirectDomain(_) => {
+                Self::bad_request(api::error_code::INVALID_REDIRECT_URL, error)
             }
             OAuth2Error::OAuth2WebflowStateNotFound(_) => {
                 Self::not_found(api::error_code::OAUTH_STATE_NOT_FOUND, error)
@@ -618,13 +704,18 @@ impl From<DeploymentWriteError> for ApiError {
             }
 
             DeploymentWriteError::DeploymentValidationFailed(failed_validations) => {
-                // Conflict is probably a better fit
                 Self::BadRequest(Json(ErrorsBody {
                     errors: failed_validations
                         .into_iter()
-                        .map(|fv| fv.to_safe_string())
+                        .map(|fv| {
+                            format!(
+                                "{}: {}",
+                                deployment_validation_subcode(&fv),
+                                fv.to_safe_string()
+                            )
+                        })
                         .collect(),
-                    code: api::error_code::DEPLOYMENT_VALIDATION_FAILED.to_string(),
+                    code: api::error_code::deployment_validation::FAILED.to_string(),
                     cause: None,
                 }))
             }
@@ -639,7 +730,7 @@ impl From<DeploymentWriteError> for ApiError {
                 Self::conflict(api::error_code::DEPLOYMENT_VERSION_ALREADY_EXISTS, error)
             }
             DeploymentWriteError::DeploymentHashMismatch { .. } => {
-                Self::bad_request(api::error_code::DEPLOYMENT_HASH_MISMATCH, error)
+                Self::conflict(api::error_code::DEPLOYMENT_HASH_MISMATCH, error)
             }
             DeploymentWriteError::EnvironmentNotYetDeployed => {
                 Self::conflict(api::error_code::ENVIRONMENT_NOT_DEPLOYED, error)
@@ -703,6 +794,14 @@ impl From<DomainRegistrationError> for ApiError {
 
             DomainRegistrationError::DomainAlreadyExists(_) => {
                 Self::conflict(api::error_code::DOMAIN_ALREADY_EXISTS, error)
+            }
+
+            DomainRegistrationError::DomainNotValidForHttpApi(_) => {
+                Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
+            }
+
+            DomainRegistrationError::DomainNotValidForMcp(_) => {
+                Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_MCP, error)
             }
 
             DomainRegistrationError::Unauthorized(inner) => inner.into(),
@@ -776,6 +875,10 @@ impl From<HttpApiDeploymentError> for ApiError {
                 cause: None,
             })),
 
+            HttpApiDeploymentError::DomainNotValidForHttpApi(_) => {
+                Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
+            }
+
             HttpApiDeploymentError::HttpApiDeploymentForDomainAlreadyExists(_) => {
                 Self::conflict(api::error_code::HTTP_API_DEPLOYMENT_ALREADY_EXISTS, error)
             }
@@ -815,6 +918,10 @@ impl From<McpDeploymentError> for ApiError {
                 code: api::error_code::DOMAIN_NOT_REGISTERED.to_string(),
                 cause: None,
             })),
+
+            McpDeploymentError::DomainNotValidForMcp(_) => {
+                Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_MCP, error)
+            }
 
             McpDeploymentError::McpDeploymentForDomainAlreadyExists(_) => {
                 Self::conflict(api::error_code::MCP_DEPLOYMENT_ALREADY_EXISTS, error)
@@ -866,8 +973,11 @@ impl From<RetryPolicyError> for ApiError {
     fn from(value: RetryPolicyError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            RetryPolicyError::InvalidPredicateJson(_) | RetryPolicyError::InvalidPolicyJson(_) => {
-                Self::bad_request(api::error_code::VALIDATION_ERROR, error)
+            RetryPolicyError::InvalidPredicateJson(_) => {
+                Self::bad_request(api::error_code::RETRY_POLICY_INVALID_PREDICATE_JSON, error)
+            }
+            RetryPolicyError::InvalidPolicyJson(_) => {
+                Self::bad_request(api::error_code::RETRY_POLICY_INVALID_POLICY_JSON, error)
             }
             RetryPolicyError::ConcurrentModification => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
@@ -919,6 +1029,117 @@ impl From<ResourceDefinitionError> for ApiError {
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             })),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::component::ComponentError;
+    use golem_common::base_model::agent_secret::CanonicalAgentSecretPath;
+    use golem_common::base_model::quota::ResourceName;
+    use test_r::test;
+
+    fn bad_request_from_validations(errors: Vec<DeployValidationError>) -> ErrorsBody {
+        let api_error = ApiError::from(DeploymentWriteError::DeploymentValidationFailed(errors));
+
+        match api_error {
+            ApiError::BadRequest(body) => body.0,
+            other => panic!("Expected BadRequest, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deployment_validation_single_error_uses_specific_code() {
+        let body =
+            bad_request_from_validations(vec![DeployValidationError::AgentSecretTypeConflict {
+                path: CanonicalAgentSecretPath(vec!["apiKey".to_string()]),
+            }]);
+
+        assert_eq!(body.code, api::error_code::deployment_validation::FAILED);
+        assert_eq!(body.errors.len(), 1);
+        assert!(body.errors[0].starts_with(&format!(
+            "{}: ",
+            api::error_code::deployment_validation::AGENT_SECRET_TYPE_CONFLICT
+        )));
+    }
+
+    #[test]
+    fn deployment_validation_homogeneous_multi_error_uses_failed_top_level_code() {
+        let body = bad_request_from_validations(vec![
+            DeployValidationError::AgentSecretTypeConflict {
+                path: CanonicalAgentSecretPath(vec!["apiKey".to_string()]),
+            },
+            DeployValidationError::AgentSecretTypeConflict {
+                path: CanonicalAgentSecretPath(vec!["dbPassword".to_string()]),
+            },
+        ]);
+
+        assert_eq!(body.code, api::error_code::deployment_validation::FAILED);
+        assert_eq!(body.errors.len(), 2);
+        assert!(body.errors.iter().all(|error| {
+            error.starts_with(&format!(
+                "{}: ",
+                api::error_code::deployment_validation::AGENT_SECRET_TYPE_CONFLICT
+            ))
+        }));
+    }
+
+    #[test]
+    fn deployment_validation_mixed_multi_error_uses_failed_top_level_code() {
+        let body = bad_request_from_validations(vec![
+            DeployValidationError::AgentSecretTypeConflict {
+                path: CanonicalAgentSecretPath(vec!["apiKey".to_string()]),
+            },
+            DeployValidationError::ConflictingResourceDefinitions {
+                name: ResourceName("cpu".to_string()),
+            },
+        ]);
+
+        assert_eq!(body.code, api::error_code::deployment_validation::FAILED);
+        assert_eq!(body.errors.len(), 2);
+        assert!(body.errors.iter().any(|error| {
+            error.starts_with(&format!(
+                "{}: ",
+                api::error_code::deployment_validation::AGENT_SECRET_TYPE_CONFLICT
+            ))
+        }));
+        assert!(body.errors.iter().any(|error| {
+            error.starts_with(&format!(
+                "{}: ",
+                api::error_code::deployment_validation::CONFLICTING_RESOURCE_DEFINITIONS
+            ))
+        }));
+    }
+
+    #[test]
+    fn deployment_validation_reset_override_uses_specific_subcode() {
+        let body = bad_request_from_validations(vec![
+            DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled,
+        ]);
+
+        assert_eq!(body.code, api::error_code::deployment_validation::FAILED);
+        assert_eq!(body.errors.len(), 1);
+        assert!(body.errors[0].starts_with(&format!(
+            "{}: ",
+            api::error_code::deployment_validation::RESET_OVERRIDE_REQUIRES_COMPATIBILITY_CHECK_DISABLED
+        )));
+    }
+
+    #[test]
+    fn component_reset_override_disabled_maps_to_specific_code() {
+        let api_error =
+            ApiError::from(ComponentError::ResetOverrideRequiresCompatibilityCheckDisabled);
+
+        match api_error {
+            ApiError::Conflict(body) => {
+                assert_eq!(
+                    body.0.code,
+                    api::error_code::RESET_OVERRIDE_REQUIRES_COMPATIBILITY_CHECK_DISABLED
+                );
+            }
+            other => panic!("Expected Conflict, got: {other:?}"),
         }
     }
 }

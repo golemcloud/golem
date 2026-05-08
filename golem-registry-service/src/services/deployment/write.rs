@@ -190,6 +190,8 @@ impl DeploymentWriteService {
             .get_latest_deployment_for_environment(&environment, auth)
             .await?;
 
+        let compatibility_check_enabled = environment.compatibility_check;
+
         let next_deployment_revision = latest_deployment
             .as_ref()
             .map(|ld| ld.revision.next())
@@ -245,8 +247,8 @@ impl DeploymentWriteService {
         )?;
 
         {
-            let actual_hash = deployment_context.hash();
-            if data.expected_deployment_hash != deployment_context.hash() {
+            let actual_hash = deployment_context.hash().map_err(anyhow::Error::new)?;
+            if data.expected_deployment_hash != actual_hash {
                 return Err(DeploymentWriteError::DeploymentHashMismatch {
                     requested_hash: data.expected_deployment_hash,
                     actual_hash,
@@ -255,6 +257,10 @@ impl DeploymentWriteService {
         }
 
         let mut errors = Vec::new();
+
+        if data.replace_incompatible_agent_secrets && compatibility_check_enabled {
+            errors.push(DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled);
+        }
 
         let compiled_routes = deployment_context.compile_http_api_routes(&mut errors);
 
@@ -290,10 +296,11 @@ impl DeploymentWriteService {
             &mut errors,
         );
 
-        let (new_agent_secrets, updated_agent_secrets) = deployment_context
+        let (new_agent_secrets, updated_agent_secrets, replaced_agent_secrets) = deployment_context
             .deployment_agent_secret_creations_and_updates(
                 agent_secrets_in_environment,
                 data.agent_secret_defaults,
+                data.replace_incompatible_agent_secrets,
                 &mut errors,
             );
 
@@ -308,7 +315,7 @@ impl DeploymentWriteService {
             data.retry_policy_defaults,
             auth.account_id(),
             &mut errors,
-        );
+        )?;
 
         if !errors.is_empty() {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
@@ -334,6 +341,7 @@ impl DeploymentWriteService {
                 .collect(),
             new_agent_secrets,
             updated_agent_secrets,
+            replaced_agent_secrets,
             new_resource_definitions,
             new_retry_policies,
             auth.account_id(),

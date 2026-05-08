@@ -1,0 +1,20 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/clocks/wallClock"
+
+// Values
+pub fn now() -> Datetime
+
+pub fn resolution() -> Datetime
+
+// Errors
+
+// Types and methods
+pub(all) struct Datetime {
+  seconds : UInt64
+  nanoseconds : UInt
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::diff::DiffError;
 use crate::model::diff::agent::AgentTypeProvisionConfig;
 use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_value};
 use crate::model::diff::ser::serialize_with_mode;
@@ -20,7 +21,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 /// Top-level diffable component state.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Component {
     pub wasm_hash: Hash,
@@ -30,7 +31,7 @@ pub struct Component {
 }
 
 /// Top-level component diff result.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentDiff {
     pub wasm_changed: bool,
@@ -41,26 +42,28 @@ pub struct ComponentDiff {
 impl Diffable for Component {
     type DiffResult = ComponentDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let wasm_changed = new.wasm_hash != current.wasm_hash;
         let agent_type_provision_config_changes = new
             .agent_type_provision_configs
-            .diff_with_current(&current.agent_type_provision_configs)
+            .diff_with_current(&current.agent_type_provision_configs)?
             .unwrap_or_default();
 
-        if wasm_changed || !agent_type_provision_config_changes.is_empty() {
-            Some(ComponentDiff {
-                wasm_changed,
-                agent_type_provision_config_changes,
-            })
-        } else {
-            None
-        }
+        Ok(
+            if wasm_changed || !agent_type_provision_config_changes.is_empty() {
+                Some(ComponentDiff {
+                    wasm_changed,
+                    agent_type_provision_config_changes,
+                })
+            } else {
+                None
+            },
+        )
     }
 }
 
 impl Hashable for Component {
-    fn hash(&self) -> Hash {
+    fn hash(&self) -> Result<Hash, DiffError> {
         hash_from_serialized_value(self)
     }
 }

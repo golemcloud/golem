@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 impl TextView for Vec<ComponentView> {
     fn log(&self) {
-        let mut table = new_table(vec![
+        let mut table = new_table_full_condensed(vec![
             Column::new("Name"),
             Column::new("Revision").fixed_right(),
             Column::new("Version").fixed_right(),
@@ -59,12 +59,6 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
                 &provision_config.env,
                 !provision_config.env.is_empty(),
                 |env| format_env(view.show_sensitive, env),
-            )
-            .fmt_field_optional(
-                &format!("{}WASI config", prefix),
-                &provision_config.wasi_config,
-                !provision_config.wasi_config.is_empty(),
-                format_wasi_config,
             )
             .fmt_field_optional(
                 &format!("{}Agent config", prefix),

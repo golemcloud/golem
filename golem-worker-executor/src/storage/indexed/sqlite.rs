@@ -18,9 +18,12 @@ use super::{
 };
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
+use golem_common::metrics::db::record_db_serialized_size;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::repo::RepoError;
 use std::time::Duration;
+
+const DB_TYPE: &str = "sqlite";
 
 #[derive(Debug, Clone)]
 pub struct SqliteIndexedStorage {
@@ -61,18 +64,33 @@ impl SqliteIndexedStorage {
 
     fn namespace(namespace: IndexedStorageNamespace) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog { agent_id: _ } => "worker-oplog".to_string(),
-            IndexedStorageNamespace::CompressedOpLog { agent_id: _, level } => {
-                format!("worker-c{level}-oplog")
+            IndexedStorageNamespace::OpLog {
+                agent_id: _,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-oplog")
+            }
+            IndexedStorageNamespace::CompressedOpLog {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-c{level}-oplog")
             }
         }
     }
 
     fn meta_namespace(namespace: IndexedStorageMetaNamespace) -> String {
         match namespace {
-            IndexedStorageMetaNamespace::Oplog => "worker-oplog".to_string(),
-            IndexedStorageMetaNamespace::CompressedOplog { level } => {
-                format!("worker-c{level}-oplog")
+            IndexedStorageMetaNamespace::Oplog { agent_mode } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-oplog")
+            }
+            IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-c{level}-oplog")
             }
         }
     }
@@ -191,12 +209,13 @@ impl IndexedStorage for SqliteIndexedStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        _entity_name: &'static str,
+        entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
         value: Vec<u8>,
     ) -> Result<(), IndexedStorageError> {
+        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let query = sqlx::query(
             r#"
                     INSERT INTO index_storage (namespace, key, id, value) VALUES (?,?,?,?);
