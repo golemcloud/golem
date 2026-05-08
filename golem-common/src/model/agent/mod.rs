@@ -56,6 +56,7 @@ use std::sync::LazyLock;
 use uuid::Uuid;
 
 pub use crate::base_model::agent::*;
+use crate::model::AgentId;
 
 impl TryFrom<i32> for AgentMode {
     type Error = String;
@@ -298,26 +299,25 @@ pub struct AgentTypes {
     pub types: Vec<AgentType>,
 }
 
+// Strict constructors enforce the AgentId length limit at creation time and should be used
+// by normal production code paths. Lenient variants skip that check so oversized ids can
+// still be represented temporarily for tests and diagnostics, but they are not intended for
+// general runtime use because AgentId creation still validates the final identifier length.
 impl ParsedAgentId {
     pub fn new(
         agent_type: AgentTypeName,
         parameters: DataValue,
         phantom_id: Option<Uuid>,
     ) -> Result<Self, String> {
-        use crate::model::agent::structural_format::format_structural;
+        Self::new_internal(agent_type, parameters, phantom_id, false)
+    }
 
-        let formatted = format_structural(&parameters).map_err(|e| e.to_string())?;
-        let mut as_string = format!("{}({})", agent_type.0, formatted);
-        if let Some(phantom_id) = &phantom_id {
-            use std::fmt::Write;
-            write!(as_string, "[{phantom_id}]").unwrap();
-        }
-        Ok(Self {
-            agent_type,
-            parameters,
-            phantom_id,
-            as_string,
-        })
+    pub fn new_lenient(
+        agent_type: AgentTypeName,
+        parameters: DataValue,
+        phantom_id: Option<Uuid>,
+    ) -> Result<Self, String> {
+        Self::new_internal(agent_type, parameters, phantom_id, true)
     }
 
     pub fn new_auto_phantom(
@@ -326,17 +326,27 @@ impl ParsedAgentId {
         phantom_id: Option<Uuid>,
         mode: AgentMode,
     ) -> Result<Self, String> {
-        let phantom_id = match (mode, phantom_id) {
-            (_, Some(id)) => Some(id),
-            (AgentMode::Ephemeral, None) => Some(Uuid::new_v4()),
-            (AgentMode::Durable, None) => None,
-        };
+        Self::new_auto_phantom_internal(agent_type, parameters, phantom_id, mode, false)
+    }
 
-        Self::new(agent_type, parameters, phantom_id)
+    pub fn new_auto_phantom_lenient(
+        agent_type: AgentTypeName,
+        parameters: DataValue,
+        phantom_id: Option<Uuid>,
+        mode: AgentMode,
+    ) -> Result<Self, String> {
+        Self::new_auto_phantom_internal(agent_type, parameters, phantom_id, mode, true)
     }
 
     pub fn parse(s: impl AsRef<str>, resolver: impl AgentTypeResolver) -> Result<Self, String> {
-        Self::parse_and_resolve_type(s, resolver).map(|(agent_id, _)| agent_id)
+        Self::parse_and_resolve_type_internal(s, resolver, false).map(|(agent_id, _)| agent_id)
+    }
+
+    pub fn parse_lenient(
+        s: impl AsRef<str>,
+        resolver: impl AgentTypeResolver,
+    ) -> Result<Self, String> {
+        Self::parse_and_resolve_type_internal(s, resolver, true).map(|(agent_id, _)| agent_id)
     }
 
     pub fn parse_agent_type_name(s: &str) -> Result<AgentTypeName, String> {
@@ -348,9 +358,73 @@ impl ParsedAgentId {
         s: impl AsRef<str>,
         resolver: impl AgentTypeResolver,
     ) -> Result<(Self, AgentType), String> {
-        use crate::model::agent::structural_format::{
-            format_structural, normalize_structural, parse_structural,
+        Self::parse_and_resolve_type_internal(s, resolver, false)
+    }
+
+    pub fn parse_and_resolve_type_lenient(
+        s: impl AsRef<str>,
+        resolver: impl AgentTypeResolver,
+    ) -> Result<(Self, AgentType), String> {
+        Self::parse_and_resolve_type_internal(s, resolver, true)
+    }
+
+    pub fn with_phantom_id(&self, phantom_id: Option<Uuid>) -> Result<Self, String> {
+        self.with_phantom_id_internal(phantom_id, false)
+    }
+
+    pub fn with_phantom_id_lenient(&self, phantom_id: Option<Uuid>) -> Result<Self, String> {
+        self.with_phantom_id_internal(phantom_id, true)
+    }
+
+    fn new_internal(
+        agent_type: AgentTypeName,
+        parameters: DataValue,
+        phantom_id: Option<Uuid>,
+        lenient: bool,
+    ) -> Result<Self, String> {
+        use crate::model::agent::structural_format::format_structural;
+
+        let formatted = format_structural(&parameters).map_err(|e| e.to_string())?;
+        let mut as_string = format!("{}({})", agent_type.0, formatted);
+        if let Some(phantom_id) = &phantom_id {
+            use std::fmt::Write;
+            write!(as_string, "[{phantom_id}]").unwrap();
+        }
+
+        if !lenient {
+            Self::validate_length(&as_string)?;
+        }
+
+        Ok(Self {
+            agent_type,
+            parameters,
+            phantom_id,
+            as_string,
+        })
+    }
+
+    fn new_auto_phantom_internal(
+        agent_type: AgentTypeName,
+        parameters: DataValue,
+        phantom_id: Option<Uuid>,
+        mode: AgentMode,
+        lenient: bool,
+    ) -> Result<Self, String> {
+        let phantom_id = match (mode, phantom_id) {
+            (_, Some(id)) => Some(id),
+            (AgentMode::Ephemeral, None) => Some(Uuid::new_v4()),
+            (AgentMode::Durable, None) => None,
         };
+
+        Self::new_internal(agent_type, parameters, phantom_id, lenient)
+    }
+
+    fn parse_and_resolve_type_internal(
+        s: impl AsRef<str>,
+        resolver: impl AgentTypeResolver,
+        lenient: bool,
+    ) -> Result<(Self, AgentType), String> {
+        use crate::model::agent::structural_format::{normalize_structural, parse_structural};
 
         let s = s.as_ref();
         let (agent_type_name, param_list, phantom_id_str) = parse_agent_id_parts(s)?;
@@ -366,37 +440,26 @@ impl ParsedAgentId {
         let value = parse_structural(&normalized_param_list, &agent_type.constructor.input_schema)
             .map_err(|e| e.to_string())?;
 
-        let formatted = format_structural(&value).map_err(|e| e.to_string())?;
-        let mut as_string = format!("{}({})", agent_type.type_name.0, formatted);
-        if let Some(phantom_id) = &phantom_id {
-            use std::fmt::Write;
-            write!(as_string, "[{phantom_id}]").unwrap();
-        }
-
-        let agent_id = ParsedAgentId {
-            agent_type: agent_type.type_name.clone(),
-            parameters: value,
-            phantom_id,
-            as_string,
-        };
+        let agent_id =
+            Self::new_internal(agent_type.type_name.clone(), value, phantom_id, lenient)?;
         Ok((agent_id, agent_type))
     }
 
-    pub fn with_phantom_id(&self, phantom_id: Option<Uuid>) -> Self {
-        use crate::model::agent::structural_format::format_structural;
-        use std::fmt::Write;
-
-        let formatted = format_structural(&self.parameters).unwrap_or_default();
-        let mut as_string = format!("{}({})", self.agent_type.0, formatted);
-        if let Some(ref id) = phantom_id {
-            write!(as_string, "[{id}]").unwrap();
-        }
-        Self {
-            agent_type: self.agent_type.clone(),
-            parameters: self.parameters.clone(),
+    fn with_phantom_id_internal(
+        &self,
+        phantom_id: Option<Uuid>,
+        lenient: bool,
+    ) -> Result<Self, String> {
+        Self::new_internal(
+            self.agent_type.clone(),
+            self.parameters.clone(),
             phantom_id,
-            as_string,
-        }
+            lenient,
+        )
+    }
+
+    fn validate_length(as_string: &str) -> Result<(), String> {
+        AgentId::validate_length(as_string)
     }
 
     /// Normalizes an agent ID string without requiring component metadata.

@@ -33,7 +33,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             merge_agent_env_with_default_env(Some(worker_metadata.env), default_agent_env);
 
         let current_agent_name = if let Some(agent_id) = self.parsed_agent_id() {
-            let updated_agent_id = agent_id.with_phantom_id(self.state.current_phantom_id);
+            let updated_agent_id = agent_id
+                .with_phantom_id(self.state.current_phantom_id)
+                .map_err(wasmtime::Error::msg)?;
             updated_agent_id.to_string()
         } else {
             self.owned_agent_id.agent_name()
