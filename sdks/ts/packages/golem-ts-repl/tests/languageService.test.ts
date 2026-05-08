@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { describe, expect, it } from 'vitest';
+import util from 'node:util';
 import { LanguageService } from '../src/language-service';
 import type { Config, ReplCliFlags } from '../src/config';
 
@@ -76,8 +77,9 @@ const remoteMethodConfig: Config = {
 
 function expectRemoteMethodHint(result: { formattedHints: string[] }, expected: string): void {
   expect(result.formattedHints).toHaveLength(1);
-  expect(result.formattedHints[0]).toContain(expected);
-  expect(result.formattedHints[0]).toContain('authorization');
+  const hint = util.stripVTControlCharacters(result.formattedHints[0]);
+  expect(hint).toContain(expected);
+  expect(hint).toContain('authorization');
 }
 
 describe('LanguageService tagged union placeholders', () => {
