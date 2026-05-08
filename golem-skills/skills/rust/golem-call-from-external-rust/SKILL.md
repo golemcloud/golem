@@ -22,9 +22,16 @@ bridge:
     #   - MyAgent
     #   - my-app:billing
     outputDir: ./bridge-sdk/rust   # Optional custom output directory
+    additionalDerives:             # Optional: extra derives for generated Rust types
+      - pattern: ".*"              # Regex matched against generated type names
+        derives: [PartialEq]
+      - pattern: "^.*Id$"
+        derives: [Eq, Hash]
 ```
 
 The `agents` field accepts `"*"` (all agents), or a list of agent type names or component names (`namespace:name`).
+
+Use `additionalDerives` when the external Rust application needs generated bridge types to implement extra traits, for example `PartialEq` in tests or `Eq`/`Hash` for map/set keys. Patterns must be valid regular expressions, and derives must be syntactically valid Rust derive paths whose macros are available to the generated crate at compile time. Invalid derive rules fail `golem build` during bridge validation, before stale generated output is reused. Do not add `Debug`, `Clone`, `serde::Serialize`, or `serde::Deserialize` here; those are already generated in the standard derives / `serde` feature path.
 
 ## Step 2: Generate the Bridge SDK
 
@@ -50,17 +57,13 @@ my-agent-client = { path = "../path/to/bridge-sdk/rust/my-agent-client" }
 Then use the generated client:
 
 ```rust
-use my_agent_client::{MyAgent, global_config};
-use golem_client::bridge::{Configuration, GolemServer};
+use my_agent_client::{configure, MyAgent};
+use golem_client::bridge::GolemServer;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure the Golem server connection
-    global_config(Configuration {
-        app_name: "my-app".to_string(),
-        env_name: "local".to_string(),
-        server: GolemServer::Local,
-    });
+    configure(GolemServer::Local, "my-app", "local");
 
     // Get or create an agent instance
     let agent = MyAgent::get("my-instance".to_string()).await?;
@@ -118,7 +121,27 @@ let agent = MyAgent::get_with_config(
 
 ## Generated Crate Dependencies
 
-The generated crate depends on `golem-client`, `golem-common`, `golem-wasm`, `reqwest`, `serde_json`, `uuid`, and `chrono`. These are resolved from crates.io or from the Golem repository depending on the SDK version.
+The generated crate has feature-gated dependencies:
+
+- `default = ["client"]` preserves the normal fully functional client SDK.
+- `client` enables the HTTP client stack and depends on `serde` and `golem-types`.
+- `serde` enables serde derives on generated types.
+- `golem-types` enables lightweight Golem helper types used by multimodal and unstructured text/binary schemas without pulling in the HTTP client stack.
+
+For normal external clients, use the default features. For type-only use cases, depend on the generated crate with `default-features = false` and enable only what you need:
+
+```toml
+[dependencies]
+my-agent-client = { path = "../path/to/bridge-sdk/rust/my-agent-client", default-features = false, features = ["serde"] }
+```
+
+When `client` is disabled, the crate provides generated types only; runtime client APIs such as `configure(...)`, `MyAgent::get(...)`, and method invocation helpers are not available.
+
+If the generated types include multimodal or unstructured text/binary fields, also enable `golem-types`:
+
+```toml
+my-agent-client = { path = "../path/to/bridge-sdk/rust/my-agent-client", default-features = false, features = ["serde", "golem-types"] }
+```
 
 ## Key Points
 
@@ -127,3 +150,4 @@ The generated crate depends on `golem-client`, `golem-common`, `golem-wasm`, `re
 - All custom types (records, variants, enums, flags) are generated as corresponding Rust types
 - The client uses async/await with `reqwest` for HTTP communication
 - Each agent type gets its own crate with a `Cargo.toml` and `src/lib.rs`
+- Changing `additionalDerives` forces the next `golem build` to regenerate the Rust bridge SDK

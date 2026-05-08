@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
+use crate::bridge_gen::DeriveRule;
 use crate::fs;
 use crate::log::log_warn_action;
 use crate::model::app_raw::{
@@ -319,6 +320,7 @@ pub struct GenerateBridgeSdkMarkerHash<'a> {
     pub component_name: &'a ComponentName,
     pub agent_type_name: &'a AgentTypeName,
     pub language: &'a GuestLanguage,
+    pub derive_rules: &'a [DeriveRule],
 }
 
 impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
@@ -332,9 +334,43 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
         Ok(HashFromString(format!(
-            "{}-{}-{}",
-            self.component_name, self.agent_type_name, self.language
+            "{}-{}-{}-{:?}",
+            self.component_name, self.agent_type_name, self.language, self.derive_rules
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn generate_bridge_sdk_marker_hash_includes_derive_rules() {
+        let component_name = ComponentName("component".to_string());
+        let agent_type_name = AgentTypeName("Agent".to_string());
+        let language = GuestLanguage::Rust;
+        let derive_rules = vec![DeriveRule {
+            pattern: "^Foo$".to_string(),
+            derives: vec!["PartialEq".to_string()],
+        }];
+
+        let source = GenerateBridgeSdkMarkerHash {
+            component_name: &component_name,
+            agent_type_name: &agent_type_name,
+            language: &language,
+            derive_rules: &derive_rules,
+        }
+        .source()
+        .unwrap();
+
+        match source {
+            HashFromString(input) => {
+                assert!(input.contains("^Foo$"));
+                assert!(input.contains("PartialEq"));
+            }
+            Hash(_) => panic!("expected bridge SDK marker source to hash input text"),
+        }
     }
 }
 

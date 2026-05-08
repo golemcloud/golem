@@ -18,6 +18,7 @@ use std::fmt::Debug;
 ///
 /// `MT` specifies the allowed language codes for inline text.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UnstructuredBinary<MT: AllowedMimeTypes> {
     Url(String),
     Inline { data: Vec<u8>, mime_type: MT },

@@ -1590,7 +1590,11 @@ mod test {
 
     fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
         (arb_token_list_model(), arb_opt(arb_ident()))
-            .prop_map(|(agents, output_dir)| BridgeSdkLanguageTargets { agents, output_dir })
+            .prop_map(|(agents, output_dir)| BridgeSdkLanguageTargets {
+                agents,
+                output_dir,
+                additional_derives: None,
+            })
             .boxed()
     }
 

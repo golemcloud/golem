@@ -216,12 +216,15 @@ async fn gen_bridge_sdk_target(
     let final_wasm = component.final_wasm();
     let agent_type_name = target.agent_type.type_name.clone();
     let output_dir = Utf8PathBuf::try_from(target.output_dir)?;
+    let config = BridgeGeneratorConfig::new(target.derive_rules.clone())?;
+    let generator_config = config.clone();
 
     new_task_up_to_date_check(ctx)
         .with_task_result_marker(GenerateBridgeSdkMarkerHash {
             component_name: &target.component_name,
             agent_type_name: &target.agent_type.type_name,
             language: &target.target_language,
+            derive_rules: &config.derive_rules,
         })?
         .with_sources(|| vec![&final_wasm])
         .with_targets(|| vec![&output_dir])
@@ -238,22 +241,19 @@ async fn gen_bridge_sdk_target(
                 );
                 let _indent = LogIndent::new();
 
-                let config = BridgeGeneratorConfig {
-                    derive_rules: target.derive_rules,
-                };
                 let mut generator: Box<dyn BridgeGenerator> = match target.target_language {
                     GuestLanguage::Rust => Box::new(RustBridgeGenerator::new(
                         target.agent_type,
                         &output_dir,
                         false,
-                        config,
+                        generator_config,
                     )?),
                     GuestLanguage::TypeScript => {
                         Box::new(<TypeScriptBridgeGenerator as BridgeGenerator>::new(
                             target.agent_type,
                             &output_dir,
                             false,
-                            config,
+                            generator_config,
                         )?)
                     }
                     GuestLanguage::Scala => {
