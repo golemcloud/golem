@@ -389,7 +389,7 @@ impl GolemCliCommand {
             .map(|arg| arg.into())
             .collect::<Vec<OsString>>();
 
-        match GolemCliCommand::try_parse_from(&args) {
+        match Self::try_parse_from_with_agent_hints(&args) {
             Ok(mut command) => {
                 if with_env_overrides {
                     match command.global_flags.with_env_overrides() {
@@ -477,6 +477,24 @@ impl GolemCliCommand {
                 }
             }
         }
+    }
+
+    /// Same as the auto-generated `GolemCliCommand::try_parse_from`, except
+    /// the underlying `clap::Command` may be augmented with agent-only help
+    /// hints before parsing. This is the only way to influence what clap
+    /// renders for `--help` (clap renders help from the `Command` itself,
+    /// not from the parsed struct).
+    fn try_parse_from_with_agent_hints(
+        args: &[OsString],
+    ) -> Result<GolemCliCommand, clap::Error> {
+        use clap::FromArgMatches;
+
+        let mut cmd = <GolemCliCommand as CommandFactory>::command();
+        if crate::agent_help_hints::is_agent_help_enabled() {
+            crate::agent_help_hints::augment_command_with_skill_links(&mut cmd);
+        }
+        let matches = cmd.try_get_matches_from_mut(args)?;
+        GolemCliCommand::from_arg_matches(&matches)
     }
 
     fn invalid_arg_matchers() -> Vec<InvalidArgMatcher> {
