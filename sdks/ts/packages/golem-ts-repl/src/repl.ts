@@ -408,6 +408,8 @@ export class Repl {
 
     if (evalResult.error) {
       writeln(formatEvalError(evalResult.error));
+      process.exitCode = 1;
+      return;
     }
 
     const jsonResult = tryJsonStringify(evalResult.result);
