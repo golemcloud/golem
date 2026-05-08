@@ -29,7 +29,7 @@ export function logSnippetInfo(message: string | string[]) {
   let maxLineLength = 0;
   lines.forEach((line) => {
     maxLineLength = Math.max(maxLineLength, util.stripVTControlCharacters(line).length);
-    writeln(`${INFO_PREFIX} ${line}`);
+    writeln(pc.reset(`${INFO_PREFIX} ${line}`));
   });
 
   if (maxLineLength > 0) {
