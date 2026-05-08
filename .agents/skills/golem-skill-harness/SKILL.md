@@ -161,7 +161,50 @@ description: "What the skill does. Use when <trigger conditions>."
 Instructions for the agent...
 ```
 
-### 2. Rebuild the binaries
+### 2. (Optional) Link the skill from `golem-cli --help`
+
+If the skill is relevant to one or more `golem-cli` subcommands, add a `SkillBinding` entry so that — when an automated coding agent invokes `golem-cli ... --help` inside a Golem application that has the skill installed — a `Relevant skills:` block linking to the skill's `SKILL.md` is appended to that command's long help.
+
+Edit [`cli/golem-cli/src/agent_help_hints/builtin_skill_map.rs`](file:///Users/vigoo/projects/golem/golem/cli/golem-cli/src/agent_help_hints/builtin_skill_map.rs) and add a row to `SKILL_BINDINGS`:
+
+```rust
+// Common (language-independent) skill:
+SkillBinding {
+    cli_path: &["agent", "delete"],
+    basename: "golem-delete-agent",
+    kind: SkillKind::Common,
+    summary: "Delete an agent instance.",
+},
+
+// Per-language skill (one variant per listed language; folder is
+// `<basename>-<lang>` where lang is rust|ts|scala|moonbit):
+SkillBinding {
+    cli_path: &["secret", "create"],
+    basename: "golem-add-secret",
+    kind: SkillKind::PerLanguage(ALL_LANGS),
+    summary: "Add a typed secret available to your agents.",
+},
+```
+
+Rules:
+- `cli_path` is the chain of subcommand names exactly as they appear in clap's tree (kebab-case, e.g. `&["agent", "cancel-invocation"]`).
+- `basename` is the skill folder name **without** any language suffix.
+- `kind` is `SkillKind::Common` for language-independent skills, or `SkillKind::PerLanguage(...)` for per-language ones.
+- `summary` is a one-line, language-agnostic description shown above the file links.
+- The same `cli_path` can appear in multiple bindings; they are merged into a single block under that command in source order.
+- A skill that is **not installed** under `<app_dir>/.agents/skills/` is silently skipped at runtime, so adding speculative bindings is safe.
+
+Two compile-time tests guard the table:
+- `every_binding_basename_exists_in_golem_skills_repo` — fails if the named skill folder is missing from `golem-skills/skills/`.
+- `every_binding_path_resolves_in_clap_tree` — fails if `cli_path` doesn't match a real subcommand (catches CLI renames).
+
+Run them with:
+
+```shell
+cargo test -p golem-cli --lib -- agent_help_hints
+```
+
+### 3. Rebuild the binaries
 
 After creating or modifying a skill, recompile so the changes are embedded:
 
@@ -169,7 +212,7 @@ After creating or modifying a skill, recompile so the changes are embedded:
 cargo make build-release-full
 ```
 
-### 3. Write a scenario YAML
+### 4. Write a scenario YAML
 
 Create `golem-skills/tests/harness/scenarios/<scenario-name>.yaml`:
 
@@ -188,7 +231,7 @@ steps:
       build: true
 ```
 
-### 4. Run the scenario
+### 5. Run the scenario
 
 ```shell
 npx tsx src/run.ts --agent claude-code --language rust --scenario my-scenario

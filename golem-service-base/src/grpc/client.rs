@@ -23,13 +23,17 @@ use std::fmt::Write;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Code, Status};
 use tonic_tracing_opentelemetry::middleware::client::{OtelGrpcLayer, OtelGrpcService};
 use tower::ServiceBuilder;
 use tracing::{Instrument, debug, debug_span, warn};
+
+use crate::metrics::grpc::{
+    record_internal_grpc_failure, record_internal_grpc_retry, record_internal_grpc_success,
+};
 
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
@@ -73,8 +77,16 @@ impl<T: Clone> GrpcClient<T> {
                 .get()
                 .await
                 .map_err(|err| Status::from_error(Box::new(err)))?;
+            let attempt_start = Instant::now();
             match f(&mut entry.client).instrument(span.clone()).await {
-                Ok(result) => break Ok(result),
+                Ok(result) => {
+                    record_internal_grpc_success(
+                        &self.target_name,
+                        description.as_ref(),
+                        attempt_start.elapsed(),
+                    );
+                    break Ok(result);
+                }
                 Err(e) => {
                     if requires_reconnect(&e) {
                         let _ = self.client.lock().await.take();
@@ -82,17 +94,20 @@ impl<T: Clone> GrpcClient<T> {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
                             });
+                            record_internal_grpc_failure(&self.target_name, description.as_ref());
                             break Err(e);
                         } else {
                             span.in_scope(|| {
                                 debug!("gRPC call failed with {:?}, retrying", e);
                             });
+                            record_internal_grpc_retry(&self.target_name, description.as_ref());
                             continue; // retry
                         }
                     } else {
                         span.in_scope(|| {
                             warn!("gRPC call failed: {:?}, not retriable", e);
                         });
+                        record_internal_grpc_failure(&self.target_name, description.as_ref());
                         break Err(e);
                     }
                 }
@@ -173,8 +188,16 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                 .get(endpoint.clone())
                 .await
                 .map_err(|err| Status::from_error(Box::new(err)))?;
+            let attempt_start = Instant::now();
             match f(&mut entry.client).instrument(span.clone()).await {
-                Ok(result) => break Ok(result),
+                Ok(result) => {
+                    record_internal_grpc_success(
+                        &self.target_name,
+                        description.as_ref(),
+                        attempt_start.elapsed(),
+                    );
+                    break Ok(result);
+                }
                 Err(e) => {
                     if requires_reconnect(&e) {
                         self.clients.remove_async(&endpoint).await;
@@ -182,17 +205,20 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
                             });
+                            record_internal_grpc_failure(&self.target_name, description.as_ref());
                             break Err(e);
                         } else {
                             span.in_scope(|| {
                                 debug!("gRPC call failed with {:?}, retrying", e);
                             });
+                            record_internal_grpc_retry(&self.target_name, description.as_ref());
                             continue; // retry
                         }
                     } else {
                         span.in_scope(|| {
                             warn!("gRPC call failed: {:?}, not retriable", e);
                         });
+                        record_internal_grpc_failure(&self.target_name, description.as_ref());
                         break Err(e);
                     }
                 }

@@ -2,7 +2,7 @@ use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
 
 use golem_cli::fs;
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::{GuestLanguage, TemplateDescription};
 use golem_common::base_model::agent::DeployedRegisteredAgentType;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
@@ -29,27 +29,15 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
 
     let app_name = format!("all-templates-app-{}", language.id());
 
-    let outputs = ctx.cli([cmd::TEMPLATES]).await;
+    let outputs = ctx.cli([cmd::TEMPLATES, flag::FORMAT, "json"]).await;
     assert!(outputs.success_or_dump());
 
-    let template_text_output_prefix = "  - ";
-
     let templates = outputs
-        .stdout()
-        .filter(|line| line.starts_with(template_text_output_prefix) && line.contains(':'))
-        .map(|line| {
-            let template_with_desc = line.strip_prefix(template_text_output_prefix);
-            let Some(template_with_desc) = template_with_desc else {
-                panic!("{}", line)
-            };
-            let separator_index = template_with_desc.find(":");
-            let Some(separator_index) = separator_index else {
-                panic!("{}", template_with_desc)
-            };
-
-            template_with_desc[..separator_index].to_string()
-        })
-        .filter(|template| template.starts_with(language.id()))
+        .stdout_json::<Vec<TemplateDescription>>()
+        .into_iter()
+        .flatten()
+        .filter(|template| template.language == language)
+        .map(|template| template.name)
         .collect::<Vec<_>>();
 
     // MoonBit does not yet support single->multi component upgrade via
