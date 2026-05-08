@@ -176,17 +176,13 @@ impl DeploymentWriteService {
             return Err(DeploymentWriteError::ConcurrentDeployment);
         };
 
-        if let Some(current_deployment_hash) = environment
+        let deployment_hash_unchanged = environment
             .current_deployment
             .as_ref()
             .map(|ld| ld.deployment_hash)
-            && data.expected_deployment_hash == current_deployment_hash
-            && data.agent_secret_defaults.is_empty()
-            && data.quota_resource_defaults.is_empty()
-            && data.retry_policy_defaults.is_empty()
-        {
-            return Err(DeploymentWriteError::NoOpDeployment);
-        }
+            .is_some_and(|current_deployment_hash| {
+                data.expected_deployment_hash == current_deployment_hash
+            });
 
         let latest_deployment = self
             .get_latest_deployment_for_environment(&environment, auth)
@@ -321,6 +317,16 @@ impl DeploymentWriteService {
 
         if !errors.is_empty() {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
+        }
+
+        if deployment_hash_unchanged
+            && new_agent_secrets.is_empty()
+            && updated_agent_secrets.is_empty()
+            && replaced_agent_secrets.is_empty()
+            && new_resource_definitions.is_empty()
+            && new_retry_policies.is_empty()
+        {
+            return Err(DeploymentWriteError::NoOpDeployment);
         }
 
         let record = DeploymentRevisionCreationRecord::from_model(
