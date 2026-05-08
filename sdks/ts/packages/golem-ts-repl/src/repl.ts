@@ -512,8 +512,7 @@ function transformTopLevelAwaitScript(code: string): string {
 
 function isTopLevelAwaitError(error: unknown): boolean {
   return (
-    error instanceof SyntaxError &&
-    error.message.includes('await is only valid in async functions')
+    error instanceof SyntaxError && error.message.includes('await is only valid in async functions')
   );
 }
 
