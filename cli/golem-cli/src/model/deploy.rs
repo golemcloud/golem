@@ -22,7 +22,7 @@ use crate::model::worker::RawAgentId;
 use golem_client::model::{AgentSecretDto, RetryPolicyDto};
 use golem_common::model::agent::{
     AgentConfigSource, AgentMethod, AgentType, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    PathSegment, Snapshotting,
+    PathSegment,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::{AgentFilePermissions, ComponentName, ComponentRevision};
@@ -495,7 +495,7 @@ pub fn build_environment_setup_plan(
                 resource.name.0.clone(),
                 EnvironmentSetupResourceDisplay {
                     limit: serde_json::to_value(&resource.limit)?,
-                    enforcement_action: format!("{:?}", resource.enforcement_action),
+                    enforcement_action: resource.enforcement_action.to_string(),
                     unit: resource.unit.clone(),
                     units: resource.units.clone(),
                 },
@@ -510,7 +510,7 @@ pub fn build_environment_setup_plan(
                 resource.name.0.clone(),
                 EnvironmentSetupResourceDisplay {
                     limit: serde_json::to_value(&resource.limit)?,
-                    enforcement_action: format!("{:?}", resource.enforcement_action),
+                    enforcement_action: resource.enforcement_action.to_string(),
                     unit: resource.unit,
                     units: resource.units,
                 },
@@ -571,7 +571,7 @@ pub struct DeploymentDisplayAgentType {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source_language: String,
     pub mode: String,
-    pub snapshotting: String,
+    pub snapshotting: serde_json::Value,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub config_declarations: BTreeMap<String, DeploymentDisplayConfigDeclaration>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -791,8 +791,8 @@ fn display_agent_type(
         constructor: render_agent_constructor(agent, false, false),
         description: agent.description.clone(),
         source_language: agent.source_language.clone(),
-        mode: format!("{:?}", agent.mode),
-        snapshotting: render_snapshotting(&agent.snapshotting),
+        mode: agent.mode.to_string(),
+        snapshotting: serde_json::to_value(&agent.snapshotting)?,
         config_declarations: display_config_declarations(agent)?,
         config_defaults: display_config_defaults(show_sensitive, agent, provision_config)?,
         env: provision_config
@@ -1158,12 +1158,6 @@ fn render_http_method(method: &HttpMethod) -> &str {
     }
 }
 
-fn render_snapshotting(snapshotting: &Snapshotting) -> String {
-    match snapshotting {
-        Snapshotting::Disabled(_) => "disabled".to_string(),
-        Snapshotting::Enabled(config) => format!("enabled {:?}", config),
-    }
-}
 
 fn render_agent_config_source(source: AgentConfigSource) -> &'static str {
     match source {

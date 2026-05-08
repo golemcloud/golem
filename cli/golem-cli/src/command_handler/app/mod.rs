@@ -892,19 +892,21 @@ impl AppCommandHandler {
         let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
         debug!("deploy_diff: {:#?}", deploy_diff);
 
-        if deployment_is_up_to_date {
-            let environment_setup = self.build_environment_setup_plan(&deploy_diff).await?;
-
-            if !environment_setup.display.has_entries_to_apply()
-                && !environment_setup
-                    .display
-                    .has_entries_skipped_already_exists()
+        let environment_setup = if deployment_is_up_to_date {
+            let plan = self.build_environment_setup_plan(&deploy_diff).await?;
+            if !plan.display.has_entries_to_apply()
+                && !plan.display.has_entries_skipped_already_exists()
             {
                 return Ok(None);
             }
-        }
+            Some(plan)
+        } else {
+            None
+        };
 
-        let deploy_diff = self.detailed_deploy_diff(deploy_diff, full_diff).await?;
+        let deploy_diff = self
+            .detailed_deploy_diff(deploy_diff, full_diff, environment_setup)
+            .await?;
         debug!("detailed deploy_diff: {:#?}", deploy_diff);
 
         if deployment_is_up_to_date && !deploy_diff.has_environment_setup_work() {
@@ -1194,6 +1196,7 @@ impl AppCommandHandler {
         &self,
         mut deploy_diff: DeployDiff,
         full_diff: bool,
+        environment_setup: Option<EnvironmentSetupPlan>,
     ) -> anyhow::Result<DeployDiff> {
         let parallelism = self.ctx.http_parallelism();
         let limiter = Arc::new(tokio::sync::Semaphore::new(parallelism));
@@ -1213,8 +1216,10 @@ impl AppCommandHandler {
             }
         }
 
-        deploy_diff.environment_setup =
-            Some(self.build_environment_setup_plan(&deploy_diff).await?);
+        deploy_diff.environment_setup = Some(match environment_setup {
+            Some(plan) => plan,
+            None => self.build_environment_setup_plan(&deploy_diff).await?,
+        });
 
         debug!(
             "diffable_server_staged_deployment hash: {:#?}",
