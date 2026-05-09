@@ -2508,10 +2508,14 @@ fn scale_duration(duration: Duration, factor: f64) -> Duration {
     let value = base * factor;
 
     if !value.is_finite() {
-        Duration::MAX
-    } else {
-        Duration::from_secs_f64(value.min(Duration::MAX.as_secs_f64()))
+        return Duration::MAX;
     }
+
+    // `Duration::from_secs_f64` panics if the value overflows `Duration`'s representation,
+    // and `Duration::MAX.as_secs_f64()` rounds up to `2^64` (just past `u64::MAX`), so
+    // clamping with `value.min(Duration::MAX.as_secs_f64())` is not safe. Use the
+    // non-panicking variant and saturate to `Duration::MAX` on overflow.
+    Duration::try_from_secs_f64(value).unwrap_or(Duration::MAX)
 }
 
 fn saturating_add_duration(left: Duration, right: Duration) -> Duration {
@@ -3455,6 +3459,37 @@ mod tests {
                 Duration::from_millis(80)
             ]
         );
+    }
+
+    #[test]
+    fn exponential_strategy_saturates_for_large_counters() {
+        // Regression test: with `Policy::exponential(1s, 2.0).clamp(500ms, 10s)` retried
+        // forever, after ~64 attempts the unclamped exponential delay overflowed
+        // `Duration::MAX.as_secs_f64()` and `Duration::from_secs_f64` panicked before
+        // the surrounding clamp could be applied.
+        let policy = RetryPolicy::Clamp {
+            min_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(10),
+            inner: Box::new(RetryPolicy::Exponential {
+                base_delay: Duration::from_secs(1),
+                factor: 2.0,
+            }),
+        };
+        let mut state = policy.initial_state();
+        let mut rng = FixedRng(0.0);
+        let props = RetryProperties::new();
+
+        for _ in 0..2_000 {
+            let (new_state, verdict) = policy.step(&state, Duration::ZERO, &props, &mut rng);
+            state = new_state;
+            match verdict {
+                RetryVerdict::Retry(delay) => {
+                    assert!(delay >= Duration::from_millis(500));
+                    assert!(delay <= Duration::from_secs(10));
+                }
+                other => panic!("expected retry verdict, got {other:?}"),
+            }
+        }
     }
 
     #[test]
