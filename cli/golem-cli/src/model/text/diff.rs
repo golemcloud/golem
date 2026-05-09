@@ -412,9 +412,6 @@ impl TextView for DeployPlanView<'_> {
             || !self.deployment_diff.mcp_deployments.is_empty();
 
         let environment_setup_view = self.environment_setup.map(EnvironmentSetupPlanView);
-        let has_entries_to_apply = environment_setup_view
-            .as_ref()
-            .is_some_and(EnvironmentSetupPlanView::has_entries_to_apply);
 
         if has_deployment_changes {
             self.deployment_diff.log();
@@ -423,9 +420,6 @@ impl TextView for DeployPlanView<'_> {
         if let Some(environment_setup) = environment_setup_view
             && !environment_setup.0.display.is_empty()
         {
-            if has_deployment_changes || has_entries_to_apply {
-                logln("");
-            }
             environment_setup.log();
         }
     }
