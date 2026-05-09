@@ -14,6 +14,7 @@
 
 use super::agent::AgentTypeName;
 use super::component_metadata::ComponentMetadata;
+use crate::base_model::render_config_path;
 pub use crate::base_model::worker::*;
 use crate::model::agent::AgentConfigSource;
 use golem_wasm::ValueAndType;
@@ -22,7 +23,7 @@ use std::collections::BTreeMap;
 
 impl TypedAgentConfigEntry {
     fn render_path(path: &[String]) -> String {
-        path.join(".")
+        render_config_path(path)
     }
 
     pub fn to_flat_pair(&self) -> Option<(String, String)> {

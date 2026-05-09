@@ -143,8 +143,8 @@ const SENSITIVE_ENV_VAR_NAME_PATTERNS: &[&str] = &[
     "TOKEN",
 ];
 
-// NOTE: Keys are expected to be already uppercase
 pub fn is_sensitive_env_var_name(show_sensitive: bool, name: &str) -> bool {
+    let name = name.to_uppercase();
     if show_sensitive {
         false
     } else {

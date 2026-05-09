@@ -293,16 +293,20 @@ pub fn current_indent_width() -> usize {
         .count()
 }
 
-/// Prints a comfy-table correctly inside the current log indent context.
+/// Prints pre-formatted multi-line text inside the current log indent context.
 ///
 /// Unlike `logln`, which would only prepend the indent to the first line of a multi-line
-/// string, this function prepends the current indent to **every** line of the table and
-/// writes directly to the active output channel — bypassing `logln_internal`'s text-wrapping
-/// logic, which must not be applied to pre-formatted table output.
-pub fn log_table(table: impl std::fmt::Display) {
+/// string, this function prepends the current indent to **every** line and writes directly
+/// to the active output channel — bypassing `logln_internal`'s text-wrapping logic, which
+/// must not be applied to pre-formatted output.
+pub fn log_preformatted(text: impl AsRef<str>) {
+    log_preformatted_internal(text.as_ref());
+}
+
+fn log_preformatted_internal(text: &str) {
     let state = LOG_STATE.read().unwrap();
     let indent = &state.calculated_indent;
-    for line in table.to_string().lines() {
+    for line in text.lines() {
         match state.output {
             Output::Stdout => println!("{indent}{line}"),
             Output::Stderr => eprintln!("{indent}{line}"),
@@ -316,6 +320,13 @@ pub fn log_table(table: impl std::fmt::Display) {
             }
         }
     }
+}
+
+/// Prints a comfy-table correctly inside the current log indent context.
+///
+/// Accepts any [`std::fmt::Display`] value; delegates to [`log_preformatted`].
+pub fn log_table(table: impl std::fmt::Display) {
+    log_preformatted_internal(&table.to_string());
 }
 
 pub fn logln_internal(message: &str) {
