@@ -2781,7 +2781,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             &component_metadata,
                             agent_id.as_ref(),
                         )?;
-                        let full_function_name = lowered.wit_fqfn.clone();
+                        let full_function_name = lowered.display_name.clone();
 
                         store
                             .as_context_mut()

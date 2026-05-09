@@ -212,14 +212,14 @@ async fn invoke_observed<Ctx: WorkerCtx>(
                 &mut store,
                 function,
                 decoded_params,
-                &lowered.wit_fqfn,
+                &lowered.display_name,
                 kind,
             )
             .await
         }
         FindFunctionResult::ResourceDrop => {
             // Special function: drop
-            drop_resource(&mut store, &lowered.params, &lowered.wit_fqfn, kind).await
+            drop_resource(&mut store, &lowered.params, &lowered.display_name, kind).await
         }
     };
 
@@ -296,7 +296,7 @@ async fn invoke<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
     decoded_function_input: Vec<DecodeParamResult>,
-    raw_function_name: &str,
+    display_name: &str,
     kind: AgentInvocationKind,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
@@ -309,7 +309,7 @@ async fn invoke<Ctx: WorkerCtx>(
     }
 
     let (results, consumed_fuel) =
-        call_exported_function(&mut store, function, params, raw_function_name).await?;
+        call_exported_function(&mut store, function, params, display_name).await?;
 
     for resource in resources_to_drop {
         debug!("Dropping passed owned resources {:?}", resource);
@@ -391,7 +391,7 @@ fn analysed_result_type_for_kind(kind: AgentInvocationKind) -> Option<AnalysedTy
 async fn drop_resource<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function_input: &[Value],
-    raw_function_name: &str,
+    display_name: &str,
     kind: AgentInvocationKind,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
@@ -402,7 +402,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
     };
 
     if let Some((_, resource)) = store.data_mut().get(resource_id).await {
-        debug!("Dropping resource {resource:?} in {raw_function_name}");
+        debug!("Dropping resource {resource:?} in {display_name}");
 
         let result = resource.resource_drop_async(&mut store).await;
 
@@ -432,7 +432,7 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function: Func,
     params: Vec<Val>,
-    raw_function_name: &str,
+    display_name: &str,
 ) -> Result<(wasmtime::Result<Vec<Val>>, u64), WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -444,7 +444,7 @@ async fn call_exported_function<Ctx: WorkerCtx>(
             .data()
             .get_public_state()
             .event_service()
-            .emit_invocation_start(raw_function_name, idempotency_key, store.data().is_live());
+            .emit_invocation_start(display_name, idempotency_key, store.data().is_live());
     }
 
     let mut results: Vec<Val> = function
@@ -456,21 +456,21 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     let result = function.call_async(&mut store, &params, &mut results).await;
 
     let consumed_fuel_for_call =
-        finish_invocation_and_get_fuel_consumption(&mut store, raw_function_name).await?;
+        finish_invocation_and_get_fuel_consumption(&mut store, display_name).await?;
 
     Ok((result.map(|_| results), consumed_fuel_for_call))
 }
 
 async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
-    raw_function_name: &str,
+    display_name: &str,
 ) -> Result<u64, WorkerExecutorError> {
     let current_fuel_level = store.get_fuel().unwrap_or(0);
     let consumed_fuel_for_call = store.data_mut().return_fuel(current_fuel_level);
 
     if consumed_fuel_for_call > 0 {
         debug!(
-            "Fuel consumed for call {raw_function_name}: {}",
+            "Fuel consumed for call {display_name}: {}",
             consumed_fuel_for_call
         );
     }
