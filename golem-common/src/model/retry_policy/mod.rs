@@ -531,10 +531,49 @@ impl<'de> Deserialize<'de> for Predicate {
     }
 }
 
+/// Deserializes a [`Duration`] from either a humantime string (e.g. `"200ms"`,
+/// `"5s"`, `"1m"`) or the canonical Rust `{ "secs": <u64>, "nanos": <u32> }`
+/// struct form. Both forms are accepted in JSON and YAML retry policy
+/// payloads. The struct form is used when serializing.
+fn deserialize_duration_humantime_or_struct<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum DurationRepr {
+        Humantime(String),
+        // Use the default `Duration` representation here: `{ secs, nanos }`.
+        Struct(Duration),
+    }
+
+    match DurationRepr::deserialize(deserializer)? {
+        DurationRepr::Humantime(s) => humantime::parse_duration(&s).map_err(|e| {
+            serde::de::Error::custom(format!("invalid duration string {s:?}: {e}"))
+        }),
+        DurationRepr::Struct(d) => Ok(d),
+    }
+}
+
+/// Same as [`deserialize_duration_humantime_or_struct`] but operates on an
+/// already-extracted [`JsonValue`] payload, used by the `RetryPolicy::Periodic`
+/// branch which deserializes the payload directly as a `Duration` rather than
+/// through a struct field.
+fn deserialize_duration_value_humantime_or_struct(value: JsonValue) -> Result<Duration, String> {
+    match value {
+        JsonValue::String(s) => humantime::parse_duration(&s)
+            .map_err(|e| format!("invalid duration string {s:?}: {e}")),
+        other => serde_json::from_value::<Duration>(other).map_err(|e| e.to_string()),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExponentialPayload {
-    #[serde(alias = "base_delay")]
+    #[serde(
+        alias = "base_delay",
+        deserialize_with = "deserialize_duration_humantime_or_struct"
+    )]
     base_delay: Duration,
     factor: f64,
 }
@@ -542,7 +581,9 @@ struct ExponentialPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FibonacciPayload {
+    #[serde(deserialize_with = "deserialize_duration_humantime_or_struct")]
     first: Duration,
+    #[serde(deserialize_with = "deserialize_duration_humantime_or_struct")]
     second: Duration,
 }
 
@@ -557,6 +598,7 @@ struct CountBoxPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TimeBoxPayload {
+    #[serde(deserialize_with = "deserialize_duration_humantime_or_struct")]
     limit: Duration,
     inner: RetryPolicy,
 }
@@ -564,9 +606,15 @@ struct TimeBoxPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClampPayload {
-    #[serde(alias = "min_delay")]
+    #[serde(
+        alias = "min_delay",
+        deserialize_with = "deserialize_duration_humantime_or_struct"
+    )]
     min_delay: Duration,
-    #[serde(alias = "max_delay")]
+    #[serde(
+        alias = "max_delay",
+        deserialize_with = "deserialize_duration_humantime_or_struct"
+    )]
     max_delay: Duration,
     inner: RetryPolicy,
 }
@@ -574,6 +622,7 @@ struct ClampPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AddDelayPayload {
+    #[serde(deserialize_with = "deserialize_duration_humantime_or_struct")]
     delay: Duration,
     inner: RetryPolicy,
 }
@@ -726,7 +775,7 @@ impl RetryPolicy {
                 let (kind, payload) = take_single_key_object(value)?;
                 match kind.as_str() {
                     "periodic" => Ok(Self::Periodic(
-                        serde_json::from_value(payload)
+                        deserialize_duration_value_humantime_or_struct(payload)
                             .map_err(|e| format!("Invalid periodic payload: {e}"))?,
                     )),
                     "exponential" => {
@@ -1608,6 +1657,37 @@ impl NamedRetryPolicy {
         for policy in ordered {
             if policy.predicate.matches(properties)? {
                 return Ok(Some(policy));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Like [`resolve`], but treats [`RetryEvaluationError::PropertyNotFound`] as a
+    /// non-match instead of a hard error.
+    ///
+    /// This is intended for retry decision sites whose context only exposes a subset of
+    /// retry properties (for example, the WASM trap path does not populate
+    /// `status-code`). A user policy keyed on a property that does not exist in the
+    /// current context should be silently skipped — it cannot apply here by definition
+    /// — rather than producing a confusing "property not found" error in logs.
+    ///
+    /// Other evaluation errors (such as type-coercion failures) are still propagated.
+    ///
+    /// [`resolve`]: NamedRetryPolicy::resolve
+    pub fn resolve_treating_missing_properties_as_no_match<'a>(
+        policies: &'a [NamedRetryPolicy],
+        properties: &RetryProperties,
+    ) -> Result<Option<&'a NamedRetryPolicy>, RetryEvaluationError> {
+        let mut ordered = policies.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|p| std::cmp::Reverse(p.priority));
+
+        for policy in ordered {
+            match policy.predicate.matches(properties) {
+                Ok(true) => return Ok(Some(policy)),
+                Ok(false) => continue,
+                Err(RetryEvaluationError::PropertyNotFound { .. }) => continue,
+                Err(other) => return Err(other),
             }
         }
 
@@ -3856,6 +3936,201 @@ mod tests {
         let no_match = NamedRetryPolicy::resolve(&no_match_policies, &props)
             .expect("resolution should succeed");
         assert!(no_match.is_none());
+    }
+
+    #[test]
+    fn resolve_treating_missing_properties_as_no_match_skips_property_not_found() {
+        // A status-code-keyed policy that would normally apply to outgoing HTTP
+        // responses, plus a fallback policy keyed on the trap context.
+        let status_code_policy = NamedRetryPolicy {
+            name: "http-5xx".to_string(),
+            priority: 100,
+            predicate: Predicate::PropEq {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(500),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+        let trap_policy = NamedRetryPolicy {
+            name: "trap-fallback".to_string(),
+            priority: 10,
+            predicate: Predicate::PropEq {
+                property: "trap-type".to_string(),
+                value: PredicateValue::Text("transient-error".to_string()),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+
+        let policies = vec![status_code_policy.clone(), trap_policy.clone()];
+
+        // Trap context: only `trap-type` is populated, no `status-code`.
+        let mut trap_props = RetryProperties::new();
+        trap_props.set(
+            "trap-type",
+            PredicateValue::Text("transient-error".to_string()),
+        );
+
+        // The strict resolver errors because `status-code` is referenced but missing.
+        let strict = NamedRetryPolicy::resolve(&policies, &trap_props);
+        assert!(matches!(
+            strict,
+            Err(RetryEvaluationError::PropertyNotFound { ref property }) if property == "status-code"
+        ));
+
+        // The lenient resolver skips the status-code policy and selects the trap one.
+        let resolved =
+            NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(&policies, &trap_props)
+                .expect("resolution should succeed")
+                .expect("trap-fallback policy should be selected");
+        assert_eq!(resolved.name, "trap-fallback");
+
+        // When no policy matches and missing properties are skipped, returns None
+        // instead of an error.
+        let unmatched_props = RetryProperties::new();
+        let resolved = NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(
+            &policies,
+            &unmatched_props,
+        )
+        .expect("resolution should succeed");
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_treating_missing_properties_as_no_match_propagates_other_errors() {
+        // A predicate that would fail with a coercion error (text vs integer),
+        // not with PropertyNotFound. That kind of error must still surface.
+        let bad_policy = NamedRetryPolicy {
+            name: "type-mismatch".to_string(),
+            priority: 100,
+            predicate: Predicate::PropGt {
+                property: "verb".to_string(),
+                value: PredicateValue::Integer(0),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+
+        let mut props = RetryProperties::new();
+        props.set("verb", PredicateValue::Text("trap".to_string()));
+
+        let resolved = NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(
+            std::slice::from_ref(&bad_policy),
+            &props,
+        );
+        assert!(matches!(
+            resolved,
+            Err(RetryEvaluationError::CoercionFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn retry_policy_accepts_humantime_duration_strings() {
+        // Periodic — Duration is the bare payload (not inside a struct).
+        let json = r#"{ "periodic": "200ms" }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(parsed, RetryPolicy::Periodic(Duration::from_millis(200)));
+
+        // Exponential — Duration is a struct field with humantime form.
+        let json =
+            r#"{ "exponential": { "baseDelay": "500ms", "factor": 2.0 } }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(
+            parsed,
+            RetryPolicy::Exponential {
+                base_delay: Duration::from_millis(500),
+                factor: 2.0,
+            }
+        );
+
+        // Clamp + nested exponential.
+        let json = r#"{
+            "clamp": {
+                "minDelay": "100ms",
+                "maxDelay": "5s",
+                "inner": { "exponential": { "baseDelay": "200ms", "factor": 2.0 } }
+            }
+        }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(
+            parsed,
+            RetryPolicy::Clamp {
+                min_delay: Duration::from_millis(100),
+                max_delay: Duration::from_secs(5),
+                inner: Box::new(RetryPolicy::Exponential {
+                    base_delay: Duration::from_millis(200),
+                    factor: 2.0,
+                }),
+            }
+        );
+
+        // Fibonacci.
+        let json = r#"{ "fibonacci": { "first": "1s", "second": "2s" } }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(
+            parsed,
+            RetryPolicy::Fibonacci {
+                first: Duration::from_secs(1),
+                second: Duration::from_secs(2),
+            }
+        );
+
+        // TimeBox.
+        let json = r#"{ "timeBox": { "limit": "30s", "inner": "immediate" } }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(
+            parsed,
+            RetryPolicy::TimeBox {
+                limit: Duration::from_secs(30),
+                inner: Box::new(RetryPolicy::Immediate),
+            }
+        );
+
+        // AddDelay.
+        let json = r#"{ "addDelay": { "delay": "750ms", "inner": "immediate" } }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(
+            parsed,
+            RetryPolicy::AddDelay {
+                delay: Duration::from_millis(750),
+                inner: Box::new(RetryPolicy::Immediate),
+            }
+        );
+    }
+
+    #[test]
+    fn retry_policy_still_accepts_struct_duration_form() {
+        // Both string and struct forms must be accepted to preserve backward
+        // compatibility with the Rust `Duration` JSON serialization.
+        let json = r#"{
+            "exponential": {
+                "baseDelay": { "secs": 1, "nanos": 500000000 },
+                "factor": 2.0
+            }
+        }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse struct form");
+        assert_eq!(
+            parsed,
+            RetryPolicy::Exponential {
+                base_delay: Duration::from_millis(1500),
+                factor: 2.0,
+            }
+        );
+
+        // Periodic struct form.
+        let json = r#"{ "periodic": { "secs": 1, "nanos": 0 } }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse struct form");
+        assert_eq!(parsed, RetryPolicy::Periodic(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn retry_policy_rejects_invalid_duration_string() {
+        let json = r#"{ "periodic": "definitely not a duration" }"#;
+        let result: Result<RetryPolicy, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("invalid duration string"),
+            "expected duration error, got: {err}"
+        );
     }
 
     #[test]

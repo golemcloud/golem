@@ -877,7 +877,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         );
         self.state.enrich_retry_properties(&mut properties);
 
-        let named_policy = match golem_common::model::NamedRetryPolicy::resolve(
+        // The trap context only populates a subset of the retry properties (no
+        // `status-code`, etc.), so policies keyed on properties that only exist in
+        // other contexts (e.g. an HTTP `status-code` policy) are intentionally
+        // skipped here instead of erroring out.
+        let named_policy = match golem_common::model::NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(
             &named_retry_policies,
             &properties,
         ) {

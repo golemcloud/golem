@@ -107,14 +107,30 @@ await withPersistenceLevel({ tag: 'persist-nothing' }, async () => {
 
 ## Idempotence Mode
 
-Control whether HTTP requests are retried when the result is uncertain:
+> **Default: `true`.** Every outgoing HTTP request — including `POST`, `PUT`, `PATCH`, and
+> `DELETE` — is treated as idempotent. This means status-code-keyed retry policies (see
+> `golem-retry-policies-ts`) **already work out of the box for `POST` requests**. You do **not**
+> need to wrap a `POST` in `withIdempotenceMode(true, ...)` to make it retriable on a 5xx — that
+> is the default.
+
+Use `withIdempotenceMode(false, ...)` only when you need to **opt out** for a specific call. The
+flag controls how `WriteRemote` host functions are replayed when their previous attempt's outcome
+is unknown after a crash:
+
+- `true` (default): assume the previous attempt succeeded; do **not** re-invoke on replay.
+  Combined with the host-side retry machinery, the request can be transparently re-sent when a
+  matching retry policy fires.
+- `false`: do **not** assume success; the worker traps so a higher-level retry decides what to
+  do. Use this for non-idempotent side effects whose accidental duplication would be more harmful
+  than missing the call entirely.
 
 ```typescript
 import { withIdempotenceMode } from '@golemcloud/golem-ts-sdk';
 
+// Opt OUT of the default — the wrapped call is treated as non-idempotent.
 // Sync
 withIdempotenceMode(false, () => {
-    // HTTP requests won't be automatically retried
+    // HTTP requests will not be automatically retried on uncertain outcomes
 });
 
 // Async

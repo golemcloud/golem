@@ -109,6 +109,49 @@ throw needed. The resolved `Response` is the *last* attempt. See the
 This is the recommended path when the retry trigger is a status code (or status-code range). It
 also handles request-body reconstruction, idempotency checks, and replay correctly.
 
+> **POST/PUT/PATCH work out of the box.** Idempotence mode defaults to `true`, so a plain `POST
+> /charge` with a JSON body is already eligible for status-code retry — there is **no** need to
+> wrap the call in `withIdempotenceMode(true, ...)`. See `golem-atomic-block-ts` for details on
+> when (rarely) to opt out with `withIdempotenceMode(false, ...)`.
+
+Minimal POST example — the policy is defined once (in `golem.yaml` or via the SDK) and the call
+site is just `fetch`:
+
+```yaml
+# golem.yaml — under retryPolicyDefaults / <env>:
+http-5xx-retry:
+  priority: 20
+  predicate:
+    propIn: { property: "status-code", values: [500, 502, 503, 504] }
+  policy:
+    countBox:
+      maxRetries: 3
+      inner:
+        exponential:
+          baseDelay: "200ms"
+          factor: 2.0
+```
+
+```typescript
+// Plain fetch — no atomically(...), no withIdempotenceMode wrapper.
+const response = await fetch('https://payments.example.com/charge', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ orderId, amount }),
+});
+
+if (!response.ok) {
+  // The host already retried up to maxRetries times against the 5xx policy;
+  // this is the *final* response after retries were exhausted.
+  throw new Error(`charge failed: ${response.status}`);
+}
+const charge = await response.json();
+```
+
+If status retry "doesn't seem to work", load the `golem-local-dev-server` skill and look for the
+`HTTP status retry skipped, reason: …` debug line — it pinpoints why a particular request was not
+retried (e.g. `BodyNotFinished`, `NotIdempotent`, `NoRetry`).
+
 ### Fallback: `atomically(...)`
 
 When the retry trigger is application-level (e.g. retrying based on a parsed body field, or

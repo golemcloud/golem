@@ -201,6 +201,57 @@ let _ = options.set_between_bytes_timeout(Some(30_000_000_000UL))  // 30 s
 let future_response = @http.handle(request, Some(options)).unwrap()
 ```
 
+## Retrying on non-2xx Responses
+
+`@http.handle` resolves successfully when the server returns an HTTP response, even if the status
+is `500`. From Golem's durability point of view, the recorded oplog entry already contains the
+`500` response, and any subsequent application-level error you produce based on the status is a
+separate failure *after* the side effect.
+
+There are two ways to make Golem retry the HTTP call itself when a non-2xx response arrives.
+
+### Preferred: a `status-code`-keyed retry policy
+
+Define a named retry policy whose predicate explicitly references `status-code`. When the
+response arrives the host transparently re-sends the request — no atomic block and no
+application-level error needed. The resolved response is the *last* attempt. See the
+`golem-retry-policies-moonbit` skill for the policy YAML / SDK shape.
+
+> **POST/PUT/PATCH work out of the box.** Idempotence mode defaults to `true`, so a plain `POST
+> /charge` with a body is already eligible for status-code retry — there is **no** need to wrap
+> the call in `@api.with_idempotence_mode(true, ...)`. See `golem-atomic-block-moonbit` for
+> details on when (rarely) to opt out with `@api.with_idempotence_mode(false, ...)`.
+
+The policy is defined once (in `golem.yaml` or via the SDK) and the call site is just a plain
+HTTP call — no extra wrapping is needed at the call site:
+
+```yaml
+# golem.yaml — under retryPolicyDefaults / <env>:
+http-5xx-retry:
+  priority: 20
+  predicate:
+    propIn: { property: "status-code", values: [500, 502, 503, 504] }
+  policy:
+    countBox:
+      maxRetries: 3
+      inner:
+        exponential:
+          baseDelay: "200ms"
+          factor: 2.0
+```
+
+If status retry "doesn't seem to work", load the `golem-local-dev-server` skill and look for the
+`HTTP status retry skipped, reason: …` debug line — it pinpoints why a particular request was
+not retried (e.g. `BodyNotFinished`, `NotIdempotent`, `NoRetry`).
+
+### Fallback: atomic block
+
+When the retry trigger is application-level (e.g. retrying based on a parsed body field, or
+combining multiple side effects into one logical step), wrap the **entire** request,
+response-body read, and status check in an atomic block. The failed atomic block is not
+committed, so recovery re-executes the request instead of replaying the recorded failed
+response. See `golem-atomic-block-moonbit`.
+
 ## Error Handling
 
 Both `@http.handle` and `FutureIncomingResponse::get` can fail. `get()` returns `Option[Result[Result[IncomingResponse, ErrorCode], Unit]]` — `None` means not ready yet, the inner `Err(())` means the response was already consumed:

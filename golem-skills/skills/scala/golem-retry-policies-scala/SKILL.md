@@ -87,14 +87,35 @@ Predicates are boolean expressions evaluated against error context properties. C
 
 ### Available Properties
 
-- `status-code` — HTTP response status code (populated for outgoing HTTP responses)
-- `uri-scheme` — URI scheme (http, https)
-- `method` — HTTP method (e.g. GET, POST)
-- `uri` — full request URI
-- `error-type` — classification of the error
-- `db-type` — database type for RDBMS retry contexts (e.g. `postgres`, `mysql`)
-- `verb` — RDBMS verb (e.g. `execute`, `query`)
-- `pool-key` — RDBMS pool key
+Every retry decision happens in a specific **context** (an outgoing HTTP request, an HTTP
+response, a worker-to-worker RPC call, a trap from inside the guest, etc.). Each context only
+populates a subset of the property vocabulary below — a policy keyed on a property that is **not
+present in the current context is silently skipped** for that decision (it cannot apply there by
+definition).
+
+Common to every context:
+- `verb` — operation verb (HTTP method, RDBMS verb, RPC verb, or `"trap"` in the trap context)
+- `noun-uri` — the resource URI (`https://...`, `worker://...`, `kv://...`, `blobstore://...`,
+  `dns://...`, `wasm://<function>` for traps, `golem://api`, …)
+- `uri-scheme`, `uri-host`, `uri-port`, `uri-path` — decomposed from `noun-uri`
+
+Context-specific properties:
+
+| Property                | Populated in                                          |
+|-------------------------|-------------------------------------------------------|
+| `status-code`           | outgoing HTTP **response** only                       |
+| `error-type`            | outgoing HTTP **response** only                       |
+| `function`              | worker-to-worker RPC call                             |
+| `target-component-id`   | worker-to-worker RPC call                             |
+| `target-agent-type`     | worker-to-worker RPC call (when the agent ID parses)  |
+| `db-type`               | RDBMS operations (e.g. `postgres`, `mysql`)           |
+| `trap-type`             | guest WASM trap (`transient-error`, `unknown`, …)     |
+
+**Practical consequence.** A status-code-keyed policy (predicate: `status-code in [...]`) only
+fires for HTTP responses. The trap path **does not** see `status-code` and silently skips that
+policy — it does **not** error out. Likewise, a `trap-type`-keyed policy only fires from the
+trap path. Design one policy per context (or use `or`/`and` to make a policy explicitly match
+multiple contexts) rather than expecting a single policy to apply everywhere.
 
 ### `error-type` values
 
