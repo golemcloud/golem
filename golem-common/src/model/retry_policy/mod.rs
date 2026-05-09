@@ -1252,9 +1252,70 @@ impl Predicate {
             Predicate::False => Ok(false),
         }
     }
+
+    /// Returns `true` if this predicate explicitly references the given property name
+    /// anywhere in its tree.
+    ///
+    /// This is used by retry decision sites whose entire behavior depends on a policy
+    /// having opted into a specific property (e.g. HTTP status-code retries should only
+    /// consider policies whose predicate explicitly references `status-code`). Catch-all
+    /// predicates such as [`Predicate::True`] return `false` because they do not
+    /// reference any property.
+    pub fn references_property(&self, name: &str) -> bool {
+        match self {
+            Predicate::PropEq { property, .. }
+            | Predicate::PropNeq { property, .. }
+            | Predicate::PropGt { property, .. }
+            | Predicate::PropGte { property, .. }
+            | Predicate::PropLt { property, .. }
+            | Predicate::PropLte { property, .. }
+            | Predicate::PropExists(property)
+            | Predicate::PropIn { property, .. }
+            | Predicate::PropMatches { property, .. }
+            | Predicate::PropStartsWith { property, .. }
+            | Predicate::PropContains { property, .. } => property == name,
+            Predicate::And(left, right) | Predicate::Or(left, right) => {
+                left.references_property(name) || right.references_property(name)
+            }
+            Predicate::Not(inner) => inner.references_property(name),
+            Predicate::True | Predicate::False => false,
+        }
+    }
 }
 
 impl RetryPolicy {
+    /// Returns `true` if any nested predicate inside this policy explicitly references
+    /// the given property name.
+    ///
+    /// Mirrors [`Predicate::references_property`] but recurses through retry-policy
+    /// combinators that carry predicates (currently [`RetryPolicy::FilteredOn`]) and
+    /// through structural wrappers that hold an `inner` policy. This lets retry-decision
+    /// sites that are gated on explicit property opt-in (e.g. HTTP status-code retries)
+    /// also recognize policies whose status-code logic is encoded inside `FilteredOn`
+    /// rather than in the [`NamedRetryPolicy`] selector predicate.
+    pub fn references_property(&self, name: &str) -> bool {
+        match self {
+            RetryPolicy::Periodic(_)
+            | RetryPolicy::Exponential { .. }
+            | RetryPolicy::Fibonacci { .. }
+            | RetryPolicy::Immediate
+            | RetryPolicy::Never => false,
+            RetryPolicy::CountBox { inner, .. }
+            | RetryPolicy::TimeBox { inner, .. }
+            | RetryPolicy::Clamp { inner, .. }
+            | RetryPolicy::AddDelay { inner, .. }
+            | RetryPolicy::Jitter { inner, .. } => inner.references_property(name),
+            RetryPolicy::FilteredOn { predicate, inner } => {
+                predicate.references_property(name) || inner.references_property(name)
+            }
+            RetryPolicy::AndThen(left, right)
+            | RetryPolicy::Union(left, right)
+            | RetryPolicy::Intersect(left, right) => {
+                left.references_property(name) || right.references_property(name)
+            }
+        }
+    }
+
     /// Returns the initial [`RetryPolicyState`] for this policy (zero attempts, not yet started).
     pub fn initial_state(&self) -> RetryPolicyState {
         match self {
@@ -3532,6 +3593,126 @@ mod tests {
             .matches(&props)
             .unwrap()
         );
+    }
+
+    #[test]
+    fn predicate_references_property_detects_explicit_reference() {
+        // Direct leaf reference
+        assert!(
+            Predicate::PropEq {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(500),
+            }
+            .references_property("status-code")
+        );
+        assert!(
+            Predicate::PropExists("status-code".to_string()).references_property("status-code")
+        );
+        assert!(
+            Predicate::PropIn {
+                property: "status-code".to_string(),
+                values: vec![PredicateValue::Integer(500), PredicateValue::Integer(503)],
+            }
+            .references_property("status-code")
+        );
+
+        // Different property — does not reference
+        assert!(
+            !Predicate::PropEq {
+                property: "error-type".to_string(),
+                value: PredicateValue::Text("transient".to_string()),
+            }
+            .references_property("status-code")
+        );
+
+        // Catch-all predicates do not reference any property
+        assert!(!Predicate::True.references_property("status-code"));
+        assert!(!Predicate::False.references_property("status-code"));
+    }
+
+    #[test]
+    fn predicate_references_property_traverses_composites() {
+        let status_eq = Predicate::PropEq {
+            property: "status-code".to_string(),
+            value: PredicateValue::Integer(500),
+        };
+        let error_eq = Predicate::PropEq {
+            property: "error-type".to_string(),
+            value: PredicateValue::Text("transient".to_string()),
+        };
+
+        // And/Or detect references in either side
+        assert!(
+            Predicate::And(Box::new(status_eq.clone()), Box::new(error_eq.clone()))
+                .references_property("status-code")
+        );
+        assert!(
+            Predicate::Or(Box::new(error_eq.clone()), Box::new(status_eq.clone()))
+                .references_property("status-code")
+        );
+
+        // Not detects reference inside negated predicate
+        assert!(Predicate::Not(Box::new(status_eq.clone())).references_property("status-code"));
+
+        // Composite of catch-all + unrelated property does not reference
+        assert!(
+            !Predicate::And(Box::new(Predicate::True), Box::new(error_eq.clone()))
+                .references_property("status-code")
+        );
+        assert!(
+            !Predicate::Or(Box::new(error_eq.clone()), Box::new(Predicate::True))
+                .references_property("status-code")
+        );
+    }
+
+    #[test]
+    fn retry_policy_references_property_recurses_through_policy_combinators() {
+        let status_eq = Predicate::PropEq {
+            property: "status-code".to_string(),
+            value: PredicateValue::Integer(503),
+        };
+        let inner = RetryPolicy::Periodic(Duration::from_millis(100));
+
+        // FilteredOn carries a predicate
+        let filtered = RetryPolicy::FilteredOn {
+            predicate: status_eq.clone(),
+            inner: Box::new(inner.clone()),
+        };
+        assert!(filtered.references_property("status-code"));
+        assert!(!filtered.references_property("error-type"));
+
+        // Wrapping combinators recurse into inner
+        let wrapped = RetryPolicy::CountBox {
+            max_retries: 3,
+            inner: Box::new(filtered.clone()),
+        };
+        assert!(wrapped.references_property("status-code"));
+
+        let wrapped2 = RetryPolicy::TimeBox {
+            limit: Duration::from_secs(1),
+            inner: Box::new(filtered.clone()),
+        };
+        assert!(wrapped2.references_property("status-code"));
+
+        // Binary combinators recurse into both sides
+        let union = RetryPolicy::Union(
+            Box::new(RetryPolicy::Periodic(Duration::from_millis(50))),
+            Box::new(filtered.clone()),
+        );
+        assert!(union.references_property("status-code"));
+
+        // Pure delay/timing policies have no predicate references
+        assert!(
+            !RetryPolicy::Periodic(Duration::from_millis(100)).references_property("status-code")
+        );
+        assert!(
+            !RetryPolicy::Exponential {
+                base_delay: Duration::from_millis(100),
+                factor: 2.0,
+            }
+            .references_property("status-code")
+        );
+        assert!(!RetryPolicy::Never.references_property("status-code"));
     }
 
     #[test]

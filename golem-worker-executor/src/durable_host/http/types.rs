@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
-use crate::durable_host::http::inline_retry::take_http_background_retry_fallback;
+use crate::durable_host::http::inline_retry::{
+    StatusRetryOutcome, take_http_background_retry_fallback, try_status_code_retry,
+};
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
@@ -826,98 +828,34 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             let mut response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
-            // Background retry may decide that the next delay must escape to the
-            // outer retry/replay machinery. Convert that marker trap back into the
-            // same transient host failure path used by non-background HTTP calls.
-            if let Err(err) = &response
-                && let Some(error_code) = take_http_background_retry_fallback(err)
-            {
-                self.state.current_retry_point = begin_index;
-                let failure = anyhow::Error::new(ClassifiedHostError {
-                    kind: HostFailureKind::Transient,
-                    message: error_code.to_string(),
-                });
-                let mut properties = golem_common::model::RetryContext::http(
-                    &request_state.request.method.to_string(),
-                    &request_state.request.uri,
-                );
-                self.state.enrich_retry_properties(&mut properties);
-                properties.set(
-                    "error-type",
-                    golem_common::model::PredicateValue::Text("transient".to_string()),
-                );
-                self.try_trigger_retry(failure, properties)
-                    .await
-                    .map_err(wasmtime::Error::from_anyhow)?;
-                let future_res = self
-                    .table()
-                    .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
-                *future_res = wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(Ok(
-                    Err(error_code.clone()),
-                ));
-                response = Ok(Some(Ok(Err(error_code))));
-            }
-
-            let mut classified = classify_http_response(self.table(), &response)?;
-
-            if let Err(err) = &classified.1 {
-                let kind = match err {
-                    HttpFailure::ErrorCode(code) => classify_http_error_code(code),
-                    HttpFailure::Other(_) => HostFailureKind::Transient,
-                };
-                // Only try an extra awaiting-response inline retry when background retry is not
-                // already managing this request. Background retry either succeeded, exhausted,
-                // or already requested trap+replay in the block above.
-                let has_background_retry = self
-                    .state
-                    .open_http_requests
-                    .get(&handle)
-                    .is_some_and(|s| s.retry.has_background_retry);
-
-                if kind == HostFailureKind::Transient
-                    && !has_background_retry
-                    && let Some(request_state) = self.state.open_http_requests.get(&handle).cloned()
-                    && let Some(retried_response) =
-                        crate::durable_host::http::inline_retry::try_awaiting_response_inline_retry(
-                            self,
-                            &request_state,
-                        )
-                        .await
-                        .map_err(wasmtime::Error::from_anyhow)?
+            // Outer per-attempt loop. Each iteration:
+            //   1. Converts background-retry "trap+replay" markers into the standard
+            //      transient host-failure retry path.
+            //   2. Classifies the response.
+            //   3. Runs the existing transient transport-error inline retry.
+            //   4. Triggers the transient host-failure retry if still erroring.
+            //   5. Runs status-code retry against user-defined policies. On
+            //      `Retried(Ok)` it swaps the future entry and continues the loop;
+            //      on other outcomes it falls through to persist + expose.
+            // The loop bound is the user policy's own attempt budget (encoded in the
+            // retry state machinery), not a hard-coded cap.
+            let (serializable_response, _for_retry) = loop {
+                // Background retry may decide that the next delay must escape to the
+                // outer retry/replay machinery. Convert that marker trap back into the
+                // same transient host failure path used by non-background HTTP calls.
+                if let Err(err) = &response
+                    && let Some(error_code) = take_http_background_retry_fallback(err)
                 {
-                    let future_res = self
-                        .table()
-                        .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
-                    *future_res = wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(Ok(
-                        Ok(retried_response),
-                    ));
-
-                    let self2 = Resource::<FutureIncomingResponse>::new_borrow(handle);
-                    response =
-                        HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self2).await;
-                    classified = classify_http_response(self.table(), &response)?;
-                }
-            }
-
-            let (serializable_response, for_retry) = classified;
-
-            if let Err(err) = &for_retry {
-                let kind = match err {
-                    HttpFailure::ErrorCode(code) => classify_http_error_code(code),
-                    HttpFailure::Other(_) => HostFailureKind::Transient,
-                };
-                let has_background_retry = self
-                    .state
-                    .open_http_requests
-                    .get(&handle)
-                    .is_some_and(|s| s.retry.has_background_retry);
-                if kind == HostFailureKind::Transient && !has_background_retry {
                     self.state.current_retry_point = begin_index;
                     let failure = anyhow::Error::new(ClassifiedHostError {
-                        kind,
-                        message: err.to_string(),
+                        kind: HostFailureKind::Transient,
+                        message: error_code.to_string(),
                     });
-                    let mut properties = golem_common::model::RetryProperties::new();
+                    let mut properties = golem_common::model::RetryContext::http(
+                        &request_state.request.method.to_string(),
+                        &request_state.request.uri,
+                    );
+                    self.state.enrich_retry_properties(&mut properties);
                     properties.set(
                         "error-type",
                         golem_common::model::PredicateValue::Text("transient".to_string()),
@@ -925,8 +863,220 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     self.try_trigger_retry(failure, properties)
                         .await
                         .map_err(wasmtime::Error::from_anyhow)?;
+                    let future_res = self
+                        .table()
+                        .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
+                    *future_res = wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(Ok(
+                        Err(error_code.clone()),
+                    ));
+                    response = Ok(Some(Ok(Err(error_code))));
                 }
-            }
+
+                let mut classified = classify_http_response(self.table(), &response)?;
+
+                if let Err(err) = &classified.1 {
+                    let kind = match err {
+                        HttpFailure::ErrorCode(code) => classify_http_error_code(code),
+                        HttpFailure::Other(_) => HostFailureKind::Transient,
+                    };
+                    // Only try an extra awaiting-response inline retry when background retry is not
+                    // already managing this request. Background retry either succeeded, exhausted,
+                    // or already requested trap+replay in the block above.
+                    let has_background_retry = self
+                        .state
+                        .open_http_requests
+                        .get(&handle)
+                        .is_some_and(|s| s.retry.has_background_retry);
+
+                    if kind == HostFailureKind::Transient
+                        && !has_background_retry
+                        && let Some(request_state) =
+                            self.state.open_http_requests.get(&handle).cloned()
+                        && let Some(retried_response) =
+                            crate::durable_host::http::inline_retry::try_awaiting_response_inline_retry(
+                                self,
+                                &request_state,
+                            )
+                            .await
+                            .map_err(wasmtime::Error::from_anyhow)?
+                    {
+                        let future_res = self
+                            .table()
+                            .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
+                        *future_res =
+                            wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(Ok(
+                                Ok(retried_response),
+                            ));
+
+                        let self2 = Resource::<FutureIncomingResponse>::new_borrow(handle);
+                        response = HostFutureIncomingResponse::get(
+                            &mut self.as_wasi_http_view(),
+                            self2,
+                        )
+                        .await;
+                        classified = classify_http_response(self.table(), &response)?;
+                    }
+                }
+
+                let (serializable_response, for_retry) = classified;
+
+                if let Err(err) = &for_retry {
+                    let kind = match err {
+                        HttpFailure::ErrorCode(code) => classify_http_error_code(code),
+                        HttpFailure::Other(_) => HostFailureKind::Transient,
+                    };
+                    let has_background_retry = self
+                        .state
+                        .open_http_requests
+                        .get(&handle)
+                        .is_some_and(|s| s.retry.has_background_retry);
+                    if kind == HostFailureKind::Transient && !has_background_retry {
+                        self.state.current_retry_point = begin_index;
+                        let failure = anyhow::Error::new(ClassifiedHostError {
+                            kind,
+                            message: err.to_string(),
+                        });
+                        let mut properties = golem_common::model::RetryProperties::new();
+                        properties.set(
+                            "error-type",
+                            golem_common::model::PredicateValue::Text("transient".to_string()),
+                        );
+                        self.try_trigger_retry(failure, properties)
+                            .await
+                            .map_err(wasmtime::Error::from_anyhow)?;
+                    }
+                }
+
+                // status-code retry against user-defined policies. Only when:
+                //   - the response is a real headers-received result (not pending)
+                //   - we have a Resource<IncomingResponse> handle in `response`
+                //   - the request is still tracked in `open_http_requests`
+                // Note: we deliberately do NOT gate on `has_background_retry` here.
+                // In v1 background retry handles transport-error retry only, so
+                // status retry must remain available even when the request was
+                // wrapped with background retry.
+                let status_retry_outcome = if let SerializableHttpResponse::HeadersReceived(headers) =
+                    &serializable_response
+                    && let Ok(Some(Ok(Ok(_)))) = &response
+                    && let Some(request_state) = self.state.open_http_requests.get(&handle).cloned()
+                {
+                    let status = headers.status;
+                    let outcome = try_status_code_retry(self, &request_state, status)
+                        .await
+                        .map_err(wasmtime::Error::from_anyhow)?;
+                    Some((status, request_state, outcome))
+                } else {
+                    None
+                };
+
+                match status_retry_outcome {
+                    Some((_status, _request_state, StatusRetryOutcome::NoRetry)) => {
+                        break (serializable_response, for_retry);
+                    }
+                    Some((_status, _request_state, StatusRetryOutcome::Retried(Ok(new_resp)))) => {
+                        // Drop the rejected IncomingResponse resource so it does not
+                        // leak. Use wasi-http's resource drop path (rather than raw
+                        // table().delete) to ensure any host-side teardown runs.
+                        if let Ok(Some(Ok(Ok(rejected)))) = &response {
+                            let rejected_rep = rejected.rep();
+                            let _ = HostIncomingResponse::drop(
+                                &mut self.as_wasi_http_view(),
+                                Resource::<IncomingResponse>::new_own(rejected_rep),
+                            )
+                            .await;
+                        }
+                        let future_res = self
+                            .table()
+                            .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
+                        *future_res = wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(
+                            Ok(Ok(new_resp)),
+                        );
+                        let self2 = Resource::<FutureIncomingResponse>::new_borrow(handle);
+                        response =
+                            HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self2)
+                                .await;
+                        // Fall through to top of loop to re-classify and possibly retry again.
+                        continue;
+                    }
+                    Some((
+                        _status,
+                        request_state,
+                        StatusRetryOutcome::Retried(Err(error_code)),
+                    )) => {
+                        // The status-retry resend itself produced a transport error.
+                        // This error did NOT come through the background-retry task,
+                        // so it must be routed through the standard transient-failure
+                        // retry/trap path regardless of whether the original request
+                        // was background-managed (otherwise a real transport error
+                        // could leak straight to the guest).
+                        if let Ok(Some(Ok(Ok(rejected)))) = &response {
+                            let rejected_rep = rejected.rep();
+                            let _ = HostIncomingResponse::drop(
+                                &mut self.as_wasi_http_view(),
+                                Resource::<IncomingResponse>::new_own(rejected_rep),
+                            )
+                            .await;
+                        }
+                        if classify_http_error_code(&error_code) == HostFailureKind::Transient {
+                            self.state.current_retry_point = request_state.begin_index;
+                            let failure = anyhow::Error::new(ClassifiedHostError {
+                                kind: HostFailureKind::Transient,
+                                message: error_code.to_string(),
+                            });
+                            let mut transient_props =
+                                golem_common::model::RetryContext::http_with_response(
+                                    &request_state.request.method.to_string(),
+                                    &request_state.request.uri,
+                                    None,
+                                    "transient",
+                                );
+                            self.state.enrich_retry_properties(&mut transient_props);
+                            self.try_trigger_retry(failure, transient_props)
+                                .await
+                                .map_err(wasmtime::Error::from_anyhow)?;
+                        }
+                        let future_res = self
+                            .table()
+                            .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
+                        *future_res = wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(
+                            Ok(Err(error_code.clone())),
+                        );
+                        response = Ok(Some(Ok(Err(error_code))));
+                        // Re-classify and (if outer trap path was not taken) expose.
+                        continue;
+                    }
+                    Some((_status, _request_state, StatusRetryOutcome::Exhausted)) => {
+                        // Expose the most-recent rejected response as-is.
+                        break (serializable_response, for_retry);
+                    }
+                    Some((status, request_state, StatusRetryOutcome::FallBackToTrap)) => {
+                        // Escalate to the existing transient-host-failure trap path.
+                        self.state.current_retry_point = request_state.begin_index;
+                        let failure = anyhow::Error::new(ClassifiedHostError {
+                            kind: HostFailureKind::Transient,
+                            message: format!(
+                                "HTTP response status {status} matched user-defined retry policy"
+                            ),
+                        });
+                        let mut properties = golem_common::model::RetryContext::http_with_response(
+                            &request_state.request.method.to_string(),
+                            &request_state.request.uri,
+                            Some(status),
+                            "http-status",
+                        );
+                        self.state.enrich_retry_properties(&mut properties);
+                        self.try_trigger_retry(failure, properties)
+                            .await
+                            .map_err(wasmtime::Error::from_anyhow)?;
+                        // If `try_trigger_retry` did not trap, the outer retry budget
+                        // is also exhausted — expose the response.
+                        break (serializable_response, for_retry);
+                    }
+                    None => {
+                        break (serializable_response, for_retry);
+                    }
+                }
+            };
 
             let is_pending = matches!(serializable_response, SerializableHttpResponse::Pending);
             if let Some(state) = self.state.open_http_requests.get_mut(&handle) {

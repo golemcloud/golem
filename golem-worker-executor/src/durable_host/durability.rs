@@ -203,6 +203,43 @@ impl InFunctionRetryState {
         self.retry_count
     }
 
+    /// Decides whether an in-function retry should happen against a specific named
+    /// policy (skipping the normal resolver).
+    ///
+    /// Use this when the caller has already selected the matching policy and must
+    /// not re-enter the resolver — for example, code paths whose entire behavior
+    /// depends on whether a *user-defined* policy matches (the synthesized default
+    /// must not silently take over). All other semantics — atomic region check,
+    /// retry-state tracking, oplog error entry, retry metric — are identical to
+    /// `decide_retry_with_properties`.
+    pub async fn decide_retry_for_named_policy(
+        &mut self,
+        ctx: &mut (impl InFunctionRetryHost + Sync),
+        function_label: &str,
+        properties: &RetryProperties,
+        named_policy: &NamedRetryPolicy,
+    ) -> AsyncRetryDecision {
+        if ctx.in_atomic_region() {
+            return AsyncRetryDecision::FallBackToTrap;
+        }
+
+        let retry_point = ctx.current_retry_point();
+        let current_state = ctx.current_retry_state_for(retry_point).await;
+        let oplog_retry_count = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
+        let total_attempts = self.retry_count + oplog_retry_count;
+
+        self.apply_policy_step(
+            ctx,
+            function_label,
+            properties,
+            named_policy,
+            current_state.as_ref(),
+            total_attempts,
+            retry_point,
+        )
+        .await
+    }
+
     /// Decides whether an in-function retry should happen based on the current retry budget,
     /// atomic region status, and delay threshold.
     ///
@@ -222,7 +259,6 @@ impl InFunctionRetryState {
         let current_state = ctx.current_retry_state_for(retry_point).await;
         let oplog_retry_count = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
         let total_attempts = self.retry_count + oplog_retry_count;
-        let retry_policy_state: Option<RetryPolicyState>;
 
         let policies = ctx.named_retry_policies().await;
         let named_policy = match NamedRetryPolicy::resolve(&policies, properties) {
@@ -239,34 +275,61 @@ impl InFunctionRetryState {
             }
         };
 
-        let delay =
-            match evaluate_named_policy_step(named_policy, properties, current_state.as_ref()) {
-                Ok((new_state, RetryVerdict::Retry(delay))) => {
-                    retry_policy_state = Some(new_state);
-                    delay
-                }
-                Ok((_new_state, RetryVerdict::GiveUp)) => return AsyncRetryDecision::Exhausted,
-                Ok((_new_state, RetryVerdict::Error(error))) => {
-                    warn!(
-                        function = function_label,
-                        retry_policy = %named_policy.name,
-                        total_attempts,
-                        ?error,
-                        "Semantic retry policy evaluation returned error verdict"
-                    );
-                    return AsyncRetryDecision::Exhausted;
-                }
-                Err(error) => {
-                    warn!(
-                        function = function_label,
-                        retry_policy = %named_policy.name,
-                        total_attempts,
-                        ?error,
-                        "Failed evaluating semantic retry policy"
-                    );
-                    return AsyncRetryDecision::Exhausted;
-                }
-            };
+        self.apply_policy_step(
+            ctx,
+            function_label,
+            properties,
+            named_policy,
+            current_state.as_ref(),
+            total_attempts,
+            retry_point,
+        )
+        .await
+    }
+
+    /// Shared body of the in-function retry decision: evaluates the selected named
+    /// policy against current retry state, updates retry-budget bookkeeping, and
+    /// produces the resulting `AsyncRetryDecision`.
+    #[allow(clippy::too_many_arguments)]
+    async fn apply_policy_step(
+        &mut self,
+        ctx: &mut (impl InFunctionRetryHost + Sync),
+        function_label: &str,
+        properties: &RetryProperties,
+        named_policy: &NamedRetryPolicy,
+        current_state: Option<&RetryPolicyState>,
+        total_attempts: u32,
+        retry_point: OplogIndex,
+    ) -> AsyncRetryDecision {
+        let retry_policy_state: Option<RetryPolicyState>;
+
+        let delay = match evaluate_named_policy_step(named_policy, properties, current_state) {
+            Ok((new_state, RetryVerdict::Retry(delay))) => {
+                retry_policy_state = Some(new_state);
+                delay
+            }
+            Ok((_new_state, RetryVerdict::GiveUp)) => return AsyncRetryDecision::Exhausted,
+            Ok((_new_state, RetryVerdict::Error(error))) => {
+                warn!(
+                    function = function_label,
+                    retry_policy = %named_policy.name,
+                    total_attempts,
+                    ?error,
+                    "Semantic retry policy evaluation returned error verdict"
+                );
+                return AsyncRetryDecision::Exhausted;
+            }
+            Err(error) => {
+                warn!(
+                    function = function_label,
+                    retry_policy = %named_policy.name,
+                    total_attempts,
+                    ?error,
+                    "Failed evaluating semantic retry policy"
+                );
+                return AsyncRetryDecision::Exhausted;
+            }
+        };
 
         let state = ctx.durable_execution_state();
         if delay > state.max_in_function_retry_delay {
@@ -2025,6 +2088,99 @@ mod tests {
             .await
             .expect("should not propagate error");
         assert_eq!(action, InternalRetryResult::Persist);
+    }
+
+    // Test: decide_retry_for_named_policy uses the supplied policy directly,
+    // bypassing the resolver. Even if `named_retry_policies` would have selected a
+    // different (e.g. synthesized default) policy for the same properties,
+    // `decide_retry_for_named_policy` honors the explicit `named_policy`.
+    #[test]
+    async fn decide_retry_for_named_policy_uses_supplied_policy() {
+        let mut ctx = MockDurabilityHost::new();
+        // Resolver-visible policies include only a "would-be-default" that exhausts
+        // immediately. If the helper re-resolved, no retry would happen.
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
+            name: "default".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 0,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+            },
+        }];
+
+        // The explicitly supplied policy permits one retry.
+        let explicit = NamedRetryPolicy {
+            name: "explicit".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 1,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+            },
+        };
+
+        let mut state = InFunctionRetryState::new();
+        let decision = state
+            .decide_retry_for_named_policy(&mut ctx, "test-fn", &RetryProperties::new(), &explicit)
+            .await;
+
+        match decision {
+            AsyncRetryDecision::RetryAfterDelay(_) => {}
+            other => panic!("expected RetryAfterDelay, got {other:?}"),
+        }
+        assert_eq!(ctx.retry_entries_appended, 1);
+        assert_eq!(state.retry_count(), 1);
+    }
+
+    // Test: decide_retry_for_named_policy honors atomic-region as FallBackToTrap.
+    #[test]
+    async fn decide_retry_for_named_policy_falls_back_in_atomic_region() {
+        let mut ctx = MockDurabilityHost::new();
+        ctx.in_atomic_region = true;
+
+        let explicit = NamedRetryPolicy {
+            name: "explicit".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 5,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+            },
+        };
+
+        let mut state = InFunctionRetryState::new();
+        let decision = state
+            .decide_retry_for_named_policy(&mut ctx, "test-fn", &RetryProperties::new(), &explicit)
+            .await;
+
+        assert!(matches!(decision, AsyncRetryDecision::FallBackToTrap));
+        assert_eq!(ctx.retry_entries_appended, 0);
+    }
+
+    // Test: decide_retry_for_named_policy returns Exhausted when the supplied
+    // policy has no remaining attempts.
+    #[test]
+    async fn decide_retry_for_named_policy_exhausted_when_supplied_policy_gives_up() {
+        let mut ctx = MockDurabilityHost::new();
+
+        let explicit = NamedRetryPolicy {
+            name: "explicit".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 0,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+            },
+        };
+
+        let mut state = InFunctionRetryState::new();
+        let decision = state
+            .decide_retry_for_named_policy(&mut ctx, "test-fn", &RetryProperties::new(), &explicit)
+            .await;
+
+        assert!(matches!(decision, AsyncRetryDecision::Exhausted));
+        assert_eq!(ctx.retry_entries_appended, 0);
     }
 
     // Test: is_eligible_for_internal_retry covers all DurableFunctionType variants

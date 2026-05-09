@@ -14,19 +14,12 @@ Add retry policy definitions under `retryPolicyDefaults` in `golem.yaml`, scoped
 ```yaml
 retryPolicyDefaults:
   prod:
-    no-retry-4xx:
-      priority: 20
-      predicate:
-        and:
-          - propGte: { property: "status-code", value: 400 }
-          - propLt: { property: "status-code", value: 500 }
-      policy:
-        never: {}
-
     http-transient:
       priority: 10
       predicate:
-        propIn: { property: "status-code", values: [502, 503, 504] }
+        and:
+          - propEq: { property: "error-type", value: "transient" }
+          - propEq: { property: "uri-scheme", value: "https" }
       policy:
         countBox:
           maxRetries: 5
@@ -94,9 +87,57 @@ Predicates are boolean expressions evaluated against error context properties. C
 
 ### Available Properties
 
-- `status-code` — HTTP response status code
+- `status-code` — HTTP response status code (populated for outgoing HTTP responses)
 - `uri-scheme` — URI scheme (http, https)
+- `method` — HTTP method (e.g. GET, POST)
+- `uri` — full request URI
 - `error-type` — classification of the error
+- `db-type` — database type for RDBMS retry contexts (e.g. `postgres`, `mysql`)
+- `verb` — RDBMS verb (e.g. `execute`, `query`)
+- `pool-key` — RDBMS pool key
+
+### `error-type` values
+
+- `transient` — transient transport failure (e.g. WASI HTTP error code, transient RDBMS error)
+- `http-status` — HTTP response with a status code that matched a `status-code`-keyed policy
+
+### Status-code retries (opt-in)
+
+Outgoing HTTP responses now flow through the retry-policy machinery: when the response arrives,
+its `status-code` is exposed to predicates. **A policy is only considered for status-code retries
+if its predicate (or the predicate inside a nested `FilteredOn`) explicitly references the
+`status-code` property.** Catch-all policies — including the synthesized default and any
+user-defined `Predicate::True` — are intentionally excluded so status-based retries remain
+strictly opt-in.
+
+When a matching policy decides to retry, the rejected response resource is dropped, the request
+body is reconstructed from the oplog, and the request is re-sent.
+
+Eligibility rules (mirror inline transport retry):
+- live execution (not replay/snapshot/`PersistNothing`)
+- request body and trailers are reconstructible
+- the HTTP method is idempotent, or `assume_idempotence` was set on the outgoing request
+- not inside an `atomically(...)` block — in v1 status retries are skipped inside atomic
+  regions; the user-land throw still triggers atomic-region replay, which gives equivalent
+  end-to-end behavior
+
+Example status-code policy:
+
+```yaml
+http-5xx-retry:
+  priority: 20
+  predicate:
+    and:
+      - propIn: { property: "status-code", values: [500, 502, 503, 504] }
+      - propEq: { property: "uri-scheme", value: "https" }
+  policy:
+    countBox:
+      maxRetries: 3
+      inner:
+        exponential:
+          baseDelay: "200ms"
+          factor: 2.0
+```
 
 ## 2. SDK: Build and Apply Retry Policies at Runtime
 
@@ -111,7 +152,7 @@ let policy = NamedPolicy::named(
     Policy::exponential(Duration::from_millis(200), 2.0)
         .clamp(Duration::from_millis(100), Duration::from_secs(5))
         .with_jitter(0.15)
-        .only_when(Predicate::one_of(Props::STATUS_CODE, [502_u16, 503, 504]))
+        .only_when(Predicate::eq(Props::ERROR_TYPE, "transient"))
         .max_retries(5),
 )
 .priority(10)
@@ -159,16 +200,16 @@ Policy::never()
 ### Predicate Builder Methods
 
 ```rust
-// Match specific status codes
-Predicate::one_of(Props::STATUS_CODE, [502_u16, 503, 504])
+// Match transient host-level failures
+Predicate::eq(Props::ERROR_TYPE, "transient")
 
 // Match a property value
 Predicate::eq(Props::URI_SCHEME, "https")
 
 // Combine predicates
 Predicate::and(vec![
-    Predicate::gte(Props::STATUS_CODE, 500_u16),
-    Predicate::lt(Props::STATUS_CODE, 600_u16),
+    Predicate::eq(Props::ERROR_TYPE, "transient"),
+    Predicate::eq(Props::URI_SCHEME, "https"),
 ])
 ```
 
@@ -201,7 +242,7 @@ Retry policies can be managed at runtime without redeployment:
 # Create a new policy
 golem retry-policy create http-transient \
   --priority 10 \
-  --predicate '{ "propIn": { "property": "status-code", "values": [502, 503, 504] } }' \
+  --predicate '{ "and": [{ "propEq": { "property": "error-type", "value": "transient" } }, { "propEq": { "property": "uri-scheme", "value": "https" } }] }' \
   --policy '{ "countBox": { "maxRetries": 5, "inner": { "exponential": { "baseDelay": "200ms", "factor": 2.0 } } } }'
 
 # List all policies in the current environment
