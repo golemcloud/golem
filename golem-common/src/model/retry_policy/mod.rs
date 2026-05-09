@@ -548,9 +548,8 @@ where
     }
 
     match DurationRepr::deserialize(deserializer)? {
-        DurationRepr::Humantime(s) => humantime::parse_duration(&s).map_err(|e| {
-            serde::de::Error::custom(format!("invalid duration string {s:?}: {e}"))
-        }),
+        DurationRepr::Humantime(s) => humantime::parse_duration(&s)
+            .map_err(|e| serde::de::Error::custom(format!("invalid duration string {s:?}: {e}"))),
         DurationRepr::Struct(d) => Ok(d),
     }
 }
@@ -561,8 +560,9 @@ where
 /// through a struct field.
 fn deserialize_duration_value_humantime_or_struct(value: JsonValue) -> Result<Duration, String> {
     match value {
-        JsonValue::String(s) => humantime::parse_duration(&s)
-            .map_err(|e| format!("invalid duration string {s:?}: {e}")),
+        JsonValue::String(s) => {
+            humantime::parse_duration(&s).map_err(|e| format!("invalid duration string {s:?}: {e}"))
+        }
         other => serde_json::from_value::<Duration>(other).map_err(|e| e.to_string()),
     }
 }
@@ -4013,10 +4013,12 @@ mod tests {
         ));
 
         // The lenient resolver skips the status-code policy and selects the trap one.
-        let resolved =
-            NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(&policies, &trap_props)
-                .expect("resolution should succeed")
-                .expect("trap-fallback policy should be selected");
+        let resolved = NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(
+            &policies,
+            &trap_props,
+        )
+        .expect("resolution should succeed")
+        .expect("trap-fallback policy should be selected");
         assert_eq!(resolved.name, "trap-fallback");
 
         // When no policy matches and missing properties are skipped, returns None
@@ -4065,8 +4067,7 @@ mod tests {
         assert_eq!(parsed, RetryPolicy::Periodic(Duration::from_millis(200)));
 
         // Exponential — Duration is a struct field with humantime form.
-        let json =
-            r#"{ "exponential": { "baseDelay": "500ms", "factor": 2.0 } }"#;
+        let json = r#"{ "exponential": { "baseDelay": "500ms", "factor": 2.0 } }"#;
         let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
         assert_eq!(
             parsed,

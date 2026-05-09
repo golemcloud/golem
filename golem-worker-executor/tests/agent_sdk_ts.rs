@@ -16,13 +16,14 @@ use crate::Tracing;
 use axum::Router;
 use axum::extract::State;
 use axum::routing::get;
+use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_common::model::RetryConfig;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{TestDsl, drain_connection};
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -175,6 +176,102 @@ async fn ts_http_status_retry_policy_retries_matching_status(
 
     assert_eq!(result, Value::Bool(true));
     assert_eq!(counter.load(Ordering::SeqCst), 4);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn ts_invocation_events_use_method_display_name(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // Server fails the first request with HTTP 500, succeeds on the 2nd.
+    let (port, _counter) = start_attempt_counter_server(1).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_ts)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("RetryTest", "invocation-events-test");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    let _ = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "withRetryPolicyTest",
+            data_value!("localhost", port as f64),
+        )
+        .await?;
+
+    // Give the broadcast channel a moment to deliver the trailing InvocationFinished event.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    abort_capture.send(()).unwrap();
+    let events = drain_connection(rx).await;
+
+    let invocation_started_functions: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            Some(LogEvent {
+                event: Some(log_event::Event::InvocationStarted(inner)),
+            }) => Some(inner.function.clone()),
+            _ => None,
+        })
+        .collect();
+
+    let invocation_finished_functions: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            Some(LogEvent {
+                event: Some(log_event::Event::InvocationFinished(inner)),
+            }) => Some(inner.function.clone()),
+            _ => None,
+        })
+        .collect();
+
+    tracing::info!(?invocation_started_functions, "captured InvocationStarted");
+    tracing::info!(
+        ?invocation_finished_functions,
+        "captured InvocationFinished"
+    );
+
+    assert!(
+        invocation_started_functions
+            .iter()
+            .any(|f| f == "withRetryPolicyTest"),
+        "expected an InvocationStarted event with function == \"withRetryPolicyTest\", got {invocation_started_functions:?}"
+    );
+    assert!(
+        invocation_finished_functions
+            .iter()
+            .any(|f| f == "withRetryPolicyTest"),
+        "expected an InvocationFinished event with function == \"withRetryPolicyTest\", got {invocation_finished_functions:?}"
+    );
+    assert!(
+        !invocation_started_functions
+            .iter()
+            .any(|f| f.contains("golem:agent/guest")),
+        "no InvocationStarted should report the raw WIT function name, got {invocation_started_functions:?}"
+    );
+    assert!(
+        !invocation_finished_functions
+            .iter()
+            .any(|f| f.contains("golem:agent/guest")),
+        "no InvocationFinished should report the raw WIT function name, got {invocation_finished_functions:?}"
+    );
 
     Ok(())
 }
