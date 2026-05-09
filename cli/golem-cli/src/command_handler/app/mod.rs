@@ -2766,17 +2766,18 @@ fn collect_declared_agent_secret_types(
 }
 
 fn materialize_agent_secret_defaults(
-    raw_default: Option<&WithSource<serde_json::Value>>,
+    raw_default: Option<&WithSource<crate::model::app_raw::JsonObject>>,
     declared_secret_paths: &BTreeSet<Vec<String>>,
 ) -> (Vec<DeploymentAgentSecretDefault>, Vec<Vec<String>>) {
     let mut materialized_defaults = Vec::new();
     let mut unused_paths = Vec::new();
 
     if let Some(raw_default) = raw_default {
+        let root = serde_json::Value::Object(raw_default.value.clone());
         let mut consumed_paths = Vec::new();
 
         for declared_path in declared_secret_paths {
-            if let Some(secret_value) = value_at_path(&raw_default.value, declared_path) {
+            if let Some(secret_value) = value_at_path(&root, declared_path) {
                 materialized_defaults.push(DeploymentAgentSecretDefault {
                     path: AgentSecretPath(declared_path.clone()),
                     secret_value: secret_value.clone(),
@@ -2785,7 +2786,7 @@ fn materialize_agent_secret_defaults(
             }
         }
 
-        unused_paths.extend(collect_unused_leaf_paths(&raw_default.value, |leaf_path| {
+        unused_paths.extend(collect_unused_leaf_paths(&root, |leaf_path| {
             consumed_paths
                 .iter()
                 .any(|consumed_path| leaf_path.starts_with(consumed_path))
