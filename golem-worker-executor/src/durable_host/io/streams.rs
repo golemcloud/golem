@@ -322,7 +322,50 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             .map_err(StreamError::from)?;
 
             let result = if durability.is_live() {
-                let result = HostOutputStream::check_write(self.table(), self_).await;
+                let first_try = HostOutputStream::check_write(self.table(), self_).await;
+
+                // If the peer already closed the request body stream after an
+                // early response, rebuild the streaming request before recording
+                // the failed check-write result.
+                let result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &first_try,
+                )
+                .await
+                {
+                    Ok(u64::MAX)
+                } else if is_http_retryable_stream_error(&first_try) {
+                    match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(
+                        self, rep,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            let self2 = Resource::<OutputStream>::new_borrow(rep);
+                            HostOutputStream::check_write(self.table(), self2).await
+                        }
+                        Ok(false) => first_try,
+                        Err(e) => {
+                            tracing::warn!("Output stream inline retry failed: {e}");
+                            first_try
+                        }
+                    }
+                } else {
+                    first_try
+                };
+                let result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &result,
+                )
+                .await
+                {
+                    Ok(u64::MAX)
+                } else {
+                    result
+                };
+
                 durability
                     .persist(
                         self,
@@ -374,7 +417,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     HostOutputStream::write(self.table(), self_, contents.clone()).await;
 
                 // Attempt inline retry BEFORE persisting so the retried result is what gets recorded
-                let write_result = if is_transient_stream_error(&first_try) {
+                let write_result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &first_try,
+                )
+                .await
+                {
+                    Ok(())
+                } else if is_http_retryable_stream_error(&first_try) {
                     match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(
                         self, rep,
                     )
@@ -392,6 +443,17 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     }
                 } else {
                     first_try
+                };
+                let write_result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &write_result,
+                )
+                .await
+                {
+                    Ok(())
+                } else {
+                    write_result
                 };
 
                 durability
@@ -484,7 +546,14 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 // For HTTP body streams, Closed is also retryable (hyper consumer
                 // died due to connection reset).
                 let mut write_result = first_try;
-                while is_http_retryable_stream_error(&write_result) {
+                while !should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &write_result,
+                )
+                .await
+                    && is_http_retryable_stream_error(&write_result)
+                {
                     match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(
                         self, rep,
                     )
@@ -502,6 +571,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                             break;
                         }
                     }
+                }
+                if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &write_result,
+                )
+                .await
+                {
+                    write_result = Ok(());
                 }
 
                 durability
@@ -553,7 +631,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 let first_try = HostOutputStream::flush(self.table(), self_).await;
 
                 // Attempt inline retry BEFORE persisting so the retried result is what gets recorded
-                let flush_result = if is_transient_stream_error(&first_try) {
+                let flush_result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &first_try,
+                )
+                .await
+                {
+                    Ok(())
+                } else if is_http_retryable_stream_error(&first_try) {
                     match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(
                         self, rep,
                     )
@@ -571,6 +657,17 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     }
                 } else {
                     first_try
+                };
+                let flush_result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &flush_result,
+                )
+                .await
+                {
+                    Ok(())
+                } else {
+                    flush_result
                 };
 
                 durability
@@ -614,7 +711,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 let first_try = HostOutputStream::blocking_flush(self.table(), self_).await;
 
                 // Attempt inline retry BEFORE persisting so the retried result is what gets recorded
-                let flush_result = if is_transient_stream_error(&first_try) {
+                let flush_result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &first_try,
+                )
+                .await
+                {
+                    Ok(())
+                } else if is_http_retryable_stream_error(&first_try) {
                     match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(
                         self, rep,
                     )
@@ -632,6 +737,17 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     }
                 } else {
                     first_try
+                };
+                let flush_result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &flush_result,
+                )
+                .await
+                {
+                    Ok(())
+                } else {
+                    flush_result
                 };
 
                 durability
@@ -699,7 +815,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 let first_try = HostOutputStream::write_zeroes(self.table(), self_, len).await;
 
                 // Attempt inline retry BEFORE persisting so the retried result is what gets recorded
-                let write_result = if is_transient_stream_error(&first_try) {
+                let write_result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &first_try,
+                )
+                .await
+                {
+                    Ok(())
+                } else if is_http_retryable_stream_error(&first_try) {
                     match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(
                         self, rep,
                     )
@@ -717,6 +841,17 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     }
                 } else {
                     first_try
+                };
+                let write_result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &write_result,
+                )
+                .await
+                {
+                    Ok(())
+                } else {
+                    write_result
                 };
 
                 durability
@@ -799,7 +934,15 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
                 // For HTTP body streams, Closed is also retryable (hyper consumer
                 // died due to connection reset).
-                let write_result = if is_http_retryable_stream_error(&first_try) {
+                let write_result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &first_try,
+                )
+                .await
+                {
+                    Ok(())
+                } else if is_http_retryable_stream_error(&first_try) {
                     match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(
                         self, rep,
                     )
@@ -817,6 +960,17 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     }
                 } else {
                     first_try
+                };
+                let write_result = if should_accept_closed_for_pending_status_retry(
+                    self,
+                    state.request_handle,
+                    &write_result,
+                )
+                .await
+                {
+                    Ok(())
+                } else {
+                    write_result
                 };
 
                 durability
@@ -1142,6 +1296,51 @@ fn is_transient_stream_error<T>(result: &Result<T, StreamError>) -> bool {
 /// those are excluded.
 fn is_http_retryable_stream_error<T>(result: &Result<T, StreamError>) -> bool {
     matches!(result, Err(e) if !matches!(e, StreamError::Trap(_)))
+}
+
+async fn should_accept_closed_for_pending_status_retry<Ctx: WorkerCtx, T>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    request_handle: u32,
+    result: &Result<T, StreamError>,
+) -> bool {
+    if has_matched_pending_status_retry(ctx, request_handle, result) {
+        return true;
+    }
+
+    if has_pending_status_retry_decision(ctx, request_handle, result) {
+        tokio::task::yield_now().await;
+        return has_matched_pending_status_retry(ctx, request_handle, result);
+    }
+
+    false
+}
+
+fn has_matched_pending_status_retry<Ctx: WorkerCtx, T>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    request_handle: u32,
+    result: &Result<T, StreamError>,
+) -> bool {
+    has_pending_status_retry_decision(ctx, request_handle, result)
+        && ctx
+            .state
+            .open_http_requests
+            .get(&request_handle)
+            .and_then(|state| state.pending_status_retry_matched.as_ref())
+            .is_some_and(|matched| matched.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+fn has_pending_status_retry_decision<Ctx: WorkerCtx, T>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    request_handle: u32,
+    result: &Result<T, StreamError>,
+) -> bool {
+    is_http_retryable_stream_error(result)
+        && ctx
+            .state
+            .open_http_requests
+            .get(&request_handle)
+            .filter(|state| !state.retry.body_finished && !state.retry.body_closed_without_finish)
+            .is_some_and(|state| state.pending_status_retry_matched.is_some())
 }
 
 async fn blocking_write_and_flush_chunked(

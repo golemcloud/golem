@@ -3574,11 +3574,24 @@ pub(crate) struct HttpRetryEligibility {
     /// Awaiting-response retry requires the body to be fully finished before
     /// retrying.
     pub body_finished: bool,
+    /// Set to true when the outgoing body resource is dropped before
+    /// OutgoingBody::finish() succeeds. Once this happens, the request body is
+    /// not fully replayable.
+    pub body_closed_without_finish: bool,
     /// Set to true when outgoing body stream writes are replayed from oplog
     /// (rather than executed live). When true, the actual body pipe does NOT
     /// contain the replayed bytes, so the request must be rebuilt from oplog
     /// before finishing the body.
     pub replayed_body_writes: bool,
+}
+
+/// Shared state used by the HTTP response future wrapper for requests whose
+/// response can arrive before the outgoing body is finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HttpOutgoingBodyState {
+    Open,
+    Finished,
+    Closed,
 }
 
 /// State associated with ongoing http requests, on top of the underlying wasi-http implementation
@@ -3611,6 +3624,16 @@ pub(crate) struct HttpRequestState {
     pub connect_timeout: std::time::Duration,
     pub first_byte_timeout: std::time::Duration,
     pub between_bytes_timeout: std::time::Duration,
+    /// Notifies a wrapped response future when the outgoing body becomes fully
+    /// replayable, or when it is closed before finish and therefore cannot be
+    /// held back for status-code retry anymore.
+    pub outgoing_body_state: Option<tokio::sync::watch::Sender<HttpOutgoingBodyState>>,
+    /// Set by the pending-status response wrapper when an early response has
+    /// matched an explicit status-code retry policy while the outgoing body is
+    /// still open. Body stream writes may then be accepted into the oplog even
+    /// if the original transport has already closed the body pipe; the fully
+    /// captured body will be used by the subsequent status-code retry.
+    pub pending_status_retry_matched: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Retry eligibility flags tracked during the request lifecycle.
     pub retry: HttpRetryEligibility,
 }

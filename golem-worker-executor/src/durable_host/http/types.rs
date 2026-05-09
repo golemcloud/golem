@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::HttpOutgoingBodyState;
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::http::inline_retry::{
     StatusRetryOutcome, take_http_background_retry_fallback, try_status_code_retry,
@@ -715,47 +716,79 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::outgoing_body", "finish");
         let body_rep = this.rep();
         let has_trailers = trailers.is_some();
-        if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep)
-            && let Some(state) = self.state.open_http_requests.get_mut(&handle)
-        {
-            state.retry.body_finished = true;
-            state.retry.has_outgoing_trailers = has_trailers;
-            state.outgoing_body_rep = None;
-        } else if let Some(request_rep) = self
-            .state
-            .find_pending_request_rep_by_outgoing_body(body_rep)
-        {
-            let retry = self
+        let request_handle = self.state.find_request_handle_by_outgoing_body(body_rep);
+        let pending_status_retry_matched = request_handle
+            .and_then(|handle| self.state.open_http_requests.get(&handle))
+            .and_then(|state| state.pending_status_retry_matched.as_ref())
+            .is_some_and(|matched| matched.load(std::sync::atomic::Ordering::SeqCst));
+        let result = HostOutgoingBody::finish(&mut self.as_wasi_http_view(), this, trailers);
+        let accept_for_pending_status_retry =
+            result.is_err() && !has_trailers && pending_status_retry_matched;
+        if result.is_ok() || accept_for_pending_status_retry {
+            if let Some(handle) = request_handle
+                && let Some(state) = self.state.open_http_requests.get_mut(&handle)
+            {
+                state.retry.body_finished = true;
+                state.retry.has_outgoing_trailers = has_trailers;
+                state.outgoing_body_rep = None;
+                if let Some(body_state) = &state.outgoing_body_state {
+                    let _ = body_state.send(HttpOutgoingBodyState::Finished);
+                }
+                state.outgoing_body_state = None;
+                state.pending_status_retry_matched = None;
+            } else if let Some(request_rep) = self
                 .state
-                .pending_http_retry_eligibility
-                .entry(request_rep)
-                .or_default();
-            retry.body_finished = true;
-            retry.has_outgoing_trailers = has_trailers;
+                .find_pending_request_rep_by_outgoing_body(body_rep)
+            {
+                let retry = self
+                    .state
+                    .pending_http_retry_eligibility
+                    .entry(request_rep)
+                    .or_default();
+                retry.body_finished = true;
+                retry.has_outgoing_trailers = has_trailers;
+            }
         }
-        HostOutgoingBody::finish(&mut self.as_wasi_http_view(), this, trailers)
+        if accept_for_pending_status_retry {
+            Ok(())
+        } else {
+            result
+        }
     }
 
     fn drop(&mut self, rep: Resource<OutgoingBody>) -> wasmtime::Result<()> {
         self.observe_function_call("http::types::outgoing_body", "drop");
         let body_rep = rep.rep();
-        if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep) {
-            if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
-                state.outgoing_body_rep = None;
+        let result = HostOutgoingBody::drop(&mut self.as_wasi_http_view(), rep);
+        if result.is_ok() {
+            if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep) {
+                if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
+                    if !state.retry.body_finished {
+                        state.retry.body_closed_without_finish = true;
+                    }
+                    if !state.retry.body_finished
+                        && let Some(body_state) = &state.outgoing_body_state
+                    {
+                        let _ = body_state.send(HttpOutgoingBodyState::Closed);
+                    }
+                    state.outgoing_body_state = None;
+                    state.pending_status_retry_matched = None;
+                    state.outgoing_body_rep = None;
+                }
+            } else if let Some(request_rep) = self
+                .state
+                .find_pending_request_rep_by_outgoing_body(body_rep)
+            {
+                self.state
+                    .pending_http_retry_eligibility
+                    .remove(&request_rep);
             }
-        } else if let Some(request_rep) = self
-            .state
-            .find_pending_request_rep_by_outgoing_body(body_rep)
-        {
+            // Clean up pending mapping if handle() was never called
             self.state
-                .pending_http_retry_eligibility
-                .remove(&request_rep);
+                .pending_http_outgoing_body_stream
+                .remove(&body_rep);
         }
-        // Clean up pending mapping if handle() was never called
-        self.state
-            .pending_http_outgoing_body_stream
-            .remove(&body_rep);
-        HostOutgoingBody::drop(&mut self.as_wasi_http_view(), rep)
+        result
     }
 }
 

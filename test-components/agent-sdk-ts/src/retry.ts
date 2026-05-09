@@ -17,6 +17,8 @@ import {
   agent,
   NamedPolicy,
   Policy,
+  Predicate,
+  Props,
   atomically,
   withRetryPolicy,
 } from '@golemcloud/golem-ts-sdk';
@@ -38,5 +40,17 @@ class RetryTest extends BaseAgent {
         return true;
       }),
     );
+  }
+
+  async withStatusRetryPolicyTest(host: string, port: number): Promise<boolean> {
+    const policy = NamedPolicy.named(
+      'status-retry-test',
+      Policy.immediate().maxRetries(10),
+    ).appliesWhen(Predicate.eq(Props.statusCode, 500));
+
+    return withRetryPolicy(policy, async () => {
+      const response = await fetch(`http://${host}:${port}/attempt`);
+      return response.ok;
+    });
   }
 }

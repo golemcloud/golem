@@ -13,9 +13,13 @@
 // limitations under the License.
 
 use crate::durable_host::durability::InFunctionRetryHost;
-use crate::durable_host::http::inline_retry::spawn_http_request_with_retry;
+use crate::durable_host::http::inline_retry::{
+    InlineRetryPhase, is_http_inline_retry_eligible, spawn_http_request_with_retry,
+    spawn_http_status_retry_after_body_finish,
+};
 use crate::durable_host::{
-    DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState, HttpRetryEligibility,
+    DurabilityHost, DurableWorkerCtx, HttpOutgoingBodyState, HttpRequestCloseOwner,
+    HttpRequestState, HttpRetryEligibility,
 };
 use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
@@ -27,6 +31,8 @@ use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::bindings::http::outgoing_handler::Host;
 use wasmtime_wasi_http::bindings::http::types;
@@ -61,7 +67,7 @@ pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
     let durable_state = ctx.durable_execution_state();
     let method_eligible =
         durable_state.assume_idempotence || is_method_idempotent(&state.request.method);
-    let body_ready_for_retry = state.retry.body_finished || state.output_stream_rep.is_none();
+    let body_ready_for_retry = state.retry.body_finished || state.outgoing_body_rep.is_none();
 
     let enable_background_retry = durable_state.is_live
         && durable_state.snapshotting_mode.is_none()
@@ -70,6 +76,7 @@ pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
         && method_eligible
         && body_ready_for_retry
         && !state.retry.has_unreconstructable_body
+        && !state.retry.body_closed_without_finish
         && !state.retry.has_outgoing_trailers
         && !state.retry.output_stream_subscribed;
 
@@ -118,6 +125,87 @@ pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
     if let Some(state) = ctx.state.open_http_requests.get_mut(&handle) {
         state.retry.has_background_retry = wrapped_is_pending;
     }
+
+    Ok(())
+}
+
+pub(crate) async fn maybe_enable_http_pending_status_retry<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+) -> HttpResult<()> {
+    let state = match ctx.state.open_http_requests.get(&handle) {
+        Some(state) => state.clone(),
+        None => return Ok(()),
+    };
+
+    if state.retry.body_finished
+        || state.retry.body_closed_without_finish
+        || state.outgoing_body_rep.is_none()
+    {
+        return Ok(());
+    }
+
+    if ctx.in_atomic_region() {
+        return Ok(());
+    }
+
+    if is_http_inline_retry_eligible(
+        &ctx.durable_execution_state(),
+        &state,
+        InlineRetryPhase::WritingRequestBody,
+    )
+    .is_err()
+    {
+        return Ok(());
+    }
+
+    let environment_state_service = ctx.state.environment_state_service.clone();
+    let environment_id = ctx.state.owned_agent_id.environment_id;
+    let default_retry_policy = NamedRetryPolicy::default_from_config(&ctx.state.config.retry);
+    let agent_config_retry_policies = ctx.state.agent_config_retry_policies();
+    let runtime_retry_policy_mutations = ctx.state.runtime_retry_policy_mutations.clone();
+    let assume_idempotence = ctx.state.assume_idempotence;
+    let agent_type = ctx
+        .state
+        .agent_id
+        .as_ref()
+        .map(|agent_id| agent_id.agent_type.to_string());
+
+    let future_res = ctx
+        .table()
+        .get_mut(&Resource::<HostFutureIncomingResponse>::new_borrow(handle))?;
+    let old = std::mem::replace(future_res, HostFutureIncomingResponse::Consumed);
+    let wrapped = if let HostFutureIncomingResponse::Pending(orig_handle) = old {
+        let (body_state_tx, body_state_rx) =
+            tokio::sync::watch::channel(HttpOutgoingBodyState::Open);
+        let pending_status_retry_matched = Arc::new(AtomicBool::new(false));
+        if let Some(state) = ctx.state.open_http_requests.get_mut(&handle) {
+            state.outgoing_body_state = Some(body_state_tx);
+            state.pending_status_retry_matched = Some(pending_status_retry_matched.clone());
+        }
+
+        HostFutureIncomingResponse::pending(spawn_http_status_retry_after_body_finish(
+            orig_handle,
+            state.request.clone(),
+            body_state_rx,
+            pending_status_retry_matched,
+            ctx.public_state.worker(),
+            environment_state_service,
+            environment_id,
+            default_retry_policy,
+            agent_config_retry_policies,
+            runtime_retry_policy_mutations,
+            assume_idempotence,
+            agent_type,
+            ctx.state.config.max_in_function_retry_delay,
+            state.begin_index,
+        ))
+    } else {
+        old
+    };
+
+    *ctx.table()
+        .get_mut(&Resource::<HostFutureIncomingResponse>::new_borrow(handle))? = wrapped;
 
     Ok(())
 }
@@ -295,6 +383,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         connect_timeout,
                         first_byte_timeout,
                         between_bytes_timeout,
+                        outgoing_body_state: None,
+                        pending_status_retry_matched: None,
                         retry: HttpRetryEligibility {
                             has_background_retry: false,
                             ..pending_retry
@@ -302,6 +392,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     },
                 );
 
+                maybe_enable_http_pending_status_retry(self, handle).await?;
                 maybe_enable_http_background_retry(self, handle).await?;
             }
             Err(err) => {

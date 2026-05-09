@@ -137,3 +137,44 @@ async fn ts_with_retry_policy_retries_on_user_land_error(
 
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn ts_http_status_retry_policy_retries_matching_status(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
+
+    let (port, counter) = start_attempt_counter_server(3).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_ts)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("RetryTest", "status-retry-test");
+    executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "withStatusRetryPolicyTest",
+            data_value!("localhost", port as f64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
+
+    assert_eq!(result, Value::Bool(true));
+    assert_eq!(counter.load(Ordering::SeqCst), 4);
+
+    Ok(())
+}
