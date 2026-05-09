@@ -646,10 +646,10 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 
     assert!(outputs.stdout_contains_ordered([
         "  Diffing ",
-        "      @@ -7,13 +7,13 @@",
-        "               sourceLanguage: rust",
+        "      @@ -8,13 +8,13 @@",
         "               mode: Durable",
-        "               snapshotting: disabled",
+        "               snapshotting:",
+        "                 type: Disabled",
         "               files:",
         "      -          /Cargo.toml:",
         "      +          /Cargo2.toml:",
