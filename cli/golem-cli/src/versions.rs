@@ -13,9 +13,9 @@
 // limitations under the License.
 
 pub mod sdk {
-    pub const RUST: &str = "2.0.0";
-    pub const TS: &str = "1.0.0";
-    pub const SCALA: &str = "1.5.0";
+    pub const RUST: &str = "2.1.0";
+    pub const TS: &str = "1.1.0";
+    pub const SCALA: &str = "1.5.1";
     pub const MOONBIT: &str = "0.5.1";
     pub const MANIFEST: &str = "1.5.0";
 
@@ -64,6 +64,6 @@ pub mod scala_dep {
 }
 
 pub mod ai {
-    pub const VERSION: &str = "v0.5.0";
+    pub const VERSION: &str = "v0.5.1";
     pub const SUFFIX: &str = ".wasm";
 }
