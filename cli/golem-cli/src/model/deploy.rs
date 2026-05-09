@@ -118,6 +118,7 @@ pub struct EnvironmentSetupResourceDisplay {
 pub struct EnvironmentSetupPlan {
     pub display: EnvironmentSetupDisplay,
     pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
+    pub skipped_existing_agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
     pub retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
     pub resource_defaults: Vec<ResourceDefinitionCreation>,
 }
@@ -401,7 +402,7 @@ pub fn build_environment_setup_plan(
         .iter()
         .map(|default| {
             let canonical_path = CanonicalAgentSecretPath::from(default.path.clone());
-            let canonical_path_str = canonical_path.0.join(".");
+            let canonical_path_str = canonical_path.to_string();
             Ok((
                 canonical_path_str.clone(),
                 EnvironmentSetupSecretValueDisplay {
@@ -423,7 +424,7 @@ pub fn build_environment_setup_plan(
                 None => serde_json::Value::Null,
             };
             Ok((
-                secret.path.0.join("."),
+                secret.path.to_string(),
                 EnvironmentSetupSecretValueDisplay {
                     secret_type: render_type_for_language(
                         source_language,
@@ -436,15 +437,34 @@ pub fn build_environment_setup_plan(
         })
         .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
+    let secret_defaults_by_path = resolved_agent_secret_defaults
+        .iter()
+        .map(|default| {
+            (
+                CanonicalAgentSecretPath::from(default.path.clone()).to_string(),
+                default,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut to_be_applied_agent_secret_defaults = Vec::new();
+    let mut skipped_existing_agent_secret_defaults = Vec::new();
+
     classify_environment_setup_entries(
         &mut display,
         local_secret_defaults,
         current_secret_values,
         |section, key, value| {
-            section.secret_values.insert(key, value);
+            section.secret_values.insert(key.clone(), value);
+            if let Some(default) = secret_defaults_by_path.get(&key) {
+                to_be_applied_agent_secret_defaults.push((*default).clone());
+            }
         },
         |section, key| {
-            section.secret_values.insert(key);
+            section.secret_values.insert(key.clone());
+            if let Some(default) = secret_defaults_by_path.get(&key) {
+                skipped_existing_agent_secret_defaults.push((*default).clone());
+            }
         },
     );
 
@@ -532,7 +552,8 @@ pub fn build_environment_setup_plan(
 
     Ok(EnvironmentSetupPlan {
         display,
-        agent_secret_defaults: resolved_agent_secret_defaults,
+        agent_secret_defaults: to_be_applied_agent_secret_defaults,
+        skipped_existing_agent_secret_defaults,
         retry_policy_defaults,
         resource_defaults,
     })

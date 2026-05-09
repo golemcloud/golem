@@ -2110,7 +2110,17 @@ impl AppCommandHandler {
                         current_revision: deploy_diff.current_deployment_revision(),
                         expected_deployment_hash: deploy_diff.local_deployment_hash,
                         version: DeploymentVersion("".to_string()), // TODO: atomic
-                        agent_secret_defaults: environment_setup.agent_secret_defaults.clone(),
+                        agent_secret_defaults: if replace_incompatible_agent_secrets {
+                            let mut defaults = environment_setup.agent_secret_defaults.clone();
+                            defaults.extend(
+                                environment_setup
+                                    .skipped_existing_agent_secret_defaults
+                                    .clone(),
+                            );
+                            defaults
+                        } else {
+                            environment_setup.agent_secret_defaults.clone()
+                        },
                         quota_resource_defaults: environment_setup.resource_defaults.clone(),
                         retry_policy_defaults: environment_setup.retry_policy_defaults.clone(),
                         replace_incompatible_agent_secrets,
