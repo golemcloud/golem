@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 03156b17bb7b12c58b4546caef9ecd31d1db43046e8483e021184d5f93458bb3 # shrinks to txt1 = Url(Url { value: "https://example.com/xyz?a=1" }), txt2 = Url(Url { value: "https://example.com/xyz?a=1" })
+cc b00154b9e30259159b602ae7caee4d7363eb91a9d8e72b3f1c4cb5bcd391c6b5 # shrinks to txt1 = Url(Url { value: "https://example.com/xyz?a=1" }), txt2 = Url(Url { value: "https://example.com/xyz?a=1" })

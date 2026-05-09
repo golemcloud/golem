@@ -285,6 +285,7 @@ fn calculate_latest_worker_status(
                 error,
                 retry_from,
                 inside_atomic_region,
+                retry_policy_state,
                 ..
             } = entry
         {
@@ -299,6 +300,7 @@ fn calculate_latest_worker_status(
                 error,
                 count,
                 *inside_atomic_region,
+                retry_policy_state.as_ref(),
             ) {
                 current_status = AgentStatus::Retrying;
             } else {
@@ -1027,7 +1029,12 @@ fn is_worker_error_retriable(
     error: &AgentError,
     retry_count: u32,
     inside_atomic_region: bool,
+    semantic_retry_state: Option<&RetryPolicyState>,
 ) -> bool {
+    if let Some(state) = semantic_retry_state {
+        return !state.is_exhausted();
+    }
+
     match error {
         AgentError::Unknown(_) | AgentError::TransientError(_) => {
             retry_count < retry_config.max_attempts
@@ -1076,14 +1083,14 @@ mod test {
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::host_functions::HostFunctionName;
     use golem_common::model::oplog::{
-        DurableFunctionType, HostRequest, HostRequestNoInput, HostResponse, OplogEntry,
+        AgentError, DurableFunctionType, HostRequest, HostRequestNoInput, HostResponse, OplogEntry,
         OplogPayload, PayloadId, RawOplogPayload, TimestampedUpdateDescription, UpdateDescription,
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
         AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
-        OplogProcessorCheckpointState, OwnedAgentId, RetryConfig, ScanCursor,
+        OplogProcessorCheckpointState, OwnedAgentId, RetryConfig, RetryPolicyState, ScanCursor,
         SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation,
     };
     use golem_common::read_only_lock;
@@ -1131,6 +1138,66 @@ mod test {
             .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
             .filesystem_storage_usage_update(100)
             .filesystem_storage_usage_update(-9999) // larger than total acquired
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn semantic_retry_state_keeps_status_retrying_after_legacy_retry_limit() {
+        let idempotency_key = IdempotencyKey::fresh();
+        let retry_from = OplogIndex::from_u64(2);
+        let retry_state = RetryPolicyState::Counter(56);
+        let test_case = TestCase::builder(0)
+            .agent_invocation_started("a", vec![], idempotency_key.clone())
+            .add(
+                OplogEntry::error(
+                    AgentError::TransientError("transient".to_string()),
+                    retry_from,
+                    false,
+                    Some(retry_state.clone()),
+                ),
+                move |mut status| {
+                    status.status = AgentStatus::Retrying;
+                    status.current_retry_state.insert(retry_from, retry_state);
+                    status
+                        .invocation_results
+                        .insert(idempotency_key, status.oplog_idx);
+                    status
+                },
+            )
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn exhausted_semantic_retry_state_marks_status_failed() {
+        let idempotency_key = IdempotencyKey::fresh();
+        let retry_from = OplogIndex::from_u64(2);
+        let retry_state = RetryPolicyState::AndThen {
+            left: Box::new(RetryPolicyState::Counter(3)),
+            right: Box::new(RetryPolicyState::Terminal),
+            on_right: true,
+        };
+        let test_case = TestCase::builder(0)
+            .agent_invocation_started("a", vec![], idempotency_key.clone())
+            .add(
+                OplogEntry::error(
+                    AgentError::TransientError("transient".to_string()),
+                    retry_from,
+                    false,
+                    Some(retry_state.clone()),
+                ),
+                move |mut status| {
+                    status.status = AgentStatus::Failed;
+                    status.current_retry_state.insert(retry_from, retry_state);
+                    status
+                        .invocation_results
+                        .insert(idempotency_key, status.oplog_idx);
+                    status
+                },
+            )
             .build();
 
         run_test_case(test_case).await;

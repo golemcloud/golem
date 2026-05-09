@@ -907,6 +907,32 @@ impl RetryPolicyState {
             RetryPolicyState::Pair(left, right) => left.retry_count().max(right.retry_count()),
         }
     }
+
+    /// Wraps this state in an exhausted marker while preserving its retry count.
+    pub fn exhausted(self) -> RetryPolicyState {
+        if self.retry_count() == 0 {
+            RetryPolicyState::Terminal
+        } else {
+            RetryPolicyState::AndThen {
+                left: Box::new(self),
+                right: Box::new(RetryPolicyState::Terminal),
+                on_right: true,
+            }
+        }
+    }
+
+    /// Returns whether this state marks a retry policy that has already given up.
+    pub fn is_exhausted(&self) -> bool {
+        matches!(self, RetryPolicyState::Terminal)
+            || matches!(
+                self,
+                RetryPolicyState::AndThen {
+                    right,
+                    on_right: true,
+                    ..
+                } if matches!(**right, RetryPolicyState::Terminal)
+            )
+    }
 }
 
 /// A bag of key-value properties describing the error context (HTTP status, verb, URI, etc.)

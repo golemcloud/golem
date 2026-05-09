@@ -924,7 +924,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     trap = ?trap_type,
                     "Semantic trap retry: exhausted"
                 );
-                (RetryDecision::None, Some(new_state))
+                (RetryDecision::None, Some(new_state.exhausted()))
             }
             Ok((_new_state, RetryVerdict::Error(error))) => {
                 warn!(
@@ -2319,7 +2319,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         ) || matches!(
             latest_status.status,
-            AgentStatus::Failed | AgentStatus::Interrupted | AgentStatus::Exited
+            AgentStatus::Interrupted | AgentStatus::Exited
         ) || decision == RetryDecision::None;
 
         if giving_up {
