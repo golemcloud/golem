@@ -77,6 +77,21 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
+    fn interrupt_decision(kind: InterruptKind) -> RetryDecision {
+        match kind {
+            InterruptKind::Restart | InterruptKind::Jump => RetryDecision::Immediate,
+            _ => RetryDecision::None,
+        }
+    }
+
+    async fn pending_interrupt(&self) -> Option<(InterruptKind, RetryDecision)> {
+        self.interrupt_signal
+            .lock()
+            .await
+            .take()
+            .map(|kind| (kind, Self::interrupt_decision(kind)))
+    }
+
     /// Runs the invocation loop of a running worker, responsible for processing incoming
     /// invocation and update commands one by one.
     ///
@@ -101,6 +116,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             debug!("Invocation queue loop preparing the instance");
 
             let mut final_decision = self.recover_instance_state(&instance, &store).await;
+            let mut final_interrupt = None;
+
+            if let Some((kind, decision)) = self.pending_interrupt().await {
+                debug!(
+                    ?decision,
+                    "Invocation queue loop interrupted after recovery"
+                );
+                if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                    final_interrupt = Some(kind);
+                }
+                final_decision = Some(decision);
+            }
 
             if final_decision.is_none() {
                 let mut inner_loop = InnerInvocationLoop {
@@ -122,6 +149,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
 
             self.suspend_worker(&store).await;
+
+            if let Some(kind) = final_interrupt {
+                store
+                    .lock()
+                    .await
+                    .data_mut()
+                    .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind))
+                    .await;
+            }
 
             match final_decision {
                 None | Some(RetryDecision::None) => {
@@ -163,9 +199,68 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
                 Some(RetryDecision::Delayed(delay)) => {
                     debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
-                    tokio::time::sleep(delay).await;
-                    debug!("Invocation queue loop restarting after delay");
-                    continue;
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => {
+                            debug!("Invocation queue loop restarting after delay");
+                            continue;
+                        }
+                        command = self.receiver.recv() => {
+                            if let Some((kind, decision)) = self.pending_interrupt().await {
+                                debug!(?decision, "Invocation queue loop interrupted during delayed retry");
+                                if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                                    store
+                                        .lock()
+                                        .await
+                                        .data_mut()
+                                        .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind))
+                                        .await;
+                                }
+                                match decision {
+                                    RetryDecision::Immediate => continue,
+                                    RetryDecision::None => {
+                                        self.parent
+                                            .stop_internal(
+                                                true,
+                                                None,
+                                                FinalWorkerState::Unloaded {
+                                                    startup_failure: None,
+                                                },
+                                            )
+                                            .await;
+                                        break;
+                                    }
+                                    RetryDecision::Delayed(_) | RetryDecision::TryStop(_) | RetryDecision::ReacquirePermits => {
+                                        unreachable!("interrupt decisions are only immediate or none")
+                                    }
+                                }
+                            }
+
+                            match command {
+                                Some(WorkerCommand::Unblock) => {
+                                    debug!("Invocation queue loop woke up during delayed retry");
+                                    continue;
+                                }
+                                Some(WorkerCommand::ResumeReplay) => {
+                                    self.resume_replay_pending.store(false, Ordering::Release);
+                                    debug!("Invocation queue loop woke up for resume replay during delayed retry");
+                                    continue;
+                                }
+                                None => {
+                                    debug!("Invocation queue loop command channel closed during delayed retry");
+                                    self.parent
+                                        .stop_internal(
+                                            true,
+                                            None,
+                                            FinalWorkerState::Unloaded {
+                                                startup_failure: None,
+                                            },
+                                        )
+                                        .await;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
                 Some(RetryDecision::ReacquirePermits) => {
                     let delay = get_delay(self.parent.oom_retry_config(), self.oom_retry_count);
