@@ -1018,22 +1018,14 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                             .await;
                         }
                         if classify_http_error_code(&error_code) == HostFailureKind::Transient {
-                            self.state.current_retry_point = request_state.begin_index;
-                            let failure = anyhow::Error::new(ClassifiedHostError {
-                                kind: HostFailureKind::Transient,
-                                message: error_code.to_string(),
-                            });
-                            let mut transient_props =
-                                golem_common::model::RetryContext::http_with_response(
-                                    &request_state.request.method.to_string(),
-                                    &request_state.request.uri,
-                                    None,
-                                    "transient",
-                                );
-                            self.state.enrich_retry_properties(&mut transient_props);
-                            self.try_trigger_retry(failure, transient_props)
-                                .await
-                                .map_err(wasmtime::Error::from_anyhow)?;
+                            escalate_http_to_outer_retry(
+                                self,
+                                &request_state,
+                                None,
+                                "transient",
+                                error_code.to_string(),
+                            )
+                            .await?;
                         }
                         let future_res = self
                             .table()
@@ -1051,23 +1043,16 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     }
                     Some((status, request_state, StatusRetryOutcome::FallBackToTrap)) => {
                         // Escalate to the existing transient-host-failure trap path.
-                        self.state.current_retry_point = request_state.begin_index;
-                        let failure = anyhow::Error::new(ClassifiedHostError {
-                            kind: HostFailureKind::Transient,
-                            message: format!(
-                                "HTTP response status {status} matched user-defined retry policy"
-                            ),
-                        });
-                        let mut properties = golem_common::model::RetryContext::http_with_response(
-                            &request_state.request.method.to_string(),
-                            &request_state.request.uri,
+                        escalate_http_to_outer_retry(
+                            self,
+                            &request_state,
                             Some(status),
                             "http-status",
-                        );
-                        self.state.enrich_retry_properties(&mut properties);
-                        self.try_trigger_retry(failure, properties)
-                            .await
-                            .map_err(wasmtime::Error::from_anyhow)?;
+                            format!(
+                                "HTTP response status {status} matched user-defined retry policy"
+                            ),
+                        )
+                        .await?;
                         // If `try_trigger_retry` did not trap, the outer retry budget
                         // is also exhausted — expose the response.
                         break (serializable_response, for_retry);
@@ -1297,6 +1282,36 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         Ok(())
     }
+}
+
+/// Escalates an HTTP failure that occurred during status-retry handling to the outer
+/// transient host-failure retry/trap path. Used by both:
+/// - `Retried(Err(error_code))`: a status-retry resend itself failed at transport level
+///   (`status = None`, `error_type = "transient"`).
+/// - `FallBackToTrap`: the user-defined status-code policy decided to escalate
+///   (`status = Some(...)`, `error_type = "http-status"`).
+async fn escalate_http_to_outer_retry<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    request_state: &crate::durable_host::HttpRequestState,
+    status: Option<u16>,
+    error_type: &'static str,
+    message: String,
+) -> wasmtime::Result<()> {
+    ctx.state.current_retry_point = request_state.begin_index;
+    let mut properties = golem_common::model::RetryContext::http_with_response(
+        &request_state.request.method.to_string(),
+        &request_state.request.uri,
+        status,
+        error_type,
+    );
+    ctx.state.enrich_retry_properties(&mut properties);
+    let failure = anyhow::Error::new(ClassifiedHostError {
+        kind: HostFailureKind::Transient,
+        message,
+    });
+    ctx.try_trigger_retry(failure, properties)
+        .await
+        .map_err(wasmtime::Error::from_anyhow)
 }
 
 #[allow(clippy::type_complexity)]
