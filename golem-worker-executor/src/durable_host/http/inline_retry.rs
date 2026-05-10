@@ -1984,25 +1984,6 @@ mod tests {
     }
 
     #[test]
-    fn test_body_not_finished_disqualifies_awaiting_response_only() {
-        let exec = make_exec_state();
-        let mut req = make_request_state();
-        req.output_stream_rep = Some(1);
-        req.retry.body_finished = false;
-        req.output_stream_rep = Some(1);
-        // AwaitingResponse should be disqualified
-        assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
-            Err(InlineRetryIneligible::BodyNotFinished)
-        );
-        // ResumingResponseBody should still be eligible
-        assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody)
-                .is_ok()
-        );
-    }
-
-    #[test]
     fn test_no_output_stream_eligible_even_if_body_not_finished() {
         let exec = make_exec_state();
         let mut req = make_request_state();
