@@ -1282,30 +1282,18 @@ struct EndpointChaos {
     hang: bool,
 }
 
-impl EndpointChaos {
-    /// Serialize to the JSON shape the chaos-backend expects on
-    /// `POST /_chaos/<endpoint>` (only fields actually set are sent so we
-    /// don't accidentally clobber server-side defaults).
-    fn to_json(&self) -> String {
-        let mut parts: Vec<String> = Vec::new();
-        if self.failure_rate > 0.0 {
-            parts.push(format!("\"failureRate\":{}", self.failure_rate));
-        }
-        if self.latency_ms > 0 {
-            parts.push(format!("\"latencyMs\":{}", self.latency_ms));
-        }
-        if self.hang {
-            parts.push("\"hang\":true".to_string());
-        }
-        format!("{{{}}}", parts.join(","))
-    }
+#[derive(Clone, Copy)]
+enum Endpoint {
+    Inventory,
+    Payment,
+    Shipment,
+    Email,
 }
 
-/// Per-endpoint *request-arrival* counters. These are bumped as soon as a
-/// request line is parsed off the wire by the in-front TCP relay —
-/// BEFORE the request reaches the chaos-backend's `applyChaos` — so they
-/// include hung, failed, and successful requests alike. Used to detect
-/// the tight replay/retry loops the user observed (where the chaos log
+/// Per-endpoint *request-arrival* counters. Bumped at the very top of
+/// each business handler — BEFORE chaos is applied — so they include
+/// hung, failed, and successful requests alike. Used to detect the
+/// tight replay/retry loops the user observed (where the chaos log
 /// fills with thousands of hits even though the agent never makes
 /// durable progress).
 #[derive(Default)]
@@ -1316,382 +1304,304 @@ struct AttemptCounts {
     email: AtomicUsize,
 }
 
-/// Handle returned from `start_chaos_backend`. Holds:
-///   - `node_port`: the port of the spawned Node.js chaos-backend (used
-///     for chaos config / reset / log queries — i.e. the admin plane).
-///     The executor itself talks to a *different* port, returned
-///     separately, that points at a thin TCP relay so we can count
-///     wire-level request attempts without touching the chaos-backend.
-///   - `attempts`: per-endpoint attempt counters maintained by the relay.
-///   - `_child`: kill-on-drop guard for the spawned `npx tsx server.ts`
-///     process; the last clone of `ChaosBackend` to drop will tear the
-///     server down.
+#[derive(Default)]
+struct ChaosState {
+    inventory: EndpointChaos,
+    payment: EndpointChaos,
+    shipment: EndpointChaos,
+    email: EndpointChaos,
+}
+
+/// Per-endpoint count of *successful* (chaos-passed, body-consumed,
+/// 200-responded) calls, mirroring the original node.js chaos-backend's
+/// `log[name]` length used by the tests' assertions.
+#[derive(Default)]
+struct LogState {
+    inventory: usize,
+    payment: usize,
+    shipment: usize,
+    email: usize,
+}
+
+/// Inner shared state of the embedded chaos-backend. Cloned into both
+/// the test-facing `ChaosBackend` handle and the axum router so config
+/// mutations are visible to in-flight handler invocations.
+#[derive(Clone)]
+struct ChaosInner {
+    attempts: Arc<AttemptCounts>,
+    chaos: Arc<Mutex<ChaosState>>,
+    log: Arc<Mutex<LogState>>,
+}
+
+impl ChaosInner {
+    fn read_chaos(&self, ep: Endpoint) -> EndpointChaos {
+        let g = self.chaos.lock().unwrap();
+        match ep {
+            Endpoint::Inventory => g.inventory.clone(),
+            Endpoint::Payment => g.payment.clone(),
+            Endpoint::Shipment => g.shipment.clone(),
+            Endpoint::Email => g.email.clone(),
+        }
+    }
+
+    fn bump_attempt(&self, ep: Endpoint) {
+        let counter = match ep {
+            Endpoint::Inventory => &self.attempts.inventory,
+            Endpoint::Payment => &self.attempts.payment,
+            Endpoint::Shipment => &self.attempts.shipment,
+            Endpoint::Email => &self.attempts.email,
+        };
+        counter.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn bump_log(&self, ep: Endpoint) {
+        let mut g = self.log.lock().unwrap();
+        let slot = match ep {
+            Endpoint::Inventory => &mut g.inventory,
+            Endpoint::Payment => &mut g.payment,
+            Endpoint::Shipment => &mut g.shipment,
+            Endpoint::Email => &mut g.email,
+        };
+        *slot += 1;
+    }
+}
+
+/// Embedded in-process chaos-backend handle returned by
+/// `start_chaos_backend`. Holds:
+///   - shared chaos config that handlers consult on every request,
+///   - per-endpoint attempt counters,
+///   - per-endpoint successful-call counters,
+///   - an `Arc<ServerShutdown>` that aborts the axum server when the
+///     last `ChaosBackend` clone is dropped (matching the kill-on-drop
+///     semantics of the previous `tokio::process::Child` handle).
 #[derive(Clone)]
 struct ChaosBackend {
-    node_port: u16,
-    attempts: Arc<AttemptCounts>,
-    _child: Arc<NodeChild>,
+    inner: ChaosInner,
+    _shutdown: Arc<ServerShutdown>,
 }
 
-/// Owns the spawned `tsx server.ts` process and kills it on drop. The
-/// outer `Arc<NodeChild>` ensures a single shared Child handle across
-/// `ChaosBackend` clones, dropped exactly once when the last clone goes
-/// out of scope.
-struct NodeChild {
-    child: Mutex<Option<tokio::process::Child>>,
+struct ServerShutdown {
+    abort: tokio::task::AbortHandle,
 }
 
-impl Drop for NodeChild {
+impl Drop for ServerShutdown {
     fn drop(&mut self) {
-        if let Some(mut c) = self.child.lock().unwrap().take() {
-            // `kill_on_drop(true)` was set on spawn; this is belt-and-braces.
-            let _ = c.start_kill();
-        }
+        self.abort.abort();
     }
 }
 
 impl ChaosBackend {
     fn attempts_snapshot(&self) -> (usize, usize, usize, usize) {
+        let a = &self.inner.attempts;
         (
-            self.attempts.inventory.load(Ordering::SeqCst),
-            self.attempts.payment.load(Ordering::SeqCst),
-            self.attempts.shipment.load(Ordering::SeqCst),
-            self.attempts.email.load(Ordering::SeqCst),
+            a.inventory.load(Ordering::SeqCst),
+            a.payment.load(Ordering::SeqCst),
+            a.shipment.load(Ordering::SeqCst),
+            a.email.load(Ordering::SeqCst),
         )
+    }
+
+    fn set(&self, ep: Endpoint, c: EndpointChaos) {
+        let mut g = self.inner.chaos.lock().unwrap();
+        match ep {
+            Endpoint::Inventory => g.inventory = c,
+            Endpoint::Payment => g.payment = c,
+            Endpoint::Shipment => g.shipment = c,
+            Endpoint::Email => g.email = c,
+        }
     }
 
     async fn set_inventory(&self, c: EndpointChaos) {
-        post_chaos(self.node_port, "inventory", &c).await;
+        self.set(Endpoint::Inventory, c);
     }
     async fn set_payment(&self, c: EndpointChaos) {
-        post_chaos(self.node_port, "payment", &c).await;
+        self.set(Endpoint::Payment, c);
     }
     async fn set_shipment(&self, c: EndpointChaos) {
-        post_chaos(self.node_port, "shipment", &c).await;
+        self.set(Endpoint::Shipment, c);
     }
     async fn set_email(&self, c: EndpointChaos) {
-        post_chaos(self.node_port, "email", &c).await;
+        self.set(Endpoint::Email, c);
     }
+
+    /// Mirrors the node.js `/_chaos/reset` route: clears all chaos
+    /// config across every endpoint. Like the original it does NOT clear
+    /// the `log` counters — successful-call counts accumulate for the
+    /// life of the backend.
     async fn reset(&self) {
-        post_admin(self.node_port, "/_chaos/reset", "").await;
+        *self.inner.chaos.lock().unwrap() = ChaosState::default();
     }
 
     /// Returns `(inventory, payment, shipment, email)` *successful* call
-    /// counts as observed by the chaos-backend. The chaos-backend only
-    /// pushes to `log[name]` on the success path, so this counts requests
-    /// that completed without chaos-injected failure or hang. For total
-    /// wire-level attempt counts (including hung/failed requests) use
-    /// `attempts_snapshot`.
+    /// counts as observed by the chaos-backend (chaos-passed, body
+    /// consumed, 200 responded). For total wire-level attempt counts
+    /// (including hung/failed requests) use `attempts_snapshot`.
     async fn snapshot(&self) -> (usize, usize, usize, usize) {
-        let port = self.node_port;
-        let (inv, pay, ship, mail) = tokio::join!(
-            get_log_count(port, "inventory"),
-            get_log_count(port, "payment"),
-            get_log_count(port, "shipment"),
-            get_log_count(port, "email"),
-        );
-        (inv, pay, ship, mail)
+        let g = self.inner.log.lock().unwrap();
+        (g.inventory, g.payment, g.shipment, g.email)
     }
 }
 
-/// HTTP/1.1 `POST` to the chaos-backend admin port. Sends `body` (JSON if
-/// non-empty, otherwise an empty body) and reads the response to
-/// completion. Panics on transport errors so the test fails loudly rather
-/// than silently corrupting later assertions.
-async fn post_admin(node_port: u16, path: &str, body: &str) {
-    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", node_port))
-        .await
-        .unwrap_or_else(|e| panic!("connect to chaos-backend admin port {node_port}: {e}"));
-    let req = format!(
-        "POST {path} HTTP/1.1\r\n\
-         Host: 127.0.0.1\r\n\
-         Content-Type: application/json\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\
-         \r\n\
-         {body}",
-        body.len()
-    );
-    stream
-        .write_all(req.as_bytes())
-        .await
-        .unwrap_or_else(|e| panic!("POST {path} write: {e}"));
-    let mut sink = Vec::new();
-    let _ = stream.read_to_end(&mut sink).await;
+fn rand_id8() -> String {
+    format!("{:08x}", rand::random::<u32>())
 }
 
-async fn post_chaos(node_port: u16, endpoint: &str, c: &EndpointChaos) {
-    let path = format!("/_chaos/{endpoint}");
-    post_admin(node_port, &path, &c.to_json()).await;
-}
+/// Per-endpoint business handler. Mirrors the node.js chaos-backend's
+/// `applyChaos` semantics exactly:
+///   - bump the wire-level attempt counter first (matches the previous
+///     TCP-relay sniffing that incremented before the request reached
+///     the server),
+///   - apply latency,
+///   - if `hang`, never respond and never consume the request body,
+///   - if a synthetic failure fires, return 500 *without* consuming the
+///     request body (matches the node.js `send(res, 500, ...); return false`
+///     wire shape that the previous TCP relay was preserving),
+///   - otherwise read the body, bump the success counter, return a 200
+///     response shaped like the original handler.
+async fn business_handler(
+    state: ChaosInner,
+    ep: Endpoint,
+    req: axum::http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    state.bump_attempt(ep);
 
-/// Issue `GET /_log/<endpoint>` against the chaos-backend admin port and
-/// return the number of successful-call records the backend has logged
-/// for that endpoint. Each log entry is a JSON object containing the
-/// `"in":` key, so we count those occurrences in the JSON response body.
-async fn get_log_count(node_port: u16, endpoint: &str) -> usize {
-    let mut stream = match tokio::net::TcpStream::connect(("127.0.0.1", node_port)).await {
-        Ok(s) => s,
-        Err(_) => return 0,
+    let cfg = state.read_chaos(ep);
+
+    if cfg.latency_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(cfg.latency_ms)).await;
+    }
+
+    if cfg.hang {
+        // Never respond — mirrors node.js handler returning false from
+        // `applyChaos` and not calling `res.end()`.
+        std::future::pending::<()>().await;
+        unreachable!();
+    }
+
+    if cfg.failure_rate > 0.0 && rand::random::<f64>() < cfg.failure_rate {
+        return chaos_failure_response();
+    }
+
+    let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
+        Ok(b) => b,
+        Err(_) => return chaos_failure_response(),
     };
-    let req = format!(
-        "GET /_log/{endpoint} HTTP/1.1\r\n\
-         Host: 127.0.0.1\r\n\
-         Connection: close\r\n\
-         \r\n"
-    );
-    if stream.write_all(req.as_bytes()).await.is_err() {
-        return 0;
-    }
-    let mut buf = Vec::new();
-    if stream.read_to_end(&mut buf).await.is_err() {
-        return 0;
-    }
-    let s = match std::str::from_utf8(&buf) {
-        Ok(s) => s,
-        Err(_) => return 0,
+    let body_json: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .unwrap_or(serde_json::Value::Object(Default::default()));
+
+    state.bump_log(ep);
+
+    let order_id = body_json
+        .get("orderId")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let id = rand_id8();
+    let resp_body = match ep {
+        Endpoint::Inventory => serde_json::json!({
+            "reservationId": format!("res_{id}"),
+            "orderId": order_id,
+        }),
+        Endpoint::Payment => {
+            let amount = body_json
+                .get("amount")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let currency = body_json
+                .get("currency")
+                .cloned()
+                .unwrap_or_else(|| serde_json::Value::String("USD".to_string()));
+            serde_json::json!({
+                "paymentId": format!("pay_{id}"),
+                "orderId": order_id,
+                "amount": amount,
+                "currency": currency,
+            })
+        }
+        Endpoint::Shipment => {
+            let tracking = format!("1Z{:012X}", rand::random::<u64>() & 0x0000_FFFF_FFFF_FFFFu64);
+            serde_json::json!({
+                "shipmentId": format!("shp_{id}"),
+                "trackingNumber": tracking,
+                "orderId": order_id,
+            })
+        }
+        Endpoint::Email => {
+            let to = body_json
+                .get("to")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "messageId": format!("msg_{id}"),
+                "to": to,
+            })
+        }
     };
-    let body_start = s.find("\r\n\r\n").map(|i| i + 4).unwrap_or(s.len());
-    let body = &s[body_start..];
-    body.matches("\"in\":").count()
+
+    axum::response::Response::builder()
+        .status(200)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(resp_body.to_string()))
+        .unwrap()
 }
 
-/// Resolve the chaos-backend project directory. Defaults to
-/// `~/projects/craft/chaos-backend` (the user's craft project). Override
-/// with `CHAOS_BACKEND_DIR` if the project lives elsewhere.
-fn chaos_backend_dir() -> std::path::PathBuf {
-    if let Ok(v) = std::env::var("CHAOS_BACKEND_DIR") {
-        return std::path::PathBuf::from(v);
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    std::path::PathBuf::from(home).join("projects/craft/chaos-backend")
+fn chaos_failure_response() -> axum::response::Response {
+    axum::response::Response::builder()
+        .status(500)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            r#"{"error":"chaos: synthetic failure"}"#,
+        ))
+        .unwrap()
 }
 
-/// Reserve an ephemeral TCP port by binding-then-immediately-releasing
-/// a listener on `127.0.0.1:0`. The brief race window between release and
-/// the spawned Node process re-binding the same port is an acceptable
-/// flake-source on a developer workstation.
-async fn reserve_ephemeral_port() -> u16 {
+/// Spawn an embedded in-process axum chaos-backend on an ephemeral port.
+///
+/// Returns `(port, ChaosBackend)`. The caller hands `port` to the agent
+/// under test (so it talks to a real HTTP server at the wire level) and
+/// uses the `ChaosBackend` handle to mutate chaos config (`set_*` /
+/// `reset`) and read counts (`snapshot` / `attempts_snapshot`). The
+/// embedded server is aborted when the last `ChaosBackend` clone is
+/// dropped, mirroring the kill-on-drop semantics of the previous
+/// `npx tsx server.ts` child process.
+async fn start_chaos_backend() -> (u16, ChaosBackend) {
+    let inner = ChaosInner {
+        attempts: Arc::new(AttemptCounts::default()),
+        chaos: Arc::new(Mutex::new(ChaosState::default())),
+        log: Arc::new(Mutex::new(LogState::default())),
+    };
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    port
-}
 
-/// Probe whether the chaos-backend is up by issuing `GET /_chaos` and
-/// looking for an HTTP/1.1 200 response.
-async fn probe_chaos_backend(port: u16) -> bool {
-    let mut stream = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    if stream
-        .write_all(
-            b"GET /_chaos HTTP/1.1\r\n\
-              Host: 127.0.0.1\r\n\
-              Connection: close\r\n\r\n",
-        )
-        .await
-        .is_err()
-    {
-        return false;
-    }
-    let mut buf = [0u8; 256];
-    matches!(
-        stream.read(&mut buf).await,
-        Ok(n) if n > 0 && buf[..n].starts_with(b"HTTP/1.1 200")
-    )
-}
-
-/// Sniff a chunk of executor→backend bytes for HTTP request lines that
-/// match one of the four chaos-backend POST endpoints, bumping the
-/// corresponding attempt counter for each match. `carry` holds bytes
-/// that may straddle a read boundary so we don't miss a pattern split
-/// across two reads.
-fn sniff_request_lines(buf: &[u8], carry: &mut Vec<u8>, attempts: &AttemptCounts) {
-    let patterns: [(&[u8], &AtomicUsize); 4] = [
-        (b"POST /inventory/reserve ", &attempts.inventory),
-        (b"POST /payment/charge ", &attempts.payment),
-        (b"POST /shipment/create ", &attempts.shipment),
-        (b"POST /email/send ", &attempts.email),
-    ];
-    let max_pat = patterns.iter().map(|(p, _)| p.len()).max().unwrap_or(0);
-    carry.extend_from_slice(buf);
-    let mut i = 0;
-    while i < carry.len() {
-        let slice = &carry[i..];
-        let mut hit = false;
-        for (pat, counter) in &patterns {
-            if slice.starts_with(pat) {
-                counter.fetch_add(1, Ordering::SeqCst);
-                i += pat.len();
-                hit = true;
-                break;
-            }
+    let make_route = |ep: Endpoint| {
+        let s = inner.clone();
+        move |req: axum::http::Request<axum::body::Body>| {
+            let s = s.clone();
+            async move { business_handler(s, ep, req).await }
         }
-        if !hit {
-            // If the remaining slice is shorter than the longest pattern
-            // we may have a partial match — keep it for the next call.
-            if slice.len() < max_pat {
-                break;
-            }
-            i += 1;
-        }
-    }
-    carry.drain(..i);
-    // Defensive cap: should never actually grow beyond max_pat, but
-    // guards against pathological input.
-    if carry.len() > 64 * 1024 {
-        let drop_n = carry.len() - max_pat;
-        carry.drain(..drop_n);
-    }
-}
-
-/// Pump bytes between two TCP halves. On every read from the executor
-/// side, sniff the bytes for chaos-backend POST request lines and bump
-/// the attempt counters. The relay is otherwise a transparent
-/// byte-for-byte forwarder so the wire-level semantics of the real
-/// Node.js chaos-backend (e.g. responding 500 *without* draining the
-/// request body) are preserved end-to-end.
-async fn run_relay_connection(
-    client: tokio::net::TcpStream,
-    upstream: tokio::net::TcpStream,
-    attempts: Arc<AttemptCounts>,
-) {
-    let (mut client_r, mut client_w) = client.into_split();
-    let (mut up_r, mut up_w) = upstream.into_split();
-
-    let attempts_for_up = attempts.clone();
-    let to_up = async move {
-        let mut buf = [0u8; 8192];
-        let mut carry: Vec<u8> = Vec::new();
-        loop {
-            match client_r.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    sniff_request_lines(&buf[..n], &mut carry, &attempts_for_up);
-                    if up_w.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-        let _ = up_w.shutdown().await;
     };
 
-    let to_client = async move {
-        let mut buf = [0u8; 8192];
-        loop {
-            match up_r.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if client_w.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-        let _ = client_w.shutdown().await;
-    };
+    let app = Router::new()
+        .route("/inventory/reserve", post(make_route(Endpoint::Inventory)))
+        .route("/payment/charge", post(make_route(Endpoint::Payment)))
+        .route("/shipment/create", post(make_route(Endpoint::Shipment)))
+        .route("/email/send", post(make_route(Endpoint::Email)));
 
-    let _ = tokio::join!(to_up, to_client);
-}
-
-/// Spawn the real Node.js `chaos-backend/server.ts` from the user's
-/// craft project on an ephemeral port, then a small Rust TCP relay on a
-/// *separate* ephemeral port that 1:1 forwards bytes to the Node server
-/// while sniffing executor→backend request lines for attempt counting.
-///
-/// Returns `(relay_port, ChaosBackend)`. The caller should hand
-/// `relay_port` to the agent under test (so it sees a real Node backend
-/// at the wire level) and use the `ChaosBackend` handle to mutate chaos
-/// config (`set_*` / `reset`) and read counts (`snapshot` /
-/// `attempts_snapshot`). The Node process is killed automatically when
-/// the last clone of `ChaosBackend` is dropped.
-async fn start_chaos_backend() -> (u16, ChaosBackend) {
-    let dir = chaos_backend_dir();
-    assert!(
-        dir.join("server.ts").exists(),
-        "chaos-backend server.ts not found at {} \
-         (set CHAOS_BACKEND_DIR if it lives elsewhere)",
-        dir.display()
-    );
-
-    let node_port = reserve_ephemeral_port().await;
-
-    // Spawn `npx tsx server.ts` with PORT=<node_port>. We pipe stdout to
-    // the parent so the colored chaos-log lines show up in the test
-    // output (helpful for diagnosing tight retry loops at a glance).
-    let mut cmd = tokio::process::Command::new("npx");
-    cmd.arg("tsx")
-        .arg("server.ts")
-        .current_dir(&dir)
-        .env("PORT", node_port.to_string())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .kill_on_drop(true);
-    let child = cmd.spawn().unwrap_or_else(|e| {
-        panic!(
-            "failed to spawn `npx tsx server.ts` from {}: {e}",
-            dir.display()
-        )
-    });
-
-    // Wait until the chaos-backend is actually serving.
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        if probe_chaos_backend(node_port).await {
-            break;
-        }
-        if std::time::Instant::now() > deadline {
-            panic!("chaos-backend on port {node_port} did not become ready within 20s");
-        }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    }
-    tracing::info!(node_port, "chaos-backend ready");
-
-    let attempts = Arc::new(AttemptCounts::default());
-
-    // Spawn the byte-relay on its own ephemeral port. The executor will
-    // talk to *this* port; the relay forwards every byte 1:1 to Node
-    // while counting attempt request lines.
-    let relay_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let relay_port = relay_listener.local_addr().unwrap().port();
-    let attempts_for_relay = attempts.clone();
-    tokio::spawn(
+    let handle = tokio::spawn(
         async move {
-            loop {
-                let (client, _addr) = match relay_listener.accept().await {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                let upstream = match tokio::net::TcpStream::connect(("127.0.0.1", node_port)).await
-                {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::warn!(?e, "chaos-relay: failed to connect upstream");
-                        continue;
-                    }
-                };
-                let attempts_for_conn = attempts_for_relay.clone();
-                tokio::spawn(async move {
-                    run_relay_connection(client, upstream, attempts_for_conn).await;
-                });
-            }
+            let _ = axum::serve(listener, app).await;
         }
         .in_current_span(),
     );
+    let abort = handle.abort_handle();
+
+    tracing::info!(port, "embedded chaos-backend ready");
 
     let backend = ChaosBackend {
-        node_port,
-        attempts,
-        _child: Arc::new(NodeChild {
-            child: Mutex::new(Some(child)),
-        }),
+        inner,
+        _shutdown: Arc::new(ServerShutdown { abort }),
     };
-
-    (relay_port, backend)
+    (port, backend)
 }
 
 /// Common executor overrides for the four V2 scenarios:
