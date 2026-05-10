@@ -690,9 +690,17 @@
         # test framework launches. Run from the workspace root before tests.
         mkRuntimeRoot = ''
           mkdir -p ./test-components ./target/debug
+          # Copy wasms (not symlink). `tokio::fs::copy` in the test
+          # framework's `component_writer` preserves source mode; if the
+          # source is a /nix/store symlink target (mode 0444), the
+          # framework's working copy ends up read-only, and the negative
+          # tests that rewrite the component bytes (e.g.
+          # `trying_to_use_a_wasm_that_wasmtime_cannot_load_*`) fail with
+          # EACCES. `install -m 0644` gives every staged wasm a writable
+          # mode bit downstream copies can inherit.
           for wasm in ${test-components-rust}/test-components/*.wasm \
                       ${test-components-ts}/test-components/*.wasm; do
-            [ -e "$wasm" ] && ln -sf "$wasm" "./test-components/$(basename "$wasm")"
+            [ -e "$wasm" ] && install -m 0644 "$wasm" "./test-components/$(basename "$wasm")"
           done
           for bin in ${golem-services}/target/debug/*; do
             dst="./target/debug/$(basename "$bin")"
@@ -722,13 +730,19 @@
             export HOME="$TMPDIR/home"
             export XDG_CACHE_HOME="$TMPDIR/cache"
             mkdir -p "$HOME" "$XDG_CACHE_HOME"
-            # `wasi::ip_address_resolve` exercises real DNS through wasi-net;
-            # the Nix sandbox blocks all networking, so the test sees
-            # `name-unresolvable` and panics. Skip it specifically — the
-            # behavior under test (live DNS) can't be reproduced offline.
+            # Skip tests that depend on external services the sandbox can't
+            # provide:
+            #   - `ip_address_resolve` exercises live DNS via wasi-net;
+            #     sandbox has no network.
+            #   - `rdbms` test_dep is `DockerMysqlRdb::new()`, which talks
+            #     to `/var/run/docker.sock` to spawn a MySQL testcontainer.
+            #     A panic in dep-init corrupts test-r's worker pool and
+            #     cascades into unrelated tests, so the safest move is to
+            #     filter the suite out entirely.
             cargo test --locked -p golem-worker-executor --test integration \
               -- ${tag} --report-time --nocapture \
-              --skip ip_address_resolve
+              --skip ip_address_resolve \
+              --skip rdbms
           '';
           installPhaseCommand = ''
             mkdir -p $out
