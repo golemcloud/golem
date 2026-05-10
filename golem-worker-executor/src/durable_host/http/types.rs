@@ -719,8 +719,13 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         let request_handle = self.state.find_request_handle_by_outgoing_body(body_rep);
         let pending_status_retry_matched = request_handle
             .and_then(|handle| self.state.open_http_requests.get(&handle))
-            .and_then(|state| state.pending_status_retry_matched.as_ref())
-            .is_some_and(|matched| matched.load(std::sync::atomic::Ordering::SeqCst));
+            .and_then(|state| state.pending_status_retry_decision.as_ref())
+            .is_some_and(|rx| {
+                matches!(
+                    *rx.borrow(),
+                    crate::durable_host::PendingStatusRetryDecision::Matched
+                )
+            });
         let result = HostOutgoingBody::finish(&mut self.as_wasi_http_view(), this, trailers);
         let accept_for_pending_status_retry =
             result.is_err() && !has_trailers && pending_status_retry_matched;
@@ -735,7 +740,7 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
                     let _ = body_state.send(HttpOutgoingBodyState::Finished);
                 }
                 state.outgoing_body_state = None;
-                state.pending_status_retry_matched = None;
+                state.pending_status_retry_decision = None;
             } else if let Some(request_rep) = self
                 .state
                 .find_pending_request_rep_by_outgoing_body(body_rep)
@@ -772,7 +777,7 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
                         let _ = body_state.send(HttpOutgoingBodyState::Closed);
                     }
                     state.outgoing_body_state = None;
-                    state.pending_status_retry_matched = None;
+                    state.pending_status_retry_decision = None;
                     state.outgoing_body_rep = None;
                 }
             } else if let Some(request_rep) = self

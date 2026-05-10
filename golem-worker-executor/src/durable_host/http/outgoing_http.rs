@@ -19,7 +19,7 @@ use crate::durable_host::http::inline_retry::{
 };
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpOutgoingBodyState, HttpRequestCloseOwner,
-    HttpRequestState, HttpRetryEligibility,
+    HttpRequestState, HttpRetryEligibility, PendingStatusRetryDecision,
 };
 use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
@@ -31,8 +31,6 @@ use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::bindings::http::outgoing_handler::Host;
 use wasmtime_wasi_http::bindings::http::types;
@@ -178,17 +176,18 @@ pub(crate) async fn maybe_enable_http_pending_status_retry<Ctx: WorkerCtx>(
     let wrapped = if let HostFutureIncomingResponse::Pending(orig_handle) = old {
         let (body_state_tx, body_state_rx) =
             tokio::sync::watch::channel(HttpOutgoingBodyState::Open);
-        let pending_status_retry_matched = Arc::new(AtomicBool::new(false));
+        let (decision_tx, decision_rx) =
+            tokio::sync::watch::channel(PendingStatusRetryDecision::Pending);
         if let Some(state) = ctx.state.open_http_requests.get_mut(&handle) {
             state.outgoing_body_state = Some(body_state_tx);
-            state.pending_status_retry_matched = Some(pending_status_retry_matched.clone());
+            state.pending_status_retry_decision = Some(decision_rx);
         }
 
         HostFutureIncomingResponse::pending(spawn_http_status_retry_after_body_finish(
             orig_handle,
             state.request.clone(),
             body_state_rx,
-            pending_status_retry_matched,
+            decision_tx,
             ctx.public_state.worker(),
             environment_state_service,
             environment_id,
@@ -384,7 +383,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         first_byte_timeout,
                         between_bytes_timeout,
                         outgoing_body_state: None,
-                        pending_status_retry_matched: None,
+                        pending_status_retry_decision: None,
                         retry: HttpRetryEligibility {
                             has_background_retry: false,
                             ..pending_retry

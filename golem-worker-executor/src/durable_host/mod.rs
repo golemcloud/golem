@@ -3602,6 +3602,23 @@ pub(crate) enum HttpOutgoingBodyState {
     Closed,
 }
 
+/// Decision computed by the pending-status response wrapper task after the
+/// first response arrives early (before the outgoing body is finished).
+///
+/// The wrapper task starts in [`PendingStatusRetryDecision::Pending`] and
+/// transitions exactly once to either [`PendingStatusRetryDecision::Matched`]
+/// (an explicit `status-code` retry policy applies to the early response) or
+/// [`PendingStatusRetryDecision::NotMatched`] (no policy applies, so the
+/// response should be exposed normally). Consumers of the receiving end
+/// (`io::streams` write/flush paths) deterministically wait for the
+/// transition out of `Pending` instead of relying on cooperative scheduling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingStatusRetryDecision {
+    Pending,
+    Matched,
+    NotMatched,
+}
+
 /// State associated with ongoing http requests, on top of the underlying wasi-http implementation
 #[derive(Debug, Clone)]
 pub(crate) struct HttpRequestState {
@@ -3636,12 +3653,17 @@ pub(crate) struct HttpRequestState {
     /// replayable, or when it is closed before finish and therefore cannot be
     /// held back for status-code retry anymore.
     pub outgoing_body_state: Option<tokio::sync::watch::Sender<HttpOutgoingBodyState>>,
-    /// Set by the pending-status response wrapper when an early response has
-    /// matched an explicit status-code retry policy while the outgoing body is
-    /// still open. Body stream writes may then be accepted into the oplog even
-    /// if the original transport has already closed the body pipe; the fully
-    /// captured body will be used by the subsequent status-code retry.
-    pub pending_status_retry_matched: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Watched by the pending-status response wrapper to publish whether an
+    /// early response (received while the outgoing body is still open) has
+    /// matched an explicit status-code retry policy. When the watch transitions
+    /// to [`PendingStatusRetryDecision::Matched`], body stream writes may be
+    /// accepted into the oplog even if the original transport has already
+    /// closed the body pipe; the fully captured body will be used by the
+    /// subsequent status-code retry. The decision is published exactly once,
+    /// deterministically, so write/flush paths can `wait_for` it instead of
+    /// polling and relying on scheduler yields.
+    pub pending_status_retry_decision:
+        Option<tokio::sync::watch::Receiver<PendingStatusRetryDecision>>,
     /// Retry eligibility flags tracked during the request lifecycle.
     pub retry: HttpRetryEligibility,
 }

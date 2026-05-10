@@ -33,7 +33,7 @@ use crate::durable_host::durability::{
     InFunctionRetryHost, InFunctionRetryState,
 };
 use crate::durable_host::http::types::classify_http_error_code;
-use crate::durable_host::{HttpOutgoingBodyState, HttpRequestState};
+use crate::durable_host::{HttpOutgoingBodyState, HttpRequestState, PendingStatusRetryDecision};
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::{HasOplog, HasWorker};
@@ -50,7 +50,6 @@ use http::{HeaderName, HeaderValue};
 use http_body_util::BodyExt;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing::Instrument;
 use wasmtime_wasi::OutputStream;
@@ -652,7 +651,7 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
     original_handle: FutureIncomingResponseHandle,
     request: HostRequestHttpRequest,
     mut body_state: tokio::sync::watch::Receiver<HttpOutgoingBodyState>,
-    pending_status_retry_matched: Arc<AtomicBool>,
+    pending_status_retry_decision: tokio::sync::watch::Sender<PendingStatusRetryDecision>,
     worker: Arc<crate::worker::Worker<Ctx>>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     environment_id: EnvironmentId,
@@ -668,10 +667,15 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
         async move {
             let result = original_handle.await;
             let Ok(Ok(response)) = result else {
+                // No response to evaluate against — publish a definitive non-match
+                // so any consumer waiting on the decision wakes up immediately
+                // (rather than waiting on the sender drop).
+                let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::NotMatched);
                 return result;
             };
 
             if *body_state.borrow() != HttpOutgoingBodyState::Open {
+                let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::NotMatched);
                 return Ok(Ok(response));
             }
 
@@ -709,7 +713,12 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
             let policies = task_ctx.named_retry_policies().await;
             match resolve_matching_status_retry_policy(policies, &properties) {
                 Ok(Some(matched)) => {
-                    pending_status_retry_matched.store(true, Ordering::SeqCst);
+                    // Publish the decision *before* waiting for the body to finish.
+                    // Stream write paths can now deterministically observe `Matched`
+                    // via `watch::Receiver::wait_for(...)` instead of polling and
+                    // hoping a single `yield_now()` is enough.
+                    let _ = pending_status_retry_decision
+                        .send(PendingStatusRetryDecision::Matched);
                     tracing::debug!(
                         policy = %matched.name,
                         status,
@@ -732,8 +741,13 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
                         );
                     }
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    let _ = pending_status_retry_decision
+                        .send(PendingStatusRetryDecision::NotMatched);
+                }
                 Err(err) => {
+                    let _ = pending_status_retry_decision
+                        .send(PendingStatusRetryDecision::NotMatched);
                     tracing::warn!(
                         ?err,
                         status,
@@ -1850,7 +1864,7 @@ mod tests {
             first_byte_timeout: Duration::from_secs(5),
             between_bytes_timeout: Duration::from_secs(5),
             outgoing_body_state: None,
-            pending_status_retry_matched: None,
+            pending_status_retry_decision: None,
             retry: HttpRetryEligibility {
                 body_finished: true,
                 ..Default::default()
