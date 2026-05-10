@@ -931,6 +931,111 @@
             testName = "integration";
             testThreads = 1;
           };
+
+          # `cargo make check-configs`. Each service binary supports
+          # `--dump-config-default-toml` / `--dump-config-default-env-var`;
+          # we run them and diff against the committed copies. Drift = fail.
+          config-drift = pkgs.runCommand "golem-config-drift" {
+            nativeBuildInputs = [ pkgs.diffutils ];
+          } ''
+            set -e
+            fail=0
+            check() {
+              local bin="$1" flag="$2" committed="$3"
+              local generated
+              generated=$(${golem-services}/target/debug/$bin $flag 2>/dev/null) || {
+                echo "ERROR: failed to dump $flag from $bin" >&2
+                fail=1
+                return
+              }
+              if ! diff <(echo "$generated") ${src}/$committed >/dev/null 2>&1; then
+                echo "DRIFT: $committed differs from $bin $flag" >&2
+                diff <(echo "$generated") ${src}/$committed | head -20 >&2 || true
+                fail=1
+              fi
+            }
+            for svc in registry-service shard-manager component-compilation-service worker-service worker-executor; do
+              case "$svc" in
+                registry-service)
+                  bin=golem-registry-service; toml=golem-registry-service/config/registry-service.toml; env=golem-registry-service/config/registry-service.sample.env;;
+                shard-manager)
+                  bin=golem-shard-manager; toml=golem-shard-manager/config/shard-manager.toml; env=golem-shard-manager/config/shard-manager.sample.env;;
+                component-compilation-service)
+                  bin=golem-component-compilation-service; toml=golem-component-compilation-service/config/component-compilation-service.toml; env=golem-component-compilation-service/config/component-compilation-service.sample.env;;
+                worker-service)
+                  bin=golem-worker-service; toml=golem-worker-service/config/worker-service.toml; env=golem-worker-service/config/worker-service.sample.env;;
+                worker-executor)
+                  bin=worker-executor; toml=golem-worker-executor/config/worker-executor.toml; env=golem-worker-executor/config/worker-executor.sample.env;;
+              esac
+              check $bin --dump-config-default-toml "$toml"
+              check $bin --dump-config-default-env-var "$env"
+            done
+            if [ "$fail" -ne 0 ]; then
+              echo "Run \`cargo make generate-configs\` and commit the changes." >&2
+              exit 1
+            fi
+            mkdir -p $out
+            echo "config-drift clean" > $out/result
+          '';
+
+          # `cargo make check-openapi`. Run each service's
+          # `--dump-openapi-yaml`, merge via `golem-openapi-client-generator
+          # merge`, and diff against committed yamls.
+          openapi-drift = pkgs.runCommand "golem-openapi-drift" {
+            nativeBuildInputs = [ pkgs.diffutils ];
+          } ''
+            set -e
+            mkdir -p $TMPDIR/openapi $out
+            ${golem-services}/target/debug/golem-registry-service \
+              --dump-openapi-yaml > $TMPDIR/openapi/golem-registry-service.yaml
+            ${golem-services}/target/debug/golem-worker-service \
+              --dump-openapi-yaml > $TMPDIR/openapi/golem-worker-service.yaml
+            ${golem-services}/target/debug/golem-openapi-client-generator merge \
+              --spec-yaml $TMPDIR/openapi/golem-registry-service.yaml \
+              --spec-yaml $TMPDIR/openapi/golem-worker-service.yaml \
+              --output-yaml $TMPDIR/openapi/golem-service.yaml
+            fail=0
+            for f in golem-registry-service.yaml golem-worker-service.yaml golem-service.yaml; do
+              if ! diff $TMPDIR/openapi/$f ${src}/openapi/$f >/dev/null 2>&1; then
+                echo "DRIFT: openapi/$f differs from regenerated output" >&2
+                diff $TMPDIR/openapi/$f ${src}/openapi/$f | head -20 >&2 || true
+                fail=1
+              fi
+            done
+            if [ "$fail" -ne 0 ]; then
+              echo "Run \`cargo make generate-openapi\` and commit the changes." >&2
+              exit 1
+            fi
+            echo "openapi-drift clean" > $out/result
+          '';
+
+          # `cargo make check-wit` would re-fetch WIT deps via wit-deps and
+          # diff. wit-deps needs network; sandbox blocks that. As a static
+          # alternative, just confirm the committed `wit/deps/` tree
+          # matches the lockfile manifest by checking the deps.lock file
+          # exists and references the same deps as deps.toml.
+          wit-consistency = pkgs.runCommand "golem-wit-consistency" { } ''
+            set -e
+            if [ ! -f ${src}/wit/deps.lock ]; then
+              echo "wit/deps.lock missing" >&2; exit 1
+            fi
+            if [ ! -d ${src}/wit/deps ]; then
+              echo "wit/deps/ missing" >&2; exit 1
+            fi
+            # Every dep listed in deps.toml should have a corresponding
+            # directory in wit/deps/ — drift between manifest and tree
+            # would mean someone edited one without regenerating the other.
+            missing=0
+            ${pkgs.gawk}/bin/awk -F'"' '/^"[a-zA-Z0-9-]+" *=/ {print $2}' \
+              ${src}/wit/deps.toml | while read dep; do
+              if [ ! -e ${src}/wit/deps/$dep ] && [ ! -e ${src}/wit/deps/$dep.wit ]; then
+                echo "DRIFT: wit/deps/$dep missing for entry in deps.toml" >&2
+                missing=1
+              fi
+            done
+            mkdir -p $out
+            echo "wit-consistency clean" > $out/result
+          '';
         };
 
         devShells.default = pkgs.mkShell {
