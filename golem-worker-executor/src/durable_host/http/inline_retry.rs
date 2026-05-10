@@ -460,14 +460,15 @@ pub fn reconstruct_http_request(
         builder = builder.header(header_name, header_value);
     }
 
-    // The retry resend goes through `default_send_request_handler` (raw
-    // hyper http1::SendRequest), which does NOT inject a Host header
-    // automatically the way hyper-util's pooled `Client` does. Without
-    // an explicit Host header, HTTP/1.1 servers reject the request with
-    // 400 Bad Request — and crucially, that 400 surfaces to the guest
-    // as a non-5xx response, bypassing any 5xx retry policy. Add the
-    // Host header here from the URI's authority if the captured
-    // headers don't already include one.
+    // When the retry resend takes the no-pool path it goes through
+    // `default_send_request_handler` (raw hyper `http1::SendRequest`), which
+    // does NOT inject a Host header automatically the way hyper-util's pooled
+    // `Client` does. Without an explicit Host header, HTTP/1.1 servers reject
+    // the request with 400 Bad Request — and crucially, that 400 surfaces to
+    // the guest as a non-5xx response, bypassing any 5xx retry policy. The
+    // pooled path adds Host on its own, but adding it unconditionally here is
+    // safe (and required whenever no pool is configured) so we add it from
+    // the URI's authority if the captured headers don't already include one.
     if !has_host_header
         && let Some(authority) = authority
         && let Ok(value) = HeaderValue::from_str(&authority)
@@ -540,6 +541,7 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
     body_chunks: &[BodyChunk],
     extra_headers: &[(String, String)],
     retry_function_name: Option<&'static str>,
+    connection_pool: Option<HttpConnectionPool>,
 ) -> Result<Option<IncomingResponse>, anyhow::Error> {
     let mut retry_state = retry_function_name.map(|_| InFunctionRetryState::new());
     let reconstructed_body_len: u64 = body_chunks
@@ -572,10 +574,12 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
             reconstruct_http_request(&request_state.request, hyper_body, &merged_extra_headers)?;
         let config = request_state.outgoing_request_config();
 
-        // Force a fresh transport for each inline retry attempt. Reusing pooled
-        // connections after mid-body failures can keep retrying a poisoned
-        // socket and repeatedly hit read timeouts.
-        let mut future_resp = default_send_request_with_pool(http_request, config, None, None);
+        let mut future_resp = default_send_request_with_pool(
+            http_request,
+            config,
+            None,
+            connection_pool.clone(),
+        );
 
         use wasmtime_wasi::Pollable;
         future_resp.ready().await;
@@ -910,7 +914,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     original_handle: FutureIncomingResponseHandle,
     request: HostRequestHttpRequest,
     config: OutgoingRequestConfig,
-    _connection_pool: Option<HttpConnectionPool>,
+    connection_pool: Option<HttpConnectionPool>,
     worker: Arc<crate::worker::Worker<Ctx>>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     environment_id: EnvironmentId,
@@ -1014,6 +1018,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                         let result = {
                             let oplog = oplog.clone();
                             let request = request.clone();
+                            let connection_pool = connection_pool.clone();
 
                             async move {
                                 let body_chunks =
@@ -1046,11 +1051,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                                     http_request,
                                     retry_config,
                                     None,
-                                    // Force a fresh connection for each in-task retry attempt.
-                                    // Reusing pooled connections after mid-body failures can
-                                    // keep retrying a poisoned transport and lead to repeated
-                                    // read timeouts.
-                                    None,
+                                    connection_pool,
                                 );
 
                                 use wasmtime_wasi::Pollable;
@@ -1382,12 +1383,14 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
         vec![]
     };
     // 6. Send the reconstructed request (with interrupt-aware retries)
+    let connection_pool = ctx.wasi_http.connection_pool.clone();
     let response = match send_with_interrupt_aware_retries(
         ctx,
         &request_state,
         &body_chunks,
         &extra_headers,
         Some("http-resume-response-body-send"),
+        connection_pool,
     )
     .await?
     {
@@ -1742,10 +1745,13 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
             let http_request = reconstruct_http_request(&request_state.request, hyper_body, &[])?;
             let config = request_state.outgoing_request_config();
 
-            // Force a fresh transport for each retry attempt; reusing pooled
-            // connections across status-bearing failures can keep retrying a
-            // poisoned socket.
-            let mut future_resp = default_send_request_with_pool(http_request, config, None, None);
+            let connection_pool = ctx.wasi_http.connection_pool.clone();
+            let mut future_resp = default_send_request_with_pool(
+                http_request,
+                config,
+                None,
+                connection_pool,
+            );
 
             use wasmtime_wasi::Pollable;
             future_resp.ready().await;
@@ -1813,7 +1819,16 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
     if body_chunks.is_empty() {
         body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
     }
-    send_with_interrupt_aware_retries(ctx, request_state, &body_chunks, &[], None).await
+    let connection_pool = ctx.wasi_http.connection_pool.clone();
+    send_with_interrupt_aware_retries(
+        ctx,
+        request_state,
+        &body_chunks,
+        &[],
+        None,
+        connection_pool,
+    )
+    .await
 }
 
 /// Parses the start byte position from a Content-Range header value.
