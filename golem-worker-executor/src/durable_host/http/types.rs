@@ -681,6 +681,39 @@ impl<Ctx: WorkerCtx> HostOutgoingResponse for DurableWorkerCtx<Ctx> {
     }
 }
 
+/// Aborts an outgoing HTTP request body that is being finished while a
+/// status-code retry policy has already matched against an early response.
+///
+/// `HostOutgoingBody::drop` in wasmtime calls `HostOutgoingBody::abort`
+/// internally, which sends `FinishMessage::Abort` over the body's finish
+/// channel. Hyper observes the resulting error frame and tears down the
+/// underlying connection without writing the chunked-transfer terminator
+/// (`0\r\n\r\n`).
+///
+/// This matters when the peer returned a final response (e.g. HTTP 500)
+/// without consuming the request body. If we let hyper finish the body
+/// normally, the trailing terminator would be parsed by the receiving
+/// HTTP/1.1 server as the start of a new (malformed) request and prompt
+/// it to reply HTTP 400 — bypassing the user's retry policy entirely.
+///
+/// The retry resend itself is independent of this connection: it
+/// reconstructs the request from the oplog and dispatches it on a fresh
+/// transport via `try_status_code_retry` (which forces
+/// `connection_pool = None`).
+fn abort_outgoing_body_for_pending_status_retry<T>(
+    view: &mut wasmtime_wasi_http::WasiHttpImpl<T>,
+    body: Resource<OutgoingBody>,
+) -> HttpResult<()>
+where
+    T: wasmtime_wasi_http::WasiHttpView + Send,
+{
+    HostOutgoingBody::drop(view, body).map_err(|e| {
+        HttpError::trap(wasmtime::Error::msg(format!(
+            "failed to abort outgoing body for pending status retry: {e}"
+        )))
+    })
+}
+
 impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
     fn write(
         &mut self,
@@ -726,10 +759,41 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
                     crate::durable_host::PendingStatusRetryDecision::Matched
                 )
             });
-        let result = HostOutgoingBody::finish(&mut self.as_wasi_http_view(), this, trailers);
-        let accept_for_pending_status_retry =
+        // When a status-code retry policy has already matched against the
+        // early response, abort the body instead of finishing it. See
+        // [`abort_outgoing_body_for_pending_status_retry`] for the full
+        // rationale. Trailer-bearing finishes fall through to the normal
+        // path because `is_http_inline_retry_eligible` already rejects
+        // retries when trailers are present.
+        //
+        // NOTE: `pending_status_retry_matched` is sampled synchronously here.
+        // If the wrapper task that resolves the policy hasn't published the
+        // `Matched` decision yet, the body will be finished normally and the
+        // doomed keep-alive socket may still be poisoned by the chunked
+        // terminator. The downstream retry resend always uses a fresh
+        // connection (`connection_pool = None`), so this only manifests as
+        // an extra leftover request observed by some servers, not as a guest
+        // failure. The write paths handle this race more robustly via
+        // `tokio::sync::watch::Receiver::wait_for`; finish() cannot do the
+        // same because we have no signal that an early response is even
+        // expected.
+        let result = if pending_status_retry_matched && !has_trailers {
+            debug_assert!(
+                trailers.is_none(),
+                "checked via has_trailers guard above"
+            );
+            abort_outgoing_body_for_pending_status_retry(&mut self.as_wasi_http_view(), this)
+        } else {
+            HostOutgoingBody::finish(&mut self.as_wasi_http_view(), this, trailers)
+        };
+        // The body channel was already closed by hyper when the early
+        // response arrived, so a normal `finish` may now fail with
+        // `HttpProtocolError`. Treat that error as benign when a status
+        // retry is pending — the body bytes are in the oplog and the
+        // retry path will resend on a fresh connection.
+        let suppress_finish_error_for_pending_retry =
             result.is_err() && !has_trailers && pending_status_retry_matched;
-        if result.is_ok() || accept_for_pending_status_retry {
+        if result.is_ok() || suppress_finish_error_for_pending_retry {
             if let Some(handle) = request_handle
                 && let Some(state) = self.state.open_http_requests.get_mut(&handle)
             {
@@ -754,7 +818,7 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
                 retry.has_outgoing_trailers = has_trailers;
             }
         }
-        if accept_for_pending_status_retry {
+        if suppress_finish_error_for_pending_retry {
             Ok(())
         } else {
             result

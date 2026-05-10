@@ -68,4 +68,55 @@ class RetryTest extends BaseAgent {
     }
     return true;
   }
+
+  /**
+   * Reproducer for the "V2" manifest-only status-code retry path with a
+   * POST request that carries a JSON body. Mirrors the user-level pattern
+   * used in the chaos-backend smoke test:
+   *
+   *   const res = await fetch(url, {
+   *     method: 'POST',
+   *     headers: { 'content-type': 'application/json' },
+   *     body: JSON.stringify(payload),
+   *   });
+   *   if (!res.ok) throw new Error(...);
+   *
+   * The retry policy comes from the environment (no `withRetryPolicy`,
+   * no `atomically`). The host's inline status-code retry path must
+   * transparently re-issue the failing POST request — including its
+   * `content-type` header and JSON body — until success.
+   */
+  async manifestStatusRetryPostTest(host: string, port: number): Promise<boolean> {
+    const response = await fetch(`http://${host}:${port}/attempt-post`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ orderId: 'ord_repro', amount: 29.99 }),
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return true;
+  }
+
+  /**
+   * Variant of `manifestStatusRetryPostTest` that targets a fixed path
+   * (e.g. the user's chaos-backend `/payment/charge`) and uses the same
+   * JSON body shape. Used to reproduce the V2 failure mode against the
+   * actual Node.js chaos-backend.
+   */
+  async manifestStatusRetryPostPath(
+    host: string,
+    port: number,
+    path: string,
+  ): Promise<boolean> {
+    const response = await fetch(`http://${host}:${port}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ orderId: 'ord_repro', amount: 29.99, currency: 'USD' }),
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return true;
+  }
 }
