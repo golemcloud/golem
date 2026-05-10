@@ -44,8 +44,8 @@ use golem_common::model::oplog::{
     AgentError, OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload,
     TimestampedUpdateDescription, types::ObjectMetadata,
 };
-use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::plan::PlanId;
+use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,

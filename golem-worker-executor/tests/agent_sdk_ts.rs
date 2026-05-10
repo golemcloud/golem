@@ -18,9 +18,7 @@ use axum::extract::State;
 use axum::routing::get;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_common::model::RetryConfig;
-use golem_common::model::retry_policy::{
-    NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy,
-};
+use golem_common::model::retry_policy::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, drain_connection};
 use golem_wasm::Value;
@@ -353,10 +351,14 @@ async fn run_manifest_status_retry_test(
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Bool(true), "agent must complete successfully");
+    assert_eq!(
+        result,
+        Value::Bool(true),
+        "agent must complete successfully"
+    );
     let observed = counter.load(Ordering::SeqCst);
     assert!(
-        observed >= fail_count + 1,
+        observed > fail_count,
         "server must observe at least {} attempts, observed {observed}",
         fail_count + 1
     );
@@ -409,5 +411,3 @@ async fn ts_manifest_status_retry_periodic_short(
     )
     .await
 }
-
-

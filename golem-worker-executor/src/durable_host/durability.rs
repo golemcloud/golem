@@ -2284,8 +2284,7 @@ mod tests {
     fn evaluate_named_policy_step_resets_on_state_shape_mismatch() {
         use golem_common::model::RetryConfig;
 
-        let default_policy =
-            NamedRetryPolicy::default_from_config(&RetryConfig::max_attempts_5());
+        let default_policy = NamedRetryPolicy::default_from_config(&RetryConfig::max_attempts_5());
 
         // Simulate the leftover state from an exhausted inline status
         // retry: its inner state is a bare `Counter`, while the default
@@ -2299,9 +2298,8 @@ mod tests {
         // Without the guard: evaluation surfaces InvalidState as a
         // verdict (which the trap-retry call site treats as a fall-back
         // signal to the legacy retry config).
-        let baseline =
-            evaluate_named_policy_step(&default_policy, &properties, Some(&stale_state))
-                .expect("evaluate must not error at the Result layer");
+        let baseline = evaluate_named_policy_step(&default_policy, &properties, Some(&stale_state))
+            .expect("evaluate must not error at the Result layer");
         assert!(
             matches!(
                 baseline.1,
@@ -2329,9 +2327,8 @@ mod tests {
         // matches: the existing accumulator must be preserved (otherwise
         // it would be a regression in normal retry accounting).
         let valid_state = default_policy.policy.initial_state();
-        let direct =
-            evaluate_named_policy_step(&default_policy, &properties, Some(&valid_state))
-                .expect("evaluate must not error");
+        let direct = evaluate_named_policy_step(&default_policy, &properties, Some(&valid_state))
+            .expect("evaluate must not error");
         let via_guard = evaluate_named_policy_step_resetting_on_invalid_state(
             &default_policy,
             &properties,
