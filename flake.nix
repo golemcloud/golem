@@ -222,38 +222,29 @@
           hash = "sha256-khdBtROh+phw2ggAq9HE7r/calxX2Sw5xicoLNG7rrw=";
         };
 
-        # Built golem-ts-sdk monorepo (golem-ts-sdk, golem-ts-typegen, …).
-        # Test-components reference these via npm `file:` deps; we pre-build
-        # them so the test-components' `npm install` resolves to working
-        # `dist/` outputs without needing to re-run the SDK's prepare script.
-        golem-ts-sdk = pkgs.stdenv.mkDerivation {
-          pname = "golem-ts-sdk";
+        # First-stage SDK build: just `pnpm run build` over the workspace,
+        # producing dist/ for every package. Has NO `wasm/agent_guest.wasm`
+        # — that's circular-dependent on this output (the agent-template
+        # crate embeds the SDK's dist/index.mjs at build time, then its
+        # compiled wasm gets staged back into the final SDK).
+        golem-ts-sdk-base = pkgs.stdenv.mkDerivation {
+          pname = "golem-ts-sdk-base";
           version = "0.0.0";
           src = tsSdkSrc;
-
           pnpmDeps = golem-ts-sdk-pnpm-deps;
-
           nativeBuildInputs = [
             pkgs.nodejs_20
             pkgs.pnpm_10
             pkgs.pnpmConfigHook
             wasm-rquickjs
           ];
-
           buildPhase = ''
             runHook preBuild
             pnpm run build
             runHook postBuild
           '';
-
           installPhase = ''
             runHook preInstall
-            # Stage just the built artifacts of each workspace package — we
-            # deliberately drop the pnpm-symlinked node_modules/ tree because
-            # nixpkgs' noBrokenSymlinks check rejects relative .pnpm symlinks
-            # that escape the package directory, and the test-components don't
-            # need them: they `npm install` their own deps and reference these
-            # SDK packages via `file:` deps that only need the publish files.
             for pkg in $(ls packages); do
               src_dir="packages/$pkg"
               dst_dir="$out/packages/$pkg"
@@ -269,14 +260,163 @@
               done
             done
             cp -r wit $out/wit
-            # Test-components consume these packages via npm `file:` deps;
-            # npm symlinks the bin scripts into node_modules/.bin so any
-            # `#!/usr/bin/env node` shebangs need patching here, before the
-            # downstream derivations consume them read-only.
+            find $out/packages -type f \( -name '*.cjs' -o -name '*.mjs' -o -name '*.js' \) \
+              -path '*/dist/*' -exec chmod +x {} +
             patchShebangs $out/packages
+            for pkg_json in $out/packages/*/package.json; do
+              ${pkgs.jq}/bin/jq 'del(.scripts.prepare)' "$pkg_json" > "$pkg_json.tmp"
+              mv "$pkg_json.tmp" "$pkg_json"
+            done
             runHook postInstall
           '';
         };
+
+        # Generate the `agent-template` Rust crate purely from WIT input via
+        # wasm-rquickjs. No network access needed — this is just code
+        # generation. The output's `Cargo.lock` is stable for a given
+        # wasm-rquickjs version, which is what makes the downstream
+        # `cargo vendor` FOD usable.
+        agent-template-source = pkgs.runCommand "agent-template-source"
+          {
+            nativeBuildInputs = [ wasm-rquickjs ];
+          } ''
+          set -eu
+          cp -rL ${tsSdkSrc}/wit ./wit
+          chmod -R +w ./wit
+          # generate-wrapper-crate copies a JavaScript module into the
+          # crate's bundle. We point it at the REAL `dist/index.mjs` from
+          # the first-stage SDK build, so the embedded module exposes the
+          # same exports (TypescriptTypeRegistry, etc.) that compiled TS
+          # components reference at wizer pre-initialize time.
+          ${wasm-rquickjs}/bin/wasm-rquickjs generate-wrapper-crate \
+            --wit ./wit \
+            --output ./agent-template \
+            --world agent-guest \
+            --js-modules '@golemcloud/golem-ts-sdk=${golem-ts-sdk-base}/packages/golem-ts-sdk/dist/index.mjs' \
+            --js-modules 'user=@slot'
+          test -f ./agent-template/src/lib.rs || {
+            echo "agent-template/src/lib.rs not produced" >&2
+            exit 1
+          }
+          mkdir -p $out
+          cp -r ./agent-template $out/agent-template
+        '';
+
+        # FOD that runs `cargo vendor` over the generated agent-template
+        # crate. cargo vendor's output is byte-stable (sorted directory
+        # listing, no timestamps) so a fixed-output hash is reliable here.
+        agent-template-vendor = pkgs.stdenv.mkDerivation {
+          pname = "agent-template-vendor";
+          version = "0.0.0";
+          src = "${agent-template-source}/agent-template";
+
+          outputHashAlgo = "sha256";
+          outputHashMode = "recursive";
+          outputHash = "sha256-RhiCFCqKdiwuuFOfWFm11mOkQXNFV1tJ/KJR8BHtIgw=";
+
+          nativeBuildInputs = [
+            rustToolchain
+            pkgs.cacert
+            pkgs.git
+          ];
+
+          buildPhase = ''
+            runHook preBuild
+            export HOME=$TMPDIR/home
+            mkdir -p $HOME $out
+            # Have cargo vendor write directly into $out — that way each
+            # vendored crate dir is at the top of the FOD output and
+            # consumers point their [source.vendored-sources] directory
+            # at the FOD path itself. cargo vendor's stdout is the
+            # [source.<git+url>] config snippet with absolute
+            # `directory = "<abs path>"` lines; rewrite those lines to a
+            # sentinel so consumers can substitute in their own vendor
+            # store path at use time.
+            cargo vendor "$out" > "$out/.cargo-config.toml.in"
+            sed -i "s|directory = .*|directory = \"@VENDOR_DIR@\"|" "$out/.cargo-config.toml.in"
+            # Belt-and-braces: scrub timestamps so any stray mtime that
+            # cargo-vendor leaves doesn't perturb the recursive hash.
+            find "$out" -exec touch -h -t 197001010000.00 {} +
+            runHook postBuild
+          '';
+
+          dontInstall = true;
+          # FOD outputs must not reference store paths; nixpkgs' fixupPhase
+          # runs patchShebangs which would rewrite shebangs in vendored .sh
+          # files to /nix/store/.../bash. Skip fixup entirely — cargo only
+          # cares about the crate sources, not shebangs.
+          dontFixup = true;
+        };
+
+        # Hermetic build of agent_guest.wasm — the wasm runtime that
+        # `golem-ts-sdk` injects user JavaScript into. Consumes the
+        # vendored deps from `agent-template-vendor` so it's offline-only.
+        agent-guest-wasm = pkgs.stdenv.mkDerivation {
+          pname = "agent-guest";
+          version = "0.0.1";
+          src = "${agent-template-source}/agent-template";
+
+          nativeBuildInputs = [
+            rustToolchain
+            pkgs.libclang.lib
+            pkgs.clang
+            pkgs.glibc.dev
+          ] ++ pkgs.lib.optionals (wasi-sdk != null) [ wasi-sdk ];
+
+          hardeningDisable = [ "all" ];
+
+          buildPhase = ''
+            runHook preBuild
+            export HOME=$TMPDIR/home
+            mkdir -p $HOME
+
+            # Wire cargo to the vendored deps from the FOD. The config
+            # template carries every `[source.<git+...>]` redirect cargo
+            # vendor produced, with `@VENDOR_DIR@` placeholders we now
+            # substitute with the actual FOD output path.
+            mkdir -p .cargo
+            sed "s|@VENDOR_DIR@|${agent-template-vendor}|g" \
+              ${agent-template-vendor}/.cargo-config.toml.in \
+              > .cargo/config.toml
+
+            # rquickjs-sys + cc-rs + bindgen env (same shape as the original
+            # FOD-based pipeline, kept here so this derivation is usable
+            # standalone and so debugging is easy).
+            ${pkgs.lib.optionalString (wasi-sdk != null) ''
+              export WASI_SDK_PATH=${wasi-sdk}
+              export WASI_SDK=${wasi-sdk}
+              export WASI_SDK_VERSION=25
+              export CC_wasm32_wasip2="${wasi-sdk}/bin/clang"
+              export CXX_wasm32_wasip2="${wasi-sdk}/bin/clang++"
+              export AR_wasm32_wasip2="${wasi-sdk}/bin/llvm-ar"
+              export BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip2="--sysroot=${wasi-sdk}/share/wasi-sysroot"
+            ''}
+            export LIBCLANG_PATH="${pkgs.libclang.lib}/lib"
+            export BINDGEN_EXTRA_CLANG_ARGS_x86_64_unknown_linux_gnu="--target=x86_64-unknown-linux-gnu -I${pkgs.glibc.dev}/include"
+
+            cargo build --offline --target wasm32-wasip2 --release --features full,golem
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out
+            cp target/wasm32-wasip2/release/agent_guest.wasm $out/agent_guest.wasm
+            runHook postInstall
+          '';
+        };
+
+        # Final golem-ts-sdk: the base monorepo with the hermetically-built
+        # `agent_guest.wasm` staged into `wasm/`. Test-components reference
+        # this via npm `file:` deps; the wasm is what `injectToPrebuiltQuickjs`
+        # uses at build time.
+        golem-ts-sdk = pkgs.runCommand "golem-ts-sdk-0.0.0" { } ''
+          mkdir -p $out
+          cp -r ${golem-ts-sdk-base}/. $out/
+          chmod -R +w $out
+          mkdir -p $out/packages/golem-ts-sdk/wasm
+          cp ${agent-guest-wasm}/agent_guest.wasm $out/packages/golem-ts-sdk/wasm/
+        '';
 
         rustTestComponents = [
           "host-api-tests"
@@ -365,146 +505,151 @@
           '';
         };
 
-        # The TypeScript pipeline (TS test-components + the SDK's
-        # agent_guest.wasm) needs:
-        #   1. `pnpm` to install npm deps + run rollup
-        #   2. `wasm-rquickjs generate-wrapper-crate` to produce a Cargo crate
-        #      whose `Cargo.lock` doesn't exist at flake-eval time
-        #   3. `cargo build --target wasm32-wasip2` against that crate
-        #   4. `npm install` per test-component (file: deps to the just-built
-        #      SDK plus normal registry deps)
-        #   5. `golem-cli build` per test-component
-        # The dynamic Cargo.lock blocks pre-vendoring, so this is a single
-        # fixed-output derivation with network access. Output is hash-pinned:
-        # if reproducibility breaks, the hash mismatch surfaces immediately.
-        test-components-ts = pkgs.stdenv.mkDerivation {
-          pname = "golem-test-components-ts";
+        # Per-test-component npm offline cache. The hash list mirrors
+        # `tsTestComponents` order; `pkgs.fetchNpmDeps` produces a
+        # deterministic offline-mirror tarball collection from the
+        # component's `package-lock.json`.
+        tsComponentNpmDeps = pkgs.lib.genAttrs tsTestComponents (name:
+          pkgs.fetchNpmDeps {
+            src = ./test-components + "/${name}";
+            name = "test-component-${name}-npm-deps";
+            hash = builtins.getAttr name {
+              "agent-constructor-parameter-echo" =
+                "sha256-2pJo/Bgg9Kcly8BIi2WqvcjHlvQbpReWKd5dcIZNu5o=";
+              "agent-promise" =
+                "sha256-2pJo/Bgg9Kcly8BIi2WqvcjHlvQbpReWKd5dcIZNu5o=";
+              "agent-sdk-ts" =
+                "sha256-Ft+NZN6L4LJuoXjVW7mUmrYwrroaBbUJf1BXRfwPrbM=";
+              "agent-rpc" =
+                "sha256-2pJo/Bgg9Kcly8BIi2WqvcjHlvQbpReWKd5dcIZNu5o=";
+            };
+          });
+
+        # Hermetic per-component build. Consumes:
+        # - the pre-built `golem-ts-sdk` (with `agent_guest.wasm` already in
+        #   `wasm/` and shebangs already patched) — overlaid into
+        #   `sdks/ts/packages/*` so `npm install`'s file: deps resolve
+        #   correctly.
+        # - the per-component `fetchNpmDeps` tarball (`npmConfigHook` wires
+        #   `npm_config_cache` to it so `npm install --offline` works).
+        # No network access required.
+        mkTsTestComponent = name: pkgs.stdenv.mkDerivation {
+          pname = "golem-test-component-ts-${name}";
           version = "0.0.0";
           inherit src;
 
-          # Two non-hermetic moves we can't avoid yet:
-          # 1. `__noChroot` lets the build see the host filesystem (so cargo
-          #    + npm can fetch dependencies live). Genuinely needed because
-          #    the dynamically-generated agent-template Cargo crate has no
-          #    Cargo.lock at flake-eval time, so we can't pre-vendor it.
-          # 2. The output isn't hash-pinned because cargo + rollup outputs
-          #    aren't bit-identical across builds (build-ids, mtimes, file-
-          #    iteration order survived `SOURCE_DATE_EPOCH=1` and stable
-          #    rustc flags). FOD hash mismatches every rebuild.
-          # Tradeoff: requires `sandbox = relaxed` in the user's nix.conf
-          # AND won't run on a strict-sandbox remote builder. The right
-          # follow-up is a multi-stage shape: deterministic FOD for cargo
-          # vendor + pnpm fetch caches, then a hermetic offline build.
-          __noChroot = true;
-
-          # nixpkgs' stdenv adds hardening flags (e.g. `-fzero-call-used-regs`)
-          # via NIX_CFLAGS_COMPILE; clang rejects them for wasm32-wasip2.
-          # Disable across the board — the WASI SDK clang has its own defaults.
-          hardeningDisable = [ "all" ];
+          npmDeps = tsComponentNpmDeps.${name};
+          npmRoot = "test-components/${name}";
+          # Hermetic-build defense: every TS test-component has `file:` deps
+          # to `sdks/ts/packages/golem-ts-sdk` (and friends), and those
+          # packages declare a `prepare` script of `pnpm build`. npm's
+          # default install runs `prepare` on file: deps, which would
+          # regenerate dist/*.cjs (re-introducing `#!/usr/bin/env node`
+          # shebangs) AND require pnpm on PATH (it's not in our inputs).
+          # Skipping scripts is correct here — the SDK we're staging in
+          # from `golem-ts-sdk` already has its dist/ built.
+          npmInstallFlags = [ "--ignore-scripts" ];
 
           nativeBuildInputs = [
             pkgs.nodejs_20
-            pkgs.pnpm_10
-            rustToolchain
+            pkgs.npmHooks.npmConfigHook
             golem-cli
-            wasm-rquickjs
-            pkgs.wasm-tools
-            pkgs.wit-bindgen
-            pkgs.cacert
             pkgs.git
             pkgs.bash
-            pkgs.curl
-            pkgs.libclang.lib
-            pkgs.clang
-            pkgs.glibc.dev
-          ] ++ pkgs.lib.optionals (wasi-sdk != null) [ wasi-sdk ];
+            # golem-cli's startup probe creates an HTTPS reqwest client
+            # which loads system CA roots. Without this in the sandbox
+            # the build fails with "No CA certificates were loaded".
+            pkgs.cacert
+          ];
+
+          # Overlay the pre-built golem-ts-sdk packages into the source
+          # tree BEFORE configurePhase so when `npmConfigHook` runs its
+          # internal `npm install` during configure, the file: deps to
+          # `sdks/ts/packages/*` resolve to packages with built dist/,
+          # types/, wasm/agent_guest.wasm, and patched shebangs already
+          # in place. Without this, npm install tries to run the dep's
+          # `prepare` script (`pnpm build`) and crashes because pnpm
+          # isn't a build input.
+          #
+          # Also strip `prepare` from each SDK package.json: npm treats
+          # `prepare` as a "preparation" step that runs for file:/git:
+          # deps even with `--ignore-scripts`, so the only reliable way
+          # to stop `pnpm build` from being invoked is to remove the
+          # script entry. Safe here — the SDK's dist/ is already built
+          # in the `golem-ts-sdk` derivation we just overlaid.
+          postPatch = ''
+            chmod -R +w sdks/ts/packages
+            for pkg in $(ls ${golem-ts-sdk}/packages); do
+              rm -rf "sdks/ts/packages/$pkg"
+              cp -rL "${golem-ts-sdk}/packages/$pkg" "sdks/ts/packages/$pkg"
+              chmod -R +w "sdks/ts/packages/$pkg"
+            done
+            for pkg_json in sdks/ts/packages/*/package.json; do
+              ${pkgs.nodejs_20}/bin/node -e "
+                const fs = require('fs');
+                const path = process.argv[1];
+                const j = JSON.parse(fs.readFileSync(path));
+                if (j.scripts) { delete j.scripts.prepare; }
+                fs.writeFileSync(path, JSON.stringify(j, null, 2));
+              " "$pkg_json"
+            done
+          '';
+
+          # npmConfigHook may write to $HOME during its install pass.
+          preBuild = ''
+            export HOME=$TMPDIR/home
+            mkdir -p $HOME
+          '';
 
           buildPhase = ''
             runHook preBuild
-            export HOME=$TMPDIR/home
-            mkdir -p $HOME
-            # pnpm 10 honors `packageManager` in package.json and tries to
-            # download the exact pinned version (here 10.17.1) into PNPM_HOME.
-            # We use whatever pnpm nixpkgs ships; turn off the auto-switch.
-            echo "manage-package-manager-versions=false" >> $HOME/.npmrc
-            # rquickjs-sys uses bindgen, which needs libclang on the host.
-            export LIBCLANG_PATH="${pkgs.libclang.lib}/lib"
-            ${pkgs.lib.optionalString (wasi-sdk != null) ''
-              export WASI_SDK_PATH=${wasi-sdk}
-              # rquickjs-sys reads `WASI_SDK` (no `_PATH`) — without this it
-              # downloads its own v24 tarball, then fails to invoke the
-              # bundled clang because cc-rs can't find it on PATH.
-              export WASI_SDK=${wasi-sdk}
-              export WASI_SDK_VERSION=25
-              # Make cc-rs use the WASI SDK's clang for wasm32-wasip2 cross-
-              # compilation. Without this, host nixpkgs clang gets picked and
-              # tries to consume glibc headers for a wasm target.
-              export CC_wasm32_wasip2="${wasi-sdk}/bin/clang"
-              export CXX_wasm32_wasip2="${wasi-sdk}/bin/clang++"
-              export AR_wasm32_wasip2="${wasi-sdk}/bin/llvm-ar"
-              # NB: deliberately not overriding the rust linker — let rustc
-              # use its bundled rust-lld with the right `--no-entry` defaults
-              # for wasm32-wasip2 cdylibs.
-            ''}
-            # Bindgen reads per-target overrides via
-            # `BINDGEN_EXTRA_CLANG_ARGS_<sanitized-target>`. For host builds
-            # of rquickjs-sys we have to point bindgen's bare libclang at
-            # nixpkgs' glibc dev headers AND lock the target to 64-bit so it
-            # doesn't try to consume the missing `gnu/stubs-32.h`. For the
-            # wasm cross-compile we point at the WASI sysroot.
-            export BINDGEN_EXTRA_CLANG_ARGS_x86_64_unknown_linux_gnu="--target=x86_64-unknown-linux-gnu -I${pkgs.glibc.dev}/include"
-            ${pkgs.lib.optionalString (wasi-sdk != null) ''
-              export BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip2="--sysroot=${wasi-sdk}/share/wasi-sysroot"
-            ''}
 
-            # 1) Build the SDK monorepo (produces dist/ in each package)
-            (cd sdks/ts && pnpm install --frozen-lockfile && pnpm run build)
+            # npmConfigHook already populated node_modules for us during
+            # configurePhase; patch shebangs of the freshly-installed
+            # bins (tsc, rollup, golem-typegen, …).
+            cd test-components/${name}
+            patchShebangs node_modules
 
-            # 2-4) Generate + compile + copy the agent-template inside golem-ts-sdk
-            (cd sdks/ts/packages/golem-ts-sdk && pnpm run build-agent-template)
-
-            # Patch shebangs in the just-built SDK packages so that
-            # downstream `npm install` of file: deps gets working bin scripts.
-            echo "==> patching shebangs in sdks/ts/packages"
-            patchShebangs sdks/ts/packages
-            echo "==> golem-typegen.cjs head:"
-            head -2 sdks/ts/packages/golem-ts-typegen/dist/golem-typegen.cjs 2>/dev/null || echo "  (not present)"
-
-            # 5) Build each TS test-component
+            # golem-cli build. Its `ensure_npm_dependencies` check sees
+            # an up-to-date node_modules with matching package-lock hash
+            # so it skips its own internal `npm install` (which would
+            # otherwise undo our patch).
             #
-            # `npm install` runs `prepare` scripts on file: deps, which
-            # invokes `pnpm build` inside the SDK packages — that regenerates
-            # dist/*.cjs (re-introducing `#!/usr/bin/env node`) and undoes
-            # our shebang patches. Disable lifecycle scripts globally for
-            # test-component installs (the SDK is already built).
-            #
-            # golem-cli also runs its own `npm install` when its marker file
-            # doesn't match. Let it do the install on the first invocation
-            # (which fails on the broken shebang because tsc gets re-staged
-            # by prepare) — then patch shebangs across node_modules + the
-            # source SDK packages — then run `golem-cli build` again. The
-            # second pass sees the marker as up-to-date and skips reinstall.
-            export NPM_CONFIG_IGNORE_SCRIPTS=true
-            cd test-components
-            for c in ${pkgs.lib.concatStringsSep " " tsTestComponents}; do
-              echo "==> Building TS component $c"
-              pushd "$c"
-              golem-cli --preset release build --yes --skip-check || true
-              patchShebangs node_modules
-              patchShebangs ../../sdks/ts/packages
+            # agent-rpc's golem.yaml declares both a Rust component
+            # (`golem-it:agent-rpc-rust`) and a TS one (`golem-it:agent-rpc`).
+            # The Rust half is already built in `test-components-rust`, and
+            # building it here would need cargo + WASI SDK in this
+            # JS-focused derivation. Scope to just the TS component.
+            ${if name == "agent-rpc" then ''
+              golem-cli --preset release build golem-it:agent-rpc --yes --skip-check
+              wasm=$(find . -name 'golem_it_agent_rpc.wasm' -print -quit)
+              cp "$wasm" ../golem_it_agent_rpc.wasm
+            '' else ''
               golem-cli --preset release build --yes --skip-check
               golem-cli --preset release exec copy
-              popd
-            done
+            ''}
+
             runHook postBuild
           '';
 
           installPhase = ''
             runHook preInstall
+            # `golem-cli exec copy` drops `<name>.wasm` into
+            # `test-components/` (one dir above the component dir).
             mkdir -p $out/test-components
-            find . -maxdepth 1 -name '*.wasm' -exec cp {} $out/test-components/ \;
+            find ../ -maxdepth 1 -name '*.wasm' -exec cp {} $out/test-components/ \;
             runHook postInstall
           '';
+
+          # Cargo target dir gets cleaned up; no build artifacts to keep.
+          dontFixup = false;
+        };
+
+        # All hermetically-built TS test-components combined into one
+        # `test-components/*.wasm` tree.
+        test-components-ts = pkgs.symlinkJoin {
+          name = "golem-test-components-ts";
+          paths = map mkTsTestComponent tsTestComponents;
         };
 
         # All workspace binaries staged into the layout the test framework
@@ -577,7 +722,13 @@
             export HOME="$TMPDIR/home"
             export XDG_CACHE_HOME="$TMPDIR/cache"
             mkdir -p "$HOME" "$XDG_CACHE_HOME"
-            cargo test --locked -p golem-worker-executor --test integration -- ${tag} --report-time --nocapture
+            # `wasi::ip_address_resolve` exercises real DNS through wasi-net;
+            # the Nix sandbox blocks all networking, so the test sees
+            # `name-unresolvable` and panics. Skip it specifically — the
+            # behavior under test (live DNS) can't be reproduced offline.
+            cargo test --locked -p golem-worker-executor --test integration \
+              -- ${tag} --report-time --nocapture \
+              --skip ip_address_resolve
           '';
           installPhaseCommand = ''
             mkdir -p $out
@@ -594,6 +745,20 @@
           test-components-rust = test-components-rust;
           test-components-ts = test-components-ts;
           golem-ts-sdk = golem-ts-sdk;
+          golem-ts-sdk-base = golem-ts-sdk-base;
+          # Expose per-component TS builds so individual failures are easy
+          # to triage with `nix build .#test-components-ts-<name>`.
+          test-components-ts-agent-constructor-parameter-echo =
+            mkTsTestComponent "agent-constructor-parameter-echo";
+          test-components-ts-agent-promise =
+            mkTsTestComponent "agent-promise";
+          test-components-ts-agent-sdk-ts =
+            mkTsTestComponent "agent-sdk-ts";
+          test-components-ts-agent-rpc =
+            mkTsTestComponent "agent-rpc";
+          agent-template-source = agent-template-source;
+          agent-template-vendor = agent-template-vendor;
+          agent-guest-wasm = agent-guest-wasm;
         } // pkgs.lib.optionalAttrs (wasi-sdk != null) {
           wasi-sdk = wasi-sdk;
         };
