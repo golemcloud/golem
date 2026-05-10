@@ -574,12 +574,8 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
             reconstruct_http_request(&request_state.request, hyper_body, &merged_extra_headers)?;
         let config = request_state.outgoing_request_config();
 
-        let mut future_resp = default_send_request_with_pool(
-            http_request,
-            config,
-            None,
-            connection_pool.clone(),
-        );
+        let mut future_resp =
+            default_send_request_with_pool(http_request, config, None, connection_pool.clone());
 
         use wasmtime_wasi::Pollable;
         future_resp.ready().await;
@@ -1746,12 +1742,8 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
             let config = request_state.outgoing_request_config();
 
             let connection_pool = ctx.wasi_http.connection_pool.clone();
-            let mut future_resp = default_send_request_with_pool(
-                http_request,
-                config,
-                None,
-                connection_pool,
-            );
+            let mut future_resp =
+                default_send_request_with_pool(http_request, config, None, connection_pool);
 
             use wasmtime_wasi::Pollable;
             future_resp.ready().await;
@@ -1820,15 +1812,8 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
         body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
     }
     let connection_pool = ctx.wasi_http.connection_pool.clone();
-    send_with_interrupt_aware_retries(
-        ctx,
-        request_state,
-        &body_chunks,
-        &[],
-        None,
-        connection_pool,
-    )
-    .await
+    send_with_interrupt_aware_retries(ctx, request_state, &body_chunks, &[], None, connection_pool)
+        .await
 }
 
 /// Parses the start byte position from a Content-Range header value.

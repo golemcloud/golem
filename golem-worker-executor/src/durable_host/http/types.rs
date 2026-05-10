@@ -778,10 +778,7 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         // same because we have no signal that an early response is even
         // expected.
         let result = if pending_status_retry_matched && !has_trailers {
-            debug_assert!(
-                trailers.is_none(),
-                "checked via has_trailers guard above"
-            );
+            debug_assert!(trailers.is_none(), "checked via has_trailers guard above");
             abort_outgoing_body_for_pending_status_retry(&mut self.as_wasi_http_view(), this)
         } else {
             HostOutgoingBody::finish(&mut self.as_wasi_http_view(), this, trailers)

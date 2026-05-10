@@ -1169,28 +1169,23 @@ where
 {
     let first_try = op(ctx).await;
 
-    let after_inline_retry = if should_accept_closed_for_pending_status_retry(
-        ctx,
-        request_handle,
-        &first_try,
-    )
-    .await
-    {
-        Ok(success_for_pending_status_retry.clone())
-    } else if is_http_retryable_stream_error(&first_try) {
-        match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(ctx, rep)
-            .await
-        {
-            Ok(true) => op(ctx).await,
-            Ok(false) => first_try,
-            Err(e) => {
-                tracing::warn!("Output stream inline retry failed: {e}");
-                first_try
+    let after_inline_retry =
+        if should_accept_closed_for_pending_status_retry(ctx, request_handle, &first_try).await {
+            Ok(success_for_pending_status_retry.clone())
+        } else if is_http_retryable_stream_error(&first_try) {
+            match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(ctx, rep)
+                .await
+            {
+                Ok(true) => op(ctx).await,
+                Ok(false) => first_try,
+                Err(e) => {
+                    tracing::warn!("Output stream inline retry failed: {e}");
+                    first_try
+                }
             }
-        }
-    } else {
-        first_try
-    };
+        } else {
+            first_try
+        };
 
     if should_accept_closed_for_pending_status_retry(ctx, request_handle, &after_inline_retry).await
     {

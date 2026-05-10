@@ -33,7 +33,6 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
     PersistenceLevel,
 };
-use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState, RetryProperties,
     RetryVerdict, ThreadRng, Timestamp,
@@ -158,9 +157,7 @@ impl std::error::Error for SemanticTrapRetryOverrideMarker {
         // Expose the inner failure as the source so chain() walks past
         // this marker into the original error (e.g. `ClassifiedHostError`),
         // and so error reporting still surfaces the underlying cause.
-        Some(AsRef::<dyn std::error::Error + Send + Sync + 'static>::as_ref(
-            &self.inner,
-        ))
+        Some(AsRef::<dyn std::error::Error + Send + Sync + 'static>::as_ref(&self.inner))
     }
 }
 
@@ -308,50 +305,6 @@ pub(crate) fn evaluate_named_policy_step_resetting_on_invalid_state(
         }
         _ => Ok(result),
     }
-}
-
-/// Looks up the most relevant `RetryPolicyState` for a given `retry_from`
-/// begin index, carrying retry budget forward across trap+replay boundaries.
-///
-/// Returns the direct match in `current_retry_state` when present. Otherwise,
-/// when a host function call (e.g. a hung HTTP request) traps and the worker
-/// replays from the oplog, the previous failed attempt's begin_index is moved
-/// into a skipped region by trap+replay, and the re-issued call gets a brand
-/// new begin_index whose `current_retry_state` slot is empty. Without
-/// carrying the previous retry budget forward, the attempt counter resets to
-/// zero on every replay and the policy never exhausts — producing the
-/// unbounded loop reported in `ts_v2_s2_shipment_hangs_then_reset` and
-/// `ts_v2_s3_process_crash_mid_workflow`.
-///
-/// We carry the budget forward by inspecting `current_retry_state` entries
-/// whose `retry_from` falls inside a skipped region (i.e. entries from
-/// previous attempts of the same logical call) and returning the one with
-/// the largest accumulated `retry_count`. This intentionally over-aggregates
-/// when multiple distinct logical calls in the same invocation have failed
-/// and retried, but in practice the named retry policy still bounds total
-/// attempts to its configured `max_retries`, which is the important
-/// invariant for terminating the loop.
-pub(crate) fn lookup_retry_state_with_replay_aggregation(
-    current_retry_state: &HashMap<OplogIndex, RetryPolicyState>,
-    skipped_regions: &DeletedRegions,
-    retry_from: OplogIndex,
-) -> Option<RetryPolicyState> {
-    if let Some(state) = current_retry_state.get(&retry_from) {
-        return Some(state.clone());
-    }
-
-    let mut best: Option<RetryPolicyState> = None;
-    let mut best_count: u32 = 0;
-    for (key, state) in current_retry_state {
-        if *key < retry_from && skipped_regions.is_in_deleted_region(*key) {
-            let count = state.retry_count();
-            if count > best_count {
-                best_count = count;
-                best = Some(state.clone());
-            }
-        }
-    }
-    best
 }
 
 /// Encapsulates in-function retry state for a single durable function invocation.
@@ -807,11 +760,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             .worker()
             .get_non_detached_last_known_status()
             .await;
-        lookup_retry_state_with_replay_aggregation(
-            &latest_status.current_retry_state,
-            &latest_status.skipped_regions,
-            retry_from,
-        )
+        latest_status.current_retry_state.get(&retry_from).cloned()
     }
 
     fn durable_execution_state(&self) -> DurableExecutionState {
@@ -985,11 +934,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             }
         };
 
-        let current_state = lookup_retry_state_with_replay_aggregation(
-            &latest_status.current_retry_state,
-            &latest_status.skipped_regions,
-            current_retry_point,
-        );
+        let current_state = latest_status
+            .current_retry_state
+            .get(&current_retry_point)
+            .cloned();
         let total_attempts = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
 
         match evaluate_named_policy_step_resetting_on_invalid_state(

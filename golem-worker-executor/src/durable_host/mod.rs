@@ -35,9 +35,7 @@ pub mod wasm_rpc;
 pub mod websocket;
 
 use self::golem::v1x::GetPromiseResultEntry;
-use crate::durable_host::durability::{
-    collect_named_retry_policies, lookup_retry_state_with_replay_aggregation,
-};
+use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::ephemeral::record_non_suspending_failure;
@@ -711,9 +709,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         in_atomic_region: bool,
     ) -> Option<RetryDecision> {
         match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt(ts)) => {
-                Some(RetryDecision::TryStop(*ts))
-            }
+            TrapType::Interrupt(InterruptKind::Interrupt(ts)) => Some(RetryDecision::TryStop(*ts)),
             TrapType::Interrupt(InterruptKind::Suspend(ts)) => Some(RetryDecision::TryStop(*ts)),
             TrapType::Interrupt(InterruptKind::Restart) => Some(RetryDecision::Immediate),
             TrapType::Interrupt(InterruptKind::Jump) => Some(RetryDecision::Immediate),
@@ -818,7 +814,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn get_recovery_decision_on_trap_with_semantic(
         &mut self,
         retry_state_with_current_attempt: &HashMap<OplogIndex, RetryPolicyState>,
-        skipped_regions: &DeletedRegions,
         trap_type: &TrapType,
         in_atomic_region: bool,
         full_function_name: &str,
@@ -918,11 +913,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         };
 
-        let current_state = lookup_retry_state_with_replay_aggregation(
-            retry_state_with_current_attempt,
-            skipped_regions,
-            *retry_from,
-        );
+        let current_state = retry_state_with_current_attempt.get(retry_from).cloned();
         let total_attempts_with_current = current_state
             .as_ref()
             .map(|s| s.retry_count())
@@ -2305,7 +2296,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let (decision, retry_policy_state) = self
             .get_recovery_decision_on_trap_with_semantic(
                 &latest_status_before.current_retry_state,
-                &latest_status_before.skipped_regions,
                 trap_type,
                 in_atomic_region,
                 full_function_name,

@@ -16,10 +16,9 @@ use crate::Tracing;
 use axum::Router;
 use axum::extract::State;
 use axum::routing::{get, post};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
-use golem_common::model::{AgentStatus, RetryConfig};
 use golem_common::model::retry_policy::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
+use golem_common::model::{AgentStatus, RetryConfig};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, drain_connection};
 use golem_wasm::Value;
@@ -33,6 +32,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tracing::Instrument;
 
@@ -481,12 +481,7 @@ async fn ts_manifest_status_retry_periodic_short(
 /// throws, traps, and the default trap policy gives up.
 async fn start_chaos_post_server(
     fail_count: usize,
-) -> (
-    u16,
-    Arc<AtomicUsize>,
-    Arc<AtomicUsize>,
-    Arc<AtomicUsize>,
-) {
+) -> (u16, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let counter = Arc::new(AtomicUsize::new(0));
     let conn_counter = Arc::new(AtomicUsize::new(0));
     let bad_request_counter = Arc::new(AtomicUsize::new(0));
@@ -635,10 +630,10 @@ fn content_length(headers_raw: &[u8]) -> Option<usize> {
     let s = std::str::from_utf8(headers_raw).ok()?;
     for line in s.split("\r\n") {
         let lower = line.to_ascii_lowercase();
-        if let Some(rest) = lower.strip_prefix("content-length:") {
-            if let Ok(n) = rest.trim().parse::<usize>() {
-                return Some(n);
-            }
+        if let Some(rest) = lower.strip_prefix("content-length:")
+            && let Ok(n) = rest.trim().parse::<usize>()
+        {
+            return Some(n);
         }
     }
     None
@@ -726,8 +721,7 @@ async fn ts_manifest_status_retry_post_with_json_body(
     // replay; a single 400 surfaced to the guest means the host's resend
     // path poisoned a keep-alive connection.
     let fail_count: usize = 5;
-    let (port, counter, conn_counter, bad_requests) =
-        start_chaos_post_server(fail_count).await;
+    let (port, counter, conn_counter, bad_requests) = start_chaos_post_server(fail_count).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_ts)
@@ -810,7 +804,11 @@ struct StepCounterState {
 
 async fn step_a_handler(State(state): State<StepCounterState>) -> axum::response::Response {
     let attempt = state.counter_a.fetch_add(1, Ordering::SeqCst) + 1;
-    let status = if attempt <= state.fail_count_a { 500 } else { 200 };
+    let status = if attempt <= state.fail_count_a {
+        500
+    } else {
+        200
+    };
     axum::response::Response::builder()
         .status(status)
         .body(axum::body::Body::empty())
@@ -819,7 +817,11 @@ async fn step_a_handler(State(state): State<StepCounterState>) -> axum::response
 
 async fn step_b_handler(State(state): State<StepCounterState>) -> axum::response::Response {
     let attempt = state.counter_b.fetch_add(1, Ordering::SeqCst) + 1;
-    let status = if attempt <= state.fail_count_b { 500 } else { 200 };
+    let status = if attempt <= state.fail_count_b {
+        500
+    } else {
+        200
+    };
     axum::response::Response::builder()
         .status(status)
         .body(axum::body::Body::empty())
@@ -917,7 +919,9 @@ async fn ts_manifest_status_retry_two_sequential_calls_are_both_re_armed(
 
     let observed_a = counter_a.load(Ordering::SeqCst);
     let observed_b = counter_b.load(Ordering::SeqCst);
-    eprintln!("two-step server observed: /step-a {observed_a} requests, /step-b {observed_b} requests");
+    eprintln!(
+        "two-step server observed: /step-a {observed_a} requests, /step-b {observed_b} requests"
+    );
 
     assert_eq!(
         result,
@@ -1091,7 +1095,6 @@ async fn ts_manifest_status_retry_ok_then_crash_is_bounded(
 
     Ok(())
 }
-
 
 /// Spawn an axum server with two POST routes:
 ///
@@ -1448,10 +1451,7 @@ async fn get_log_count(node_port: u16, endpoint: &str) -> usize {
         Ok(s) => s,
         Err(_) => return 0,
     };
-    let body_start = s
-        .find("\r\n\r\n")
-        .map(|i| i + 4)
-        .unwrap_or(s.len());
+    let body_start = s.find("\r\n\r\n").map(|i| i + 4).unwrap_or(s.len());
     let body = &s[body_start..];
     body.matches("\"in\":").count()
 }
@@ -1666,8 +1666,7 @@ async fn start_chaos_backend() -> (u16, ChaosBackend) {
                     Ok(c) => c,
                     Err(_) => continue,
                 };
-                let upstream = match tokio::net::TcpStream::connect(("127.0.0.1", node_port))
-                    .await
+                let upstream = match tokio::net::TcpStream::connect(("127.0.0.1", node_port)).await
                 {
                     Ok(s) => s,
                     Err(e) => {
@@ -1811,10 +1810,22 @@ async fn ts_v2_s1_payment_failure_then_reset(
         Value::Bool(true),
         "S1: agent must complete successfully once /payment recovers"
     );
-    assert_eq!(inv, 1, "S1: inventory must succeed exactly once, observed {inv}");
-    assert_eq!(pay, 1, "S1: payment must succeed exactly once, observed {pay}");
-    assert_eq!(ship, 1, "S1: shipment must succeed exactly once, observed {ship}");
-    assert_eq!(mail, 1, "S1: email must succeed exactly once, observed {mail}");
+    assert_eq!(
+        inv, 1,
+        "S1: inventory must succeed exactly once, observed {inv}"
+    );
+    assert_eq!(
+        pay, 1,
+        "S1: payment must succeed exactly once, observed {pay}"
+    );
+    assert_eq!(
+        ship, 1,
+        "S1: shipment must succeed exactly once, observed {ship}"
+    );
+    assert_eq!(
+        mail, 1,
+        "S1: email must succeed exactly once, observed {mail}"
+    );
 
     let _ = worker_id;
     Ok(())
@@ -1854,7 +1865,7 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
         .await?;
 
     let agent_id = agent_id!("CheckoutAgentV2", "ord-s2-v2");
-    let _worker_id = executor
+    let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
 
@@ -1900,10 +1911,22 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
         Value::Bool(true),
         "S2: agent must complete successfully once /shipment recovers"
     );
-    assert_eq!(inv, 1, "S2: inventory must succeed exactly once, observed {inv}");
-    assert_eq!(pay, 1, "S2: payment must succeed exactly once, observed {pay}");
-    assert_eq!(ship, 1, "S2: shipment must succeed exactly once, observed {ship}");
-    assert_eq!(mail, 1, "S2: email must succeed exactly once, observed {mail}");
+    assert_eq!(
+        inv, 1,
+        "S2: inventory must succeed exactly once, observed {inv}"
+    );
+    assert_eq!(
+        pay, 1,
+        "S2: payment must succeed exactly once, observed {pay}"
+    );
+    assert_eq!(
+        ship, 1,
+        "S2: shipment must succeed exactly once, observed {ship}"
+    );
+    assert_eq!(
+        mail, 1,
+        "S2: email must succeed exactly once, observed {mail}"
+    );
 
     // Hard upper bound on the *number of /shipment attempts*: the user
     // observed hundreds-to-thousands of in-flight POSTs because every
@@ -1916,6 +1939,62 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
     assert!(
         ship_a <= 32,
         "S2: /shipment attempt count must be bounded (tight retry loop bug), observed {ship_a}"
+    );
+
+    // Regression: the /shipment retries happen inside `atomically(...)`, so
+    // every persisted `OplogEntry::Error.retry_from` must point at the
+    // active `BeginAtomicRegion` index (BAR) — never at a per-attempt
+    // `BeginRemoteWrite` index. If `retry_from` were keyed off the unstable
+    // BeginRemoteWrite index, the retry budget would silently reset on
+    // every replay and the named retry policy could never exhaust, which is
+    // exactly the unbounded-loop bug that the now-removed
+    // `lookup_retry_state_with_replay_aggregation` fallback used to mask.
+    let oplog = executor
+        .get_oplog(&worker_id, golem_common::model::oplog::OplogIndex::INITIAL)
+        .await?;
+    let begin_atomic_region_indices: std::collections::HashSet<_> = oplog
+        .iter()
+        .filter_map(|e| match &e.entry {
+            golem_common::model::oplog::PublicOplogEntry::BeginAtomicRegion(_) => {
+                Some(e.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    let begin_remote_write_indices: std::collections::HashSet<_> = oplog
+        .iter()
+        .filter_map(|e| match &e.entry {
+            golem_common::model::oplog::PublicOplogEntry::BeginRemoteWrite(_) => {
+                Some(e.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    let mut error_entries_checked = 0usize;
+    for e in &oplog {
+        if let golem_common::model::oplog::PublicOplogEntry::Error(params) = &e.entry {
+            assert!(
+                !begin_remote_write_indices.contains(&params.retry_from),
+                "S2: Error.retry_from must NOT point to a BeginRemoteWrite index \
+                 (would mean unstable per-attempt retry identity); \
+                 retry_from={:?}, error={:?}",
+                params.retry_from,
+                params.error,
+            );
+            assert!(
+                begin_atomic_region_indices.contains(&params.retry_from),
+                "S2: Error.retry_from must point to the active atomic region's \
+                 BeginAtomicRegion index; retry_from={:?}, error={:?}, BAR indices={:?}",
+                params.retry_from,
+                params.error,
+                begin_atomic_region_indices,
+            );
+            error_entries_checked += 1;
+        }
+    }
+    assert!(
+        error_entries_checked > 0,
+        "S2: expected at least one persisted Error entry from the shipment retries, found none"
     );
 
     Ok(())
@@ -2016,9 +2095,18 @@ async fn ts_v2_s3_process_crash_mid_workflow(
         "S3: agent must reach Idle (recovered via oplog replay), got {:?}",
         metadata.status
     );
-    assert_eq!(inv, 1, "S3: /inventory must NOT be re-executed after crash, observed {inv}");
-    assert_eq!(pay, 1, "S3: /payment must NOT be re-executed after crash, observed {pay}");
-    assert_eq!(ship, 1, "S3: /shipment must NOT be re-executed after crash, observed {ship}");
+    assert_eq!(
+        inv, 1,
+        "S3: /inventory must NOT be re-executed after crash, observed {inv}"
+    );
+    assert_eq!(
+        pay, 1,
+        "S3: /payment must NOT be re-executed after crash, observed {pay}"
+    );
+    assert_eq!(
+        ship, 1,
+        "S3: /shipment must NOT be re-executed after crash, observed {ship}"
+    );
     assert_eq!(
         mail, 1,
         "S3: /email must succeed exactly once after replay (no tight retry loop), observed {mail}"
@@ -2104,10 +2192,22 @@ async fn ts_v2_s4_sustained_70_percent_chaos(
         Value::Bool(true),
         "S4: agent must complete successfully despite 70% failure rate"
     );
-    assert_eq!(inv, 1, "S4: inventory must succeed exactly once, observed {inv}");
-    assert_eq!(pay, 1, "S4: payment must succeed exactly once, observed {pay}");
-    assert_eq!(ship, 1, "S4: shipment must succeed exactly once, observed {ship}");
-    assert_eq!(mail, 1, "S4: email must succeed exactly once, observed {mail}");
+    assert_eq!(
+        inv, 1,
+        "S4: inventory must succeed exactly once, observed {inv}"
+    );
+    assert_eq!(
+        pay, 1,
+        "S4: payment must succeed exactly once, observed {pay}"
+    );
+    assert_eq!(
+        ship, 1,
+        "S4: shipment must succeed exactly once, observed {ship}"
+    );
+    assert_eq!(
+        mail, 1,
+        "S4: email must succeed exactly once, observed {mail}"
+    );
 
     Ok(())
 }
