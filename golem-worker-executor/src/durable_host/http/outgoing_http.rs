@@ -319,94 +319,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Scheme::Https | Scheme::Other(_) => true,
         };
 
-        let (default_connect_timeout, default_first_byte_timeout, default_between_bytes_timeout) =
-            match &self.state.config.http_client {
-                crate::services::golem_config::HttpClientConfig::Enabled(http) => (
-                    http.default_request_connect_timeout,
-                    http.default_request_first_byte_timeout,
-                    http.default_request_between_bytes_timeout,
-                ),
-                crate::services::golem_config::HttpClientConfig::Disabled(_) => {
-                    let default = std::time::Duration::from_secs(600);
-                    (default, default, default)
-                }
-            };
-        // Clamp guest-provided timeouts by the host defaults: the host config
-        // acts as both default (when guest omits it) and upper bound (when guest
-        // provides a larger value). This is required so that host-level retry
-        // policies aren't undermined by guests that ship with absurdly long
-        // default timeouts (e.g. wasm-rquickjs `fetch` defaults).
+        let default_timeout = std::time::Duration::from_secs(600);
         let opts = options.as_ref().and_then(|o| self.table().get(o).ok());
         let connect_timeout = opts
             .and_then(|o| o.connect_timeout)
-            .map(|t| t.min(default_connect_timeout))
-            .unwrap_or(default_connect_timeout);
+            .unwrap_or(default_timeout);
         let first_byte_timeout = opts
             .and_then(|o| o.first_byte_timeout)
-            .map(|t| t.min(default_first_byte_timeout))
-            .unwrap_or(default_first_byte_timeout);
+            .unwrap_or(default_timeout);
         let between_bytes_timeout = opts
             .and_then(|o| o.between_bytes_timeout)
-            .map(|t| t.min(default_between_bytes_timeout))
-            .unwrap_or(default_between_bytes_timeout);
-
-        // Apply the clamped values to the actual RequestOptions resource so they
-        // take effect at the wasi-http transport layer. If the guest didn't
-        // provide a RequestOptions resource, synthesize one from the host
-        // defaults.
-        let effective_options = {
-            use wasmtime_wasi_http::bindings::http::types::HostRequestOptions;
-            let connect_ns: u64 = connect_timeout.as_nanos().try_into().unwrap_or(u64::MAX);
-            let first_byte_ns: u64 = first_byte_timeout
-                .as_nanos()
-                .try_into()
-                .unwrap_or(u64::MAX);
-            let between_bytes_ns: u64 = between_bytes_timeout
-                .as_nanos()
-                .try_into()
-                .unwrap_or(u64::MAX);
-            let opts_resource = if let Some(resource) = options {
-                resource
-            } else {
-                let mut view = self.as_wasi_http_view();
-                HostRequestOptions::new(&mut view).map_err(HttpError::trap)?
-            };
-            let mut view = self.as_wasi_http_view();
-            HostRequestOptions::set_connect_timeout(
-                &mut view,
-                Resource::new_borrow(opts_resource.rep()),
-                Some(connect_ns),
-            )
-            .map_err(HttpError::trap)?
-            .map_err(|()| {
-                HttpError::trap(wasmtime::Error::msg(
-                    "failed to clamp connect_timeout on RequestOptions",
-                ))
-            })?;
-            HostRequestOptions::set_first_byte_timeout(
-                &mut view,
-                Resource::new_borrow(opts_resource.rep()),
-                Some(first_byte_ns),
-            )
-            .map_err(HttpError::trap)?
-            .map_err(|()| {
-                HttpError::trap(wasmtime::Error::msg(
-                    "failed to clamp first_byte_timeout on RequestOptions",
-                ))
-            })?;
-            HostRequestOptions::set_between_bytes_timeout(
-                &mut view,
-                Resource::new_borrow(opts_resource.rep()),
-                Some(between_bytes_ns),
-            )
-            .map_err(HttpError::trap)?
-            .map_err(|()| {
-                HttpError::trap(wasmtime::Error::msg(
-                    "failed to clamp between_bytes_timeout on RequestOptions",
-                ))
-            })?;
-            Some(opts_resource)
-        };
+            .unwrap_or(default_timeout);
 
         // Capture pending request/body/stream mappings before calling handle().
         // The WASI implementation may drop the outgoing request resource as part of
@@ -427,7 +350,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .remove(&body_rep)
         });
 
-        let result = Host::handle(&mut self.as_wasi_http_view(), request, effective_options).await;
+        let result = Host::handle(&mut self.as_wasi_http_view(), request, options).await;
 
         match &result {
             Ok(future_incoming_response) => {

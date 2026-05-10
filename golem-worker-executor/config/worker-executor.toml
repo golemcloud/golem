@@ -69,9 +69,6 @@ type = "Enabled"
 
 [http_client.config]
 connect_timeout = "30s"
-default_request_between_bytes_timeout = "10m"
-default_request_connect_timeout = "10m"
-default_request_first_byte_timeout = "10m"
 idle_timeout = "1m 30s"
 max_connections_per_host = 20
 max_host_entries = 1024
@@ -391,9 +388,6 @@ without_time = false
 # 
 # [http_client.config]
 # connect_timeout = "30s"
-# default_request_between_bytes_timeout = "10m"
-# default_request_connect_timeout = "10m"
-# default_request_first_byte_timeout = "10m"
 # idle_timeout = "1m 30s"
 # max_connections_per_host = 20
 # max_host_entries = 1024
@@ -697,9 +691,6 @@ without_time = false
 # 
 # [http_client.config]
 # connect_timeout = "30s"
-# default_request_between_bytes_timeout = "10m"
-# default_request_connect_timeout = "10m"
-# default_request_first_byte_timeout = "10m"
 # idle_timeout = "1m 30s"
 # max_connections_per_host = 20
 # max_host_entries = 1024
