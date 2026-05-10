@@ -904,7 +904,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .unwrap_or_default();
         let total_attempts_before_current = total_attempts_with_current.saturating_sub(1);
 
-        match evaluate_named_policy_step(named_policy, &properties, current_state.as_ref()) {
+        match evaluate_named_policy_step_resetting_on_invalid_state(
+            named_policy,
+            &properties,
+            current_state.as_ref(),
+        ) {
             Ok((new_state, RetryVerdict::Retry(delay))) => {
                 debug!(
                     retry_policy = %named_policy.name,

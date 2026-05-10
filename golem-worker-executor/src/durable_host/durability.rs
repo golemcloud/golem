@@ -177,6 +177,42 @@ pub(crate) fn evaluate_named_policy_step(
     Ok((new_state, verdict))
 }
 
+/// Like [`evaluate_named_policy_step`], but if the evaluation reports
+/// `InvalidState` against a non-empty `current_state` (typically because
+/// the persisted state was written by a *different* policy at the same
+/// retry point — e.g. the in-function HTTP status retry path leaves a
+/// `CountBox{Counter}` state at the request's begin index, and a
+/// subsequent trap-retry path then evaluates a `Jitter/Exp` policy
+/// against that slot), automatically retry the evaluation as if no
+/// prior state existed.
+///
+/// This is a defensive guard for the case where a single retry-state
+/// slot is shared between multiple distinct policies. Without it, the
+/// shape mismatch falls through to the legacy retry config and silently
+/// disables retrying altogether.
+///
+/// We only do this fallback for `InvalidState`; other evaluation errors
+/// (e.g. `PropertyNotFound`, `CoercionFailed`) are real errors and must
+/// surface as before.
+pub(crate) fn evaluate_named_policy_step_resetting_on_invalid_state(
+    named_policy: &NamedRetryPolicy,
+    properties: &RetryProperties,
+    current_state: Option<&RetryPolicyState>,
+) -> Result<(RetryPolicyState, RetryVerdict), RetryEvaluationError> {
+    let result = evaluate_named_policy_step(named_policy, properties, current_state)?;
+    match (&result.1, current_state) {
+        (RetryVerdict::Error(RetryEvaluationError::InvalidState { details }), Some(_)) => {
+            tracing::debug!(
+                policy = %named_policy.name,
+                details,
+                "Retry-state shape mismatch detected; retrying evaluation with empty state"
+            );
+            evaluate_named_policy_step(named_policy, properties, None)
+        }
+        _ => Ok(result),
+    }
+}
+
 /// Encapsulates in-function retry state for a single durable function invocation.
 ///
 /// Tracks the retry count accumulated within the current host function call
@@ -791,7 +827,11 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 .get(&current_retry_point)
                 .cloned();
             let total_attempts = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
-            match evaluate_named_policy_step(named_policy, &properties, current_state.as_ref()) {
+            match evaluate_named_policy_step_resetting_on_invalid_state(
+                named_policy,
+                &properties,
+                current_state.as_ref(),
+            ) {
                 Ok((_new_state, RetryVerdict::Retry(_))) => {
                     debug!(
                         retry_policy = %named_policy.name,
@@ -2227,5 +2267,83 @@ mod tests {
                 "ft={ft:?}, idempotent={idempotent}"
             );
         }
+    }
+
+    /// Bug B reproducer: when the in-function HTTP status retry exhausts
+    /// (so the guest finally sees the 500 and traps), the leftover
+    /// `CountBox{Counter}` retry state at the request's begin index must
+    /// not poison the trap-retry path's evaluation of a *different*
+    /// policy (the catch-all `default` policy synthesised from
+    /// `RetryConfig`, which has shape `CountBox{Jitter{Clamp{Exp}}}`).
+    ///
+    /// Without the `evaluate_named_policy_step_resetting_on_invalid_state`
+    /// guard, evaluation produces `RetryVerdict::Error(InvalidState ..)`
+    /// and the trap path silently falls back to the legacy retry config
+    /// instead of using the user-configured (or default) named policy.
+    #[test]
+    fn evaluate_named_policy_step_resets_on_state_shape_mismatch() {
+        use golem_common::model::RetryConfig;
+
+        let default_policy =
+            NamedRetryPolicy::default_from_config(&RetryConfig::max_attempts_5());
+
+        // Simulate the leftover state from an exhausted inline status
+        // retry: its inner state is a bare `Counter`, while the default
+        // policy's inner is a `Wrapper` chain.
+        let stale_state = RetryPolicyState::CountBox {
+            attempts: 2,
+            inner: Box::new(RetryPolicyState::Counter(2)),
+        };
+        let properties = RetryProperties::new();
+
+        // Without the guard: evaluation surfaces InvalidState as a
+        // verdict (which the trap-retry call site treats as a fall-back
+        // signal to the legacy retry config).
+        let baseline =
+            evaluate_named_policy_step(&default_policy, &properties, Some(&stale_state))
+                .expect("evaluate must not error at the Result layer");
+        assert!(
+            matches!(
+                baseline.1,
+                RetryVerdict::Error(RetryEvaluationError::InvalidState { .. })
+            ),
+            "baseline must produce InvalidState verdict, got {:?}",
+            baseline.1
+        );
+
+        // With the guard: evaluation transparently re-evaluates from an
+        // empty state, producing a usable Retry verdict.
+        let guarded = evaluate_named_policy_step_resetting_on_invalid_state(
+            &default_policy,
+            &properties,
+            Some(&stale_state),
+        )
+        .expect("evaluate must not error at the Result layer");
+        assert!(
+            matches!(guarded.1, RetryVerdict::Retry(_)),
+            "guarded evaluation must produce a Retry verdict, got {:?}",
+            guarded.1
+        );
+
+        // The guard MUST NOT change behaviour when the state shape
+        // matches: the existing accumulator must be preserved (otherwise
+        // it would be a regression in normal retry accounting).
+        let valid_state = default_policy.policy.initial_state();
+        let direct =
+            evaluate_named_policy_step(&default_policy, &properties, Some(&valid_state))
+                .expect("evaluate must not error");
+        let via_guard = evaluate_named_policy_step_resetting_on_invalid_state(
+            &default_policy,
+            &properties,
+            Some(&valid_state),
+        )
+        .expect("evaluate must not error");
+        assert!(matches!(direct.1, RetryVerdict::Retry(_)));
+        assert!(matches!(via_guard.1, RetryVerdict::Retry(_)));
+        assert_eq!(
+            format!("{:?}", direct.0),
+            format!("{:?}", via_guard.0),
+            "guard must not perturb state when shape matches"
+        );
     }
 }

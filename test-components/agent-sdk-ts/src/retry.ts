@@ -53,4 +53,19 @@ class RetryTest extends BaseAgent {
       return response.ok;
     });
   }
+
+  /**
+   * Plain fetch + throw on !ok, with
+   * NO `withRetryPolicy` and NO `atomically`.  All retry behaviour must
+   * come from a `retryPolicyDefaults`-style policy defined at the
+   * environment level (i.e. supplied to the executor through the
+   * `EnvironmentStateService`).
+   */
+  async manifestStatusRetryTest(host: string, port: number): Promise<boolean> {
+    const response = await fetch(`http://${host}:${port}/attempt`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return true;
+  }
 }

@@ -18,6 +18,9 @@ use axum::extract::State;
 use axum::routing::get;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_common::model::RetryConfig;
+use golem_common::model::retry_policy::{
+    NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy,
+};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, drain_connection};
 use golem_wasm::Value;
@@ -275,3 +278,136 @@ async fn ts_invocation_events_use_method_display_name(
 
     Ok(())
 }
+
+/// Builds a manifest-style status-code retry policy:
+///
+///   countBox(maxRetries = 1000, inner = periodic(<delay>))
+///   predicate: status-code in {500, 502, 503, 504}
+fn manifest_http_5xx_retry_policy(name: &str, delay: Duration) -> NamedRetryPolicy {
+    NamedRetryPolicy {
+        name: name.to_string(),
+        priority: 20,
+        predicate: Predicate::PropIn {
+            property: "status-code".to_string(),
+            values: vec![
+                PredicateValue::Integer(500),
+                PredicateValue::Integer(502),
+                PredicateValue::Integer(503),
+                PredicateValue::Integer(504),
+            ],
+        },
+        policy: RetryPolicy::CountBox {
+            max_retries: 1000,
+            inner: Box::new(RetryPolicy::Periodic(delay)),
+        },
+    }
+}
+
+/// Reproducer for the manifest-only HTTP 5xx retry path (the "V2" pattern):
+/// the guest does plain `fetch + throw on !ok`, with NO `withRetryPolicy`
+/// and NO `atomically`.  The retry policy is supplied entirely by the
+/// environment state service (mirroring `retryPolicyDefaults` in
+/// `golem.yaml`).
+///
+/// The server returns 500 for the first 3 requests then 200; the executor
+/// must transparently re-issue the failing request 4 times until success.
+async fn run_manifest_status_retry_test(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_sdk_ts: &PrecompiledComponent,
+    delay: Duration,
+    fail_count: usize,
+    agent_name: &str,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        retry_policies: Some(vec![manifest_http_5xx_retry_policy(
+            "manifest-5xx-retry",
+            delay,
+        )]),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let (port, counter) = start_attempt_counter_server(fail_count).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_ts)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("RetryTest", agent_name);
+    executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "manifestStatusRetryTest",
+            data_value!("localhost", port as f64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
+
+    assert_eq!(result, Value::Bool(true), "agent must complete successfully");
+    let observed = counter.load(Ordering::SeqCst);
+    assert!(
+        observed >= fail_count + 1,
+        "server must observe at least {} attempts, observed {observed}",
+        fail_count + 1
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn ts_manifest_status_retry_immediate(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    // Even with a near-zero delay, the manifest-only path must retry
+    // transparently when the guest throws on !ok.
+    run_manifest_status_retry_test(
+        last_unique_id,
+        deps,
+        agent_sdk_ts,
+        Duration::from_millis(1),
+        3,
+        "manifest-status-retry-immediate",
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn ts_manifest_status_retry_periodic_short(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    // 200 ms periodic delay reproduces the V2 failure mode in the user's
+    // chaos-backend smoke test (the host matches the policy and schedules
+    // a non-zero delay; the in-flight retry must still re-issue the
+    // request).
+    run_manifest_status_retry_test(
+        last_unique_id,
+        deps,
+        agent_sdk_ts,
+        Duration::from_millis(200),
+        3,
+        "manifest-status-retry-periodic-short",
+    )
+    .await
+}
+
+
