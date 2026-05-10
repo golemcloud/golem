@@ -1632,6 +1632,18 @@ pub struct HttpClientEnabledConfig {
     pub max_total_connections: usize,
     /// Maximum number of distinct host entries tracked in the per-host semaphore map.
     pub max_host_entries: usize,
+    /// Default per-request connect timeout used when the guest does not provide
+    /// `wasi:http` `RequestOptions::connect_timeout`.
+    #[serde(with = "humantime_serde")]
+    pub default_request_connect_timeout: Duration,
+    /// Default per-request first-byte timeout used when the guest does not provide
+    /// `wasi:http` `RequestOptions::first_byte_timeout`.
+    #[serde(with = "humantime_serde")]
+    pub default_request_first_byte_timeout: Duration,
+    /// Default per-request between-bytes timeout used when the guest does not provide
+    /// `wasi:http` `RequestOptions::between_bytes_timeout`.
+    #[serde(with = "humantime_serde")]
+    pub default_request_between_bytes_timeout: Duration,
 }
 
 impl Default for HttpClientEnabledConfig {
@@ -1643,6 +1655,9 @@ impl Default for HttpClientEnabledConfig {
             max_connections_per_host: 20,
             max_total_connections: 200,
             max_host_entries: 1024,
+            default_request_connect_timeout: Duration::from_secs(600),
+            default_request_first_byte_timeout: Duration::from_secs(600),
+            default_request_between_bytes_timeout: Duration::from_secs(600),
         }
     }
 }
@@ -1672,6 +1687,21 @@ impl SafeDisplay for HttpClientEnabledConfig {
             self.max_total_connections
         );
         let _ = writeln!(&mut result, "max host entries: {}", self.max_host_entries);
+        let _ = writeln!(
+            &mut result,
+            "default request connect timeout: {}s",
+            self.default_request_connect_timeout.as_secs()
+        );
+        let _ = writeln!(
+            &mut result,
+            "default request first-byte timeout: {}s",
+            self.default_request_first_byte_timeout.as_secs()
+        );
+        let _ = writeln!(
+            &mut result,
+            "default request between-bytes timeout: {}s",
+            self.default_request_between_bytes_timeout.as_secs()
+        );
         result
     }
 }

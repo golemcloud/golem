@@ -489,6 +489,11 @@ pub enum InvokeResult {
         consumed_fuel: u64,
         error: OplogAgentError,
         retry_from: OplogIndex,
+        /// Ephemeral semantic-retry override extracted from the failing
+        /// `anyhow::Error` chain. Round-tripped via `as_trap_type` so the
+        /// post-trap recovery path can honour it.
+        semantic_trap_retry_override:
+            Option<crate::durable_host::durability::SemanticTrapRetryOverride>,
     },
     /// The invoked function succeeded and produced a result
     Succeeded {
@@ -515,10 +520,15 @@ impl InvokeResult {
                 interrupt_kind: kind,
             },
             TrapType::Exit => InvokeResult::Exited { consumed_fuel },
-            TrapType::Error { error, retry_from } => InvokeResult::Failed {
+            TrapType::Error {
+                error,
+                retry_from,
+                semantic_trap_retry_override,
+            } => InvokeResult::Failed {
                 consumed_fuel,
                 error,
                 retry_from,
+                semantic_trap_retry_override,
             },
         }
     }
@@ -535,10 +545,14 @@ impl InvokeResult {
     pub fn as_trap_type<Ctx: WorkerCtx>(&self) -> Option<TrapType> {
         match self {
             InvokeResult::Failed {
-                error, retry_from, ..
+                error,
+                retry_from,
+                semantic_trap_retry_override,
+                ..
             } => Some(TrapType::Error {
                 error: error.clone(),
                 retry_from: *retry_from,
+                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
             }),
             InvokeResult::Interrupted { interrupt_kind, .. } => {
                 Some(TrapType::Interrupt(*interrupt_kind))
@@ -754,12 +768,14 @@ fn wrap_output_as_agent_result(
                     consumed_fuel,
                     error: OplogAgentError::InternalError(agent_error.to_string()),
                     retry_from: OplogIndex::INITIAL,
+                    semantic_trap_retry_override: None,
                 })
             }
             Some(Value::Result(Err(None))) => Ok(InvokeResult::Failed {
                 consumed_fuel,
                 error: OplogAgentError::InternalError("Unknown agent error".to_string()),
                 retry_from: OplogIndex::INITIAL,
+                semantic_trap_retry_override: None,
             }),
             other => Err(WorkerExecutorError::runtime(format!(
                 "Unexpected result shape from initialize function: {other:?}"
@@ -793,12 +809,14 @@ fn wrap_output_as_agent_result(
                     consumed_fuel,
                     error: OplogAgentError::InternalError(agent_error.to_string()),
                     retry_from: OplogIndex::INITIAL,
+                    semantic_trap_retry_override: None,
                 })
             }
             Some(Value::Result(Err(None))) => Ok(InvokeResult::Failed {
                 consumed_fuel,
                 error: OplogAgentError::InternalError("Unknown agent error".to_string()),
                 retry_from: OplogIndex::INITIAL,
+                semantic_trap_retry_override: None,
             }),
             other => Err(WorkerExecutorError::runtime(format!(
                 "Unexpected result shape from invoke function: {other:?}"

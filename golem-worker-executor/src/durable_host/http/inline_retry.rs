@@ -430,7 +430,11 @@ pub fn reconstruct_http_request(
         .parse()
         .map_err(|e| anyhow::anyhow!("failed to parse stored URI '{}': {e}", request.uri))?;
 
+    let authority = uri.authority().map(|a| a.to_string());
+
     let mut builder = hyper::Request::builder().method(method).uri(uri);
+
+    let mut has_host_header = false;
 
     // Replay stored headers exactly
     for (name, value) in &request.headers {
@@ -438,6 +442,9 @@ pub fn reconstruct_http_request(
             .map_err(|e| anyhow::anyhow!("invalid stored header name '{name}': {e}"))?;
         let header_value = HeaderValue::from_str(value)
             .map_err(|e| anyhow::anyhow!("invalid stored header value for '{name}': {e}"))?;
+        if header_name == http::header::HOST {
+            has_host_header = true;
+        }
         builder = builder.header(header_name, header_value);
     }
 
@@ -447,7 +454,25 @@ pub fn reconstruct_http_request(
             .map_err(|e| anyhow::anyhow!("invalid extra header name '{name}': {e}"))?;
         let header_value = HeaderValue::from_str(value)
             .map_err(|e| anyhow::anyhow!("invalid extra header value for '{name}': {e}"))?;
+        if header_name == http::header::HOST {
+            has_host_header = true;
+        }
         builder = builder.header(header_name, header_value);
+    }
+
+    // The retry resend goes through `default_send_request_handler` (raw
+    // hyper http1::SendRequest), which does NOT inject a Host header
+    // automatically the way hyper-util's pooled `Client` does. Without
+    // an explicit Host header, HTTP/1.1 servers reject the request with
+    // 400 Bad Request — and crucially, that 400 surfaces to the guest
+    // as a non-5xx response, bypassing any 5xx retry policy. Add the
+    // Host header here from the URI's authority if the captured
+    // headers don't already include one.
+    if !has_host_header
+        && let Some(authority) = authority
+        && let Ok(value) = HeaderValue::from_str(&authority)
+    {
+        builder = builder.header(http::header::HOST, value);
     }
 
     builder
@@ -1582,41 +1607,12 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
     request_state: &HttpRequestState,
     status: u16,
 ) -> Result<StatusRetryOutcome, anyhow::Error> {
-    if ctx.in_atomic_region() {
-        tracing::debug!(
-            status,
-            uri = %request_state.request.uri,
-            "HTTP status retry skipped: inside atomic region"
-        );
-        return Ok(StatusRetryOutcome::NoRetry);
-    }
-
-    let exec_state = ctx.durable_execution_state();
-    let streaming_body_retry =
-        request_state.outgoing_body_rep.is_some() && !request_state.retry.body_finished;
-    let mut eligibility_state = request_state.clone();
-    let eligibility_phase = if streaming_body_retry {
-        InlineRetryPhase::WritingRequestBody
-    } else {
-        // AwaitingResponse get-time resend for a finished body does not swap output
-        // stream resources, so an output-stream subscribe() pollable cannot go stale
-        // here (mirrors `try_awaiting_response_inline_retry`).
-        eligibility_state.retry.output_stream_subscribed = false;
-        InlineRetryPhase::AwaitingResponse
-    };
-
-    if let Err(reason) =
-        is_http_inline_retry_eligible(&exec_state, &eligibility_state, eligibility_phase)
-    {
-        tracing::debug!(
-            ?reason,
-            status,
-            uri = %request_state.request.uri,
-            "HTTP status retry skipped"
-        );
-        return Ok(StatusRetryOutcome::NoRetry);
-    }
-
+    // Build retry properties (including `status-code`) and resolve a matching
+    // user-defined status-code policy *before* doing eligibility / atomic-region
+    // checks. We need to know whether a status-code policy matches in order to
+    // decide between `NoRetry` (fall through to user code) and `FallBackToTrap`
+    // (let the trap-recovery path honour the policy verdict via the carried
+    // override marker).
     let mut properties = RetryContext::http_with_response(
         &request_state.request.method.to_string(),
         &request_state.request.uri,
@@ -1647,6 +1643,51 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
             return Ok(StatusRetryOutcome::NoRetry);
         }
     };
+
+    // Inside an atomic region, inline retry is forbidden (it would skip the
+    // atomic-region rollback semantics). Escalate to trap+replay so the
+    // trap-recovery path can honour the resolved policy via the
+    // `SemanticTrapRetryOverride` marker that `try_trigger_retry` will attach
+    // — without this escalation the V2 guest would see the rejected response,
+    // throw, and trap with an impoverished context (no `status-code`), causing
+    // the user's status-code-keyed policy to silently fall back to the default
+    // trap-context policy.
+    if ctx.in_atomic_region() {
+        tracing::debug!(
+            policy = %matched.name,
+            status,
+            uri = %request_state.request.uri,
+            "HTTP status retry matched inside atomic region; falling back to trap+replay"
+        );
+        return Ok(StatusRetryOutcome::FallBackToTrap);
+    }
+
+    let exec_state = ctx.durable_execution_state();
+    let streaming_body_retry =
+        request_state.outgoing_body_rep.is_some() && !request_state.retry.body_finished;
+    let mut eligibility_state = request_state.clone();
+    let eligibility_phase = if streaming_body_retry {
+        InlineRetryPhase::WritingRequestBody
+    } else {
+        // AwaitingResponse get-time resend for a finished body does not swap output
+        // stream resources, so an output-stream subscribe() pollable cannot go stale
+        // here (mirrors `try_awaiting_response_inline_retry`).
+        eligibility_state.retry.output_stream_subscribed = false;
+        InlineRetryPhase::AwaitingResponse
+    };
+
+    if let Err(reason) =
+        is_http_inline_retry_eligible(&exec_state, &eligibility_state, eligibility_phase)
+    {
+        tracing::debug!(
+            ?reason,
+            policy = %matched.name,
+            status,
+            uri = %request_state.request.uri,
+            "HTTP status retry skipped"
+        );
+        return Ok(StatusRetryOutcome::NoRetry);
+    }
 
     if streaming_body_retry {
         tracing::debug!(

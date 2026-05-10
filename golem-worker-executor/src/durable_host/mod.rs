@@ -35,7 +35,9 @@ pub mod wasm_rpc;
 pub mod websocket;
 
 use self::golem::v1x::GetPromiseResultEntry;
-use crate::durable_host::durability::collect_named_retry_policies;
+use crate::durable_host::durability::{
+    collect_named_retry_policies, lookup_retry_state_with_replay_aggregation,
+};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::ephemeral::record_non_suspending_failure;
@@ -111,8 +113,7 @@ use golem_common::model::{
     AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, RetryContext,
     RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
 };
-use golem_common::model::{PredicateValue, RetryConfig, RetryPolicyState, RetryProperties};
-use golem_common::retries::get_delay;
+use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -699,117 +700,93 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn get_recovery_decision_on_trap(
-        retry_config: &RetryConfig,
-        retry_state: &HashMap<OplogIndex, RetryPolicyState>,
+    /// Returns the deterministic, policy-independent recovery decision for a
+    /// trap type — i.e. the cases where the answer does not depend on retry
+    /// state or any retry policy. For trap-error variants whose decision is
+    /// driven by named retry policies (`Unknown`, `TransientError`, and
+    /// `DeterministicTrap` inside an atomic region), this returns `None` and
+    /// the caller falls through to policy-based resolution.
+    fn fixed_decision_for_trap_type(
         trap_type: &TrapType,
         in_atomic_region: bool,
-    ) -> RetryDecision {
+    ) -> Option<RetryDecision> {
         match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt(ts)) => RetryDecision::TryStop(*ts),
-            TrapType::Interrupt(InterruptKind::Suspend(ts)) => RetryDecision::TryStop(*ts),
-            TrapType::Interrupt(InterruptKind::Restart) => RetryDecision::Immediate,
-            TrapType::Interrupt(InterruptKind::Jump) => RetryDecision::Immediate,
-            TrapType::Exit => RetryDecision::None,
+            TrapType::Interrupt(InterruptKind::Interrupt(ts)) => {
+                Some(RetryDecision::TryStop(*ts))
+            }
+            TrapType::Interrupt(InterruptKind::Suspend(ts)) => Some(RetryDecision::TryStop(*ts)),
+            TrapType::Interrupt(InterruptKind::Restart) => Some(RetryDecision::Immediate),
+            TrapType::Interrupt(InterruptKind::Jump) => Some(RetryDecision::Immediate),
+            TrapType::Exit => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::OutOfMemory,
                 ..
-            } => RetryDecision::ReacquirePermits,
+            } => Some(RetryDecision::ReacquirePermits),
             TrapType::Error {
                 error: AgentError::InvalidRequest(_),
                 ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::StackOverflow,
                 ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::ExceededMemoryLimit,
                 ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::ExceededTableLimit,
                 ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::NodeOutOfFilesystemStorage,
                 ..
-            } => RetryDecision::ReacquirePermits,
+            } => Some(RetryDecision::ReacquirePermits),
             TrapType::Error {
                 error: AgentError::AgentExceededFilesystemStorageLimit,
                 ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::AgentTerminatedByQuota(_),
                 ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error:
                     AgentError::EphemeralSleepTooLong(_)
                     | AgentError::EphemeralFuelExhausted(_)
                     | AgentError::EphemeralCannotSuspend(_),
                 ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::InternalError(_),
                 ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::ExceededHttpCallLimit,
                 ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::ExceededRpcCallLimit,
                 ..
-            } => RetryDecision::None,
-            TrapType::Error {
-                error: AgentError::DeterministicTrap(_),
-                retry_from,
-            } if in_atomic_region => {
-                // +1 because the current attempt hasn't been persisted to the state yet
-                let attempts = retry_state
-                    .get(retry_from)
-                    .map(|s| s.retry_count())
-                    .unwrap_or_default()
-                    + 1;
-                let retryable = attempts < retry_config.max_attempts;
-                if retryable {
-                    match get_delay(retry_config, attempts) {
-                        Some(delay) => RetryDecision::Delayed(delay),
-                        None => RetryDecision::None,
-                    }
-                } else {
-                    RetryDecision::None
-                }
-            }
-            TrapType::Error {
-                error: AgentError::DeterministicTrap(_),
-                ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::PermanentError(_),
                 ..
-            } => RetryDecision::None,
+            } => Some(RetryDecision::None),
+            // DeterministicTrap *outside* an atomic region is never retried;
+            // *inside* an atomic region it is retried via the named-policy
+            // path (handled by the caller).
             TrapType::Error {
-                error: AgentError::Unknown(_) | AgentError::TransientError(_),
-                retry_from,
-            } => {
-                // +1 because the current attempt hasn't been persisted to the state yet
-                let attempts = retry_state
-                    .get(retry_from)
-                    .map(|s| s.retry_count())
-                    .unwrap_or_default()
-                    + 1;
-                let retryable = attempts < retry_config.max_attempts;
-                if retryable {
-                    match get_delay(retry_config, attempts) {
-                        Some(delay) => RetryDecision::Delayed(delay),
-                        None => RetryDecision::None,
-                    }
-                } else {
-                    RetryDecision::None
-                }
-            }
+                error: AgentError::DeterministicTrap(_),
+                ..
+            } if !in_atomic_region => Some(RetryDecision::None),
+            TrapType::Error {
+                error:
+                    AgentError::Unknown(_)
+                    | AgentError::TransientError(_)
+                    | AgentError::DeterministicTrap(_),
+                ..
+            } => None,
         }
     }
 
@@ -840,36 +817,75 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn get_recovery_decision_on_trap_with_semantic(
         &mut self,
-        retry_config: &RetryConfig,
         retry_state_with_current_attempt: &HashMap<OplogIndex, RetryPolicyState>,
+        skipped_regions: &DeletedRegions,
         trap_type: &TrapType,
         in_atomic_region: bool,
         full_function_name: &str,
     ) -> (RetryDecision, Option<RetryPolicyState>) {
-        let fallback_decision = Self::get_recovery_decision_on_trap(
-            retry_config,
-            retry_state_with_current_attempt,
-            trap_type,
-            in_atomic_region,
-        );
+        // Cases whose decision does not depend on retry policy at all
+        // (Interrupt, Exit, deterministic AgentError variants like
+        // OutOfMemory, InvalidRequest, …). Returns `None` when policy
+        // resolution is required.
+        if let Some(decision) = Self::fixed_decision_for_trap_type(trap_type, in_atomic_region) {
+            return (decision, None);
+        }
 
-        let TrapType::Error { error, retry_from } = trap_type else {
-            return (fallback_decision, None);
+        // Only Error variants whose decision is policy-driven reach this point
+        // (Unknown, TransientError, and DeterministicTrap-in-atomic-region).
+        let TrapType::Error {
+            error,
+            retry_from,
+            semantic_trap_retry_override,
+        } = trap_type
+        else {
+            // Should be unreachable: `fixed_decision_for_trap_type` returns
+            // `Some(...)` for every non-Error trap variant. Treat as "give up"
+            // defensively.
+            return (RetryDecision::None, None);
         };
 
-        if !matches!(
-            error,
-            AgentError::Unknown(_)
-                | AgentError::TransientError(_)
-                | AgentError::DeterministicTrap(_)
-        ) {
-            return (fallback_decision, None);
+        // (B) — host-originated trap carrying an already-resolved verdict.
+        // The host call resolved the named policy with full properties (e.g.
+        // HTTP `status-code`) before escalating to trap+replay; honour that
+        // exact verdict so the inline path and the trap path stay
+        // semantically equivalent.
+        if let Some(override_) = semantic_trap_retry_override {
+            let decision = match &override_.verdict {
+                crate::durable_host::durability::SemanticTrapRetryVerdict::Retry(delay) => {
+                    debug!(
+                        retry_policy = %override_.policy_name,
+                        retry_path = "trap",
+                        retry_policy_source = "host-override",
+                        retry_decision = "retry",
+                        delay_ms = delay.as_millis() as u64,
+                        trap = ?trap_type,
+                        "Semantic trap retry: delaying (override carried from host call)"
+                    );
+                    RetryDecision::Delayed(*delay)
+                }
+                crate::durable_host::durability::SemanticTrapRetryVerdict::GiveUp => {
+                    debug!(
+                        retry_policy = %override_.policy_name,
+                        retry_path = "trap",
+                        retry_policy_source = "host-override",
+                        retry_decision = "give-up",
+                        trap = ?trap_type,
+                        "Semantic trap retry: exhausted (override carried from host call)"
+                    );
+                    RetryDecision::None
+                }
+            };
+            return (decision, Some(override_.retry_policy_state.clone()));
         }
 
+        // (A) — guest-originated trap, or host-originated trap whose
+        // `try_trigger_retry` did not produce an override (e.g. eval-error
+        // fallthrough). Build a `RetryContext::trap` and resolve through the
+        // named retry policies. The synthesized default-from-config has
+        // `Predicate::True` so resolution is guaranteed to find a match for
+        // any properties this branch produces.
         let named_retry_policies = self.named_retry_policies().await;
-        if named_retry_policies.is_empty() {
-            return (fallback_decision, None);
-        }
 
         let mut properties = RetryContext::trap(
             Self::semantic_trap_type_name(error),
@@ -877,27 +893,36 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         );
         self.state.enrich_retry_properties(&mut properties);
 
-        // The trap context only populates a subset of the retry properties (no
-        // `status-code`, etc.), so policies keyed on properties that only exist in
-        // other contexts (e.g. an HTTP `status-code` policy) are intentionally
-        // skipped here instead of erroring out.
+        // Status-code-keyed user policies are deliberately skipped here (no
+        // `status-code` is present in trap context). The synthesized default
+        // policy then provides the fallback.
         let named_policy = match golem_common::model::NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(
             &named_retry_policies,
             &properties,
         ) {
             Ok(Some(named_policy)) => named_policy,
-            Ok(None) => return (fallback_decision, None),
+            Ok(None) => {
+                warn!(
+                    trap = ?trap_type,
+                    "No named retry policy matched the trap context (including the synthesized default); giving up"
+                );
+                return (RetryDecision::None, None);
+            }
             Err(error) => {
                 warn!(
                     ?error,
                     trap = ?trap_type,
-                    "Failed resolving semantic trap retry policy, falling back to legacy retry config"
+                    "Failed resolving semantic trap retry policy; giving up"
                 );
-                return (fallback_decision, None);
+                return (RetryDecision::None, None);
             }
         };
 
-        let current_state = retry_state_with_current_attempt.get(retry_from).cloned();
+        let current_state = lookup_retry_state_with_replay_aggregation(
+            retry_state_with_current_attempt,
+            skipped_regions,
+            *retry_from,
+        );
         let total_attempts_with_current = current_state
             .as_ref()
             .map(|s| s.retry_count())
@@ -941,9 +966,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     retry_path = "trap",
                     fallback_reason = "eval-error",
                     trap = ?trap_type,
-                    "Semantic trap retry policy evaluation returned an error verdict, falling back to legacy retry config"
+                    "Semantic trap retry policy evaluation returned an error verdict; giving up"
                 );
-                (fallback_decision, None)
+                (RetryDecision::None, None)
             }
             Err(error) => {
                 warn!(
@@ -952,9 +977,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     retry_path = "trap",
                     fallback_reason = "eval-error",
                     trap = ?trap_type,
-                    "Failed evaluating semantic trap retry policy, falling back to legacy retry config"
+                    "Failed evaluating semantic trap retry policy; giving up"
                 );
-                (fallback_decision, None)
+                (RetryDecision::None, None)
             }
         }
     }
@@ -2270,7 +2295,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             return RetryDecision::Immediate;
         }
 
-        let retry_config = self.state.config.retry.clone();
         let in_atomic_region = !self.state.active_atomic_regions.is_empty();
 
         let latest_status_before = self
@@ -2280,8 +2304,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .await;
         let (decision, retry_policy_state) = self
             .get_recovery_decision_on_trap_with_semantic(
-                &retry_config,
                 &latest_status_before.current_retry_state,
+                &latest_status_before.skipped_regions,
                 trap_type,
                 in_atomic_region,
                 full_function_name,
@@ -2298,7 +2322,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 error: AgentError::InvalidRequest(_),
                 ..
             } => current_idempotency_key.map(OplogEntry::cancel_pending_invocation),
-            TrapType::Error { error, retry_from } => {
+            TrapType::Error {
+                error, retry_from, ..
+            } => {
                 let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
                 Some(OplogEntry::error(
                     error.clone(),

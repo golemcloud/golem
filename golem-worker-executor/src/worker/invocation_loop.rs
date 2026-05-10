@@ -982,6 +982,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         &TrapType::Error {
                             error: AgentError::InternalError(error.to_string()),
                             retry_from: OplogIndex::INITIAL,
+                            semantic_trap_retry_override: None,
                         },
                     )
                     .await;
@@ -1499,6 +1500,7 @@ mod tests {
             consumed_fuel: 0,
             error: AgentError::InternalError("boom".to_string()),
             retry_from: OplogIndex::INITIAL,
+            semantic_trap_retry_override: None,
         });
 
         assert_eq!(

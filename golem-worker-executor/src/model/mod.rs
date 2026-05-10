@@ -249,6 +249,16 @@ pub enum TrapType {
     Error {
         error: AgentError,
         retry_from: OplogIndex,
+        /// Ephemeral semantic-retry override carried from the host call that
+        /// produced this trap. Populated when `try_trigger_retry` resolved a
+        /// named retry policy with full host-call properties (e.g. HTTP
+        /// `status-code`) before escalating to trap+replay. Consumed once by
+        /// `get_recovery_decision_on_trap_with_semantic` so the post-trap
+        /// recovery decision uses the same verdict the inline path would have.
+        ///
+        /// Always `None` for guest-originated traps and for non-host failures.
+        semantic_trap_retry_override:
+            Option<crate::durable_host::durability::SemanticTrapRetryOverride>,
     },
 }
 
@@ -258,7 +268,13 @@ impl TrapType {
         retry_from: OplogIndex,
         agent_mode: AgentMode,
     ) -> TrapType {
-        use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
+        use crate::durable_host::durability::{
+            ClassifiedHostError, HostFailureKind, find_semantic_trap_retry_override,
+        };
+
+        // Extract any semantic-trap-retry override carried in the error chain
+        // once and reuse it in every `TrapType::Error` construction below.
+        let semantic_trap_retry_override = find_semantic_trap_retry_override(error);
 
         match error.root_cause().downcast_ref::<InterruptKind>() {
             Some(kind) => TrapType::Interrupt(*kind),
@@ -268,6 +284,7 @@ impl TrapType {
                     Some(&Trap::StackOverflow) => TrapType::Error {
                         error: AgentError::StackOverflow,
                         retry_from,
+                        semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                     },
                     Some(
                         &Trap::UnreachableCodeReached
@@ -284,42 +301,50 @@ impl TrapType {
                     ) => TrapType::Error {
                         error: AgentError::DeterministicTrap(format!("{error:#}")),
                         retry_from,
+                        semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                     },
                     _ => match error.root_cause().downcast_ref::<GolemSpecificWasmTrap>() {
                         Some(GolemSpecificWasmTrap::WorkerOutOfMemory) => TrapType::Error {
                             error: AgentError::OutOfMemory,
                             retry_from,
+                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                         },
                         Some(GolemSpecificWasmTrap::WorkerExceededMemoryLimit) => TrapType::Error {
                             error: AgentError::ExceededMemoryLimit,
                             retry_from,
+                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                         },
                         Some(GolemSpecificWasmTrap::WorkerExceededTableLimit) => TrapType::Error {
                             error: AgentError::ExceededTableLimit,
                             retry_from,
+                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                         },
                         Some(GolemSpecificWasmTrap::WorkerExceededHttpCallLimit) => {
                             TrapType::Error {
                                 error: AgentError::ExceededHttpCallLimit,
                                 retry_from,
+                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                             }
                         }
                         Some(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit) => {
                             TrapType::Error {
                                 error: AgentError::ExceededRpcCallLimit,
                                 retry_from,
+                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                             }
                         }
                         Some(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage) => {
                             TrapType::Error {
                                 error: AgentError::NodeOutOfFilesystemStorage,
                                 retry_from,
+                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                             }
                         }
                         Some(GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit) => {
                             TrapType::Error {
                                 error: AgentError::AgentExceededFilesystemStorageLimit,
                                 retry_from,
+                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                             }
                         }
                         Some(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted) => {
@@ -334,6 +359,8 @@ impl TrapType {
                                         },
                                     ),
                                     retry_from,
+                                    semantic_trap_retry_override: semantic_trap_retry_override
+                                        .clone(),
                                 },
                             }
                         }
@@ -349,6 +376,8 @@ impl TrapType {
                                         },
                                     ),
                                     retry_from,
+                                    semantic_trap_retry_override: semantic_trap_retry_override
+                                        .clone(),
                                 },
                             }
                         }
@@ -363,6 +392,7 @@ impl TrapType {
                                 },
                             ),
                             retry_from,
+                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                         },
                         Some(GolemSpecificWasmTrap::AgentThrottledByQuota {
                             timestamp, ..
@@ -377,6 +407,7 @@ impl TrapType {
                                     },
                                 ),
                                 retry_from,
+                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                             },
                         },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
@@ -384,24 +415,32 @@ impl TrapType {
                                 TrapType::Error {
                                     error: AgentError::InvalidRequest(details.clone()),
                                     retry_from,
+                                    semantic_trap_retry_override: semantic_trap_retry_override
+                                        .clone(),
                                 }
                             }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
                                 TrapType::Error {
                                     error: AgentError::InvalidRequest(details.clone()),
                                     retry_from,
+                                    semantic_trap_retry_override: semantic_trap_retry_override
+                                        .clone(),
                                 }
                             }
                             Some(WorkerExecutorError::ValueMismatch { details }) => {
                                 TrapType::Error {
                                     error: AgentError::InvalidRequest(details.clone()),
                                     retry_from,
+                                    semantic_trap_retry_override: semantic_trap_retry_override
+                                        .clone(),
                                 }
                             }
                             Some(WorkerExecutorError::InvocationFailed { error, .. }) => {
                                 TrapType::Error {
                                     error: error.clone(),
                                     retry_from,
+                                    semantic_trap_retry_override: semantic_trap_retry_override
+                                        .clone(),
                                 }
                             }
                             _ => {
@@ -416,18 +455,24 @@ impl TrapType {
                                                 classified.message.clone(),
                                             ),
                                             retry_from,
+                                            semantic_trap_retry_override:
+                                                semantic_trap_retry_override.clone(),
                                         },
                                         HostFailureKind::Permanent => TrapType::Error {
                                             error: AgentError::PermanentError(
                                                 classified.message.clone(),
                                             ),
                                             retry_from,
+                                            semantic_trap_retry_override:
+                                                semantic_trap_retry_override.clone(),
                                         },
                                     }
                                 } else {
                                     TrapType::Error {
                                         error: AgentError::Unknown(format!("{error:#}")),
                                         retry_from,
+                                        semantic_trap_retry_override: semantic_trap_retry_override
+                                            .clone(),
                                     }
                                 }
                             }
