@@ -382,18 +382,19 @@
           version = "0.0.0";
           inherit src;
 
-          # Two non-hermetic moves:
+          # Two non-hermetic moves we can't avoid yet:
           # 1. `__noChroot` lets the build see the host filesystem (so cargo
-          #    + npm can fetch dependencies live — this is genuinely needed
-          #    here because the dynamically-generated agent-template Cargo
-          #    crate has no Cargo.lock at flake-eval time, so we can't
-          #    pre-vendor it).
-          # 2. We don't pin an output hash because cargo + rollup outputs
-          #    aren't bit-identical across builds (build-ids, timestamps,
-          #    file-iteration order). A fixed-output derivation would
-          #    hash-mismatch on every rebuild.
-          # Tradeoff: this requires `sandbox = relaxed` in the user's
-          # nix.conf. Documented in the flake commit message.
+          #    + npm can fetch dependencies live). Genuinely needed because
+          #    the dynamically-generated agent-template Cargo crate has no
+          #    Cargo.lock at flake-eval time, so we can't pre-vendor it.
+          # 2. The output isn't hash-pinned because cargo + rollup outputs
+          #    aren't bit-identical across builds (build-ids, mtimes, file-
+          #    iteration order survived `SOURCE_DATE_EPOCH=1` and stable
+          #    rustc flags). FOD hash mismatches every rebuild.
+          # Tradeoff: requires `sandbox = relaxed` in the user's nix.conf
+          # AND won't run on a strict-sandbox remote builder. The right
+          # follow-up is a multi-stage shape: deterministic FOD for cargo
+          # vendor + pnpm fetch caches, then a hermetic offline build.
           __noChroot = true;
 
           # nixpkgs' stdenv adds hardening flags (e.g. `-fzero-call-used-regs`)
