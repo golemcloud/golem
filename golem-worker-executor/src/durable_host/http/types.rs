@@ -1081,69 +1081,76 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     Some((_status, _request_state, StatusRetryOutcome::NoRetry)) => {
                         break (serializable_response, for_retry);
                     }
-                    Some((_status, _request_state, StatusRetryOutcome::Retried(Ok(new_resp)))) => {
-                        // Drop the rejected IncomingResponse resource so it does not
-                        // leak. Use wasi-http's resource drop path (rather than raw
-                        // table().delete) to ensure any host-side teardown runs.
-                        if let Ok(Some(Ok(Ok(rejected)))) = &response {
-                            let rejected_rep = rejected.rep();
-                            let _ = HostIncomingResponse::drop(
-                                &mut self.as_wasi_http_view(),
-                                Resource::<IncomingResponse>::new_own(rejected_rep),
-                            )
-                            .await;
-                        }
-                        let future_res = self
-                            .table()
-                            .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
-                        *future_res = wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(
-                            Ok(Ok(new_resp)),
-                        );
-                        let self2 = Resource::<FutureIncomingResponse>::new_borrow(handle);
-                        response =
-                            HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self2)
+                    Some((_status, request_state, StatusRetryOutcome::Retried(retried))) => {
+                        match *retried {
+                            Ok(new_resp) => {
+                                // Drop the rejected IncomingResponse resource so it does not
+                                // leak. Use wasi-http's resource drop path (rather than raw
+                                // table().delete) to ensure any host-side teardown runs.
+                                if let Ok(Some(Ok(Ok(rejected)))) = &response {
+                                    let rejected_rep = rejected.rep();
+                                    let _ = HostIncomingResponse::drop(
+                                        &mut self.as_wasi_http_view(),
+                                        Resource::<IncomingResponse>::new_own(rejected_rep),
+                                    )
+                                    .await;
+                                }
+                                let future_res = self.table().get_mut(
+                                    &Resource::<FutureIncomingResponse>::new_borrow(handle),
+                                )?;
+                                *future_res =
+                                    wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(
+                                        Ok(Ok(new_resp)),
+                                    );
+                                let self2 =
+                                    Resource::<FutureIncomingResponse>::new_borrow(handle);
+                                response = HostFutureIncomingResponse::get(
+                                    &mut self.as_wasi_http_view(),
+                                    self2,
+                                )
                                 .await;
-                        // Fall through to top of loop to re-classify and possibly retry again.
-                        continue;
-                    }
-                    Some((
-                        _status,
-                        request_state,
-                        StatusRetryOutcome::Retried(Err(error_code)),
-                    )) => {
-                        // The status-retry resend itself produced a transport error.
-                        // This error did NOT come through the background-retry task,
-                        // so it must be routed through the standard transient-failure
-                        // retry/trap path regardless of whether the original request
-                        // was background-managed (otherwise a real transport error
-                        // could leak straight to the guest).
-                        if let Ok(Some(Ok(Ok(rejected)))) = &response {
-                            let rejected_rep = rejected.rep();
-                            let _ = HostIncomingResponse::drop(
-                                &mut self.as_wasi_http_view(),
-                                Resource::<IncomingResponse>::new_own(rejected_rep),
-                            )
-                            .await;
+                                // Fall through to top of loop to re-classify and possibly retry again.
+                                continue;
+                            }
+                            Err(error_code) => {
+                                // The status-retry resend itself produced a transport error.
+                                // This error did NOT come through the background-retry task,
+                                // so it must be routed through the standard transient-failure
+                                // retry/trap path regardless of whether the original request
+                                // was background-managed (otherwise a real transport error
+                                // could leak straight to the guest).
+                                if let Ok(Some(Ok(Ok(rejected)))) = &response {
+                                    let rejected_rep = rejected.rep();
+                                    let _ = HostIncomingResponse::drop(
+                                        &mut self.as_wasi_http_view(),
+                                        Resource::<IncomingResponse>::new_own(rejected_rep),
+                                    )
+                                    .await;
+                                }
+                                if classify_http_error_code(&error_code)
+                                    == HostFailureKind::Transient
+                                {
+                                    escalate_http_to_outer_retry(
+                                        self,
+                                        &request_state,
+                                        None,
+                                        "transient",
+                                        error_code.to_string(),
+                                    )
+                                    .await?;
+                                }
+                                let future_res = self.table().get_mut(
+                                    &Resource::<FutureIncomingResponse>::new_borrow(handle),
+                                )?;
+                                *future_res =
+                                    wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(
+                                        Ok(Err(error_code.clone())),
+                                    );
+                                response = Ok(Some(Ok(Err(error_code))));
+                                // Re-classify and (if outer trap path was not taken) expose.
+                                continue;
+                            }
                         }
-                        if classify_http_error_code(&error_code) == HostFailureKind::Transient {
-                            escalate_http_to_outer_retry(
-                                self,
-                                &request_state,
-                                None,
-                                "transient",
-                                error_code.to_string(),
-                            )
-                            .await?;
-                        }
-                        let future_res = self
-                            .table()
-                            .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
-                        *future_res = wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(
-                            Ok(Err(error_code.clone())),
-                        );
-                        response = Ok(Some(Ok(Err(error_code))));
-                        // Re-classify and (if outer trap path was not taken) expose.
-                        continue;
                     }
                     Some((_status, _request_state, StatusRetryOutcome::Exhausted)) => {
                         // Expose the most-recent rejected response as-is.

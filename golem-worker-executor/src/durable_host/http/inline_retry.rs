@@ -1567,7 +1567,11 @@ pub(crate) enum StatusRetryOutcome {
     /// and re-enter the get-flow to allow further status retries (or to expose the
     /// successful response). On `Err`, the caller MUST route through the existing
     /// transient-failure HTTP retry path.
-    Retried(Result<IncomingResponse, wasi_http_types::ErrorCode>),
+    ///
+    /// Boxed because `IncomingResponse` is large (it carries the captured pooled
+    /// connection handle plus connection permits and other fields), and we don't
+    /// want every other (zero-sized) variant to pay that size cost.
+    Retried(Box<Result<IncomingResponse, wasi_http_types::ErrorCode>>),
     /// User-defined policy matched but the retry budget is exhausted; expose the
     /// most recent response (the one that triggered this call).
     Exhausted,
@@ -1778,7 +1782,7 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
                 )))),
             };
 
-            Ok(StatusRetryOutcome::Retried(retried))
+            Ok(StatusRetryOutcome::Retried(Box::new(retried)))
         }
         AsyncRetryDecision::Exhausted => {
             tracing::debug!(
