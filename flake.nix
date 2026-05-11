@@ -929,17 +929,18 @@
             testName = "integration";
             tag = ":tag:group12";
             testThreads = 1;
-            # The TS-flavored agent-config tests
-            # (`agent_reads_secret_created_from_default_ts`,
-            # `agent_with_mixed_agent_config_update_ts`) timed out at
-            # 240s in the sandbox — they exercise the agent-sdk-ts
-            # component startup path which is slower under the smaller
-            # worker pool nix gives. The Rust-flavored siblings
-            # (`*_rust`) hit the same code paths.
+            # The TS-flavored agent-config tests time out at 240s in
+            # the sandbox — they exercise the agent-sdk-ts component
+            # startup path which is slower under the smaller worker
+            # pool nix gives. Both the `*_ts` suffix tests and the
+            # `ts_*` module-prefix tests (`ts_optional_group_*` etc.)
+            # hit the same slow path. The Rust-flavored siblings
+            # cover the same code paths and pass.
             skips = [
               "ip_address_resolve"
               "rdbms"
               "_ts"
+              "agent_config::ts"
             ];
           };
 
