@@ -1,0 +1,10 @@
+[package]
+name = "cli-profile-benchmark"
+version = "0.0.0"
+edition = "2024"
+license-file = "../../../LICENSE"
+publish = false
+
+[workspace]
+
+[dependencies]

@@ -1,0 +1,132 @@
+name: CLI Profile Benchmark
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  WASM_RQUICKJS_VERSION: "0.2.4"
+  WASI_SDK_VERSION: "25"
+  WASI_SDK_PATH: /opt/wasi-sdk
+  CLI_PROFILE_BENCH_PROFILES: debug,dev-release,release
+  QUIET: "true"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  test-benchmark:
+    name: CLI integration profile benchmark
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: 10
+      CLI_PROFILE_BENCH_RUNS: "1"
+      CLI_PROFILE_BENCH_TESTS: app::agents::test_rust_counter,app::agents::test_ts_counter
+      GOLEM_PRESET: quick
+      RUST_LOG: info
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: 'wasm32-wasip1 wasm32-wasip2'
+          install-cargo-binstall: 'true'
+          cache-save-if: 'true'
+
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.49.0
+        with:
+          redis-version: latest
+          auto-start: false
+
+      - name: Install cargo-test-r
+        run: cargo binstall --force --locked cargo-test-r@2.2.5
+
+      - name: Install wasm-tools
+        run: cargo binstall --force --locked wasm-tools@1.227.1
+
+      - name: Install wit-bindgen
+        run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
+
+      - name: Setup JS and WASM tools
+        uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Install TS SDK dependencies
+        working-directory: sdks/ts
+        run: pnpm install --frozen-lockfile
+
+      - name: Run CLI integration profile benchmark
+        run: cargo make --no-workspace benchmark-cli-test-profiles
+
+      - name: Publish CLI integration benchmark summary
+        if: always()
+        run: |
+          latest=$(ls -td target/cli-profile-benchmark/* 2>/dev/null | sed -n '1p')
+          if [ -n "$latest" ] && [ -f "$latest/results.md" ]; then
+            cat "$latest/results.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No CLI integration benchmark summary was generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload CLI integration profile benchmark results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cli-profile-test-benchmark-results
+          path: target/cli-profile-benchmark/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  build-benchmark:
+    name: CLI binary build profile benchmark
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: 10
+      CLI_PROFILE_BUILD_BENCH_RUNS: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: 'wasm32-wasip1 wasm32-wasip2'
+          cache-save-if: 'true'
+
+      - name: Run CLI binary build profile benchmark
+        run: cargo make --no-workspace benchmark-cli-build-profiles
+
+      - name: Publish CLI binary build benchmark summary
+        if: always()
+        run: |
+          latest=$(ls -td target/cli-profile-build-benchmark/* 2>/dev/null | sed -n '1p')
+          if [ -n "$latest" ] && [ -f "$latest/results.md" ]; then
+            cat "$latest/results.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No CLI binary build benchmark summary was generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload CLI binary build profile benchmark results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cli-profile-build-benchmark-results
+          path: target/cli-profile-build-benchmark/**
+          if-no-files-found: warn
+          retention-days: 7
