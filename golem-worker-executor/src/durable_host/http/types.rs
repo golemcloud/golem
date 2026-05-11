@@ -1148,8 +1148,11 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                                         Ok(Err(error_code.clone())),
                                     );
                                 response = Ok(Some(Ok(Err(error_code))));
-                                // Re-classify and (if outer trap path was not taken) expose.
-                                continue;
+                                // If outer retry did not trap, its budget is exhausted. Expose
+                                // the transport error produced by the status-retry resend, but
+                                // do not continue into the generic transient branch and charge
+                                // the same failure a second time.
+                                break classify_http_response(self.table(), &response)?;
                             }
                         }
                     }

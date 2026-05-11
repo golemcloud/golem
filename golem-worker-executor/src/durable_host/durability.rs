@@ -433,7 +433,11 @@ impl InFunctionRetryState {
     ) -> AsyncRetryDecision {
         let retry_policy_state: Option<RetryPolicyState>;
 
-        let delay = match evaluate_named_policy_step(named_policy, properties, current_state) {
+        let delay = match evaluate_named_policy_step_resetting_on_invalid_state(
+            named_policy,
+            properties,
+            current_state,
+        ) {
             Ok((new_state, RetryVerdict::Retry(delay))) => {
                 retry_policy_state = Some(new_state);
                 delay
@@ -912,27 +916,28 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         // one match for every property set; there is no legacy `RetryConfig`
         // path any more.
         let policies = self.state.named_retry_policies().await;
-        let named_policy = match NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(
-            &policies,
-            &properties,
-        ) {
-            Ok(Some(named_policy)) => named_policy,
-            Ok(None) => {
-                warn!(
-                    retry_path = "host-trap",
-                    "No named retry policy matched (including the synthesized default); giving up"
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                warn!(
-                    ?error,
-                    retry_path = "host-trap",
-                    "Failed resolving semantic host-trap retry policy; giving up"
-                );
-                return Ok(());
-            }
-        };
+        let named_policy =
+            match NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
+                &policies,
+                &properties,
+            ) {
+                Ok(Some(named_policy)) => named_policy,
+                Ok(None) => {
+                    warn!(
+                        retry_path = "host-trap",
+                        "No named retry policy matched (including the synthesized default); giving up"
+                    );
+                    return Ok(());
+                }
+                Err(error) => {
+                    warn!(
+                        ?error,
+                        retry_path = "host-trap",
+                        "Failed resolving semantic host-trap retry policy; giving up"
+                    );
+                    return Ok(());
+                }
+            };
 
         let current_state = latest_status
             .current_retry_state
@@ -2333,6 +2338,48 @@ mod tests {
 
         assert!(matches!(decision, AsyncRetryDecision::Exhausted));
         assert_eq!(ctx.retry_entries_appended, 0);
+    }
+
+    // Regression reproducer: status-code retry decisions are keyed on the HTTP
+    // request's begin index, which can already contain retry state written by a
+    // different policy shape (for example a transport-error/default policy). The
+    // explicit status-code policy must reset on that shape mismatch instead of
+    // treating `InvalidState` as exhausted.
+    #[test]
+    async fn decide_retry_for_named_policy_resets_stale_state_shape() {
+        let mut ctx = MockDurabilityHost::new();
+        ctx.current_retry_policy_state = Some(RetryPolicyState::CountBox {
+            attempts: 1,
+            inner: Box::new(RetryPolicyState::Wrapper(Box::new(
+                RetryPolicyState::Counter(1),
+            ))),
+        });
+
+        let status_policy = NamedRetryPolicy {
+            name: "http-5xx".to_string(),
+            priority: 100,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 5,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+            },
+        };
+
+        let mut state = InFunctionRetryState::new();
+        let decision = state
+            .decide_retry_for_named_policy(
+                &mut ctx,
+                "http-status-retry",
+                &RetryProperties::new(),
+                &status_policy,
+            )
+            .await;
+
+        assert!(
+            matches!(decision, AsyncRetryDecision::RetryAfterDelay(_)),
+            "stale retry state from a different policy shape must not exhaust the status policy; got {decision:?}"
+        );
+        assert_eq!(ctx.retry_entries_appended, 1);
     }
 
     // Test: is_eligible_for_internal_retry covers all DurableFunctionType variants

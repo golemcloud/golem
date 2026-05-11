@@ -75,7 +75,11 @@ fn resolve_matching_status_retry_policy(
         })
         .collect();
 
-    NamedRetryPolicy::resolve(&status_policies, properties).map(|policy| policy.cloned())
+    NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
+        &status_policies,
+        properties,
+    )
+    .map(|policy| policy.cloned())
 }
 
 #[derive(Debug, Clone)]
@@ -1856,6 +1860,7 @@ fn parse_content_range_start(value: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::{Predicate, RetryPolicy};
     use test_r::test;
 
     #[test]
@@ -1938,6 +1943,83 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn status_retry_policy_resolution_skips_missing_context_properties() {
+        let high_priority_context_incompatible = NamedRetryPolicy {
+            name: "http-500-for-specific-agent-type".to_string(),
+            priority: 100,
+            predicate: Predicate::And(
+                Box::new(Predicate::PropEq {
+                    property: "status-code".to_string(),
+                    value: PredicateValue::Integer(500),
+                }),
+                Box::new(Predicate::PropEq {
+                    property: "target-agent-type".to_string(),
+                    value: PredicateValue::Text("checkout".to_string()),
+                }),
+            ),
+            policy: RetryPolicy::Immediate,
+        };
+        let fallback = NamedRetryPolicy {
+            name: "http-500-fallback".to_string(),
+            priority: 10,
+            predicate: Predicate::PropEq {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(500),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+
+        let mut properties = RetryProperties::new();
+        properties.set("status-code", PredicateValue::Integer(500));
+
+        let resolved = resolve_matching_status_retry_policy(
+            vec![high_priority_context_incompatible, fallback],
+            &properties,
+        )
+        .expect("missing status-context properties should skip only the incompatible policy")
+        .expect("fallback status retry policy should match");
+
+        assert_eq!(resolved.name, "http-500-fallback");
+    }
+
+    #[test]
+    fn status_retry_policy_resolution_uses_filtered_on_as_applicability() {
+        let high_priority_filtered_500 = NamedRetryPolicy {
+            name: "http-500-filtered-body".to_string(),
+            priority: 100,
+            predicate: Predicate::True,
+            policy: RetryPolicy::FilteredOn {
+                predicate: Predicate::PropEq {
+                    property: "status-code".to_string(),
+                    value: PredicateValue::Integer(500),
+                },
+                inner: Box::new(RetryPolicy::Immediate),
+            },
+        };
+        let lower_priority_404 = NamedRetryPolicy {
+            name: "http-404".to_string(),
+            priority: 10,
+            predicate: Predicate::PropEq {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(404),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+
+        let mut properties = RetryProperties::new();
+        properties.set("status-code", PredicateValue::Integer(404));
+
+        let resolved = resolve_matching_status_retry_policy(
+            vec![high_priority_filtered_500, lower_priority_404],
+            &properties,
+        )
+        .expect("status retry resolution should succeed")
+        .expect("404 policy should match");
+
+        assert_eq!(resolved.name, "http-404");
     }
 
     #[test]

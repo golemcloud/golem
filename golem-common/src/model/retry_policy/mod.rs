@@ -1302,6 +1302,70 @@ impl Predicate {
         }
     }
 
+    /// Evaluates this predicate while treating missing properties as a non-match.
+    ///
+    /// Unlike wrapping [`Predicate::matches`] and mapping a top-level
+    /// [`RetryEvaluationError::PropertyNotFound`] to `false`, this is recursive so
+    /// compound predicates can still match on branches whose properties are present.
+    /// For example, `Or(missing_property, matching_property)` still matches, while
+    /// `And(missing_property, matching_property)` does not. A missing property under
+    /// `Not` remains a non-match, so `Not(status-code == 500)` does not accidentally
+    /// select a status-code policy in contexts that do not have `status-code`.
+    pub fn matches_treating_missing_properties_as_false(
+        &self,
+        props: &RetryProperties,
+    ) -> Result<bool, RetryEvaluationError> {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum LenientMatch {
+            Matched,
+            NotMatched,
+            MissingProperty,
+        }
+
+        fn evaluate(
+            predicate: &Predicate,
+            props: &RetryProperties,
+        ) -> Result<LenientMatch, RetryEvaluationError> {
+            match predicate {
+                Predicate::And(left, right) => {
+                    match (evaluate(left, props)?, evaluate(right, props)?) {
+                        (LenientMatch::Matched, LenientMatch::Matched) => Ok(LenientMatch::Matched),
+                        (LenientMatch::MissingProperty, _) | (_, LenientMatch::MissingProperty) => {
+                            Ok(LenientMatch::MissingProperty)
+                        }
+                        _ => Ok(LenientMatch::NotMatched),
+                    }
+                }
+                Predicate::Or(left, right) => {
+                    match (evaluate(left, props)?, evaluate(right, props)?) {
+                        (LenientMatch::Matched, _) | (_, LenientMatch::Matched) => {
+                            Ok(LenientMatch::Matched)
+                        }
+                        (LenientMatch::MissingProperty, _) | (_, LenientMatch::MissingProperty) => {
+                            Ok(LenientMatch::MissingProperty)
+                        }
+                        _ => Ok(LenientMatch::NotMatched),
+                    }
+                }
+                Predicate::Not(inner) => match evaluate(inner, props)? {
+                    LenientMatch::Matched => Ok(LenientMatch::NotMatched),
+                    LenientMatch::NotMatched => Ok(LenientMatch::Matched),
+                    LenientMatch::MissingProperty => Ok(LenientMatch::MissingProperty),
+                },
+                other => match other.matches(props) {
+                    Ok(true) => Ok(LenientMatch::Matched),
+                    Ok(false) => Ok(LenientMatch::NotMatched),
+                    Err(RetryEvaluationError::PropertyNotFound { .. }) => {
+                        Ok(LenientMatch::MissingProperty)
+                    }
+                    Err(other) => Err(other),
+                },
+            }
+        }
+
+        Ok(evaluate(self, props)? == LenientMatch::Matched)
+    }
+
     /// Returns `true` if this predicate explicitly references the given property name
     /// anywhere in its tree.
     ///
@@ -1362,6 +1426,49 @@ impl RetryPolicy {
             | RetryPolicy::Intersect(left, right) => {
                 left.references_property(name) || right.references_property(name)
             }
+        }
+    }
+
+    /// Returns whether this policy body is applicable in the given retry context,
+    /// treating missing properties in [`RetryPolicy::FilteredOn`] predicates as a
+    /// non-match.
+    ///
+    /// This is intentionally separate from [`RetryPolicy::step`], which remains
+    /// strict and reports missing properties as evaluation errors. It is used by
+    /// retry-policy selection sites that need to skip policies that cannot apply
+    /// to the current context before committing to a single named policy.
+    pub fn applicable_treating_missing_properties_as_no_match(
+        &self,
+        properties: &RetryProperties,
+    ) -> Result<bool, RetryEvaluationError> {
+        match self {
+            RetryPolicy::Periodic(_)
+            | RetryPolicy::Exponential { .. }
+            | RetryPolicy::Fibonacci { .. }
+            | RetryPolicy::Immediate
+            | RetryPolicy::Never => Ok(true),
+            RetryPolicy::CountBox { inner, .. } => {
+                inner.applicable_treating_missing_properties_as_no_match(properties)
+            }
+            RetryPolicy::TimeBox { inner, .. }
+            | RetryPolicy::Clamp { inner, .. }
+            | RetryPolicy::AddDelay { inner, .. }
+            | RetryPolicy::Jitter { inner, .. } => {
+                inner.applicable_treating_missing_properties_as_no_match(properties)
+            }
+            RetryPolicy::FilteredOn { predicate, inner } => {
+                if predicate.matches_treating_missing_properties_as_false(properties)? {
+                    inner.applicable_treating_missing_properties_as_no_match(properties)
+                } else {
+                    Ok(false)
+                }
+            }
+            RetryPolicy::AndThen(left, right) | RetryPolicy::Union(left, right) => Ok(left
+                .applicable_treating_missing_properties_as_no_match(properties)?
+                || right.applicable_treating_missing_properties_as_no_match(properties)?),
+            RetryPolicy::Intersect(left, right) => Ok(left
+                .applicable_treating_missing_properties_as_no_match(properties)?
+                && right.applicable_treating_missing_properties_as_no_match(properties)?),
         }
     }
 
@@ -1688,6 +1795,36 @@ impl NamedRetryPolicy {
                 Ok(false) => continue,
                 Err(RetryEvaluationError::PropertyNotFound { .. }) => continue,
                 Err(other) => return Err(other),
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Like [`resolve_treating_missing_properties_as_no_match`], but also
+    /// considers [`RetryPolicy::FilteredOn`] predicates in the policy body as
+    /// applicability filters.
+    ///
+    /// This is intended for retry decision sites where a single selected named
+    /// policy is evaluated afterwards, but user policies may encode contextual
+    /// conditions either in the named selector predicate or in `FilteredOn`
+    /// wrappers inside the policy body.
+    pub fn resolve_applicable_treating_missing_properties_as_no_match<'a>(
+        policies: &'a [NamedRetryPolicy],
+        properties: &RetryProperties,
+    ) -> Result<Option<&'a NamedRetryPolicy>, RetryEvaluationError> {
+        let mut ordered = policies.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|p| std::cmp::Reverse(p.priority));
+
+        for policy in ordered {
+            if policy
+                .predicate
+                .matches_treating_missing_properties_as_false(properties)?
+                && policy
+                    .policy
+                    .applicable_treating_missing_properties_as_no_match(properties)?
+            {
+                return Ok(Some(policy));
             }
         }
 
@@ -4030,6 +4167,76 @@ mod tests {
         )
         .expect("resolution should succeed");
         assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_applicable_treating_missing_properties_skips_policy_body_property_references() {
+        // Status-code retry policies can encode their status predicate inside
+        // the policy body rather than in the named-policy selector. Trap
+        // recovery has no `status-code` property, so this policy cannot apply
+        // there and must be skipped in favour of the trap/default fallback.
+        let status_code_policy = NamedRetryPolicy {
+            name: "http-5xx-filtered-body".to_string(),
+            priority: 100,
+            predicate: Predicate::True,
+            policy: RetryPolicy::FilteredOn {
+                predicate: Predicate::PropEq {
+                    property: "status-code".to_string(),
+                    value: PredicateValue::Integer(500),
+                },
+                inner: Box::new(RetryPolicy::Immediate),
+            },
+        };
+        let trap_policy = NamedRetryPolicy {
+            name: "trap-fallback".to_string(),
+            priority: 10,
+            predicate: Predicate::PropEq {
+                property: "trap-type".to_string(),
+                value: PredicateValue::Text("transient-error".to_string()),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+
+        let mut trap_props = RetryProperties::new();
+        trap_props.set(
+            "trap-type",
+            PredicateValue::Text("transient-error".to_string()),
+        );
+
+        let policies = vec![status_code_policy, trap_policy];
+        let resolved =
+            NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
+                &policies,
+                &trap_props,
+            )
+            .expect("resolution should succeed")
+            .expect("trap fallback should be selected when status-code is missing");
+
+        assert_eq!(resolved.name, "trap-fallback");
+    }
+
+    #[test]
+    fn lenient_predicate_not_missing_property_does_not_match() {
+        let predicate = Predicate::Not(Box::new(Predicate::PropEq {
+            property: "status-code".to_string(),
+            value: PredicateValue::Integer(500),
+        }));
+
+        assert!(
+            !predicate
+                .matches_treating_missing_properties_as_false(&RetryProperties::new())
+                .expect("lenient predicate evaluation should succeed"),
+            "missing properties under Not must remain a no-match"
+        );
+
+        let mut props = RetryProperties::new();
+        props.set("status-code", PredicateValue::Integer(404));
+        assert!(
+            predicate
+                .matches_treating_missing_properties_as_false(&props)
+                .expect("lenient predicate evaluation should succeed"),
+            "Not should still match when the referenced property exists and does not match"
+        );
     }
 
     #[test]

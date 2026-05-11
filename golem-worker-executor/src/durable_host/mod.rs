@@ -891,7 +891,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // Status-code-keyed user policies are deliberately skipped here (no
         // `status-code` is present in trap context). The synthesized default
         // policy then provides the fallback.
-        let named_policy = match golem_common::model::NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(
+        let named_policy = match golem_common::model::NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
             &named_retry_policies,
             &properties,
         ) {
