@@ -1,5 +1,34 @@
 # Build reproducibility report — TypeScript component pipeline
 
+## Status — partially mitigated by the Nix flake
+
+The Nix flake landed in this repo wraps the non-deterministic build
+inside a multi-stage shape that **absorbs** the non-determinism for
+every downstream consumer:
+
+- The network boundary lives in a small set of deterministic fixed-
+  output derivations (`agent-template-vendor` via `cargo vendor`,
+  `fetchPnpmDeps`, per-component `fetchNpmDeps`) — their outputs are
+  byte-stable because the upstream tools (cargo, pnpm, npm) produce
+  sorted, content-addressed offline mirrors.
+- The hermetic offline builds *downstream* of those FODs may still
+  produce different bytes between machines, but Nix builds them
+  exactly once per input hash and reads the cached store path
+  thereafter. So consumers of `golem-ts-sdk`, `test-components-ts`,
+  etc. see a single, stable artifact per source revision — even if a
+  re-build from scratch on a different machine produced different
+  bytes underneath.
+
+That makes "did this PR change the artifact?" answerable via Nix
+store-path comparison, and gives CI / sccache something to key on.
+
+What it does **not** fix: the issues below still affect every non-Nix
+contributor (running `cargo make build-test-components` on their
+laptop), every supply-chain consumer who wants to confirm the
+published wasm came from a particular source revision (no
+deterministic rebuild), and the project's general ability to bisect
+output changes. The mitigation only covers the Nix-mediated path.
+
 ## TL;DR
 
 While wiring the existing build scripts under `test-components/` into a

@@ -168,11 +168,23 @@
               url = "https://github.com/golemcloud/wasm-rquickjs.git";
               rev = "6d08b6db89dcf6735b0d0d7866745e458f61d8b7";
               # NB: includes submodules (rusqlite at vendor/rusqlite).
-              # Earlier this hash was the submodule-less tree (computed
-              # via `nix-prefetch-git`, which defaults to no
-              # submodules); `pkgs.fetchgit` defaults to fetching
-              # submodules so the on-disk content differs and the
-              # hash updates accordingly.
+              # `pkgs.fetchgit` defaults to `fetchSubmodules = true`,
+              # so the recursive hash captures the submodule content.
+              #
+              # Hash fragility — the rusqlite submodule pointer in
+              # `.gitmodules` is recorded as a SHA in the wasm-rquickjs
+              # tree (commit-locked), so for a fixed `rev` this hash IS
+              # stable. The risk is upstream-shaped: if `golemcloud/
+              # wasm-rquickjs` ever rewrites history at this rev (or
+              # the submodule's remote rebases), our hash drifts with
+              # a confusing "specified vs got" error. The clean fix
+              # lives at upstream:
+              #   https://github.com/golemcloud/wasm-rquickjs
+              # — either remove the submodule and vendor rusqlite
+              # inline, or move to a pinned tag-based release model
+              # so consumers can pin to immutable refs. Until then,
+              # treat any hash mismatch as a signal to re-verify the
+              # rev still points where we expect.
               hash = "sha256-g+RZhH6ec+zL9+37P4PQGcQjkQamexAZrlqOoE7QR5M=";
             };
           in
@@ -654,6 +666,30 @@
             cd test-components/${name}
             patchShebangs node_modules
 
+            # Assert the SDK overlay survived `npm install`. With the
+            # SDK's `prepare` script stripped (see `postPatch` in
+            # `golem-ts-sdk-base.installPhase`), `npm ci --ignore-scripts`
+            # should symlink `node_modules/@golemcloud/golem-ts-sdk` at
+            # the pre-built file: dep without re-running `pnpm build`.
+            # If npm re-built dist/ regardless, the shebang on
+            # `golem-typegen.cjs` would still be `#!/usr/bin/env node`
+            # rather than the patched `#!/nix/store/.../node`. Crash
+            # loudly here instead of failing later with a confusing
+            # "/usr/bin/env: bad interpreter".
+            typegen_shebang=$(head -n1 node_modules/@golemcloud/golem-ts-typegen/dist/golem-typegen.cjs 2>/dev/null || echo "MISSING")
+            case "$typegen_shebang" in
+              "#!/nix/store/"*)
+                ;;
+              *)
+                echo "ERROR: golem-typegen.cjs shebang is '$typegen_shebang'" >&2
+                echo "  Expected '#!/nix/store/.../node' — npm install" >&2
+                echo "  appears to have re-run the SDK's prepare script" >&2
+                echo "  (which would regenerate dist/ without our patched" >&2
+                echo "  shebangs). Verify postPatch in golem-ts-sdk-base." >&2
+                exit 1
+                ;;
+            esac
+
             # golem-cli build. Its `ensure_npm_dependencies` check sees
             # an up-to-date node_modules with matching package-lock hash
             # so it skips its own internal `npm install` (which would
@@ -1121,19 +1157,23 @@
             fail=0
             check() {
               local bin="$1" flag="$2" committed="$3"
-              local generated
-              generated=$(${golem-services}/target/debug/$bin $flag 2>/dev/null) || {
+              local tmpfile="$TMPDIR/$(basename $committed).generated"
+              if ! ${golem-services}/target/debug/$bin $flag > "$tmpfile" 2>/dev/null; then
                 echo "ERROR: failed to dump $flag from $bin" >&2
                 fail=1
                 return
-              }
-              # diff -B ignores trailing-blank-line drift between the
-              # binary's stdout and the committed file — the committed
-              # copies typically have a final blank line that the binary
-              # doesn't emit. Real content differences still trip the check.
-              if ! diff -B <(echo "$generated") ${src}/$committed >/dev/null 2>&1; then
+              fi
+              # Strict byte-for-byte comparison via direct file
+              # redirection — `$()` collapses trailing newlines, so
+              # writing the binary's stdout to a tmpfile preserves
+              # the exact bytes for diff. The committed copies are
+              # kept in sync via `cargo make generate-configs`; any
+              # real drift here fails the check, and the fix is to
+              # rerun generate-configs and commit, not to soften
+              # this diff.
+              if ! diff "$tmpfile" ${src}/$committed >/dev/null 2>&1; then
                 echo "DRIFT: $committed differs from $bin $flag" >&2
-                diff -B <(echo "$generated") ${src}/$committed | head -20 >&2 || true
+                diff "$tmpfile" ${src}/$committed | head -20 >&2 || true
                 fail=1
               fi
             }

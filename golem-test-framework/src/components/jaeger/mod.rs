@@ -21,6 +21,7 @@ use tokio::time::Instant;
 use tracing::{debug, info};
 
 mod docker;
+mod provided;
 
 #[async_trait]
 pub trait Jaeger: Send + Sync {
@@ -30,6 +31,30 @@ pub trait Jaeger: Send + Sync {
 }
 
 pub use docker::DockerJaeger;
+pub use provided::ProvidedJaeger;
+
+/// Construct a `Jaeger` implementation. When the environment variable
+/// `GOLEM_TEST_JAEGER_OTLP_HTTP_ENDPOINT` is set, return a
+/// `ProvidedJaeger` that points at an externally-managed collector
+/// (intended for hermetic test environments that can't run Docker —
+/// the supplied endpoint should accept OTLP HTTP and expose the
+/// Jaeger query API at `GOLEM_TEST_JAEGER_QUERY_URL`). Otherwise the
+/// default `DockerJaeger` spawns `jaegertracing/all-in-one` via
+/// testcontainers.
+pub async fn create_jaeger() -> std::sync::Arc<dyn Jaeger> {
+    match std::env::var("GOLEM_TEST_JAEGER_OTLP_HTTP_ENDPOINT").ok() {
+        Some(otlp) => {
+            let query = std::env::var("GOLEM_TEST_JAEGER_QUERY_URL").unwrap_or_else(|_| {
+                panic!(
+                    "GOLEM_TEST_JAEGER_OTLP_HTTP_ENDPOINT is set but \
+                     GOLEM_TEST_JAEGER_QUERY_URL is not"
+                )
+            });
+            std::sync::Arc::new(ProvidedJaeger::new(otlp, query).await)
+        }
+        None => std::sync::Arc::new(DockerJaeger::new().await),
+    }
+}
 
 pub struct JaegerQueryClient {
     client: reqwest::Client,
