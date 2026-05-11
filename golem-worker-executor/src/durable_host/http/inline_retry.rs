@@ -1605,6 +1605,7 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     request_state: &HttpRequestState,
     status: u16,
+    rejected_response_rep: Option<u32>,
 ) -> Result<StatusRetryOutcome, anyhow::Error> {
     // Build retry properties (including `status-code`) and resolve a matching
     // user-defined status-code policy *before* doing eligibility / atomic-region
@@ -1642,6 +1643,28 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
             return Ok(StatusRetryOutcome::NoRetry);
         }
     };
+
+    // A user-defined status-code policy matched this rejected response. The
+    // underlying TCP connection may be in an unsafe state for keep-alive reuse
+    // (for example, the server returned the rejected status without draining
+    // our request body, leaving leftover bytes in its receive buffer that
+    // would corrupt the next request line). Poison the pooled connection now
+    // so the connection pool will not hand it back — neither for the retry
+    // resend below, nor for any unrelated subsequent request from another
+    // worker sharing the same `HttpConnectionPool`. Healthy idle connections
+    // (or freshly opened ones) remain available through the pool. This is
+    // a no-op when the response was not produced through the pool.
+    if let Some(rep) = rejected_response_rep {
+        let resource = wasmtime::component::Resource::<
+            wasmtime_wasi_http::types::HostIncomingResponse,
+        >::new_borrow(rep);
+        if let Ok(resp) = ctx
+            .table()
+            .get::<wasmtime_wasi_http::types::HostIncomingResponse>(&resource)
+        {
+            resp.poison_pooled_connection();
+        }
+    }
 
     // Inside an atomic region, inline retry is forbidden (it would skip the
     // atomic-region rollback semantics). Escalate to trap+replay so the

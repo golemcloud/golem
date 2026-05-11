@@ -1056,13 +1056,22 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 // wrapped with background retry.
                 let status_retry_outcome = if let SerializableHttpResponse::HeadersReceived(headers) =
                     &serializable_response
-                    && let Ok(Some(Ok(Ok(_)))) = &response
+                    && let Ok(Some(Ok(Ok(rejected)))) = &response
                     && let Some(request_state) = self.state.open_http_requests.get(&handle).cloned()
                 {
                     let status = headers.status;
-                    let outcome = try_status_code_retry(self, &request_state, status)
-                        .await
-                        .map_err(wasmtime::Error::from_anyhow)?;
+                    // Resource rep of the rejected response. Used by
+                    // `try_status_code_retry` to poison the underlying pooled
+                    // connection when a status-code retry policy matches.
+                    let rejected_response_rep = rejected.rep();
+                    let outcome = try_status_code_retry(
+                        self,
+                        &request_state,
+                        status,
+                        Some(rejected_response_rep),
+                    )
+                    .await
+                    .map_err(wasmtime::Error::from_anyhow)?;
                     Some((status, request_state, outcome))
                 } else {
                     None
