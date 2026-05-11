@@ -1095,15 +1095,15 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                                     )
                                     .await;
                                 }
-                                let future_res = self.table().get_mut(
-                                    &Resource::<FutureIncomingResponse>::new_borrow(handle),
-                                )?;
+                                let future_res =
+                                    self.table().get_mut(
+                                        &Resource::<FutureIncomingResponse>::new_borrow(handle),
+                                    )?;
                                 *future_res =
                                     wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(
                                         Ok(Ok(new_resp)),
                                     );
-                                let self2 =
-                                    Resource::<FutureIncomingResponse>::new_borrow(handle);
+                                let self2 = Resource::<FutureIncomingResponse>::new_borrow(handle);
                                 response = HostFutureIncomingResponse::get(
                                     &mut self.as_wasi_http_view(),
                                     self2,
@@ -1139,9 +1139,10 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                                     )
                                     .await?;
                                 }
-                                let future_res = self.table().get_mut(
-                                    &Resource::<FutureIncomingResponse>::new_borrow(handle),
-                                )?;
+                                let future_res =
+                                    self.table().get_mut(
+                                        &Resource::<FutureIncomingResponse>::new_borrow(handle),
+                                    )?;
                                 *future_res =
                                     wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(
                                         Ok(Err(error_code.clone())),
