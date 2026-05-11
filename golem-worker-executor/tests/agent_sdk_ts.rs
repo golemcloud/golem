@@ -462,11 +462,13 @@ async fn ts_manifest_status_retry_periodic_short(
 ///   - Reads the request line + headers (only enough to know how much to
 ///     respond), but **does NOT consume the request body** when failing.
 ///   - On the first `fail_count` requests it writes:
-///         HTTP/1.1 500 Internal Server Error
-///         Content-Type: application/json
-///         Content-Length: 38
+///     ```
+///     HTTP/1.1 500 Internal Server Error
+///     Content-Type: application/json
+///     Content-Length: 38
 ///
-///         {"error":"chaos: synthetic failure"}
+///     {"error":"chaos: synthetic failure"}
+///     ```
 ///     and **leaves the connection open** for keep-alive reuse, exactly like
 ///     Node.js's default HTTP server.
 ///   - After `fail_count` failures, on the next request it drains the body
@@ -1518,7 +1520,10 @@ async fn business_handler(
             })
         }
         Endpoint::Shipment => {
-            let tracking = format!("1Z{:012X}", rand::random::<u64>() & 0x0000_FFFF_FFFF_FFFFu64);
+            let tracking = format!(
+                "1Z{:012X}",
+                rand::random::<u64>() & 0x0000_FFFF_FFFF_FFFFu64
+            );
             serde_json::json!({
                 "shipmentId": format!("shp_{id}"),
                 "trackingNumber": tracking,
