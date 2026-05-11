@@ -28,7 +28,8 @@ use golem_common::model::oplog::{
     HostResponseGolemRdbmsColumns, HostResponseGolemRdbmsRequest, HostResponseGolemRdbmsResult,
     HostResponseGolemRdbmsResultChunk, HostResponseGolemRdbmsRowCount,
 };
-use golem_common::model::{AgentId, OplogIndex, RdbmsPoolKey, TransactionId};
+use golem_common::model::retry_policy::RetryProperties;
+use golem_common::model::{AgentId, OplogIndex, RdbmsPoolKey, RetryContext, TransactionId};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -49,6 +50,19 @@ fn classify_rdbms_error(error: &RdbmsError) -> HostFailureKind {
         RdbmsError::QueryResponseFailure(_) => HostFailureKind::Permanent,
         RdbmsError::Other(_) => HostFailureKind::Transient,
     }
+}
+
+/// Builds the retry property bag for an RDBMS host call, populating `verb`,
+/// `noun-uri`, `db-type` (e.g. `postgres`, `mysql`, `ignite2`), and the worker-level
+/// enrichment so user-defined policies keyed on `db-type` can match.
+fn rdbms_retry_properties<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    verb: &str,
+    pool_key: &RdbmsPoolKey,
+) -> RetryProperties {
+    let mut properties = RetryContext::rdbms(verb, pool_key);
+    ctx.state.enrich_retry_properties(&mut properties);
+    properties
 }
 
 // Trait to map RdbmsType to the correct HostPayloadPair types for durability
@@ -157,6 +171,7 @@ where
         let (input, result) = match pool_key {
             Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
                 Ok(db_params) => {
+                    let properties = rdbms_retry_properties(ctx, "execute", &pool_key);
                     let result = loop {
                         let result = ctx
                             .state
@@ -166,7 +181,12 @@ where
                             .execute(&pool_key, &agent_id, &statement, db_params.clone())
                             .await;
                         match durability
-                            .try_trigger_retry_or_loop(ctx, &result, classify_rdbms_error)
+                            .try_trigger_retry_or_loop_with_properties(
+                                ctx,
+                                &result,
+                                classify_rdbms_error,
+                                properties.clone(),
+                            )
                             .await?
                         {
                             InternalRetryResult::Persist => break result,
@@ -228,6 +248,7 @@ where
         let (input, result) = match pool_key {
             Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
                 Ok(db_params) => {
+                    let properties = rdbms_retry_properties(ctx, "query", &pool_key);
                     let result = loop {
                         let result = ctx
                             .state
@@ -237,7 +258,12 @@ where
                             .query(&pool_key, &agent_id, &statement, db_params.clone())
                             .await;
                         match durability
-                            .try_trigger_retry_or_loop(ctx, &result, classify_rdbms_error)
+                            .try_trigger_retry_or_loop_with_properties(
+                                ctx,
+                                &result,
+                                classify_rdbms_error,
+                                properties.clone(),
+                            )
                             .await?
                         {
                             InternalRetryResult::Persist => break result,
@@ -303,10 +329,27 @@ where
     .await?;
 
     let result = if durability.is_live() {
+        let conn_pool_key = ctx
+            .as_wasi_view()
+            .table()
+            .get::<RdbmsConnection<T>>(entry)
+            .map(|v| v.pool_key.clone());
         let result = db_connection_query_stream(statement, params, ctx, entry);
-        durability
-            .try_trigger_retry(ctx, &result, classify_rdbms_error)
-            .await?;
+        let pool_key_for_props = result
+            .as_ref()
+            .map(|r| r.pool_key.clone())
+            .ok()
+            .or_else(|| conn_pool_key.ok());
+        if let Some(pool_key) = pool_key_for_props.as_ref() {
+            let properties = rdbms_retry_properties(ctx, "query-stream", pool_key);
+            durability
+                .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
+                .await?;
+        } else {
+            durability
+                .try_trigger_retry(ctx, &result, classify_rdbms_error)
+                .await?;
+        }
 
         let result = result.map(|request| request.into()).map_err(|e| e.into());
         durability
@@ -397,14 +440,26 @@ where
     let durability = Durability::<T::StreamGetColumns>::new(ctx, durable_function_type).await?;
 
     let result = if durability.is_live() {
+        let pool_key = ctx
+            .as_wasi_view()
+            .table()
+            .get::<RdbmsResultStreamEntry<T>>(entry)
+            .map(|v| v.request.pool_key.clone());
         let query_stream = get_db_query_stream(ctx, entry).await;
         let result = match query_stream {
             Ok(query_stream) => query_stream.deref().get_columns().await,
             Err(error) => Err(error),
         };
-        durability
-            .try_trigger_retry(ctx, &result, classify_rdbms_error)
-            .await?;
+        if let Ok(pool_key) = pool_key.as_ref() {
+            let properties = rdbms_retry_properties(ctx, "stream-get-columns", pool_key);
+            durability
+                .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
+                .await?;
+        } else {
+            durability
+                .try_trigger_retry(ctx, &result, classify_rdbms_error)
+                .await?;
+        }
 
         let result = result
             .map(|columns| columns.into_iter().map(|c| c.into()).collect())
@@ -459,14 +514,26 @@ where
     let durability = Durability::<T::StreamGetNext>::new(ctx, durable_function_type).await?;
 
     let result = if durability.is_live() {
+        let pool_key = ctx
+            .as_wasi_view()
+            .table()
+            .get::<RdbmsResultStreamEntry<T>>(entry)
+            .map(|v| v.request.pool_key.clone());
         let query_stream = get_db_query_stream(ctx, entry).await;
         let result = match query_stream {
             Ok(query_stream) => query_stream.deref().get_next().await,
             Err(error) => Err(error),
         };
-        durability
-            .try_trigger_retry(ctx, &result, classify_rdbms_error)
-            .await?;
+        if let Ok(pool_key) = pool_key.as_ref() {
+            let properties = rdbms_retry_properties(ctx, "stream-get-next", pool_key);
+            durability
+                .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
+                .await?;
+        } else {
+            durability
+                .try_trigger_retry(ctx, &result, classify_rdbms_error)
+                .await?;
+        }
 
         let result = result
             .map(|chunk| {
@@ -564,10 +631,26 @@ where
     .await?;
 
     let result = if durability.is_live() {
+        let txn_pool_key = ctx
+            .as_wasi_view()
+            .table()
+            .get::<RdbmsTransactionEntry<T>>(entry)
+            .map(|v| v.pool_key.clone());
         let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
-        durability
-            .try_trigger_retry(ctx, &result, classify_rdbms_error)
-            .await?;
+        let pool_key_for_props = input
+            .as_ref()
+            .map(|r| r.pool_key.clone())
+            .or_else(|| txn_pool_key.ok());
+        if let Some(pool_key) = pool_key_for_props.as_ref() {
+            let properties = rdbms_retry_properties(ctx, "query", pool_key);
+            durability
+                .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
+                .await?;
+        } else {
+            durability
+                .try_trigger_retry(ctx, &result, classify_rdbms_error)
+                .await?;
+        }
 
         let result = result.map(|result| result.into()).map_err(|err| err.into());
         durability
@@ -617,10 +700,26 @@ where
     .await?;
 
     let result = if durability.is_live() {
+        let txn_pool_key = ctx
+            .as_wasi_view()
+            .table()
+            .get::<RdbmsTransactionEntry<T>>(entry)
+            .map(|v| v.pool_key.clone());
         let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
-        durability
-            .try_trigger_retry(ctx, &result, classify_rdbms_error)
-            .await?;
+        let pool_key_for_props = input
+            .as_ref()
+            .map(|r| r.pool_key.clone())
+            .or_else(|| txn_pool_key.ok());
+        if let Some(pool_key) = pool_key_for_props.as_ref() {
+            let properties = rdbms_retry_properties(ctx, "execute", pool_key);
+            durability
+                .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
+                .await?;
+        } else {
+            durability
+                .try_trigger_retry(ctx, &result, classify_rdbms_error)
+                .await?;
+        }
 
         let result = result.map_err(|e| e.into());
         durability
@@ -660,10 +759,27 @@ where
     .await?;
 
     let result = if durability.is_live() {
+        let txn_pool_key = ctx
+            .as_wasi_view()
+            .table()
+            .get::<RdbmsTransactionEntry<T>>(entry)
+            .map(|v| v.pool_key.clone());
         let result = db_transaction_query_stream(statement, params, ctx, entry);
-        durability
-            .try_trigger_retry(ctx, &result, classify_rdbms_error)
-            .await?;
+        let pool_key_for_props = result
+            .as_ref()
+            .map(|r| r.pool_key.clone())
+            .ok()
+            .or_else(|| txn_pool_key.ok());
+        if let Some(pool_key) = pool_key_for_props.as_ref() {
+            let properties = rdbms_retry_properties(ctx, "query-stream", pool_key);
+            durability
+                .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
+                .await?;
+        } else {
+            durability
+                .try_trigger_retry(ctx, &result, classify_rdbms_error)
+                .await?;
+        }
 
         let result = result.map(|request| request.into()).map_err(|e| e.into());
         durability
