@@ -135,7 +135,13 @@
             wrqSrc = pkgs.fetchgit {
               url = "https://github.com/golemcloud/wasm-rquickjs.git";
               rev = "6d08b6db89dcf6735b0d0d7866745e458f61d8b7";
-              hash = "sha256-DmehvcTeasIxbYOB7DlPSJsjEsalDQ1Hobn5devqHJw=";
+              # NB: includes submodules (rusqlite at vendor/rusqlite).
+              # Earlier this hash was the submodule-less tree (computed
+              # via `nix-prefetch-git`, which defaults to no
+              # submodules); `pkgs.fetchgit` defaults to fetching
+              # submodules so the on-disk content differs and the
+              # hash updates accordingly.
+              hash = "sha256-g+RZhH6ec+zL9+37P4PQGcQjkQamexAZrlqOoE7QR5M=";
             };
           in
           craneLib.buildPackage {
@@ -954,7 +960,91 @@
           #     mixed TS+Rust apps; same network requirement.
           # Filtering both leaves zero tests, so a flake check would
           # be vacuous. Run locally via `cargo make
-          # cli-integration-tests-group1..6` with network available.
+          # cli-integration-tests-group{1..6}` with network available.
+
+          # CI's `integration-tests-group5` runs `cargo test` against the
+          # service crates themselves (not the integration-tests crate).
+          # Each cargo test invocation hits redis + sqlite-backed
+          # in-process tests with no Docker dependency.
+          integration-tests-group5-service-base = mkSpawnedTest {
+            pname = "golem-integration-tests-group5-service-base";
+            package = "golem-service-base";
+            testName = "integration";
+            # blob_storage::*_s3* exercises a real S3 backend (or a
+            # LocalStack/minio) that the sandbox doesn't provide.
+            skips = [ "ip_address_resolve" "rdbms" "_s3" ];
+          };
+          integration-tests-group5-registry-service = mkSpawnedTest {
+            pname = "golem-integration-tests-group5-registry-service";
+            package = "golem-registry-service";
+            testName = "integration";
+            skips = [ "ip_address_resolve" "rdbms" ];
+          };
+          integration-tests-group5-worker-service = mkSpawnedTest {
+            pname = "golem-integration-tests-group5-worker-service";
+            package = "golem-worker-service";
+            testName = "integration";
+            skips = [ "ip_address_resolve" "rdbms" ];
+          };
+          integration-tests-group5-debugging-service = mkSpawnedTest {
+            pname = "golem-integration-tests-group5-debugging-service";
+            package = "golem-debugging-service";
+            testName = "integration";
+            skips = [ "ip_address_resolve" "rdbms" ];
+          };
+
+          # CI's `integration-tests-group9`: `agent-config-live-mutation`
+          # test binary with SQLite. (Group8 is the Postgres variant,
+          # which needs DockerPostgresRdb — not feasible in sandbox.)
+          integration-tests-group9 = mkSpawnedTest {
+            pname = "golem-integration-tests-group9";
+            package = "integration-tests";
+            testName = "agent-config-live-mutation";
+            testThreads = 1;
+            skips = [
+              "ip_address_resolve"
+              "rdbms"
+              "_ts"
+              "agent_config::ts"
+            ];
+          };
+
+          # CI's `ci.yaml:golem-wasm-guest` step:
+          # `cargo build --target wasm32-wasip2 -p golem-wasm
+          # --no-default-features --features guest`. Confirms the
+          # WASM-guest cross-compile of the golem-wasm crate stays
+          # green. `workspace-build` doesn't cover this — it builds
+          # the host-side default features only.
+          wasm-guest-build = craneLib.mkCargoDerivation (commonArgs // {
+            inherit cargoArtifacts;
+            pname = "golem-wasm-guest-build";
+            doInstallCargoArtifacts = false;
+            buildPhaseCargoCommand = ''
+              cargo build --locked --target wasm32-wasip2 \
+                -p golem-wasm --no-default-features --features guest
+            '';
+          });
+
+          # NB: CI's `integration-tests-group7` (otlp_plugin, plugins)
+          # is intentionally NOT wired. The test framework's
+          # `DockerJaeger::new()` hardcodes `GenericImage::new(
+          # "jaegertracing/all-in-one", "1.76.0")` and shells out to
+          # the docker socket; both `otlp_plugin` and `plugins`
+          # suites depend on it. Removing the Docker requirement
+          # would mean patching `golem-test-framework/src/components/
+          # jaeger/docker.rs` to support a provided OTLP collector
+          # instead of spawning a container — an upstream change, not
+          # something the flake layer can paper over. Local runs via
+          # `cargo make integration-tests-group7` work once Docker is
+          # available.
+
+          # NB: `windows-daily-build.yaml` cross-compiles to
+          # x86_64-pc-windows-{msvc,gnu}. Wiring a Windows
+          # cross-compile from a Linux flake is technically
+          # achievable via `cross-rs` (or a mingw-w64 rust-overlay
+          # target), but it's a multi-day toolchain plumbing effort
+          # and doesn't share artifacts with the rest of the checks.
+          # Left as CI-only.
 
           # `cargo make check-configs`. Each service binary supports
           # `--dump-config-default-toml` / `--dump-config-default-env-var`;
