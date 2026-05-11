@@ -328,11 +328,17 @@ impl Drop for TestContext {
 fn test_binary_profile() -> String {
     match std::env::var(GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR) {
         Ok(profile) if profile.trim().is_empty() => "debug".to_string(),
-        Ok(profile) if profile == "debug" || profile == "dev-release" || profile == "release" => {
+        Ok(profile)
+            if profile == "debug"
+                || profile == "dev-ci"
+                || profile == "dev-release"
+                || profile == "dev-release-ci"
+                || profile == "release" =>
+        {
             profile
         }
         Ok(profile) => panic!(
-            "Unsupported {GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR} value: {profile}. Expected 'debug', 'dev-release', or 'release'"
+            "Unsupported {GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR} value: {profile}. Expected 'debug', 'dev-ci', 'dev-release', 'dev-release-ci', or 'release'"
         ),
         Err(_) => "debug".to_string(),
     }

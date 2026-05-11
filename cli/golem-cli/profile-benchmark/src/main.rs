@@ -12,8 +12,20 @@ const DEFAULT_TESTS: &[&str] = &[
     "app::app::basic_ifs_deploy",
     "app::agents::test_rust_counter",
 ];
-const DEFAULT_PROFILES: &[&str] = &["debug", "dev-release", "release"];
-const ALLOWED_PROFILES: &[&str] = &["debug", "dev-release", "release"];
+const DEFAULT_PROFILES: &[&str] = &[
+    "debug",
+    "dev-ci",
+    "dev-release",
+    "dev-release-ci",
+    "release",
+];
+const ALLOWED_PROFILES: &[&str] = &[
+    "debug",
+    "dev-ci",
+    "dev-release",
+    "dev-release-ci",
+    "release",
+];
 
 fn main() {
     if let Err(err) = dispatch() {
@@ -346,12 +358,35 @@ fn build_command(profile: &str, binary_name: &str, target_dir: &Path) -> Result<
         "debug" => {
             command.args(["build", "-p", binary_name, "--bin", binary_name]);
         }
+        "dev-ci" => {
+            command.args([
+                "build",
+                "--profile",
+                "dev-ci",
+                "-p",
+                binary_name,
+                "--bin",
+                binary_name,
+            ]);
+        }
         "dev-release" => {
             command.env("GOLEM_BUILD_SKIP_SHADOW", "1");
             command.args([
                 "build",
                 "--profile",
                 "dev-release",
+                "-p",
+                binary_name,
+                "--bin",
+                binary_name,
+            ]);
+        }
+        "dev-release-ci" => {
+            command.env("GOLEM_BUILD_SKIP_SHADOW", "1");
+            command.args([
+                "build",
+                "--profile",
+                "dev-release-ci",
                 "-p",
                 binary_name,
                 "--bin",

@@ -209,22 +209,31 @@ if ${profile_empty}
 end
 
 debug_profile = eq ${profile} debug
+dev_ci_profile = eq ${profile} dev-ci
 dev_release_profile = eq ${profile} dev-release
+dev_release_ci_profile = eq ${profile} dev-release-ci
 release_profile = eq ${profile} release
 
 if ${debug_profile}
     exec --fail-on-error cargo build -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build -p golem --bin golem
+elseif ${dev_ci_profile}
+    exec --fail-on-error cargo build --profile dev-ci -p golem-cli --bin golem-cli
+    exec --fail-on-error cargo build --profile dev-ci -p golem --bin golem
 elseif ${dev_release_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
     exec --fail-on-error cargo build --profile dev-release -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build --profile dev-release -p golem --bin golem
+elseif ${dev_release_ci_profile}
+    set_env GOLEM_BUILD_SKIP_SHADOW 1
+    exec --fail-on-error cargo build --profile dev-release-ci -p golem-cli --bin golem-cli
+    exec --fail-on-error cargo build --profile dev-release-ci -p golem --bin golem
 elseif ${release_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
     exec --fail-on-error cargo build --release -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build --release -p golem --bin golem
 else
-    echo "Unsupported GOLEM_CLI_TEST_BIN_PROFILE=${profile}. Expected 'debug', 'dev-release', or 'release'."
+    echo "Unsupported GOLEM_CLI_TEST_BIN_PROFILE=${profile}. Expected 'debug', 'dev-ci', 'dev-release', 'dev-release-ci', or 'release'."
     trigger_error unsupported-cli-test-bin-profile
 end
 '''

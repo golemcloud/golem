@@ -18,7 +18,7 @@ env:
   WASM_RQUICKJS_VERSION: "0.2.4"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
-  CLI_PROFILE_BENCH_PROFILES: debug,dev-release,release
+  CLI_PROFILE_BENCH_PROFILES: debug,dev-ci,dev-release,dev-release-ci,release
   QUIET: "true"
   RUST_BACKTRACE: "1"
 
@@ -69,6 +69,9 @@ jobs:
       - name: Install TS SDK dependencies
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
+
+      - name: Build TypeScript SDK
+        run: cargo make build-sdk-ts
 
       - name: Run CLI integration profile benchmark
         run: cargo make --no-workspace benchmark-cli-test-profiles
@@ -127,6 +130,9 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: cli-profile-build-benchmark-results
-          path: target/cli-profile-build-benchmark/**
+          path: |
+            target/cli-profile-build-benchmark/**/*.log
+            target/cli-profile-build-benchmark/**/results.csv
+            target/cli-profile-build-benchmark/**/results.md
           if-no-files-found: warn
           retention-days: 7
