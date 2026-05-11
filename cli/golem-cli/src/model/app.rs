@@ -349,7 +349,7 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
-    agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<serde_json::Value>>,
+    agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
     retry_policy_defaults:
         BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
     resource_definition_defaults:
@@ -680,7 +680,7 @@ impl Application {
     pub fn deployment_agent_secret_defaults(
         &self,
         environment: &EnvironmentName,
-    ) -> Option<WithSource<serde_json::Value>> {
+    ) -> Option<WithSource<app_raw::JsonObject>> {
         self.agent_secrets_defaults.get(environment).cloned()
     }
 
@@ -2260,7 +2260,7 @@ mod app_builder {
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
-        agent_secret_defaults: BTreeMap<EnvironmentName, WithSource<serde_json::Value>>,
+        agent_secret_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
 
         retry_policy_defaults:
             BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,

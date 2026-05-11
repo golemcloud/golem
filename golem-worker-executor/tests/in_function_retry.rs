@@ -608,6 +608,124 @@ async fn start_failing_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>)
     (port, counter)
 }
 
+async fn start_status_code_retry_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+
+    spawn(
+        async move {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+
+                let mut data = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => data.extend_from_slice(&buf[..n]),
+                        Err(_) => break,
+                    }
+                    if String::from_utf8_lossy(&data).contains("\r\n\r\n") {
+                        break;
+                    }
+                }
+
+                let header_end = data
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|position| position + 4)
+                    .unwrap_or(data.len());
+                let header_text = String::from_utf8_lossy(&data[..header_end]);
+                let content_length = header_text
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("Content-Length:")
+                            .or_else(|| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+
+                let attempt = counter_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                let (status, reason, body) = if attempt <= fail_count {
+                    (500, "Internal Server Error", "retry-me")
+                } else {
+                    (200, "OK", "status-retry-ok")
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+
+                let body_start = header_end + 4;
+                let mut body_bytes_read = data.len().saturating_sub(body_start);
+                while body_bytes_read < content_length {
+                    match stream.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => body_bytes_read += n,
+                        Err(_) => break,
+                    }
+                }
+
+                let _ = stream.shutdown().await;
+            }
+        }
+        .in_current_span(),
+    );
+
+    (port, counter)
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_status_retry_policy_retries_matching_status(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
+
+    let (port, counter) = start_status_code_retry_http_server(3).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_with_status_retry_policy",
+            data_value!(),
+        )
+        .await?;
+
+    assert_eq!(
+        result.into_return_value(),
+        Some(Value::String("200 status-retry-ok".to_string()))
+    );
+    assert_eq!(counter.load(Ordering::SeqCst), 4);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn http_zone1_inline_retry_on_transient_connection_failure(

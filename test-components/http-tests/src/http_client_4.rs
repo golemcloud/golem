@@ -1,3 +1,4 @@
+use golem_rust::retry::{NamedPolicy, Policy, Predicate, Props, with_named_policy_async};
 use golem_rust::{agent_definition, agent_implementation, with_idempotence_mode};
 
 #[agent_definition]
@@ -36,6 +37,9 @@ pub trait HttpClient4 {
     /// Sends a GET, then reads the response body using a mix of blocking_read and
     /// blocking_skip. Used for had_body_skip disqualification testing.
     async fn get_with_body_skip(&self) -> String;
+
+    /// Sends a buffered POST with a retry policy that retries HTTP 500 responses.
+    async fn post_with_status_retry_policy(&self) -> String;
 }
 
 struct HttpClient4Impl;
@@ -80,6 +84,33 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn get_with_body_skip(&self) -> String {
         do_get_with_body_skip()
+    }
+
+    async fn post_with_status_retry_policy(&self) -> String {
+        let policy = NamedPolicy::named(
+            "http-status-retry-test",
+            Policy::immediate().max_retries(10),
+        )
+        .applies_when(Predicate::eq(Props::STATUS_CODE, 500u16));
+
+        with_named_policy_async(&policy, || async {
+            use golem_wasi_http::Client;
+
+            let port = std::env::var("PORT").unwrap_or("9999".to_string());
+            let response = Client::builder()
+                .build()
+                .unwrap()
+                .post(format!("http://localhost:{port}/"))
+                .body("test-body")
+                .send()
+                .await
+                .expect("Request failed");
+            let status = response.status();
+            let body = response.text().await.expect("Response body read failed");
+            format!("{} {}", status.as_u16(), body)
+        })
+        .await
+        .unwrap()
     }
 }
 

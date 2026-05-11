@@ -414,6 +414,7 @@ impl TestContext {
         self.env_mut().insert(key.into(), value.into());
     }
 
+    #[allow(dead_code)]
     fn custom_request_port(&self) -> u16 {
         self.startup_ports
             .as_ref()

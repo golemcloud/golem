@@ -121,12 +121,14 @@ pub struct Application {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<BridgeSdks>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub secret_defaults: IndexMap<EnvironmentName, serde_json::Value>,
+    pub secret_defaults: IndexMap<EnvironmentName, JsonObject>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub retry_policy_defaults: IndexMap<EnvironmentName, IndexMap<String, EnvironmentRetryPolicy>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub resource_defaults: IndexMap<EnvironmentName, IndexMap<ResourceName, ResourceDefinition>>,
 }
+
+pub type JsonObject = serde_json::Map<String, serde_json::Value>;
 
 #[derive(Debug)]
 struct JsonSchemaValidationError {
@@ -1607,15 +1609,15 @@ mod test {
             .boxed()
     }
 
-    fn arb_json_object() -> BoxedStrategy<Value> {
+    fn arb_json_map() -> BoxedStrategy<JsonObject> {
         prop::collection::btree_map(arb_ident(), arb_json_value(), 0..=3)
-            .prop_map(|m| Value::Object(m.into_iter().collect()))
+            .prop_map(|m| m.into_iter().collect())
             .boxed()
     }
 
-    fn arb_secret_defaults_model() -> BoxedStrategy<IndexMap<EnvironmentName, serde_json::Value>> {
+    fn arb_secret_defaults_model() -> BoxedStrategy<IndexMap<EnvironmentName, JsonObject>> {
         prop::collection::vec(
-            (arb_ident().prop_map(EnvironmentName), arb_json_object()),
+            (arb_ident().prop_map(EnvironmentName), arb_json_map()),
             0..=3,
         )
         .prop_map(IndexMap::from_iter)
@@ -1952,6 +1954,61 @@ mod test {
         };
 
         assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+    }
+
+    #[test]
+    fn secret_defaults_accepts_object_per_environment() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            secretDefaults:
+              local:
+                db:
+                  password: secret
+        "# };
+
+        let result = Application::from_yaml_str(source);
+
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn secret_defaults_rejects_scalar_environment_value() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            secretDefaults:
+              local: secret
+        "# };
+
+        let result = Application::from_yaml_str(source);
+
+        let err = result.expect_err("secretDefaults.local should require an object");
+        let err = err.to_string();
+        assert!(
+            err.contains("secretDefaults.local") || err.contains("secret_defaults.local"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn secret_defaults_rejects_array_environment_value() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+
+            secretDefaults:
+              local:
+                - secret
+        "# };
+
+        let result = Application::from_yaml_str(source);
+
+        let err = result.expect_err("secretDefaults.local should require an object");
+        let err = err.to_string();
+        assert!(
+            err.contains("secretDefaults.local") || err.contains("secret_defaults.local"),
+            "unexpected error: {err}"
+        );
     }
 
     proptest! {

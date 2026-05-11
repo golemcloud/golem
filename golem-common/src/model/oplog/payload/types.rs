@@ -766,6 +766,8 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
             body: Some(HostIncomingBody::failing(
                 "Body stream was interrupted due to a restart".to_string(),
             )), // NOTE: high enough timeout so it does not matter, but not as high to overflow instants
+            // Synthetic response: not produced via the connection pool.
+            pooled_connection: None,
         })
     }
 }

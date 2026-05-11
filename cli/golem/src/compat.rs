@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 /// Migration versions are checked independently by sqlx. If migrations in the database are ahead
 /// of this CLI (`MigrateError::VersionTooNew`), startup treats that as a newer-DB case and shows
 /// the same guidance as for `DB version > CLI version` (upgrade CLI or use a different data dir).
-pub const CLI_CURRENT_DB_COMPAT_VERSION: i64 = 1;
+pub const CLI_CURRENT_DB_COMPAT_VERSION: i64 = 2;
 
 const COMPAT_TABLE_NAME: &str = "golem_compat_info";
 

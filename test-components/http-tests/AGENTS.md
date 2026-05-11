@@ -7,16 +7,37 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 
 | Skill | Description |
 |-------|-------------|
+| `golem-cloud-account-setup` | Setting up a Golem Cloud account — authentication, cloud profiles, API tokens, and first cloud deployment |
 | `golem-new-project` | Creating a new Golem application project with `golem new` |
+| `golem-add-component` | Adding a new component or agent templates to an existing application |
+| `golem-edit-manifest` | Editing the Golem Application Manifest (golem.yaml) — components, agents, templates, environments, httpApi, mcp, bridge SDKs, plugins, and more |
 | `golem-build` | Building a Golem application with `golem build` |
+| `golem-troubleshoot-build` | Troubleshooting Golem build failures and debugging manifest file (golem.yaml) configuration — diagnosing tool, dependency, env var, config, and manifest layer issues with `golem component manifest-trace` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
+| `golem-local-dev-server` | Starting, configuring, and debugging the local Golem development server with `golem server` — verbosity flags, useful tracing targets, and key log lines |
+| `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
+| `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
+| `golem-create-agent-instance-rust` | Creating a new agent instance with `golem agent new` |
+| `golem-invoke-agent-rust` | Invoking a Golem agent method from the CLI |
+| `golem-trigger-agent-rust` | Triggering a fire-and-forget invocation on a Golem agent |
+| `golem-schedule-agent-rust` | Scheduling a future invocation on a Golem agent |
 | `golem-add-rust-crate` | Adding a Rust crate dependency to the project |
+| `golem-add-postgres-rust` | Connecting to PostgreSQL with `golem:rdbms/postgres` from Rust agents |
+| `golem-add-mysql-rust` | Connecting to MySQL with `golem:rdbms/mysql` from Rust agents |
+| `golem-add-ignite-rust` | Connecting to Apache Ignite 2 with `golem:rdbms/ignite2` from Rust agents |
 | `golem-add-agent-rust` | Adding a new agent type to a Rust Golem component |
 | `golem-configure-durability-rust` | Choosing between durable and ephemeral agents |
+| `golem-stateless-agent-rust` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-rust` | Adding prompt and description annotations to agent methods |
 | `golem-call-another-agent-rust` | Calling another agent and awaiting the result (RPC) |
+| `golem-call-from-external-rust` | Calling agents from external Rust applications using generated bridge SDKs |
 | `golem-fire-and-forget-rust` | Triggering an agent invocation without waiting for the result |
+| `golem-parallel-workers-rust` | Fan out work to multiple parallel agents and collect results |
 | `golem-schedule-future-call-rust` | Scheduling a future agent invocation |
+| `golem-recurring-task-rust` | Implementing recurring (cron-like) tasks via self-scheduling — periodic polling, cleanup, heartbeats, backoff, and cancellation |
+| `golem-wait-for-external-input-rust` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
+| `golem-add-webhook-rust` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
+| `golem-multi-instance-agent-rust` | Creating multiple agent instances with the same constructor parameters using phantom agents |
 | `golem-atomic-block-rust` | Atomic blocks, persistence control, and idempotency |
 | `golem-add-transactions-rust` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-rust` | Exposing an agent over HTTP with mount paths and endpoint annotations |
@@ -24,13 +45,38 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-http-auth-rust` | Enabling authentication on HTTP endpoints |
 | `golem-add-cors-rust` | Configuring CORS allowed origins for HTTP endpoints |
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
+| `golem-configure-mcp-server` | Configuring MCP (Model Context Protocol) server deployments in golem.yaml |
+| `golem-manage-plugins` | Managing Golem plugins — listing available plugins, installing and configuring plugins via golem.yaml or CLI, and understanding built-in plugins like the OTLP exporter |
+| `golem-add-config-rust` | Adding typed configuration to a Rust Golem agent |
+| `golem-add-secret-rust` | Adding secrets to Rust Golem agents |
+| `golem-quota-rust` | Adding resource quotas (rate limiting, capacity, concurrency) to Rust Golem agents using QuotaToken and reservations |
+| `golem-retry-policies-rust` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `with_named_policy`, and live CLI management |
+| `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
+| `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
+| `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
+| `golem-file-io-rust` | Reading and writing files from agent code |
+| `golem-add-llm-rust` | Adding LLM and AI capabilities using golem-ai libraries |
 | `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using wstd |
+| `golem-logging-rust` | Adding logging to a Rust Golem agent using the `log` crate |
+| `golem-enable-otlp-rust` | Enabling the OpenTelemetry (OTLP) plugin for a Rust agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the invocation context API |
+| `golem-view-agent-logs` | Viewing agent logs and output via streaming |
+| `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
+| `golem-list-and-filter-agents` | Listing and querying agents with filters |
+| `golem-get-agent-metadata` | Checking agent metadata and status |
+| `golem-debug-agent-history` | Querying the operation log |
+| `golem-undo-agent-state` | Reverting agent state by undoing operations |
+| `golem-interrupt-resume-agent` | Interrupting and resuming a Golem agent |
+| `golem-test-crash-recovery` | Simulating a crash on an agent for testing crash recovery |
+| `golem-integration-test-setup` | Setting up a dedicated Golem environment for integration testing — isolated local server, test environment in golem.yaml, dynamic port discovery, and non-interactive deploys |
+| `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
+| `golem-delete-agent` | Deleting an agent instance |
+| `golem-interactive-repl-rust` | Using the Golem REPL for interactive testing and scripting of agents |
 
 # Golem Application Development Guide (Rust)
 
 ## Overview
 
-This is a **Golem Application** — a distributed computing project targeting WebAssembly (WASM). Components are compiled to `wasm32-wasip1` and executed on the Golem platform, which provides durable execution, persistent state, and agent-to-agent communication.
+This is a **Golem Application** — a distributed computing project targeting WebAssembly (WASM). Components are compiled to `wasm32-wasip2` and executed on the Golem platform, which provides durable execution, persistent state, and agent-to-agent communication.
 
 Key concepts:
 - **Component**: A WASM module compiled from Rust, defining one or more agent types
@@ -44,6 +90,20 @@ Key concepts:
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see Agent-to-Agent Communication)
 - An agent is created implicitly on first invocation — no separate creation step needed
+- **Futures cannot outlive invocations** — every `Future` spawned during an invocation must complete (be `.await`ed or driven to completion) before the invocation returns; do not store unresolved futures in agent state to poll them from a later invocation
+
+## Durability & Automatic Retries
+
+Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `loop { match ... }` retry patterns, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter, clamped to [100ms, 1s]) applies when no user-defined policy matches.
+
+The following are retried transparently:
+
+- **HTTP requests** to external services (via `wstd::http`, `golem-wasi-http`, `wasi:http`, etc.)
+- **RPC calls** between agents
+- **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
+- **Panics** at the top level of an agent method — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
+
+Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-rust` skill.
 
 ## Project Structure
 
@@ -76,172 +136,8 @@ golem-temp/                       # Build artifacts (gitignored)
 
 ## Prerequisites
 
-- Rust with `wasm32-wasip1` target: `rustup target add wasm32-wasip1`
+- Rust with `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
 - Golem CLI (`golem`): download from https://github.com/golemcloud/golem/releases
-
-## Building
-
-```shell
-golem build                      # Build all components
-golem component build my:comp    # Build a specific component
-golem build --build-profile release  # Build with release profile
-```
-
-The build compiles Rust to WASM, generates an agent wrapper, composes them, and links dependencies. Output goes to `golem-temp/`.
-
-Do NOT run `cargo build` directly — always use `golem build` which orchestrates the full pipeline including WIT generation and WASM component linking.
-
-## Deploying and Running
-
-```shell
-golem server run                 # Start local Golem server
-golem deploy                     # Deploy all components to the configured server
-golem deploy --try-update-agents # Deploy and update running agents
-golem deploy --reset             # Deploy and delete all previously created agents
-```
-
-**WARNING**: `golem server run --clean` deletes all existing state (agents, data, deployed components). Never run it without explicitly asking the user for confirmation first.
-
-After starting the server, components must be deployed with `golem deploy` before agents can be invoked. When iterating on code changes, use `golem deploy --reset` to delete all previously created agents — without this, existing agent instances continue running with the old component version. This is by design: Golem updates do not break existing running instances.
-
-To try out agents after deploying, use `golem agent invoke` for individual method calls, or write a Rib script and run it with `golem repl` for interactive testing. The Golem server must be running in a separate process before invoking or testing agents.
-
-## Name Mapping (Kebab-Case Convention)
-
-All Rust identifiers are converted to **kebab-case** when used externally (in CLI commands, Rib scripts, REPL, agent IDs, and WAVE values). This applies to:
-
-- **Agent type names**: `CounterAgent` → `counter-agent`
-- **Method names**: `get_count` or `getCount` → `get-count`
-- **Record field names**: `field_name` → `field-name`
-- **Enum/variant case names**: `MyCase` → `my-case`
-
-This conversion is automatic and consistent across all external interfaces.
-
-## Testing Agents
-
-### Using the REPL
-
-```shell
-golem repl                       # Interactive Rib scripting REPL
-```
-
-In the REPL, use kebab-case names and WAVE-encoded values:
-```rib
-let agent = counter-agent("my-counter")
-agent.increment()
-agent.increment()
-```
-
-### Using `golem agent invoke`
-
-Invoke agent methods directly from the CLI. The method name must be fully qualified:
-
-```shell
-# Method name format: <component-name>/<agent-type>.{method-name}
-# All names in kebab-case
-
-golem agent invoke 'counter-agent("my-counter")' \
-  'my:comp/counter-agent.{increment}'
-
-# With arguments (WAVE-encoded)
-golem agent invoke 'my-agent("id")' \
-  'my:comp/my-agent.{set-value}' '"hello world"'
-
-# With a record argument
-golem agent invoke 'my-agent("id")' \
-  'my:comp/my-agent.{update}' '{field-name: "value", count: 42}'
-
-# Fire-and-forget (enqueue without waiting for result)
-golem agent invoke --enqueue 'counter-agent("c1")' \
-  'my:comp/counter-agent.{increment}'
-
-# With idempotency key
-golem agent invoke --idempotency-key 'unique-key-123' \
-  'counter-agent("c1")' 'my:comp/counter-agent.{increment}'
-```
-
-## WAVE Value Encoding
-
-All argument values passed to `golem agent invoke` and used in Rib scripts follow the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) format. See the full [type mapping reference](https://learn.golem.cloud/type-mapping).
-
-### Rust Type to WAVE Mapping
-
-| Rust Type | WIT Type | WAVE Example |
-|-----------|----------|--------------|
-| `String` | `string` | `"hello world"` |
-| `bool` | `bool` | `true`, `false` |
-| `u8`, `u16`, `u32`, `u64` | `u8`, `u16`, `u32`, `u64` | `42` |
-| `i8`, `i16`, `i32`, `i64` | `s8`, `s16`, `s32`, `s64` | `-7` |
-| `f32`, `f64` | `f32`, `f64` | `3.14`, `nan`, `inf`, `-inf` |
-| `char` | `char` | `'x'`, `'\u{1F44B}'` |
-| `Vec<T>` | `list<T>` | `[1, 2, 3]` |
-| `Option<T>` | `option<T>` | `some("value")`, `none` |
-| `Result<T, E>` | `result<T, E>` | `ok("value")`, `err("msg")` |
-| `(T1, T2)` | `tuple<T1, T2>` | `("hello", 42)` |
-| `HashMap<K, V>` | `list<tuple<K, V>>` | `[("key1", 100), ("key2", 200)]` |
-| Struct (with `Schema`) | `record { ... }` | `{field-name: "value", count: 42}` |
-| Enum (unit variants) | `enum { ... }` | `my-variant` |
-| Enum (with data) | `variant { ... }` | `my-case("data")` |
-
-### WAVE Encoding Rules
-
-**Strings**: double-quoted with escape sequences (`\"`, `\\`, `\n`, `\t`, `\r`, `\u{...}`)
-```
-"hello \"world\""
-```
-
-**Records**: field names in kebab-case, optional fields (`Option<T>`) can be omitted (defaults to `none`)
-```
-{required-field: "value", optional-field: some(42)}
-{required-field: "value"}
-```
-
-**Variants/Enums**: case name in kebab-case, with optional payload in parentheses
-```
-my-case
-my-case("payload")
-```
-
-**Options**: can use shorthand (bare value = `some`)
-```
-some(42)    // explicit
-42          // shorthand for some(42), only for non-option/non-result inner types
-none
-```
-
-**Results**: can use shorthand (bare value = `ok`)
-```
-ok("value")   // explicit ok
-err("oops")   // explicit err
-"value"       // shorthand for ok("value")
-```
-
-**Flags**: set of labels in curly braces
-```
-{read, write}
-{}
-```
-
-**Keywords as identifiers**: prefix with `%` if a name conflicts with `true`, `false`, `some`, `none`, `ok`, `err`, `inf`, `nan`
-```
-%true
-%none
-```
-
-## Defining Agents
-
-Load the `golem-add-agent-rust` skill for defining agents and custom types. See also the skill table above for durability configuration, annotations, RPC, atomic blocks, and transactions.
-
-## Application Manifest (golem.yaml)
-
-- Root `golem.yaml`: app name, includes, witDeps, environments, and `components` entries
-- `golem-temp/common/rust/golem.yaml`: generated on-demand build templates (debug/release profiles) shared by all Rust components
-
-Key fields in each `components.<name>` entry:
-- `dir`: component directory (`"."` for single-component apps)
-- `templates`: references a template from common golem.yaml (e.g., `rust`)
-- `env`: environment variables passed to agents at runtime
-- `dependencies`: WASM dependencies (e.g., LLM providers from golem-ai)
 
 ## Available Libraries
 
@@ -254,19 +150,9 @@ From your component (or shared workspace) `Cargo.toml`:
 
 To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`). 
 
-## Debugging
-
-```shell
-golem agent get '<agent-id>'                    # Check agent state
-golem agent stream '<agent-id>'                 # Stream live logs
-golem agent oplog '<agent-id>'                  # View operation log
-golem agent revert '<agent-id>' --number-of-invocations 1  # Revert last invocation
-golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
-```
-
 ## Key Constraints
 
-- Target is `wasm32-wasip1` — no native system calls, threads, or platform-specific code
+- Target is `wasm32-wasip2` — no native system calls, threads, or platform-specific code
 - Crate type must be `cdylib` for component crates
 - All agent method parameters passed by value (no references)
 - All custom types need `Schema` derive (plus `IntoValue` and `FromValueAndType`, which `Schema` implies)
@@ -277,7 +163,7 @@ golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
 
 ```shell
 cargo fmt                            # Format code
-cargo clippy --target wasm32-wasip1  # Lint (must target wasm32-wasip1)
+cargo clippy --target wasm32-wasip2  # Lint (must target wasm32-wasip2)
 ```
 
 ## Documentation
