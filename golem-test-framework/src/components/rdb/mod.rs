@@ -36,6 +36,23 @@ pub trait Rdb: Send + Sync {
     async fn kill(&self);
 }
 
+/// Probe whether a Postgres instance is reachable at the supplied
+/// connection coordinates. Used by `EnvBasedTestDependencies` to pick
+/// `ProvidedPostgresRdb` over the Docker-spawned variant when a
+/// caller-managed Postgres is already running. Mirrors the
+/// `redis::check_if_running` predicate.
+pub async fn check_if_postgres_running(info: &PostgresInfo) -> bool {
+    let opts = PgConnectOptions::new()
+        .host(&info.public_host)
+        .port(info.public_port)
+        .username(&info.username)
+        .password(&info.password)
+        .database(&info.database_name);
+    tokio::time::timeout(Duration::from_secs(2), opts.connect())
+        .await
+        .is_ok_and(|r| r.is_ok())
+}
+
 #[derive(Debug)]
 pub enum DbInfo {
     Sqlite(PathBuf),
