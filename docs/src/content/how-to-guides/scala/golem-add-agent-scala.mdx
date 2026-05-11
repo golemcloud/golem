@@ -92,6 +92,50 @@ trait WeatherAgent extends BaseAgent {
 }
 ```
 
+## Returning Failures
+
+Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
+
+- **Uncaught errors** (`Future.failed`, thrown exceptions that escape the method) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
+- **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's return type using `Either[E, A]` wrapped in a `Future`. Both `E` and `A` need a `Schema` instance.
+
+```scala
+import golem.runtime.annotations.{agentDefinition, agentImplementation}
+import golem.BaseAgent
+import zio.blocks.schema.Schema
+
+import scala.concurrent.Future
+
+enum WithdrawError derives Schema:
+  case InsufficientFunds(available: Long)
+  case AccountClosed
+
+@agentDefinition(mount = "/wallets/{owner}")
+trait Wallet extends BaseAgent {
+  class Id(val owner: String)
+
+  def withdraw(amount: Long): Future[Either[WithdrawError, Long]]
+}
+
+@agentImplementation()
+final class WalletImpl(private val owner: String) extends Wallet {
+  private var balance: Long = 0L
+  private var closed: Boolean = false
+
+  override def withdraw(amount: Long): Future[Either[WithdrawError, Long]] =
+    Future.successful {
+      if (closed) Left(WithdrawError.AccountClosed)
+      else if (amount > balance) Left(WithdrawError.InsufficientFunds(balance))
+      else {
+        balance -= amount
+        Right(balance)
+      }
+    }
+}
+```
+
+Returning `Left(WithdrawError.X)` completes the invocation successfully — the caller receives the error as a value. Returning a failed `Future` (e.g. `Future.failed(new RuntimeException(...))`) or letting an exception escape will instead trigger a retry and eventually fail the whole agent.
+
 ## HTTP API Annotations
 
 Agents can expose methods as HTTP endpoints using `@endpoint` and `@header`:

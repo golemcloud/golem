@@ -21,6 +21,7 @@ export default {
   "golem-redeploy-agents": "Redeploying Existing Agents",
   "golem-rollback": "Rolling Back a Deployment",
   "golem-cloud-account-setup": "Setting Up a Golem Cloud Account",
+  "golem-integration-test-setup": "Setting Up a Golem Environment for Integration Testing",
   "golem-test-crash-recovery": "Testing Crash Recovery",
   "golem-troubleshoot-build": "Troubleshooting Golem Build Failures",
   "golem-undo-agent-state": "Undoing Agent State",

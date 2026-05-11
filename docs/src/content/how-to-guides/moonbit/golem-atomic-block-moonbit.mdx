@@ -8,38 +8,69 @@ The high-level APIs are in the `@api` package (`golemcloud/golem_sdk/api`). Impo
 
 ## Atomic Operations
 
-Group side effects so they are retried together on failure. Use `with_atomic_operation` for automatic lifecycle management:
+Group **external, observable side effects** (HTTP calls, calls to other agents, file/network I/O) so that on a crash the whole group is replayed together. If the agent fails partway through the block, recovery will re-execute the **entire** block from the start instead of resuming from the middle — so any external effects performed before the crash will be performed again.
+
+> **What this is NOT.** `with_atomic_operation` is **not** an STM/transaction primitive and **not** for grouping in-memory state mutations. Golem agents are single-threaded, and in-memory state is automatically rebuilt by oplog replay on recovery, so wrapping plain in-memory updates in an atomic block does nothing useful. The terminology overlaps with Haskell STM, database transactions, and `synchronized` blocks, but the semantics are different: this is purely about how durable, externally-observable effects are re-executed across a crash boundary.
+>
+> **It is also NOT how you reduce oplog size or speed up recovery.** Despite the description's mention of "persistence" and oplog-related controls, `with_atomic_operation`/persistence-level/idempotency-mode APIs do not shrink the oplog or skip replay. If your concern is that the oplog is growing too large or recovery/replay is becoming slow (long-running agents, heartbeats, polling, recurring tasks), use **snapshot-based recovery** instead — see [`golem-custom-snapshot-moonbit`](/how-to-guides/moonbit/golem-custom-snapshot-moonbit). You cannot opt out of oplog writes for a durable agent.
+>
+> Use it only when you have **two or more external side effects** that must not be left in a "first one happened, second one didn't" state across a recovery.
+
+Good use case — two external calls that must replay together. Use `with_atomic_operation` for automatic lifecycle management:
 
 ```moonbit
-fn atomic_transfer(from : Account, to : Account, amount : Double) -> Unit {
+// Reserve inventory and charge the customer — if we crash between them,
+// we want recovery to re-run BOTH calls, not skip the reservation.
+fn place_order(item_id : String, qty : Int, customer : String, price : Double) -> Order {
   @api.with_atomic_operation(fn() {
-    let withdrawn = from.withdraw(amount)
-    to.deposit(withdrawn)
+    let reservation = inventory_api.reserve(item_id, qty)
+    let charge = payment_api.charge(customer, price)
+    Order::{ reservation, charge }
   })
 }
 ```
 
-If the agent fails mid-block, the entire block is re-executed on recovery rather than resuming from the middle.
-
 For manual control, use `mark_begin_operation` / `mark_end_operation`:
 
 ```moonbit
-fn atomic_transfer(from : Account, to : Account, amount : Double) -> Unit {
+fn place_order(item_id : String, qty : Int, customer : String, price : Double) -> Order {
   let begin = @api.mark_begin_operation()
-  let withdrawn = from.withdraw(amount)
-  to.deposit(withdrawn)
+  let reservation = inventory_api.reserve(item_id, qty)
+  let charge = payment_api.charge(customer, price)
   @api.mark_end_operation(begin)
+  Order::{ reservation, charge }
 }
+```
+
+Bad use case — pure in-memory updates that already replay deterministically:
+
+```moonbit
+// DON'T do this. Wrapping in-memory mutations adds nothing — the oplog
+// already rebuilds `state.balance` and `state.last_tx` deterministically.
+@api.with_atomic_operation(fn() {
+  state.balance = state.balance - amount
+  state.last_tx = now
+})
 ```
 
 ## Persistence Level Control
 
-Temporarily adjust oplog recording for performance-sensitive sections. Use `with_persistence_level` for automatic save/restore:
+Adjust how the oplog is interpreted for a section of code. Setting the level to `PersistNothing` does **not** disable oplog recording — entries are still written, but they are treated only as an observable log and are **not used for replay**. On recovery, the side effects are **not** re-executed and **not** replayed; if the block naively runs the same side effects during replay, recovery will fail.
+
+This is **not** a knob for application code. Its primary use case is **authoring Golem-specific libraries** that implement their own custom durability on top of raw side effects. Code inside such a block must:
+
+1. Explicitly check whether the agent is in live or replay mode (via `current_durable_execution_state().is_live`).
+2. Skip the raw side effects during replay.
+3. Use the durability APIs (`begin_durable_function` / `end_durable_function`, `persist_durable_function_invocation`, `read_persisted_durable_function_invocation`) to record/recover state in a custom way.
+
+Use `with_persistence_level` for automatic save/restore:
 
 ```moonbit
 fn do_fast_work() -> Unit {
   @api.with_persistence_level(@api.PersistenceLevel::PersistNothing, fn() {
-    // Side effects here will be replayed on recovery instead of persisted
+    // Oplog entries here are observable only, never used for replay.
+    // The block MUST check live vs replay mode and use custom durability
+    // primitives — naively running side effects will break recovery.
     do_idempotent_work()
   })
 }
@@ -58,18 +89,33 @@ do_idempotent_work()
 
 | Variant | Behavior |
 |---------|----------|
-| `PersistNothing` | No oplog entries — all side effects replayed on recovery |
-| `PersistRemoteSideEffects` | Only remote side effects are persisted |
+| `PersistNothing` | Oplog entries are still written but only as an observable log; not used for replay. The block must implement custom durability — naive replay will fail |
+| `PersistRemoteSideEffects` | Only remote side effects are persisted for replay |
 | `Smart` | Default — Golem decides what to persist |
 
 ## Idempotence Mode
 
-Control whether HTTP requests are retried when the result is uncertain. Use `with_idempotence_mode` for scoped control:
+> **Default: `true`.** Every outgoing HTTP request — including `POST`, `PUT`, `PATCH`, and
+> `DELETE` — is treated as idempotent. This means status-code-keyed retry policies (see
+> [`golem-retry-policies-moonbit`](/how-to-guides/moonbit/golem-retry-policies-moonbit)) **already work out of the box for `POST` requests**. You do
+> **not** need to wrap a `POST` in `@api.with_idempotence_mode(true, ...)` to make it retriable
+> on a 5xx — that is the default.
+
+Use `@api.with_idempotence_mode(false, ...)` only when you need to **opt out** for a specific
+call. The flag controls how `WriteRemote` host functions are replayed when their previous
+attempt's outcome is unknown after a crash:
+
+- `true` (default): assume the previous attempt succeeded; do **not** re-invoke on replay.
+  Combined with the host-side retry machinery, the request can be transparently re-sent when a
+  matching retry policy fires.
+- `false`: do **not** assume success; the worker traps so a higher-level retry decides what to
+  do. Use this for non-idempotent side effects whose accidental duplication would be more harmful
+  than missing the call entirely.
 
 ```moonbit
+// Opt OUT of the default — at-most-once semantics for this non-idempotent call.
 fn make_payment(amount : Double) -> String {
   @api.with_idempotence_mode(false, fn() {
-    // At-most-once semantics for this non-idempotent call
     charge_payment(amount)
   })
 }

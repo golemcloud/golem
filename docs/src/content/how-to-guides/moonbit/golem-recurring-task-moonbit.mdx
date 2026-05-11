@@ -216,3 +216,9 @@ fn PollerAgent::schedule_next(self : Self, delay_secs : UInt64) -> Unit {
 - Each `schedule_` call is a fire-and-forget enqueue; the current invocation completes immediately
 - Use a state flag to stop the loop gracefully
 - Keep the scheduled method idempotent — it may be retried on recovery
+
+## Recovery & Oplog Growth
+
+Each scheduled tick (heartbeat, poll, cleanup) appends entries to the agent's oplog. For long-running or high-frequency recurring tasks, the oplog grows unboundedly, and recovery on crash will replay the full history — which becomes slow over time.
+
+**You cannot opt out of oplog writes for a durable agent.** The fix is **snapshot-based recovery**: enable periodic snapshotting so recovery starts from the latest snapshot instead of replaying every prior tick. See [`golem-custom-snapshot-moonbit`](/how-to-guides/moonbit/golem-custom-snapshot-moonbit) for the `#derive.agent(snapshotting="every_n(N)")` attribute and the `Snapshottable` trait.

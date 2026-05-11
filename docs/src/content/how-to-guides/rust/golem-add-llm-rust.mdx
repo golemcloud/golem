@@ -4,7 +4,7 @@
 
 Golem provides the **golem-ai** library collection — a set of Rust crates from [golemcloud/golem-ai](https://github.com/golemcloud/golem-ai) that provide unified, provider-agnostic APIs for AI capabilities. Each domain has a **core crate** (shared types and traits) plus **provider crates** (concrete backends). You add them as regular Cargo dependencies and call them directly from your agent code.
 
-> **These crates are not on crates.io yet.** Use git dependencies pointing to the `v0.5.0-dev.2` tag.
+> **These crates are not on crates.io yet.** Use git dependencies pointing to the `v0.5.1` tag.
 
 ## Available Libraries
 
@@ -135,8 +135,8 @@ Add the core crate plus your chosen provider to the component's `Cargo.toml`:
 ```toml
 [dependencies]
 # LLM — core + provider
-golem-ai-llm = "0.5.0"
-golem-ai-llm-openai = "0.5.0"
+golem-ai-llm = "0.5.1"
+golem-ai-llm-openai = "0.5.1"
 ```
 
 Store the required API key as a **secret** using Golem's typed config system. See the [`golem-add-secret-rust`](/how-to-guides/rust/golem-add-secret-rust) skill for full details. In brief:
@@ -350,7 +350,7 @@ impl ChatAgent for ChatAgentImpl {
 
 ## Key Constraints
 
-- All golem-ai crates should use version `"0.5.0"` from crates.io
+- All golem-ai crates should use version `"0.5.1"` from crates.io
 - Always add both the core crate and a provider crate (e.g., `golem-ai-llm` + `golem-ai-llm-openai`)
 - Provider API keys should be stored as secrets using Golem's typed config system (See the [`golem-add-secret-rust`](/how-to-guides/rust/golem-add-secret-rust) guide)
 - The `Durable*` provider types (e.g., `DurableOpenAI`) automatically integrate with Golem's durable execution — responses are recorded in the oplog and replayed on recovery

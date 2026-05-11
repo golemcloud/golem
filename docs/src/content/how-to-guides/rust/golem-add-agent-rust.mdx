@@ -71,6 +71,57 @@ pub struct MyData {
 }
 ```
 
+## Returning Failures
+
+Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
+
+- **Uncaught errors** (panics, unwrapped `Err`, etc.) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
+- **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's return type using `Result<T, E>`. The error type `E` must derive `Schema` like any other custom type.
+
+```rust
+use golem_rust::{agent_definition, agent_implementation, Schema};
+use serde::{Serialize, Deserialize};
+
+#[derive(Clone, Debug, Schema, Serialize, Deserialize)]
+pub enum WithdrawError {
+    InsufficientFunds { available: u64 },
+    AccountClosed,
+}
+
+#[agent_definition]
+pub trait Wallet {
+    fn new(owner: String) -> Self;
+
+    fn withdraw(&mut self, amount: u64) -> Result<u64, WithdrawError>;
+}
+
+struct WalletImpl {
+    owner: String,
+    balance: u64,
+    closed: bool,
+}
+
+#[agent_implementation]
+impl Wallet for WalletImpl {
+    fn new(owner: String) -> Self {
+        Self { owner, balance: 0, closed: false }
+    }
+
+    fn withdraw(&mut self, amount: u64) -> Result<u64, WithdrawError> {
+        if self.closed {
+            return Err(WithdrawError::AccountClosed);
+        }
+        if amount > self.balance {
+            return Err(WithdrawError::InsufficientFunds { available: self.balance });
+        }
+        self.balance -= amount;
+        Ok(self.balance)
+    }
+}
+```
+
+Returning `Err(WithdrawError::...)` completes the invocation successfully — the caller receives the error as a value. Panicking with `unwrap()`, `expect()`, `panic!()`, or returning from `?` on an unrelated error type will instead trigger a retry and eventually fail the whole agent.
+
 ## Key Constraints
 
 - All agent method parameters are passed by value (no references)

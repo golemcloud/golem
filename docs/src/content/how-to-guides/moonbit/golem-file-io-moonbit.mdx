@@ -157,3 +157,43 @@ pub fn FileReader::list_dir(self : Self, path : String) -> Array[String] {
 - The filesystem is per-agent-instance — each agent has its own isolated filesystem
 - File changes within an agent are persistent across invocations (durable state)
 - All paths are relative to a preopened directory descriptor — there is no global filesystem root; you must obtain a descriptor via `get_root_dir()` or `get_preopened_dir(path)`
+
+## Host Read-Size Limit (Important)
+
+The underlying WASI host (wasmtime) caps **each** `Descriptor::read` call at
+`MAX_READ_SIZE_ALLOC = 64 * 1024` bytes (64 KiB). Any single read request larger
+than that is silently truncated by the host, so a naive `read(stat.size, 0)`
+will only return the first 64 KiB of any larger file.
+
+- **When using the SDK wrappers (`@fs.read_bytes`, `@fs.read_string`)**: the
+  wrappers already handle this — they perform chunked reads at increasing
+  offsets and concatenate the results, so they correctly return the full
+  contents regardless of file size.
+- **When calling `Descriptor::read` directly** (low-level access via the
+  re-exported types from `@fs`, or directly through the WASI `filesystem/types`
+  interface): you **must** loop, requesting at most 64 KiB per call, advancing
+  the offset by the number of bytes actually returned, and stopping when the
+  EOF flag is set or the returned chunk is empty. Example skeleton:
+
+  ```moonbit
+  let chunks : Array[FixedArray[Byte]] = []
+  let mut offset : UInt64 = 0
+  let mut done = false
+  while not(done) {
+    match fd.read(65536, offset) {
+      Err(e) => return Err(e)
+      Ok((chunk, eof)) => {
+        if chunk.length() > 0 {
+          chunks.push(chunk)
+          offset = offset + chunk.length().to_uint64()
+        }
+        if eof || chunk.length() == 0 {
+          done = true
+        }
+      }
+    }
+  }
+  ```
+
+  Prefer the SDK wrappers unless you specifically need streaming or
+  partial-read semantics.

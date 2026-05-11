@@ -53,6 +53,45 @@ enum Status {
 }
 ```
 
+## Returning Failures
+
+Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
+
+- **Uncaught errors** (uncaught `raise`, aborts, runtime panics) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
+- **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's return type using `Result[T, E]`. Custom error types need `#derive.golem_schema`.
+
+```moonbit
+#derive.golem_schema
+pub(all) enum WithdrawError {
+  InsufficientFunds(UInt64)
+  AccountClosed
+}
+
+#derive.agent
+struct Wallet {
+  owner : String
+  mut balance : UInt64
+  mut closed : Bool
+}
+
+fn Wallet::new(owner : String) -> Wallet {
+  { owner, balance: 0, closed: false }
+}
+
+pub fn Wallet::withdraw(self : Self, amount : UInt64) -> Result[UInt64, WithdrawError] {
+  if self.closed {
+    Err(AccountClosed)
+  } else if amount > self.balance {
+    Err(InsufficientFunds(self.balance))
+  } else {
+    self.balance = self.balance - amount
+    Ok(self.balance)
+  }
+}
+```
+
+Returning `Err(...)` completes the invocation successfully — the caller receives the error as a value. Letting an exception propagate out of the method (e.g. an unhandled `raise`, or `abort(...)`) will instead trigger a retry and eventually fail the whole agent.
+
 ## Key Constraints
 
 - Constructor parameters form the agent identity — two agents with the same parameters are the same agent

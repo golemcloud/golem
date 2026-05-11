@@ -103,6 +103,75 @@ def postJson(url: String, jsonBody: String): Future[String] = {
 
 > **Note:** ZIO HTTP requires `zio-http` as a Scala.js-compatible dependency in your `build.sbt`.
 
+## Retrying on non-2xx Responses
+
+Both `fetch` and ZIO HTTP resolve successfully when the server returns an HTTP response, even if
+the status is `500`. From Golem's durability point of view, the recorded oplog entry already
+contains the `500` response, and any subsequent application-level failure derived from the
+status is a separate failure *after* the side effect.
+
+There are two ways to make Golem retry the HTTP call itself when a non-2xx response arrives.
+
+### Preferred: a `status-code`-keyed retry policy
+
+Define a named retry policy whose predicate explicitly references `status-code`. When the
+response arrives the host transparently re-sends the request — no `Guards.atomically` and no
+application-level throw needed. The resolved response is the *last* attempt. See the
+[`golem-retry-policies-scala`](/how-to-guides/scala/golem-retry-policies-scala) skill for the policy YAML / SDK shape.
+
+> **POST/PUT/PATCH work out of the box.** Idempotence mode defaults to `true`, so a plain `POST
+> /charge` with a body is already eligible for status-code retry — there is **no** need to wrap
+> the call in `Guards.withIdempotenceMode(true) { ... }`. See [`golem-atomic-block-scala`](/how-to-guides/scala/golem-atomic-block-scala) for
+> details on when (rarely) to opt out with `Guards.withIdempotenceMode(false) { ... }`.
+
+Minimal POST example — the policy is defined once (in `golem.yaml` or via the SDK) and the call
+site is just a plain HTTP call:
+
+```yaml
+# golem.yaml — under retryPolicyDefaults / <env>:
+http-5xx-retry:
+  priority: 20
+  predicate:
+    propIn: { property: "status-code", values: [500, 502, 503, 504] }
+  policy:
+    countBox:
+      maxRetries: 3
+      inner:
+        exponential:
+          baseDelay: "200ms"
+          factor: 2.0
+```
+
+```scala
+// Plain POST — no Guards.atomically, no Guards.withIdempotenceMode wrapper.
+val options = js.Dynamic.literal(
+  method = "POST",
+  headers = js.Dynamic.literal("Content-Type" -> "application/json"),
+  body    = js.JSON.stringify(js.Dynamic.literal(orderId = orderId, amount = amount))
+)
+for {
+  response <- js.Dynamic.global.fetch("https://payments.example.com/charge", options)
+                .asInstanceOf[js.Promise[js.Dynamic]].toFuture
+  // The host already retried up to maxRetries times against the 5xx policy;
+  // `response` is the *final* response after retries were exhausted.
+  ok        = response.ok.asInstanceOf[Boolean]
+  charge   <- if (ok) response.json().asInstanceOf[js.Promise[js.Dynamic]].toFuture
+              else Future.failed(new RuntimeException(s"charge failed: ${response.status}"))
+} yield charge
+```
+
+If status retry "doesn't seem to work", See the [`golem-local-dev-server`](/how-to-guides/common/golem-local-dev-server) skill and look for the
+`HTTP status retry skipped, reason: …` debug line — it pinpoints why a particular request was
+not retried (e.g. `BodyNotFinished`, `NotIdempotent`, `NoRetry`).
+
+### Fallback: `Guards.atomically`
+
+When the retry trigger is application-level (e.g. retrying based on a parsed body field, or
+combining multiple side effects into one logical step), wrap the **entire** request,
+response-body read, and status check in `Guards.atomically { ... }`. The failed atomic block is
+not committed, so recovery re-executes the request instead of replaying the recorded failed
+response. See [`golem-atomic-block-scala`](/how-to-guides/scala/golem-atomic-block-scala).
+
 ## Complete Example in an Agent
 
 ```scala

@@ -118,6 +118,68 @@ let parsed: MyStruct = response.body_mut().json::<MyStruct>().await?;
 
 ## Error Handling
 
+`wstd::http` resolves successfully when the server returns an HTTP response, even if the status
+is `500`. From Golem's durability point of view, that means the recorded oplog entry already
+contains the `500` response, and any subsequent application-level `Err`/`?` you produce based on
+the status is a separate failure *after* the side effect.
+
+There are two ways to make Golem retry the HTTP call itself when a non-2xx response arrives.
+
+### Preferred: a `status-code`-keyed retry policy
+
+Define a named retry policy whose predicate explicitly references `status-code`. When the
+response arrives the host transparently re-sends the request — no `with_atomic_operation` and no
+application-level error needed. The resolved `Response` is the *last* attempt. See the
+[`golem-retry-policies-rust`](/how-to-guides/rust/golem-retry-policies-rust) skill for the policy YAML / SDK shape.
+
+> **POST/PUT/PATCH work out of the box.** Idempotence mode defaults to `true`, so a plain `POST
+> /charge` with a body is already eligible for status-code retry — there is **no** need to wrap
+> the call in `with_idempotence_mode(true, ...)`. See [`golem-atomic-block-rust`](/how-to-guides/rust/golem-atomic-block-rust) for details on
+> when (rarely) to opt out with `with_idempotence_mode(false, ...)`.
+
+Minimal POST example — the policy is defined once (in `golem.yaml` or via the SDK) and the call
+site is just a plain HTTP call:
+
+```yaml
+# golem.yaml — under retryPolicyDefaults / <env>:
+http-5xx-retry:
+  priority: 20
+  predicate:
+    propIn: { property: "status-code", values: [500, 502, 503, 504] }
+  policy:
+    countBox:
+      maxRetries: 3
+      inner:
+        exponential:
+          baseDelay: "200ms"
+          factor: 2.0
+```
+
+```rust
+// Plain POST — no with_atomic_operation, no with_idempotence_mode wrapper.
+let request = Request::post("https://payments.example.com/charge")
+    .header("Content-Type", "application/json")
+    .body(Body::from_json(&ChargeRequest { order_id, amount })?)?;
+let mut response = Client::new().send(request).await?;
+if !response.status().is_success() {
+    // The host already retried up to maxRetries times against the 5xx policy;
+    // this is the *final* response after retries were exhausted.
+    return Err(format!("charge failed: {}", response.status()));
+}
+let charge: ChargeResponse = response.body_mut().json().await?;
+```
+
+If status retry "doesn't seem to work", See the [`golem-local-dev-server`](/how-to-guides/common/golem-local-dev-server) skill and look for the
+`HTTP status retry skipped, reason: …` debug line — it pinpoints why a particular request was
+not retried (e.g. `BodyNotFinished`, `NotIdempotent`, `NoRetry`).
+
+### Fallback: explicit error inspection
+
+When the retry trigger is application-level (e.g. retrying based on a parsed body field, or
+combining multiple side effects into one logical step), inspect the response and convert non-2xx
+into an `Err`. Wrap in `with_atomic_operation` (see [`golem-atomic-block-rust`](/how-to-guides/rust/golem-atomic-block-rust)) if you need recovery
+to re-execute the whole request rather than replay the recorded failed response.
+
 ```rust
 let request = Request::get(url).body(Body::empty())?;
 

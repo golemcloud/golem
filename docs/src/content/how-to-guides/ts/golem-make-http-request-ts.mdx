@@ -85,16 +85,100 @@ const buffer = await response.arrayBuffer(); // raw bytes
 
 ## Error Handling
 
+`fetch()` resolves successfully when the server returns an HTTP response, even if the status is
+`500`. From Golem's durability point of view, this means there are two separate durable events when
+you validate the response in TypeScript:
+
+1. the outgoing HTTP side effect completes and its response status/body is recorded in the oplog;
+2. your code later throws based on that recorded `Response`.
+
+There are two ways to make Golem retry the HTTP call itself when a non-2xx response arrives.
+
+### Preferred: a `status-code`-keyed retry policy
+
+Define a named retry policy whose predicate explicitly references `status-code`. When the response
+arrives the host transparently re-sends the request — no `atomically(...)` and no application-level
+throw needed. The resolved `Response` is the *last* attempt. See the
+[`golem-retry-policies-ts`](/how-to-guides/ts/golem-retry-policies-ts) skill for the policy YAML / SDK shape.
+
+This is the recommended path when the retry trigger is a status code (or status-code range). It
+also handles request-body reconstruction, idempotency checks, and replay correctly.
+
+> **POST/PUT/PATCH work out of the box.** Idempotence mode defaults to `true`, so a plain `POST
+> /charge` with a JSON body is already eligible for status-code retry — there is **no** need to
+> wrap the call in `withIdempotenceMode(true, ...)`. See [`golem-atomic-block-ts`](/how-to-guides/ts/golem-atomic-block-ts) for details on
+> when (rarely) to opt out with `withIdempotenceMode(false, ...)`.
+
+Minimal POST example — the policy is defined once (in `golem.yaml` or via the SDK) and the call
+site is just `fetch`:
+
+```yaml
+# golem.yaml — under retryPolicyDefaults / <env>:
+http-5xx-retry:
+  priority: 20
+  predicate:
+    propIn: { property: "status-code", values: [500, 502, 503, 504] }
+  policy:
+    countBox:
+      maxRetries: 3
+      inner:
+        exponential:
+          baseDelay: "200ms"
+          factor: 2.0
+```
+
+```typescript
+// Plain fetch — no atomically(...), no withIdempotenceMode wrapper.
+const response = await fetch('https://payments.example.com/charge', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ orderId, amount }),
+});
+
+if (!response.ok) {
+  // The host already retried up to maxRetries times against the 5xx policy;
+  // this is the *final* response after retries were exhausted.
+  throw new Error(`charge failed: ${response.status}`);
+}
+const charge = await response.json();
+```
+
+If status retry "doesn't seem to work", See the [`golem-local-dev-server`](/how-to-guides/common/golem-local-dev-server) skill and look for the
+`HTTP status retry skipped, reason: …` debug line — it pinpoints why a particular request was not
+retried (e.g. `BodyNotFinished`, `NotIdempotent`, `NoRetry`).
+
+### Fallback: `atomically(...)`
+
+When the retry trigger is application-level (e.g. retrying based on a parsed body field, or
+combining multiple side effects into one logical step), wrap the **entire** request,
+response-body read, and status check in `atomically(...)`. The failed atomic block is not
+committed, so recovery re-executes the `fetch` instead of replaying the recorded failed response.
+
+```typescript
+import { atomically } from '@golemcloud/golem-ts-sdk';
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  return atomically(async () => {
+    const response = await fetch(url, init);
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errorBody}`);
+    }
+
+    return (await response.json()) as T;
+  });
+}
+```
+
+Use the same pattern for third-party HTTP clients that resolve with a response and then throw from
+application code based on the status.
+
 ```typescript
 try {
-  const response = await fetch('https://api.example.com/data');
+  const result = await fetchJson<unknown>('https://api.example.com/data');
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`API error ${response.status}: ${errorBody}`);
-  }
-
-  return await response.json();
+  return result;
 } catch (error) {
   console.error('Request failed:', error);
   throw error;
@@ -104,7 +188,7 @@ try {
 ## Complete Example in an Agent
 
 ```typescript
-import { BaseAgent, agent, endpoint } from '@golemcloud/golem-ts-sdk';
+import { BaseAgent, agent, atomically, endpoint } from '@golemcloud/golem-ts-sdk';
 
 type WeatherReport = { temperature: number; description: string };
 
@@ -116,18 +200,20 @@ class WeatherAgent extends BaseAgent {
 
   @endpoint({ get: '/current' })
   async getCurrent(): Promise<WeatherReport> {
-    const response = await fetch(
-      `https://api.weather.example.com/current?city=${encodeURIComponent(this.city)}`,
-      {
-        headers: { 'Accept': 'application/json' },
+    return atomically(async () => {
+      const response = await fetch(
+        `https://api.weather.example.com/current?city=${encodeURIComponent(this.city)}`,
+        {
+          headers: { 'Accept': 'application/json' },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Weather API error: ${response.status}`);
       }
-    );
 
-    if (!response.ok) {
-      throw new Error(`Weather API error: ${response.status}`);
-    }
-
-    return await response.json();
+      return await response.json();
+    });
   }
 }
 ```
@@ -170,4 +256,5 @@ await fetch('http://my-app.localhost:9006/recorder/main/record', {
 - Server-side APIs (`http.createServer`, `net.listen`) are **not** available in WASM
 - Third-party HTTP client libraries that use `fetch` or `node:http` internally (e.g., `axios`) generally work; libraries that depend on native C/C++ bindings will not
 - All HTTP requests go through the WASI HTTP layer, which provides durable execution guarantees
+- HTTP error statuses are still recorded responses. Use a `status-code`-keyed retry policy (preferred) or wrap status-based throwing in `atomically` when a retry must send a new HTTP request.
 - Requests are async — always use `await`

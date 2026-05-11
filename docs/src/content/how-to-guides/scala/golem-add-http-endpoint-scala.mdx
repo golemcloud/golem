@@ -128,6 +128,22 @@ final case class Task(id: String, title: String, done: Boolean) derives Schema
 
 For collections, use `List[T]` instead of `Array[T]`. `Array` does not have automatic `Schema` derivation support.
 
+## Return Type to HTTP Response Mapping
+
+Golem maps method return types to HTTP status codes and response bodies according to the table below. **This mapping is currently not configurable.**
+
+Scala `Either[E, T]` is mapped to the WIT `result<T, E>` type, with `Right` treated as `Ok` and `Left` as `Err`.
+
+| Return Type | HTTP Status | Response Body |
+|---|---|---|
+| `Future[Unit]` | 204 No Content | empty |
+| `Future[T]` | 200 OK | JSON-serialized `T` |
+| `Future[Option[T]]` | 200 OK if `Some`, 404 Not Found if `None` | JSON `T` or empty |
+| `Future[Either[E, T]]` | 200 OK if `Right`, 500 Internal Server Error if `Left` | JSON `T` or JSON `E` |
+| `Future[Either[E, Unit]]` | 204 No Content if `Right`, 500 if `Left` | empty or JSON `E` |
+| `Future[Either[Unit, T]]` | 200 OK if `Right`, 500 if `Left` | JSON `T` or empty |
+| `Future[UnstructuredBinary]` | 200 OK | Raw binary with Content-Type |
+
 ## Complete Example
 
 ```scala

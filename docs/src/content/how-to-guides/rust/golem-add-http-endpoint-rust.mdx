@@ -93,6 +93,20 @@ pub struct Task {
 }
 ```
 
+## Return Type to HTTP Response Mapping
+
+Golem maps method return types to HTTP status codes and response bodies according to the table below. **This mapping is currently not configurable.**
+
+| Return Type | HTTP Status | Response Body |
+|---|---|---|
+| `()` (unit / no return) | 204 No Content | empty |
+| `T` (any type) | 200 OK | JSON-serialized `T` |
+| `Option<T>` | 200 OK if `Some`, 404 Not Found if `None` | JSON `T` or empty |
+| `Result<T, E>` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `T` or JSON `E` |
+| `Result<(), E>` | 204 No Content if `Ok`, 500 if `Err` | empty or JSON `E` |
+| `Result<T, ()>` | 200 OK if `Ok`, 500 if `Err` | JSON `T` or empty |
+| `UnstructuredBinary<M>` | 200 OK | Raw binary with Content-Type |
+
 ## Complete Example
 
 ```rust

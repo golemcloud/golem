@@ -20,6 +20,8 @@ golem agent simulate-crash <AGENT_ID>
 2. The agent immediately begins recovery by replaying its operation log
 3. Once recovery completes, the agent resumes normal operation
 
+> **Replay is slow? Don't try to skip oplog writes.** Durable agents always write to the oplog by design — there is no way to opt out of persistence for a durable agent. If recovery is slow because the oplog has grown large (long-running agents, frequent state changes, heartbeats, polling loops, recurring tasks), the correct fix is **snapshot-based recovery**: enable periodic snapshotting so recovery starts from the latest snapshot instead of replaying the full history. See the language-specific `golem-custom-snapshot-*` guide.
+
 ### When to Use
 
 - **Testing durability**: Verify that agent state survives crashes and is correctly restored

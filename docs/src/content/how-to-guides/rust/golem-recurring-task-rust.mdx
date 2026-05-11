@@ -203,3 +203,9 @@ impl PollerAgentImpl {
 - Each `schedule_` call is a fire-and-forget enqueue; the current invocation completes immediately
 - Use a state flag or generation counter to stop the loop gracefully
 - Keep the scheduled method idempotent — it may be retried on recovery
+
+## Recovery & Oplog Growth
+
+Each scheduled tick (heartbeat, poll, cleanup) appends entries to the agent's oplog. For long-running or high-frequency recurring tasks, the oplog grows unboundedly, and recovery on crash will replay the full history — which becomes slow over time.
+
+**You cannot opt out of oplog writes for a durable agent.** The fix is **snapshot-based recovery**: enable periodic snapshotting so recovery starts from the latest snapshot instead of replaying every prior tick. See [`golem-custom-snapshot-rust`](/how-to-guides/rust/golem-custom-snapshot-rust) for the `snapshotting = "every(N)"` / `snapshotting = "periodic(...)"` attribute and serde-based or custom save/load implementations.

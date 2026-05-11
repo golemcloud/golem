@@ -1,6 +1,15 @@
 # Custom Snapshots in Rust
 
-Golem agents can implement custom `save_snapshot` and `load_snapshot` functions to support manual (snapshot-based) updates and snapshot-based recovery. This is required when updating agents between incompatible component versions.
+Golem agents can implement custom `save_snapshot` and `load_snapshot` functions to support manual (snapshot-based) updates and snapshot-based recovery.
+
+## When to Use Snapshotting
+
+Snapshotting solves two distinct problems:
+
+1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions.
+2. **Fast recovery and oplog compaction** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, agents with frequent state changes). Without snapshotting, every recovery replays the full oplog from the beginning, which becomes increasingly expensive. With periodic snapshotting (`every(N)` or `periodic(...)`), recovery starts from the latest snapshot and replays only the entries after it.
+
+> **You cannot opt out of oplog writes for a durable agent.** If you are worried about oplog volume or replay cost, do *not* try to skip persistence — enable snapshot-based recovery here instead.
 
 ## Enabling Snapshotting
 

@@ -2,170 +2,266 @@
 
 ## Overview
 
-MoonBit Golem agents use the SDK's `@http` package (`golemcloud/golem_sdk/http`) for outgoing HTTP requests. This package re-exports the WASI HTTP types and the outgoing handler function.
+MoonBit Golem agents use the SDK's `@http` package (`golemcloud/golem_sdk/http`) for outgoing HTTP requests. This package re-exports the WASI HTTP resource types (`OutgoingRequest`, `Fields`, `IncomingResponse`, …) and exposes the `handle` function that drives the outgoing handler.
 
 All outgoing HTTP requests made from a Golem agent are **automatically durably persisted** — Golem records the request and response in the oplog, so on replay the response is read from the log rather than re-executing the network call.
 
 ## Setup
 
-Add the HTTP package to your agent's `moon.pkg`:
+Add the HTTP package to your agent's `moon.pkg`. Because the `@http` re-export only covers the resource **types** (not the `Method` / `Scheme` variant constructors), also import the underlying `types` package and the streams error type:
 
 ```
 import {
   "golemcloud/golem_sdk/http" @http,
+  "golemcloud/golem_sdk/interface/wasi/http/types" @types,
+  "golemcloud/golem_sdk/interface/wasi/io/streams" @streams,
+}
+```
+
+For UTF-8 encoding/decoding of bodies, also depend on the standard library encoders:
+
+```
+import {
+  "moonbitlang/core/encoding/utf8" @utf8,
 }
 ```
 
 No WIT changes or binding regeneration is needed — the SDK already includes the HTTP imports.
 
+## Key API Facts (don't guess these)
+
+The MoonBit HTTP API does **not** match TypeScript/Rust naming. Use exactly these constructors/methods:
+
+| What | Correct call | Wrong (does not exist) |
+|---|---|---|
+| New `Fields` | `@types.Fields::fields()` | `@http.Fields::new()` |
+| Build `Fields` from list | `@types.Fields::from_list([...])` | — |
+| New `OutgoingRequest` | `@types.OutgoingRequest::outgoing_request(headers)` | `@http.OutgoingRequest::new(...)` |
+| New `RequestOptions` | `@types.RequestOptions::request_options()` | `@http.RequestOptions::new()` |
+| Method variants | `@types.Get`, `@types.Post`, `@types.Put`, `@types.Delete`, `@types.Patch`, `@types.Head`, `@types.Options`, `@types.Connect`, `@types.Trace`, `@types.Other(s)` | `@http.Post` |
+| Scheme variants | `@types.Http`, `@types.Https`, `@types.Other(s)` | `@http.Http` |
+| Get current method | `request.method_()` (note trailing `_`) | `request.method()` |
+| Set method | `request.set_method(@types.Post)` | — |
+| Send request | `@http.handle(request, options?)` | — |
+| Field values | `FixedArray[Byte]` | `Bytes` (`b"..."` literals) |
+| String → UTF-8 `FixedArray[Byte]` | `@utf8.encode(s).to_fixedarray()` | `s.to_utf8_bytes()` |
+| `FixedArray[Byte]` → UTF-8 `String` | `@utf8.decode_lossy(Bytes::from_fixedarray(arr).view())` | `String::from_utf8_lossy(arr)` |
+
+Note: `String::to_bytes()` exists but returns **UTF-16LE** bytes — it is the wrong encoding for HTTP. Always use `@utf8.encode` for HTTP bodies and headers.
+
+## Helpers
+
+These two helpers handle the byte/string conversions you need everywhere; copy them into your agent file:
+
+```moonbit
+///| Convert a UTF-8 String to a `FixedArray[Byte]` (the WASI `field-value` / body type).
+fn str_to_bytes(s : String) -> FixedArray[Byte] {
+  @utf8.encode(s).to_fixedarray()
+}
+
+///| Decode a `FixedArray[Byte]` as UTF-8 into a `String` (lossy — invalid sequences become U+FFFD).
+fn bytes_to_str(bs : FixedArray[Byte]) -> String {
+  @utf8.decode_lossy(Bytes::from_fixedarray(bs).view())
+}
+```
+
 ## GET Request
 
 ```moonbit
-fn make_get_request(url_authority : String, path : String) -> String {
-  // 1. Create headers
-  let headers = @http.Fields::new()
+///|
+fn make_get_request(authority : String, path : String) -> String {
+  // 1. Headers (empty).
+  let headers = @types.Fields::fields()
 
-  // 2. Create outgoing request (defaults to GET)
-  let request = @http.OutgoingRequest::new(headers)
-  let _ = request.set_scheme(Some(@http.Https))
-  let _ = request.set_authority(Some(url_authority))
+  // 2. Build the request (defaults to GET).
+  let request = @types.OutgoingRequest::outgoing_request(headers)
+  let _ = request.set_scheme(Some(@types.Https))
+  let _ = request.set_authority(Some(authority))
   let _ = request.set_path_with_query(Some(path))
 
-  // 3. Finish the body (empty for GET)
+  // 3. Finish the (empty) outgoing body.
   let body = request.body().unwrap()
-  @http.OutgoingBody::finish(body, None).unwrap()
+  @types.OutgoingBody::finish(body, None).unwrap()
 
-  // 4. Send the request
+  // 4. Send.
   let future_response = @http.handle(request, None).unwrap()
 
-  // 5. Wait for the response
+  // 5. Wait for the response (FutureIncomingResponse + Pollable).
   let pollable = future_response.subscribe()
   pollable.block()
+  // get() returns Option[Result[Result[IncomingResponse, ErrorCode], Unit]]
   let response = future_response.get().unwrap().unwrap().unwrap()
 
-  // 6. Read status
-  let status = response.status()
-
-  // 7. Read response body
+  // 6. Read status (UInt) and body.
+  let _status = response.status()
   let incoming_body = response.consume().unwrap()
   let stream = incoming_body.stream().unwrap()
-  let bytes = stream.blocking_read(1048576UL).unwrap()  // read up to 1MB
+  let bytes = stream.blocking_read(1048576UL).unwrap() // up to 1 MiB
   stream.drop()
-  @http.IncomingBody::finish(incoming_body)
+  let _ = @types.IncomingBody::finish(incoming_body)
 
-  let body_str = String::from_utf8_lossy(bytes)
-  body_str
+  bytes_to_str(bytes)
 }
 ```
 
 ## POST with JSON Body
 
 ```moonbit
+///|
 fn make_post_request(
   authority : String,
   path : String,
-  json_body : String
+  json_body : String,
 ) -> (UInt, String) {
-  // 1. Create headers with Content-Type
-  let headers = @http.Fields::from_list(
-    [
-      ("Content-Type", b"application/json"),
-      ("Accept", b"application/json"),
-    ],
-  ).unwrap()
+  // 1. Headers — note: field values are FixedArray[Byte], not Bytes.
+  let headers = @types.Fields::from_list([
+    ("Content-Type", str_to_bytes("application/json")),
+    ("Accept", str_to_bytes("application/json")),
+  ]).unwrap()
 
-  // 2. Create request and set method to POST
-  let request = @http.OutgoingRequest::new(headers)
-  let _ = request.set_method(@http.Post)
-  let _ = request.set_scheme(Some(@http.Https))
+  // 2. Build request and switch method to POST.
+  let request = @types.OutgoingRequest::outgoing_request(headers)
+  let _ = request.set_method(@types.Post)
+  let _ = request.set_scheme(Some(@types.Https))
   let _ = request.set_authority(Some(authority))
   let _ = request.set_path_with_query(Some(path))
 
-  // 3. Write the request body
+  // 3. Write the body.
   let body = request.body().unwrap()
   let output_stream = body.write().unwrap()
-  let body_bytes = json_body.to_utf8_bytes()
-  output_stream.blocking_write_and_flush(body_bytes).unwrap()
-  output_stream.drop()  // must drop stream before finishing body
-  @http.OutgoingBody::finish(body, None).unwrap()
+  output_stream.blocking_write_and_flush(str_to_bytes(json_body)).unwrap()
+  output_stream.drop() // MUST drop the stream before finishing the body
+  @types.OutgoingBody::finish(body, None).unwrap()
 
-  // 4. Send and wait
+  // 4. Send and wait.
   let future_response = @http.handle(request, None).unwrap()
   let pollable = future_response.subscribe()
   pollable.block()
   let response = future_response.get().unwrap().unwrap().unwrap()
 
-  // 5. Read response
+  // 5. Read response.
   let status = response.status()
   let incoming_body = response.consume().unwrap()
   let stream = incoming_body.stream().unwrap()
   let bytes = stream.blocking_read(1048576UL).unwrap()
   stream.drop()
-  @http.IncomingBody::finish(incoming_body)
+  let _ = @types.IncomingBody::finish(incoming_body)
 
-  (status, String::from_utf8_lossy(bytes))
+  (status, bytes_to_str(bytes))
 }
 ```
 
 ## Setting Headers
 
-Headers are `Fields` resources. Field values are `FixedArray[Byte]` (the WASI `field-value` type):
+`Fields` is a WASI resource. Field values are `FixedArray[Byte]`:
 
 ```moonbit
-// From a list of (name, value) pairs
-let headers = @http.Fields::from_list(
-  [
-    ("Authorization", b"Bearer my-token"),
-    ("Accept", b"application/json"),
-    ("X-Custom-Header", b"custom-value"),
-  ],
-).unwrap()
+// From a list of (name, value) pairs.
+let headers = @types.Fields::from_list([
+  ("Authorization", str_to_bytes("Bearer my-token")),
+  ("Accept", str_to_bytes("application/json")),
+  ("X-Custom-Header", str_to_bytes("custom-value")),
+]).unwrap()
 
-// Or construct empty and append
-let headers = @http.Fields::new()
-let _ = headers.append("Authorization", b"Bearer my-token")
-let _ = headers.append("Content-Type", b"application/json")
+// Or construct empty and append.
+let headers = @types.Fields::fields()
+let _ = headers.append("Authorization", str_to_bytes("Bearer my-token"))
+let _ = headers.append("Content-Type", str_to_bytes("application/json"))
 ```
 
 ## Reading Response Headers
 
 ```moonbit
 let response = future_response.get().unwrap().unwrap().unwrap()
-
-// Status code (UInt)
-let status = response.status()
-
-// Response headers (immutable Fields)
+let _status : UInt = response.status()
 let resp_headers = response.headers()
+// Fields::get returns Array[FixedArray[Byte]] (a single header may have multiple values).
 let content_type_values = resp_headers.get("Content-Type")
-// content_type_values : Array[FixedArray[Byte]]
+let content_type : String? = match content_type_values.get(0) {
+  Some(v) => Some(bytes_to_str(v))
+  None => None
+}
 ```
 
 ## Setting Timeouts
 
-Use `RequestOptions` to configure transport-level timeouts:
+`RequestOptions` is a resource constructed via `request_options()`. Timeouts are `UInt64` nanoseconds:
 
 ```moonbit
-let options = @http.RequestOptions::new()
-let _ = options.set_connect_timeout(Some(5_000_000_000UL))         // 5 seconds in nanoseconds
-let _ = options.set_first_byte_timeout(Some(10_000_000_000UL))     // 10 seconds
-let _ = options.set_between_bytes_timeout(Some(30_000_000_000UL))  // 30 seconds
+let options = @types.RequestOptions::request_options()
+let _ = options.set_connect_timeout(Some(5_000_000_000UL))         // 5 s
+let _ = options.set_first_byte_timeout(Some(10_000_000_000UL))     // 10 s
+let _ = options.set_between_bytes_timeout(Some(30_000_000_000UL))  // 30 s
 
 let future_response = @http.handle(request, Some(options)).unwrap()
 ```
 
+## Retrying on non-2xx Responses
+
+`@http.handle` resolves successfully when the server returns an HTTP response, even if the status
+is `500`. From Golem's durability point of view, the recorded oplog entry already contains the
+`500` response, and any subsequent application-level error you produce based on the status is a
+separate failure *after* the side effect.
+
+There are two ways to make Golem retry the HTTP call itself when a non-2xx response arrives.
+
+### Preferred: a `status-code`-keyed retry policy
+
+Define a named retry policy whose predicate explicitly references `status-code`. When the
+response arrives the host transparently re-sends the request — no atomic block and no
+application-level error needed. The resolved response is the *last* attempt. See the
+[`golem-retry-policies-moonbit`](/how-to-guides/moonbit/golem-retry-policies-moonbit) skill for the policy YAML / SDK shape.
+
+> **POST/PUT/PATCH work out of the box.** Idempotence mode defaults to `true`, so a plain `POST
+> /charge` with a body is already eligible for status-code retry — there is **no** need to wrap
+> the call in `@api.with_idempotence_mode(true, ...)`. See [`golem-atomic-block-moonbit`](/how-to-guides/moonbit/golem-atomic-block-moonbit) for
+> details on when (rarely) to opt out with `@api.with_idempotence_mode(false, ...)`.
+
+The policy is defined once (in `golem.yaml` or via the SDK) and the call site is just a plain
+HTTP call — no extra wrapping is needed at the call site:
+
+```yaml
+# golem.yaml — under retryPolicyDefaults / <env>:
+http-5xx-retry:
+  priority: 20
+  predicate:
+    propIn: { property: "status-code", values: [500, 502, 503, 504] }
+  policy:
+    countBox:
+      maxRetries: 3
+      inner:
+        exponential:
+          baseDelay: "200ms"
+          factor: 2.0
+```
+
+If status retry "doesn't seem to work", See the [`golem-local-dev-server`](/how-to-guides/common/golem-local-dev-server) skill and look for the
+`HTTP status retry skipped, reason: …` debug line — it pinpoints why a particular request was
+not retried (e.g. `BodyNotFinished`, `NotIdempotent`, `NoRetry`).
+
+### Fallback: atomic block
+
+When the retry trigger is application-level (e.g. retrying based on a parsed body field, or
+combining multiple side effects into one logical step), wrap the **entire** request,
+response-body read, and status check in an atomic block. The failed atomic block is not
+committed, so recovery re-executes the request instead of replaying the recorded failed
+response. See [`golem-atomic-block-moonbit`](/how-to-guides/moonbit/golem-atomic-block-moonbit).
+
 ## Error Handling
 
+Both `@http.handle` and `FutureIncomingResponse::get` can fail. `get()` returns `Option[Result[Result[IncomingResponse, ErrorCode], Unit]]` — `None` means not ready yet, the inner `Err(())` means the response was already consumed:
+
 ```moonbit
+///|
 fn fetch_data(authority : String, path : String) -> Result[String, String] {
-  let headers = @http.Fields::new()
-  let request = @http.OutgoingRequest::new(headers)
-  let _ = request.set_scheme(Some(@http.Https))
+  let headers = @types.Fields::fields()
+  let request = @types.OutgoingRequest::outgoing_request(headers)
+  let _ = request.set_scheme(Some(@types.Https))
   let _ = request.set_authority(Some(authority))
   let _ = request.set_path_with_query(Some(path))
 
   let body = request.body().unwrap()
-  @http.OutgoingBody::finish(body, None).unwrap()
+  @types.OutgoingBody::finish(body, None).unwrap()
 
   match @http.handle(request, None) {
     Err(error_code) => Err("Request failed: " + error_code.to_string())
@@ -179,14 +275,12 @@ fn fetch_data(authority : String, path : String) -> Result[String, String] {
           let stream = incoming_body.stream().unwrap()
           let bytes = stream.blocking_read(1048576UL).unwrap()
           stream.drop()
-          @http.IncomingBody::finish(incoming_body)
+          let _ = @types.IncomingBody::finish(incoming_body)
+          let body_str = bytes_to_str(bytes)
           if status >= 200 && status < 300 {
-            Ok(String::from_utf8_lossy(bytes))
+            Ok(body_str)
           } else {
-            Err(
-              "HTTP " + status.to_string() + ": " +
-              String::from_utf8_lossy(bytes),
-            )
+            Err("HTTP " + status.to_string() + ": " + body_str)
           }
         }
         Some(Ok(Err(error_code))) =>
@@ -201,29 +295,32 @@ fn fetch_data(authority : String, path : String) -> Result[String, String] {
 
 ## Reading Large Response Bodies
 
-The `blocking_read` call returns up to the requested number of bytes. For larger responses, read in a loop:
+`InputStream::blocking_read` returns up to the requested number of bytes and returns `Err(@streams.Closed)` when EOF has been reached. Read in a loop for arbitrary-size bodies:
 
 ```moonbit
-fn read_full_body(incoming_body : @http.IncomingBody) -> FixedArray[Byte] {
+///|
+fn read_full_body(incoming_body : @types.IncomingBody) -> FixedArray[Byte] {
   let stream = incoming_body.stream().unwrap()
   let chunks : Array[FixedArray[Byte]] = []
-  loop {
+  let mut done = false
+  while not(done) {
     match stream.blocking_read(65536UL) {
-      Ok(chunk) => {
+      Ok(chunk) =>
         if chunk.length() == 0 {
-          break
+          done = true
+        } else {
+          chunks.push(chunk)
         }
-        chunks.push(chunk)
-      }
-      Err(@http.StreamError::Closed) => break
-      Err(e) => panic()
+      Err(@streams.Closed) => done = true
+      Err(e) => abort("stream read failed: " + e.to_string())
     }
   }
   stream.drop()
-  @http.IncomingBody::finish(incoming_body)
-  // Concatenate chunks
-  let total = chunks.fold(init=0, fn(acc, c) { acc + c.length() })
-  let result = FixedArray::make(total, b'\x00')
+  let _ = @types.IncomingBody::finish(incoming_body)
+
+  // Concatenate.
+  let total = chunks.iter().fold(init=0, fn(acc, c) { acc + c.length() })
+  let result : FixedArray[Byte] = FixedArray::make(total, b'\x00')
   let mut offset = 0
   for chunk in chunks {
     chunk.blit_to(result, len=chunk.length(), src_offset=0, dst_offset=offset)
@@ -236,7 +333,7 @@ fn read_full_body(incoming_body : @http.IncomingBody) -> FixedArray[Byte] {
 ## Complete Example in an Agent
 
 ```moonbit
-/// An agent that fetches data from an external API
+///| An agent that fetches data from an external API.
 #derive.agent
 pub(all) struct DataFetcher {
   base_url : String
@@ -248,20 +345,19 @@ fn DataFetcher::new(base_url : String) -> DataFetcher {
   { base_url, last_result: "" }
 }
 
-///|
-/// Fetch data from the configured API endpoint
+///| Fetch data from the configured API endpoint.
 pub fn DataFetcher::fetch(self : Self, path : String) -> String {
-  let headers = @http.Fields::from_list(
-    [("Accept", b"application/json")],
-  ).unwrap()
+  let headers = @types.Fields::from_list([
+    ("Accept", str_to_bytes("application/json")),
+  ]).unwrap()
 
-  let request = @http.OutgoingRequest::new(headers)
-  let _ = request.set_scheme(Some(@http.Https))
+  let request = @types.OutgoingRequest::outgoing_request(headers)
+  let _ = request.set_scheme(Some(@types.Https))
   let _ = request.set_authority(Some(self.base_url))
   let _ = request.set_path_with_query(Some(path))
 
   let body = request.body().unwrap()
-  @http.OutgoingBody::finish(body, None).unwrap()
+  @types.OutgoingBody::finish(body, None).unwrap()
 
   let future_response = @http.handle(request, None).unwrap()
   let pollable = future_response.subscribe()
@@ -272,9 +368,9 @@ pub fn DataFetcher::fetch(self : Self, path : String) -> String {
   let stream = incoming_body.stream().unwrap()
   let bytes = stream.blocking_read(1048576UL).unwrap()
   stream.drop()
-  @http.IncomingBody::finish(incoming_body)
+  let _ = @types.IncomingBody::finish(incoming_body)
 
-  let result = String::from_utf8_lossy(bytes)
+  let result = bytes_to_str(bytes)
   self.last_result = result
   result
 }
@@ -307,17 +403,22 @@ let json_body = "\"hello\""
 
 WASI HTTP uses resource handles that must be dropped in the correct order:
 
-1. **OutputStream** must be dropped before calling `OutgoingBody::finish`
-2. **OutgoingBody** must be finished (not just dropped) to signal the body is complete
-3. **InputStream** must be dropped before calling `IncomingBody::finish`
-4. **IncomingBody** must be finished to signal you're done reading
+1. **OutputStream** must be dropped before calling `OutgoingBody::finish`.
+2. **OutgoingBody** must be **finished** (`@types.OutgoingBody::finish(body, None)`), not just dropped, to signal the body is complete.
+3. **InputStream** must be dropped before calling `IncomingBody::finish`.
+4. **IncomingBody** must be finished to signal you're done reading.
 
 Dropping a resource out of order will cause a trap.
 
 ## Key Constraints
 
-- All HTTP types are WASI resources with strict ownership and drop ordering
-- Field values (`field-value`) are `FixedArray[Byte]`, not strings — use byte literals (`b"..."`) or `.to_utf8_bytes()`
-- The `blocking_read` function reads up to the requested number of bytes — for large responses, read in a loop
-- HTTP requests are automatically durably persisted by Golem — no manual durability wrapping is needed
-- The `Method` variant defaults to `Get` when constructing an `OutgoingRequest`
+- All HTTP types are WASI resources with strict ownership and drop ordering.
+- Field values (`field-value`) are `FixedArray[Byte]`, not `Bytes` — `b"..."` literals are `Bytes` and **do not** type-check against `Fields::append` / `Fields::from_list`. Convert with `@utf8.encode(s).to_fixedarray()` (or `b"...".to_fixedarray()` for ASCII literals).
+- `String::to_bytes()` returns UTF-16LE bytes — use `@encoding/utf8.encode` for HTTP, never `String::to_bytes()`.
+- `String::from_utf8_lossy` does not exist — use `@utf8.decode_lossy(Bytes::from_fixedarray(arr).view())`.
+- The constructor for `OutgoingRequest` is `outgoing_request(fields)`; for `Fields` it is `fields()`; for `RequestOptions` it is `request_options()`. There is no `::new` on any of these.
+- `Method` and `Scheme` variant constructors live in `@types`, not `@http` (`@http` only re-exports the type aliases). Use `@types.Post`, `@types.Https`, etc.
+- `request.method_()` (with trailing underscore) is the getter — `method` is a reserved keyword.
+- `blocking_read` reads up to the requested number of bytes — for large responses, read in a loop until you observe an empty chunk or `Err(@streams.Closed)`.
+- HTTP requests are automatically durably persisted by Golem — no manual durability wrapping is needed.
+- `Method` defaults to `Get` when constructing an `OutgoingRequest`; only call `set_method` for non-GET requests.
