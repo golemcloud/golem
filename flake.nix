@@ -789,6 +789,40 @@
           export GOLEM_REPO_ROOT="$(pwd)"
         '';
 
+        # Sidecar that spins up a `postgresql_16` cluster on
+        # 127.0.0.1:5432 inside the sandbox so test deps that need a
+        # real Postgres (worker-executor `rdbms_service` /
+        # `key_value_storage` / `indexed_storage` /
+        # `namespace_routed_key_value_storage`, registry-service
+        # `repo::postgres`, integration-tests group8) hit a live
+        # instance instead of `DockerPostgresRdb` (no docker socket
+        # in the sandbox). Provided via env discovery in
+        # `EnvBasedTestDependencies::make_rdb` —
+        # `check_if_postgres_running` succeeds against this cluster
+        # and the framework picks `ProvidedPostgresRdb` over
+        # `DockerPostgresRdb`. Cluster lives in `$TMPDIR/pgdata`;
+        # auth is `trust` over loopback only (the Nix sandbox has
+        # no external network namespace, so this is closed).
+        spawnPostgres = ''
+          export PGDATA="$TMPDIR/pgdata"
+          mkdir -p "$PGDATA"
+          # `--auth=trust` so sqlx's password-authenticated connect
+          # succeeds without needing to set a password post-init.
+          # `--username=postgres` matches `PostgresInfo`'s default.
+          initdb -D "$PGDATA" --username=postgres --auth=trust \
+            --no-sync >/dev/null
+          # Default `listen_addresses = 'localhost'` resolves to ::1
+          # under glibc, but the sandbox's loopback may not have IPv6
+          # configured. Pin to the IPv4 loopback for portability.
+          echo "listen_addresses = '127.0.0.1'" >> "$PGDATA/postgresql.conf"
+          echo "unix_socket_directories = '$PGDATA'" >> "$PGDATA/postgresql.conf"
+          # `pg_ctl start` waits for the cluster to accept
+          # connections before returning, so no separate readiness
+          # probe is required.
+          pg_ctl -D "$PGDATA" -l "$TMPDIR/postgres.log" \
+            -o "-p 5432 -k $PGDATA" start
+        '';
+
         # Generic factory for the integration-style tests that share the
         # same runtime shape: spawn redis + sqlite, stage service bins +
         # test components, then run a cargo test binary with an optional
@@ -801,14 +835,18 @@
           , skips ? commonSkips
           , extraNativeBuildInputs ? [ ]
           , testThreads ? null
+          , withPostgres ? false
           }:
           craneLib.mkCargoDerivation (commonArgs // {
             inherit cargoArtifacts;
             inherit pname;
             doInstallCargoArtifacts = false;
             doCheck = true;
-            nativeBuildInputs = commonNativeBuildInputs ++ [ pkgs.redis ] ++ extraNativeBuildInputs;
-            GOLEM_TEST_DB = "sqlite";
+            nativeBuildInputs = commonNativeBuildInputs
+              ++ [ pkgs.redis ]
+              ++ pkgs.lib.optional withPostgres pkgs.postgresql_16
+              ++ extraNativeBuildInputs;
+            GOLEM_TEST_DB = if withPostgres then "postgres" else "sqlite";
             WASMTIME_BACKTRACE_DETAILS = "1";
             RUST_BACKTRACE = "1";
             RUST_LOG = "info";
@@ -823,10 +861,14 @@
               export HOME="$TMPDIR/home"
               export XDG_CACHE_HOME="$TMPDIR/cache"
               mkdir -p "$HOME" "$XDG_CACHE_HOME"
+              ${pkgs.lib.optionalString withPostgres spawnPostgres}
               cargo test --locked -p ${package} --test ${testName} \
                 -- ${tag} --report-time --nocapture \
                 ${pkgs.lib.optionalString (testThreads != null) "--test-threads=${toString testThreads}"} \
                 ${pkgs.lib.concatMapStringsSep " " (s: "--skip ${s}") skips}
+              ${pkgs.lib.optionalString withPostgres ''
+                pg_ctl -D "$PGDATA" stop -m immediate >/dev/null 2>&1 || true
+              ''}
             '';
             installPhaseCommand = ''
               mkdir -p $out
@@ -917,27 +959,22 @@
           # CONTRIBUTING.md `worker-executor-tests-misc`. Runs the
           # untagged worker-executor tests (compatibility, fuel,
           # indexed_storage, key_value_storage,
-          # namespace_routed_key_value_storage). Skips the rdbms_service
-          # and ignite_service tag-suites — those need Postgres-via-
-          # testcontainers and a live Apache Ignite TCP node, neither of
-          # which the sandbox can provide.
+          # namespace_routed_key_value_storage). With a Postgres
+          # sidecar spawned in-sandbox, the three KV/indexed-storage
+          # binaries that previously hardcoded `DockerPostgresRdb`
+          # now consume the Provided Postgres via
+          # `create_postgres_rdb()`. `rdbms_service` still pulls in
+          # `DockerMysqlRdb` (no provided-MySQL fork exists yet);
+          # `ignite_service` needs a live Apache Ignite TCP node.
           worker-executor-tests-misc = mkSpawnedTest {
             pname = "golem-worker-executor-tests-misc";
             package = "golem-worker-executor";
             testName = "integration";
             tag = ":tag:";
-            # Skip suites that need testcontainers Docker (Postgres/MySQL)
-            # or a live Apache Ignite TCP node — the sandbox provides
-            # neither. `key_value_storage`, `indexed_storage`, and
-            # `namespace_routed_key_value_storage` each open
-            # `DockerPostgresRdb` in their test_dep, and that panic
-            # cascades through test-r's worker pool.
+            withPostgres = true;
             skips = commonSkips ++ [
               "rdbms_service"
               "ignite_service"
-              "key_value_storage"
-              "indexed_storage"
-              "namespace_routed_key_value_storage"
             ];
           };
 
@@ -1046,35 +1083,41 @@
                 # Two name shapes: `*_s3` / `*_s3_prefixed` (suffix)
                 # and `s3_copy_*` (prefix).
                 extraSkips = [ "_s3" "::s3_" ];
+                withPostgres = false;
               };
               registry-service = {
                 package = "golem-registry-service";
                 # Cargo.toml: [[test]] name = "tests", path = "tests/lib.rs"
                 testName = "tests";
-                # `tests::repo::postgres::*` uses DockerPostgresRdb;
-                # the sqlite siblings cover the same repo surface.
-                extraSkips = [ "postgres" ];
+                # `repo::postgres::*` now hits the Provided sidecar.
+                # The TLS variant (`postgres_tls`) still needs a
+                # certificate-configured Postgres image; skip just
+                # those.
+                extraSkips = [ "postgres_tls" ];
+                withPostgres = true;
               };
               worker-service = {
                 package = "golem-worker-service";
                 # Cargo.toml: [[test]] name = "oidc", path = "tests/oidc/lib.rs"
                 testName = "oidc";
                 extraSkips = [ ];
+                withPostgres = false;
               };
               debugging-service = {
                 package = "golem-debugging-service";
                 testName = "integration";
                 extraSkips = [ ];
+                withPostgres = false;
               };
             };
           in
           pkgs.lib.mapAttrs'
             (
               suffix:
-              { package, testName, extraSkips }:
+              { package, testName, extraSkips, withPostgres }:
               pkgs.lib.nameValuePair "integration-tests-group5-${suffix}" (mkSpawnedTest {
                 pname = "golem-integration-tests-group5-${suffix}";
-                inherit package testName;
+                inherit package testName withPostgres;
                 skips = commonSkips ++ extraSkips;
               })
             )
@@ -1082,9 +1125,22 @@
         )
         // {
 
-          # CI's `integration-tests-group9`: `agent-config-live-mutation`
-          # test binary with SQLite. (Group8 is the Postgres variant,
-          # which needs DockerPostgresRdb — not feasible in sandbox.)
+          # CI's `integration-tests-group8` / `integration-tests-group9`:
+          # `agent-config-live-mutation` test binary against Postgres
+          # (group8) and SQLite (group9). Group8 is now sandbox-runnable
+          # thanks to the Provided Postgres discovery in
+          # `EnvBasedTestDependencies::make_rdb`.
+          integration-tests-group8 = mkSpawnedTest {
+            pname = "golem-integration-tests-group8";
+            package = "integration-tests";
+            testName = "agent-config-live-mutation";
+            testThreads = 1;
+            withPostgres = true;
+            skips = commonSkips ++ [
+              "_ts"
+              "agent_config::ts"
+            ];
+          };
           integration-tests-group9 = mkSpawnedTest {
             pname = "golem-integration-tests-group9";
             package = "integration-tests";
