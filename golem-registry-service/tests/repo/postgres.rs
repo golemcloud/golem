@@ -291,9 +291,9 @@ async fn ensure_schema_exists(config: &DbPostgresConfig) -> Result<(), sqlx::Err
         .host(&config.host)
         .port(config.port);
     let mut conn = options.connect().await?;
-    conn.execute(
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS \"{schema}\";"))
-    )
+    conn.execute(sqlx::query(&format!(
+        "CREATE SCHEMA IF NOT EXISTS \"{schema}\";"
+    )))
     .await?;
     Ok(())
 }

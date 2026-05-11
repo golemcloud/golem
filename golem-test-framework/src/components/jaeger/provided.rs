@@ -30,9 +30,7 @@ pub struct ProvidedJaeger {
 
 impl ProvidedJaeger {
     pub async fn new(otlp_http_endpoint: String, query_url: String) -> Self {
-        info!(
-            "Using provided Jaeger: otlp={otlp_http_endpoint}, query={query_url}"
-        );
+        info!("Using provided Jaeger: otlp={otlp_http_endpoint}, query={query_url}");
         wait_for_startup(&query_url, Duration::from_secs(30)).await;
         Self {
             otlp_http_endpoint,
