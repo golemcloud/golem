@@ -1,8 +1,6 @@
 name: Daily Windows Build
 
 on:
-  schedule:
-    - cron: '0 2 * * *'
   workflow_dispatch:
 
 permissions:

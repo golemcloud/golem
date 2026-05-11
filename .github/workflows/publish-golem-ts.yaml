@@ -1,12 +1,7 @@
 name: CI
 
 on:
-  push:
-    tags:
-      - "golem-ts-v*.*.*"
-    branches:
-      - main
-  pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always

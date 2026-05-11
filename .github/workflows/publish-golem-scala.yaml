@@ -1,9 +1,7 @@
 name: Publish Scala SDK
 
 on:
-  push:
-    tags:
-      - "golem-scala-v*.*.*"
+  workflow_dispatch:
 
 env:
   JDK_JAVA_OPTIONS: -XX:+PrintCommandLineFlags
