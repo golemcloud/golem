@@ -113,6 +113,38 @@
             };
           };
 
+        # Skips applied to every cargo-test-based check. `ip_address_resolve`
+        # exercises live DNS via wasi-net (sandbox has no network);
+        # `rdbms` is the worker-executor test tag-suite that constructs
+        # `DockerMysqlRdb::new()` in its test_dep (sandbox has no
+        # `/var/run/docker.sock`). Suites add domain-specific skips on
+        # top of these via `commonSkips ++ [ ... ]`.
+        commonSkips = [ "ip_address_resolve" "rdbms" ];
+
+        # Env-var block consumed by every derivation that cross-compiles to
+        # `wasm32-wasip2` through cc-rs / bindgen / rquickjs-sys. Variables:
+        #   - `WASI_SDK_PATH` — used by `golem-cli build` and several
+        #     wasi-tooling crates.
+        #   - `WASI_SDK` — what rquickjs-sys reads (it falls back to
+        #     downloading its own v24 tarball if unset).
+        #   - `CC_wasm32_wasip2` / `CXX_wasm32_wasip2` / `AR_wasm32_wasip2`
+        #     — pin cc-rs at the WASI SDK toolchain for the target
+        #     (otherwise nixpkgs' host clang gets picked and rejects the
+        #     `--target=wasm32-wasip2` cross-compile when consuming glibc
+        #     headers).
+        #   - `BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip2` — point bindgen at
+        #     the WASI sysroot so its bare libclang finds wasi-libc.
+        # Emitted as `${wasiSdkEnv}` inside `buildPhase` shellsnippets.
+        wasiSdkEnv = pkgs.lib.optionalString (wasi-sdk != null) ''
+          export WASI_SDK_PATH=${wasi-sdk}
+          export WASI_SDK=${wasi-sdk}
+          export WASI_SDK_VERSION=25
+          export CC_wasm32_wasip2="${wasi-sdk}/bin/clang"
+          export CXX_wasm32_wasip2="${wasi-sdk}/bin/clang++"
+          export AR_wasm32_wasip2="${wasi-sdk}/bin/llvm-ar"
+          export BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip2="--sysroot=${wasi-sdk}/share/wasi-sysroot"
+        '';
+
         # Source: keep templates/, skills/, .wit, etc. — golem-cli's build.rs
         # embeds template files, so the standard cleanCargoSource is too aggressive.
         src = pkgs.lib.cleanSourceWith {
@@ -311,6 +343,21 @@
         # FOD that runs `cargo vendor` over the generated agent-template
         # crate. cargo vendor's output is byte-stable (sorted directory
         # listing, no timestamps) so a fixed-output hash is reliable here.
+        #
+        # Hash invariant: this output depends ONLY on the
+        # `agent-template-source` crate's `Cargo.lock`. Things that DO
+        # invalidate this hash:
+        #   - bumping the `wasm-rquickjs` git pin (likely changes the
+        #     generated `Cargo.lock`)
+        #   - upstream `cargo vendor` semantics changing
+        # Things that do NOT invalidate it:
+        #   - changes to `golem-ts-sdk-base`'s `dist/index.mjs` content
+        #     (the JS module gets embedded as a string literal in
+        #     `src/lib.rs` but doesn't affect Cargo.toml/lock)
+        #   - changes to the WIT files (they parametrize what code is
+        #     generated, but not which crates are pulled in)
+        # If this hash mismatches after a wasm-rquickjs bump, regenerate
+        # via `lib.fakeHash` and update.
         agent-template-vendor = pkgs.stdenv.mkDerivation {
           pname = "agent-template-vendor";
           version = "0.0.0";
@@ -369,7 +416,12 @@
             pkgs.glibc.dev
           ] ++ pkgs.lib.optionals (wasi-sdk != null) [ wasi-sdk ];
 
-          hardeningDisable = [ "all" ];
+          # nixpkgs' stdenv adds `-fzero-call-used-regs=used-gpr` via the
+          # `zerocallusedregs` hardening flag; clang rejects it for
+          # wasm32-wasip2. Narrowly disable just that one — the other
+          # hardening flags (stack protectors, FORTIFY_SOURCE, format,
+          # PIE) either work for wasm or are harmless.
+          hardeningDisable = [ "zerocallusedregs" ];
 
           buildPhase = ''
             runHook preBuild
@@ -385,18 +437,9 @@
               ${agent-template-vendor}/.cargo-config.toml.in \
               > .cargo/config.toml
 
-            # rquickjs-sys + cc-rs + bindgen env (same shape as the original
-            # FOD-based pipeline, kept here so this derivation is usable
-            # standalone and so debugging is easy).
-            ${pkgs.lib.optionalString (wasi-sdk != null) ''
-              export WASI_SDK_PATH=${wasi-sdk}
-              export WASI_SDK=${wasi-sdk}
-              export WASI_SDK_VERSION=25
-              export CC_wasm32_wasip2="${wasi-sdk}/bin/clang"
-              export CXX_wasm32_wasip2="${wasi-sdk}/bin/clang++"
-              export AR_wasm32_wasip2="${wasi-sdk}/bin/llvm-ar"
-              export BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip2="--sysroot=${wasi-sdk}/share/wasi-sysroot"
-            ''}
+            # rquickjs-sys + cc-rs + bindgen env. See `wasiSdkEnv` near the
+            # top of the let block for the full explanation of each var.
+            ${wasiSdkEnv}
             export LIBCLANG_PATH="${pkgs.libclang.lib}/lib"
             export BINDGEN_EXTRA_CLANG_ARGS_x86_64_unknown_linux_gnu="--target=x86_64-unknown-linux-gnu -I${pkgs.glibc.dev}/include"
 
@@ -468,16 +511,12 @@
             pkgs.wasm-tools
             pkgs.wit-bindgen
             pkgs.git
-            pkgs.bash
             pkgs.cacert
           ] ++ pkgs.lib.optionals (wasi-sdk != null) [ wasi-sdk ];
 
           buildPhase = ''
             runHook preBuild
-            ${pkgs.lib.optionalString (wasi-sdk != null) ''
-              export WASI_SDK_PATH=${wasi-sdk}
-              export WASI_SDK_VERSION=25
-            ''}
+            ${wasiSdkEnv}
             export CARGO_HOME=$TMPDIR/cargo-home
             mkdir -p $CARGO_HOME
             cat ${testComponentsCargoVendorDir}/config.toml >> $CARGO_HOME/config.toml
@@ -561,7 +600,6 @@
             pkgs.npmHooks.npmConfigHook
             golem-cli
             pkgs.git
-            pkgs.bash
             # golem-cli's startup probe creates an HTTPS reqwest client
             # which loads system CA roots. Without this in the sandbox
             # the build fails with "No CA certificates were loaded".
@@ -724,7 +762,7 @@
           , package
           , testName
           , tag ? ""
-          , skips ? [ "ip_address_resolve" "rdbms" ]
+          , skips ? commonSkips
           , extraNativeBuildInputs ? [ ]
           , testThreads ? null
           }:
@@ -858,9 +896,7 @@
             # `namespace_routed_key_value_storage` each open
             # `DockerPostgresRdb` in their test_dep, and that panic
             # cascades through test-r's worker pool.
-            skips = [
-              "ip_address_resolve"
-              "rdbms"
+            skips = commonSkips ++ [
               "rdbms_service"
               "ignite_service"
               "key_value_storage"
@@ -883,9 +919,7 @@
             # racy-asserts on "Duplicate oplog indices found". Upstream's
             # `cargo make worker-executor-tests-misc` flakily retries
             # similar paths with `--flaky-run=5`; we just skip them here.
-            skips = [
-              "ip_address_resolve"
-              "rdbms"
+            skips = commonSkips ++ [
               "oplog_processor_locality_recovery"
               "oplog_processor_shard_move_inflight"
             ];
@@ -904,9 +938,7 @@
             # sandbox and reports `Exceeded plan storage limit`. Looks
             # like a quota / memory-pressure interaction with the
             # smaller worker pool; runs locally with full resources.
-            skips = [
-              "ip_address_resolve"
-              "rdbms"
+            skips = commonSkips ++ [
               "fork_and_sync_with_promise"
             ];
           };
@@ -942,9 +974,7 @@
             # `ts_*` module-prefix tests (`ts_optional_group_*` etc.)
             # hit the same slow path. The Rust-flavored siblings
             # cover the same code paths and pass.
-            skips = [
-              "ip_address_resolve"
-              "rdbms"
+            skips = commonSkips ++ [
               "_ts"
               "agent_config::ts"
             ];
@@ -962,44 +992,59 @@
           # be vacuous. Run locally via `cargo make
           # cli-integration-tests-group{1..6}` with network available.
 
+        }
+        // (
           # CI's `integration-tests-group5` runs `cargo test` against the
           # service crates themselves (not the integration-tests crate).
           # Each cargo test invocation hits redis + sqlite-backed
-          # in-process tests with no Docker dependency.
-          integration-tests-group5-service-base = mkSpawnedTest {
-            pname = "golem-integration-tests-group5-service-base";
-            package = "golem-service-base";
-            testName = "integration";
-            # blob_storage tests that exercise a real S3 backend (or a
-            # LocalStack/minio) the sandbox can't provide. Two name
-            # shapes: `*_s3` and `*_s3_prefixed` (suffix), and
-            # `s3_copy_*` (prefix). The substring `::s3_` matches the
-            # prefix form; `_s3` matches the suffix form.
-            skips = [ "ip_address_resolve" "rdbms" "_s3" "::s3_" ];
-          };
-          integration-tests-group5-registry-service = mkSpawnedTest {
-            pname = "golem-integration-tests-group5-registry-service";
-            package = "golem-registry-service";
-            # Cargo.toml: [[test]] name = "tests", path = "tests/lib.rs"
-            testName = "tests";
-            # `tests::repo::postgres::*` uses DockerPostgresRdb;
-            # the sqlite siblings (`tests::repo::sqlite::*`) test the
-            # same repo surface.
-            skips = [ "ip_address_resolve" "rdbms" "postgres" ];
-          };
-          integration-tests-group5-worker-service = mkSpawnedTest {
-            pname = "golem-integration-tests-group5-worker-service";
-            package = "golem-worker-service";
-            # Cargo.toml: [[test]] name = "oidc", path = "tests/oidc/lib.rs"
-            testName = "oidc";
-            skips = [ "ip_address_resolve" "rdbms" ];
-          };
-          integration-tests-group5-debugging-service = mkSpawnedTest {
-            pname = "golem-integration-tests-group5-debugging-service";
-            package = "golem-debugging-service";
-            testName = "integration";
-            skips = [ "ip_address_resolve" "rdbms" ];
-          };
+          # in-process tests with no Docker dependency. Per-crate config
+          # captures: which Cargo.toml `[[test]] name = ...` to run, and
+          # which extra substring skips beyond `commonSkips`.
+          let
+            serviceCrates = {
+              service-base = {
+                package = "golem-service-base";
+                testName = "integration";
+                # `blob_storage::*` tests exercise a real S3 backend
+                # (or LocalStack/minio) the sandbox can't provide.
+                # Two name shapes: `*_s3` / `*_s3_prefixed` (suffix)
+                # and `s3_copy_*` (prefix).
+                extraSkips = [ "_s3" "::s3_" ];
+              };
+              registry-service = {
+                package = "golem-registry-service";
+                # Cargo.toml: [[test]] name = "tests", path = "tests/lib.rs"
+                testName = "tests";
+                # `tests::repo::postgres::*` uses DockerPostgresRdb;
+                # the sqlite siblings cover the same repo surface.
+                extraSkips = [ "postgres" ];
+              };
+              worker-service = {
+                package = "golem-worker-service";
+                # Cargo.toml: [[test]] name = "oidc", path = "tests/oidc/lib.rs"
+                testName = "oidc";
+                extraSkips = [ ];
+              };
+              debugging-service = {
+                package = "golem-debugging-service";
+                testName = "integration";
+                extraSkips = [ ];
+              };
+            };
+          in
+          pkgs.lib.mapAttrs'
+            (
+              suffix:
+              { package, testName, extraSkips }:
+              pkgs.lib.nameValuePair "integration-tests-group5-${suffix}" (mkSpawnedTest {
+                pname = "golem-integration-tests-group5-${suffix}";
+                inherit package testName;
+                skips = commonSkips ++ extraSkips;
+              })
+            )
+            serviceCrates
+        )
+        // {
 
           # CI's `integration-tests-group9`: `agent-config-live-mutation`
           # test binary with SQLite. (Group8 is the Postgres variant,
@@ -1009,9 +1054,7 @@
             package = "integration-tests";
             testName = "agent-config-live-mutation";
             testThreads = 1;
-            skips = [
-              "ip_address_resolve"
-              "rdbms"
+            skips = commonSkips ++ [
               "_ts"
               "agent_config::ts"
             ];
@@ -1030,6 +1073,20 @@
             buildPhaseCargoCommand = ''
               cargo build --locked --target wasm32-wasip2 \
                 -p golem-wasm --no-default-features --features guest
+            '';
+            # `golem-wasm` is a library crate; cargo emits a `.rlib`
+            # (not a `.wasm`) for the wasm32-wasip2 target. Verify the
+            # artifact actually got produced — without this the check
+            # would pass even if the build silently no-op'd.
+            installPhaseCommand = ''
+              rlib=$(find target/wasm32-wasip2/ -name 'libgolem_wasm*.rlib' -print -quit)
+              if [ -z "$rlib" ]; then
+                echo "ERROR: golem-wasm did not produce an .rlib for wasm32-wasip2" >&2
+                exit 1
+              fi
+              mkdir -p $out
+              cp "$rlib" $out/
+              echo "golem-wasm wasm32-wasip2 guest build OK" > $out/result
             '';
           });
 
