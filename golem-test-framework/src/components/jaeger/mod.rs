@@ -24,7 +24,7 @@ mod docker;
 mod provided;
 
 #[async_trait]
-pub trait Jaeger: Send + Sync {
+pub trait Jaeger: Debug + Send + Sync {
     fn otlp_http_endpoint(&self) -> String;
     fn query_url(&self) -> String;
     async fn kill(&self);

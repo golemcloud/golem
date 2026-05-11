@@ -72,7 +72,11 @@ sed -i 's/^host /hostssl /g' "$PGDATA/pg_hba.conf"
 "#;
 
 pub struct PostgresDb {
-    _container: ContainerAsync<Postgres>,
+    /// `None` when an externally-provided Postgres (e.g. a sandbox
+    /// sidecar) satisfies the test; `Some` when we spawned a
+    /// throwaway testcontainers cluster. Holding the container in
+    /// the struct keeps it alive for the duration of the test.
+    _container: Option<ContainerAsync<Postgres>>,
     pub pool: PostgresPool,
     pub config: DbPostgresConfig,
 }
@@ -83,7 +87,34 @@ pub struct PostgresTlsDb {
     pub config: DbPostgresConfig,
 }
 
-async fn start_plain_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
+async fn provided_postgres_config() -> Option<DbPostgresConfig> {
+    let candidate = DbPostgresConfig {
+        host: "localhost".to_string(),
+        port: 5432,
+        database: "postgres".to_string(),
+        username: "postgres".to_string(),
+        password: "postgres".to_string(),
+        // Use a unique schema name so a sidecar that is shared
+        // across multiple test binaries doesn't see cross-binary
+        // table collisions.
+        schema: Some(format!("test_{}", uuid::Uuid::new_v4().simple())),
+        max_connections: 10,
+    };
+    if check_if_postgres_ready(&candidate).await.is_ok() {
+        info!(
+            "Using provided Postgres at {}:{} schema={:?}",
+            candidate.host, candidate.port, candidate.schema
+        );
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+async fn start_plain_postgres() -> (DbPostgresConfig, Option<ContainerAsync<Postgres>>) {
+    if let Some(cfg) = provided_postgres_config().await {
+        return (cfg, None);
+    }
     let container = tryhard::retry_fn(|| Postgres::default().with_tag("14.7-alpine").start())
         .retries(5)
         .exponential_backoff(Duration::from_millis(10))
@@ -104,7 +135,7 @@ async fn start_plain_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) 
         max_connections: 10,
     };
 
-    (config, container)
+    (config, Some(container))
 }
 
 async fn start_tls_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
@@ -195,6 +226,9 @@ async fn check_if_postgres_ready(info: &DbPostgresConfig) -> Result<(), sqlx::Er
 }
 
 async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
+    ensure_schema_exists(config)
+        .await
+        .expect("Failed to ensure Postgres schema exists before migration");
     db::postgres::migrate(
         config,
         MigrationsDir::new("db/migration".into()).postgres_migrations(),
@@ -236,6 +270,32 @@ async fn postgres_db(_tracing: &Tracing) -> PostgresDb {
         pool,
         config,
     }
+}
+
+/// Bring the per-test schema online before migrations run. Plain
+/// `db::postgres::migrate` issues `SET search_path TO <schema>` and
+/// then runs the migrations; the schema must already exist or the
+/// migrate call fails with `schema does not exist`. The testcontainers
+/// image creates the configured schema as part of init; the
+/// externally-provided branch above does not — so we create it
+/// idempotently here.
+async fn ensure_schema_exists(config: &DbPostgresConfig) -> Result<(), sqlx::Error> {
+    use sqlx::Executor;
+    let Some(schema) = &config.schema else {
+        return Ok(());
+    };
+    let options = PgConnectOptions::new()
+        .username(&config.username)
+        .password(&config.password)
+        .database(&config.database)
+        .host(&config.host)
+        .port(config.port);
+    let mut conn = options.connect().await?;
+    conn.execute(
+        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS \"{schema}\";"))
+    )
+    .await?;
+    Ok(())
 }
 
 #[test_dep(tagged_as = "postgres")]

@@ -21,7 +21,7 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
 use golem_common::model::invocation_context::{SpanId, TraceId};
-use golem_test_framework::components::jaeger::{DockerJaeger, Jaeger, JaegerQueryClient};
+use golem_test_framework::components::jaeger::{Jaeger, JaegerQueryClient, create_jaeger};
 use golem_test_framework::components::otel_collector::{
     DockerOtelCollector, OtelCollector, wait_for_otlp_logs, wait_for_otlp_metrics,
 };
@@ -29,6 +29,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use reqwest::Client;
 use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, test_dep, timeout};
 use tracing::info;
@@ -37,8 +38,8 @@ inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test_dep]
-async fn create_jaeger(_tracing: &Tracing) -> DockerJaeger {
-    DockerJaeger::new().await
+async fn jaeger(_tracing: &Tracing) -> Arc<dyn Jaeger> {
+    create_jaeger().await
 }
 
 #[test_dep]
@@ -78,7 +79,7 @@ async fn find_otlp_plugin_grant(
 #[timeout("4m")]
 async fn otlp_basic_trace_export(
     deps: &EnvBasedTestDependencies,
-    jaeger: &DockerJaeger,
+    jaeger: &Arc<dyn Jaeger>,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let client = user.registry_service_client().await;
