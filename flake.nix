@@ -943,19 +943,17 @@
             ];
           };
 
-          # CONTRIBUTING.md #8: CLI exercising live services.
-          # `bridge_gen` tests shell out to `npm install` / `cargo build`
-          # against generated wrapper code in a temp dir — both need
-          # network (no pre-vendored deps for the dynamically-generated
-          # crates/packages). Skip the whole subtree; everything else in
-          # the cli integration suite runs hermetically.
-          cli-integration-tests = mkSpawnedTest {
-            pname = "golem-cli-integration-tests";
-            package = "golem-cli";
-            testName = "integration";
-            testThreads = 1;
-            skips = [ "ip_address_resolve" "rdbms" "bridge_gen" ];
-          };
+          # NB: CONTRIBUTING.md #8 `cli-integration-tests` is
+          # intentionally NOT wired up. The entire test suite is two
+          # modules:
+          #   - `bridge_gen::*` — shells out to `npm install` /
+          #     `cargo build` against dynamically-generated wrapper
+          #     code (no pre-vendorable deps).
+          #   - `app::*` — runs `golem-cli build` on freshly-scaffolded
+          #     mixed TS+Rust apps; same network requirement.
+          # Filtering both leaves zero tests, so a flake check would
+          # be vacuous. Run locally via `cargo make
+          # cli-integration-tests-group1..6` with network available.
 
           # `cargo make check-configs`. Each service binary supports
           # `--dump-config-default-toml` / `--dump-config-default-env-var`;
