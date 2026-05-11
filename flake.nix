@@ -970,20 +970,28 @@
             pname = "golem-integration-tests-group5-service-base";
             package = "golem-service-base";
             testName = "integration";
-            # blob_storage::*_s3* exercises a real S3 backend (or a
-            # LocalStack/minio) that the sandbox doesn't provide.
-            skips = [ "ip_address_resolve" "rdbms" "_s3" ];
+            # blob_storage tests that exercise a real S3 backend (or a
+            # LocalStack/minio) the sandbox can't provide. Two name
+            # shapes: `*_s3` and `*_s3_prefixed` (suffix), and
+            # `s3_copy_*` (prefix). The substring `::s3_` matches the
+            # prefix form; `_s3` matches the suffix form.
+            skips = [ "ip_address_resolve" "rdbms" "_s3" "::s3_" ];
           };
           integration-tests-group5-registry-service = mkSpawnedTest {
             pname = "golem-integration-tests-group5-registry-service";
             package = "golem-registry-service";
-            testName = "integration";
-            skips = [ "ip_address_resolve" "rdbms" ];
+            # Cargo.toml: [[test]] name = "tests", path = "tests/lib.rs"
+            testName = "tests";
+            # `tests::repo::postgres::*` uses DockerPostgresRdb;
+            # the sqlite siblings (`tests::repo::sqlite::*`) test the
+            # same repo surface.
+            skips = [ "ip_address_resolve" "rdbms" "postgres" ];
           };
           integration-tests-group5-worker-service = mkSpawnedTest {
             pname = "golem-integration-tests-group5-worker-service";
             package = "golem-worker-service";
-            testName = "integration";
+            # Cargo.toml: [[test]] name = "oidc", path = "tests/oidc/lib.rs"
+            testName = "oidc";
             skips = [ "ip_address_resolve" "rdbms" ];
           };
           integration-tests-group5-debugging-service = mkSpawnedTest {
