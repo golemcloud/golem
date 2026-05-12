@@ -204,8 +204,14 @@
           outputHashes = {
             "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v42.0.1#9fc55305c583e4d98edecfdab59dab5e5c3f6e1c" =
               "sha256-vJmlbdEatoVKRGNbdrrEXlOhBPKHvtqBhGytVIxMn68=";
+            # NB: must match the `fetchgit` hash for the same rev — crane's
+            # cargo-git source FOD now fetches with submodules (the
+            # `vendor/rusqlite` one), so its content matches the
+            # `wrqSrc` fetchgit above. Without this both `nix build` and
+            # remote builders (garnix) hit a hash mismatch on the
+            # cargo-vendored copy of wasm-rquickjs.
             "git+https://github.com/golemcloud/wasm-rquickjs.git?tag=v0.2.4#6d08b6db89dcf6735b0d0d7866745e458f61d8b7" =
-              "sha256-DmehvcTeasIxbYOB7DlPSJsjEsalDQ1Hobn5devqHJw=";
+              "sha256-g+RZhH6ec+zL9+37P4PQGcQjkQamexAZrlqOoE7QR5M=";
           };
           # Several Cargo.tomls in the wasmtime fork reference README files that
           # don't exist in the crate subdirectory; cargo package -l rejects them.
