@@ -17,7 +17,9 @@ pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
 
-use self::agent_deployments_service::DisabledEnvironmentStateService;
+use self::agent_deployments_service::{
+    ConfiguredRetryPoliciesEnvironmentStateService, DisabledEnvironmentStateService,
+};
 use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
 use anyhow::{Error, anyhow};
@@ -43,6 +45,7 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, types::ObjectMetadata,
 };
 use golem_common::model::plan::PlanId;
+use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
@@ -497,6 +500,10 @@ pub struct TestExecutorOverrides {
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
+    /// Named retry policies that the executor's `EnvironmentStateService`
+    /// should expose to running agents (mirrors `retryPolicyDefaults` in
+    /// `golem.yaml`).  When `None`, an empty policy list is used.
+    pub retry_policies: Option<Vec<NamedRetryPolicy>>,
 }
 
 fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
@@ -1338,7 +1345,12 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         _config: &EnvironmentStateServiceConfig,
         _registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn EnvironmentStateService> {
-        Arc::new(DisabledEnvironmentStateService)
+        match &self.overrides.retry_policies {
+            Some(policies) => Arc::new(ConfiguredRetryPoliciesEnvironmentStateService {
+                policies: policies.clone(),
+            }),
+            None => Arc::new(DisabledEnvironmentStateService),
+        }
     }
 
     fn create_component_service(

@@ -859,3 +859,7 @@ mod sql {
         }
     }
 }
+
+pub fn render_config_path(path: &[String]) -> String {
+    path.join(".")
+}

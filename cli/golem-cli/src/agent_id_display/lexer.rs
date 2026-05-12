@@ -122,9 +122,17 @@ impl<'a> Lexer<'a> {
         if let Token::Ident(s) = tok {
             Ok((s, start, end))
         } else {
+            let message = match &tok {
+                Token::StringLit(name) => format!(
+                    "expected identifier (record field name), got quoted string \"{name}\". \
+                     Record fields use unquoted keys (e.g. {{ {name}: \"...\" }}); \
+                     JSON-style quoted keys are not accepted."
+                ),
+                _ => format!("expected identifier, got {tok:?}"),
+            };
             Err(LexError {
                 position: start,
-                message: format!("expected identifier, got {tok:?}"),
+                message,
             })
         }
     }

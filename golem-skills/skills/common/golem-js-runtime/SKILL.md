@@ -126,3 +126,17 @@ val content = Fs.readFileSync("/data/config.json", "utf-8")
 ## Reference
 
 Check the [wasm-rquickjs README](https://github.com/golemcloud/wasm-rquickjs) for the most up-to-date list of available APIs.
+
+### Looking up Golem SDK signatures
+
+The full TypeScript type definitions for the Golem SDK live at:
+
+```
+node_modules/@golemcloud/golem-ts-sdk/dist/index.d.mts
+```
+
+Grep there (and in the `dist/host/` and `dist/lib/` subdirectories under the same package) when
+you need the exact signature of a helper such as `withIdempotenceMode`, `atomically`,
+`withRetryPolicy`, `Duration`, `Predicate`, `Policy`, `NamedPolicy`, etc. The shipped
+`dist/index.mjs` is a single-line minified bundle and is **not** a useful reference; always read
+the `.d.mts` instead.

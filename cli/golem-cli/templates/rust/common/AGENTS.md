@@ -14,7 +14,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-build` | Building a Golem application with `golem build` |
 | `golem-troubleshoot-build` | Troubleshooting Golem build failures and debugging manifest file (golem.yaml) configuration — diagnosing tool, dependency, env var, config, and manifest layer issues with `golem component manifest-trace` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
-| `golem-local-dev-server` | Starting and managing the local Golem development server with `golem server` |
+| `golem-local-dev-server` | Starting, configuring, and debugging the local Golem development server with `golem server` — verbosity flags, useful tracing targets, and key log lines |
 | `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
 | `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
 | `golem-create-agent-instance-rust` | Creating a new agent instance with `golem agent new` |

@@ -420,7 +420,8 @@ pub async fn execute_external_command(
 }
 
 pub async fn ensure_common_deps_for_tool(ctx: &BuildContext<'_>, tool: &str) -> anyhow::Result<()> {
-    match normalized_program_name(tool).as_str() {
+    let normalized = normalized_program_name(tool);
+    match normalized.as_str() {
         "node" | "npx" => {
             let package_json_path = ctx.application().app_root_dir().join("package.json");
             if !package_json_path.exists() {
@@ -434,7 +435,7 @@ pub async fn ensure_common_deps_for_tool(ctx: &BuildContext<'_>, tool: &str) -> 
                 })
                 .await
         }
-        "moon" => {
+        _ if normalized == "moon" || tool_lives_in_mooncakes(tool) => {
             let moon_mod_json_path = ctx.application().app_root_dir().join("moon.mod.json");
             if !moon_mod_json_path.exists() {
                 return Ok(());
@@ -449,6 +450,14 @@ pub async fn ensure_common_deps_for_tool(ctx: &BuildContext<'_>, tool: &str) -> 
         }
         _ => Ok(()),
     }
+}
+
+/// Returns true if the given tool path lives inside a `.mooncakes/` directory,
+/// meaning it is a binary installed by `moon install` from a `bin-deps` entry.
+fn tool_lives_in_mooncakes(tool: &str) -> bool {
+    Path::new(tool)
+        .components()
+        .any(|c| c.as_os_str() == ".mooncakes")
 }
 
 async fn ensure_npm_dependencies(

@@ -14,6 +14,7 @@
 
 use super::optional_field_update::OptionalFieldUpdate;
 use crate::base_model::environment::EnvironmentId;
+use crate::base_model::render_config_path;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use golem_wasm::analysis::AnalysedType;
 use std::fmt::Display;
@@ -47,7 +48,7 @@ impl CanonicalAgentSecretPath {
 
 impl Display for CanonicalAgentSecretPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.join("."))
+        write!(f, "{}", render_config_path(&self.0))
     }
 }
 
