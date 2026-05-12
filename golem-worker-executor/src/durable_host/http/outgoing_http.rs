@@ -32,11 +32,11 @@ use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 use wasmtime::component::Resource;
-use wasmtime_wasi_http::bindings::http::outgoing_handler::Host;
-use wasmtime_wasi_http::bindings::http::types;
-use wasmtime_wasi_http::bindings::http::types::Scheme;
-use wasmtime_wasi_http::types::{HostFutureIncomingResponse, HostOutgoingRequest};
-use wasmtime_wasi_http::{HttpError, HttpResult};
+use wasmtime_wasi_http::p2::bindings::http::outgoing_handler::Host;
+use wasmtime_wasi_http::p2::bindings::http::types;
+use wasmtime_wasi_http::p2::bindings::http::types::Scheme;
+use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, HostOutgoingRequest};
+use wasmtime_wasi_http::p2::{HttpError, HttpResult};
 
 fn is_method_idempotent(method: &SerializableHttpMethod) -> bool {
     matches!(
@@ -254,7 +254,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let mut headers: HashMap<String, String> = host_request
             .headers
-            .as_ref()
             .iter()
             .map(|(k, v)| {
                 (
@@ -269,6 +268,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await
             .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
 
+        // wasmtime-wasi-http v45 marks outgoing-request headers immutable as soon as the
+        // guest constructs the request. Capture the field size limit so we can briefly
+        // remark the headers as mutable while we inject Golem-managed headers and then
+        // restore the immutable flag before continuing.
+        let field_size_limit = self.as_wasi_http_view().ctx.field_size_limit;
+
         if self.state.forward_trace_context_headers {
             let invocation_context = self
                 .state
@@ -279,15 +284,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             let trace_context_headers =
                 TraceContextHeaders::from_invocation_context(invocation_context);
+            host_request.headers.set_mutable(field_size_limit);
             for (key, value) in trace_context_headers.to_raw_headers_map() {
                 let header_name = HeaderName::from_str(&key).unwrap();
-                host_request.headers.remove_all(&header_name);
+                let _ = host_request.headers.remove_all(header_name.clone());
                 host_request
                     .headers
-                    .append(&header_name, HeaderValue::from_str(&value).unwrap())
+                    .append(header_name, HeaderValue::from_str(&value).unwrap())
                     .map_err(HttpError::trap)?;
                 headers.insert(key, value);
             }
+            host_request.headers.set_immutable();
         }
 
         if self.state.set_outgoing_http_idempotency_key {
@@ -300,14 +307,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let header_name = HeaderName::from_static("idempotency-key");
 
             let host_request = self.table().get_mut(&request)?;
-            if !host_request.headers.as_ref().contains_key(&header_name) {
+            if !host_request.headers.contains_key(&header_name) {
+                host_request.headers.set_mutable(field_size_limit);
                 host_request
                     .headers
                     .append(
-                        &header_name,
+                        header_name,
                         HeaderValue::from_str(&idempotency_key.to_string()).unwrap(),
                     )
                     .map_err(HttpError::trap)?;
+                host_request.headers.set_immutable();
             }
         }
 

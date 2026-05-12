@@ -126,6 +126,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
@@ -176,12 +177,63 @@ use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView,
     WasiView,
 };
-use wasmtime_wasi_http::body::HyperOutgoingBody;
-use wasmtime_wasi_http::types::{
-    BodyCompletionReceiver, HostFutureIncomingResponse, OutgoingRequestConfig,
+use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
+use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
+use wasmtime_wasi_http::p2::{
+    BodyCompletionReceiver, HttpResult, WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
     default_send_request_with_pool,
 };
-use wasmtime_wasi_http::{HttpConnectionPool, HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
+use wasmtime_wasi_http::{HttpConnectionPool, WasiHttpCtx};
+
+/// Hooks providing the custom HTTP request handling needed for durable
+/// execution. Stored on `DurableWorkerCtx` and exposed via `WasiHttpCtxView`
+/// for `wasmtime-wasi-http`.
+pub struct DurableHttpHooks {
+    /// Connection pool used for outgoing HTTP requests. Mirror of
+    /// `WasiHttpCtx::connection_pool` so that `WasiHttpHooks::send_request`
+    /// can construct the deferred future without re-borrowing `WasiHttpCtx`.
+    pub connection_pool: Option<HttpConnectionPool>,
+    /// Shared replay flag that durable execution toggles when transitioning
+    /// between live and replay modes. When `true`, outgoing HTTP requests are
+    /// deferred so that they can be replayed from the oplog instead.
+    pub is_replay: Arc<AtomicBool>,
+}
+
+impl WasiHttpHooks for DurableHttpHooks {
+    fn send_request(
+        &mut self,
+        request: hyper::Request<HyperOutgoingBody>,
+        config: OutgoingRequestConfig,
+        body_completion: Option<BodyCompletionReceiver>,
+    ) -> HttpResult<HostFutureIncomingResponse> {
+        let connection_pool = self.connection_pool.clone();
+        if self.is_replay.load(std::sync::atomic::Ordering::Acquire) {
+            // If this is a replay, we must not actually send the request, but we have to store it in the
+            // FutureIncomingResponse because it is possible that there wasn't any response recorded in the oplog.
+            // If that is the case, the request has to be sent as soon as we get into live mode and trying to await
+            // or poll the response future.
+            Ok(HostFutureIncomingResponse::deferred(Box::new(move || {
+                Ok(default_send_request_with_pool(
+                    request,
+                    config,
+                    body_completion,
+                    connection_pool,
+                ))
+            })))
+        } else {
+            Ok(default_send_request_with_pool(
+                request,
+                config,
+                body_completion,
+                connection_pool,
+            ))
+        }
+    }
+
+    fn connection_pool(&self) -> Option<&HttpConnectionPool> {
+        self.connection_pool.as_ref()
+    }
+}
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -189,6 +241,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     wasi: Arc<Mutex<WasiCtx>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
     io_ctx: Arc<Mutex<IoCtx>>,
     wasi_http: WasiHttpCtx,
+    http_hooks: DurableHttpHooks,
     pub owned_agent_id: OwnedAgentId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
@@ -351,12 +404,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
         let mut wasi_http = WasiHttpCtx::new();
-        wasi_http.connection_pool = http_connection_pool;
+        wasi_http.connection_pool = http_connection_pool.clone();
+        let http_hooks = DurableHttpHooks {
+            connection_pool: http_connection_pool,
+            is_replay: Arc::new(AtomicBool::new(false)),
+        };
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),
             io_ctx: Arc::new(Mutex::new(io_ctx)),
             wasi_http,
+            http_hooks,
             owned_agent_id: owned_agent_id.clone(),
             websocket_connection_pool,
             public_state: PublicDurableWorkerState {
@@ -532,8 +590,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         DurableWorkerCtxWasiView(self)
     }
 
-    pub fn as_wasi_http_view(&mut self) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<'_, Ctx>> {
-        WasiHttpImpl(DurableWorkerCtxWasiHttpView(self))
+    pub fn as_wasi_http_view(&mut self) -> WasiHttpCtxView<'_> {
+        // Sync the replay flag observed by `WasiHttpHooks::send_request` with
+        // the current durable execution state before exposing the view to
+        // wasmtime-wasi-http.
+        let is_replay = self.state.is_replay();
+        self.http_hooks
+            .is_replay
+            .store(is_replay, std::sync::atomic::Ordering::Release);
+        let inner = &mut *self;
+        let table = Arc::get_mut(&mut inner.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        WasiHttpCtxView {
+            ctx: &mut inner.wasi_http,
+            table,
+            hooks: &mut inner.http_hooks,
+        }
     }
 
     pub fn rpc(&self) -> Arc<dyn Rpc> {
@@ -4350,8 +4424,6 @@ impl<Ctx: WorkerCtx> HasOplog for PublicDurableWorkerState<Ctx> {
 
 pub struct DurableWorkerCtxWasiView<'a, Ctx: WorkerCtx>(&'a mut DurableWorkerCtx<Ctx>);
 
-pub struct DurableWorkerCtxWasiHttpView<'a, Ctx: WorkerCtx>(&'a mut DurableWorkerCtx<Ctx>);
-
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
 pub struct SuspendForSleep(Duration);
 
@@ -4406,82 +4478,9 @@ impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'_, Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> IoView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
-    fn table(&mut self) -> &mut ResourceTable {
-        Arc::get_mut(&mut self.0.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail")
-    }
-
-    fn io_ctx(&mut self) -> &mut IoCtx {
-        Arc::get_mut(&mut self.0.io_ctx)
-            .expect("IoCtx is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("IoCtx mutex must never fail")
-    }
-
-    fn io_data(&mut self) -> IoData<'_> {
-        let inner = &mut *self.0;
-        let table = Arc::get_mut(&mut inner.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail");
-        let io_ctx = Arc::get_mut(&mut inner.io_ctx)
-            .expect("IoCtx is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("IoCtx mutex must never fail");
-        IoData { table, io_ctx }
-    }
-}
-
-impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
-    fn ctx(&mut self) -> &mut WasiHttpCtx {
-        &mut self.0.wasi_http
-    }
-
-    fn table(&mut self) -> &mut ResourceTable {
-        Arc::get_mut(&mut self.0.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail")
-    }
-
-    fn connection_pool(&self) -> Option<&HttpConnectionPool> {
-        self.0.wasi_http.connection_pool.as_ref()
-    }
-
-    fn send_request(
-        &mut self,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-        body_completion: Option<BodyCompletionReceiver>,
-    ) -> HttpResult<HostFutureIncomingResponse>
-    where
-        Self: Sized,
-    {
-        if self.0.state.is_replay() {
-            // If this is a replay, we must not actually send the request, but we have to store it in the
-            // FutureIncomingResponse because it is possible that there wasn't any response recorded in the oplog.
-            // If that is the case, the request has to be sent as soon as we get into live mode and trying to await
-            // or poll the response future.
-            let connection_pool = self.0.wasi_http.connection_pool.clone();
-            Ok(HostFutureIncomingResponse::deferred(Box::new(move || {
-                Ok(default_send_request_with_pool(
-                    request,
-                    config,
-                    body_completion,
-                    connection_pool,
-                ))
-            })))
-        } else {
-            Ok(default_send_request_with_pool(
-                request,
-                config,
-                body_completion,
-                self.0.wasi_http.connection_pool.clone(),
-            ))
-        }
+impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtx<Ctx> {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        self.as_wasi_http_view()
     }
 }
 

@@ -55,11 +55,12 @@ use wasmtime_wasi::p2::bindings::filesystem;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
 use wasmtime_wasi::p2::{FsError, SocketError};
-use wasmtime_wasi_http::bindings::http::types::{
+use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
 };
-use wasmtime_wasi_http::body::HostIncomingBody;
-use wasmtime_wasi_http::types::{FieldMap, HostIncomingResponse};
+use wasmtime_wasi_http::p2::body::HostIncomingBody;
+use wasmtime_wasi_http::p2::types::HostIncomingResponse;
+use wasmtime_wasi_http::FieldMap;
 
 /// Must match `DEFAULT_FIELD_SIZE_LIMIT` in wasmtime-wasi-http's `WasiHttpCtx`
 const DEFAULT_FIELD_SIZE_LIMIT: usize = 128 * 1024;
@@ -733,7 +734,7 @@ impl TryFrom<&HostIncomingResponse> for SerializableResponseHeaders {
 
     fn try_from(response: &HostIncomingResponse) -> Result<Self, Self::Error> {
         let mut headers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
-        for (key, value) in response.headers.as_ref().iter() {
+        for (key, value) in response.headers.iter() {
             headers
                 .entry(key.as_str().to_string())
                 .or_default()
@@ -758,7 +759,7 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
                 header_map.append(name.clone(), HeaderValue::try_from(value)?);
             }
         }
-        let headers = FieldMap::new(header_map, DEFAULT_FIELD_SIZE_LIMIT);
+        let headers = FieldMap::new_immutable(header_map);
 
         Ok(Self {
             status: value.status,
@@ -891,15 +892,15 @@ pub enum SerializableHttpErrorCode {
     InternalError(Option<String>),
 }
 
-impl From<wasmtime_wasi_http::bindings::http::types::ErrorCode> for SerializableHttpErrorCode {
-    fn from(value: wasmtime_wasi_http::bindings::http::types::ErrorCode) -> Self {
+impl From<wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> for SerializableHttpErrorCode {
+    fn from(value: wasmtime_wasi_http::p2::bindings::http::types::ErrorCode) -> Self {
         (&value).into()
     }
 }
 
-impl From<&wasmtime_wasi_http::bindings::http::types::ErrorCode> for SerializableHttpErrorCode {
-    fn from(value: &wasmtime_wasi_http::bindings::http::types::ErrorCode) -> Self {
-        use wasmtime_wasi_http::bindings::http::types::ErrorCode;
+impl From<&wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> for SerializableHttpErrorCode {
+    fn from(value: &wasmtime_wasi_http::p2::bindings::http::types::ErrorCode) -> Self {
+        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
 
         match value {
             ErrorCode::DnsTimeout => SerializableHttpErrorCode::DnsTimeout,
@@ -981,9 +982,9 @@ impl From<&wasmtime_wasi_http::bindings::http::types::ErrorCode> for Serializabl
     }
 }
 
-impl From<SerializableHttpErrorCode> for wasmtime_wasi_http::bindings::http::types::ErrorCode {
+impl From<SerializableHttpErrorCode> for wasmtime_wasi_http::p2::bindings::http::types::ErrorCode {
     fn from(value: SerializableHttpErrorCode) -> Self {
-        use wasmtime_wasi_http::bindings::http::types::ErrorCode;
+        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
 
         match value {
             SerializableHttpErrorCode::DnsTimeout => ErrorCode::DnsTimeout,
