@@ -55,12 +55,12 @@ use wasmtime_wasi::p2::bindings::filesystem;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
 use wasmtime_wasi::p2::{FsError, SocketError};
+use wasmtime_wasi_http::FieldMap;
 use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
 };
 use wasmtime_wasi_http::p2::body::HostIncomingBody;
 use wasmtime_wasi_http::p2::types::HostIncomingResponse;
-use wasmtime_wasi_http::FieldMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
