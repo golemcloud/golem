@@ -521,7 +521,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     Ok(Some(Ok(Ok(Some(trailers))))) => {
                         let mut serialized_trailers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
 
-                        for (key, value) in self.table().get(&trailers)?.iter() {
+                        for (key, value) in self.table().get(trailers)?.iter() {
                             serialized_trailers
                                 .entry(key.as_str().to_string())
                                 .or_default()
