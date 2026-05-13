@@ -16,7 +16,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.2.4"
+  WASM_RQUICKJS_BRANCH: "wasmtime-v45"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -67,7 +67,7 @@ jobs:
         with:
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          wasm-rquickjs-branch: ${{ env.WASM_RQUICKJS_BRANCH }}
 
       - name: Install dependencies
         working-directory: sdks/ts
@@ -139,7 +139,7 @@ jobs:
           model: ${{ matrix.model || '' }}
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          wasm-rquickjs-branch: ${{ env.WASM_RQUICKJS_BRANCH }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
@@ -187,7 +187,7 @@ jobs:
           model: ${{ matrix.model || '' }}
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          wasm-rquickjs-branch: ${{ env.WASM_RQUICKJS_BRANCH }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
@@ -222,7 +222,7 @@ jobs:
           language: ${{ matrix.language }}
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          wasm-rquickjs-branch: ${{ env.WASM_RQUICKJS_BRANCH }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           gemini-api-key: ${{ secrets.GEMINI_API_KEY }}

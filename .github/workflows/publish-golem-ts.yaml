@@ -10,7 +10,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASM_RQUICKJS_VERSION: "0.2.4"
+  WASM_RQUICKJS_BRANCH: "wasmtime-v45"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -36,7 +36,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          wasm-rquickjs-branch: ${{ env.WASM_RQUICKJS_BRANCH }}
           install-cargo-component: 'true'
 
       - name: Update npm
