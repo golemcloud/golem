@@ -4,7 +4,6 @@ package golem:api@1.5.0;
 /// the durability and transactional guarantees the executor provides.
 interface host {
     use golem:core/types@1.5.0.{component-id, uuid, value-and-type, agent-id, promise-id, oplog-index};
-    use wasi:io/poll@0.2.3.{pollable};
 
     /// Represents a Golem component's version
     type component-revision = u64;
@@ -184,10 +183,8 @@ interface host {
     }
 
     resource get-promise-result {
-      /// Returns a pollable that can be used to wait for the promise to become ready.j
-      subscribe: func() -> pollable;
-      /// Poll the result of the promise, returning none if it is not yet ready.
-      get: func() -> option<list<u8>>;
+      /// Awaits the result of the promise.
+      get: async func() -> list<u8>;
     }
 
     /// Create a new promise

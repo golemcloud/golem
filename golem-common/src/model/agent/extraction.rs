@@ -24,8 +24,7 @@ use wasmtime::component::{
 };
 use wasmtime::{AsContextMut, Engine, Store};
 use wasmtime_wasi::cli::StdoutStream;
-use wasmtime_wasi::p2::pipe;
-use wasmtime_wasi::{IoCtx, IoData, IoView, WasiCtx, WasiCtxView, WasiView};
+use wasmtime_wasi::{IoCtx, WasiCtx, WasiCtxView, WasiView};
 const INTERFACE_NAME: &str = "golem:agent/guest@1.5.0";
 const FUNCTION_NAME: &str = "discover-agent-types";
 
@@ -41,6 +40,8 @@ pub async fn extract_agent_types_with_streams(
     let mut config = wasmtime::Config::default();
     config.wasm_multi_value(true);
     config.wasm_component_model(true);
+    config.wasm_component_model_async(true);
+    config.wasm_component_model_error_context(true);
     config.epoch_interruption(true);
     config.consume_fuel(true);
     config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
@@ -55,10 +56,7 @@ pub async fn extract_agent_types_with_streams(
     let mut linker: Linker<Host> = Linker::new(&engine);
     linker.allow_shadowing(true);
 
-    wasmtime_wasi::p2::add_to_linker_with_options_async(
-        &mut linker,
-        &wasmtime_wasi::p2::bindings::LinkOptions::default(),
-    )?;
+    wasmtime_wasi::p3::add_to_linker(&mut linker)?;
 
     let mut builder = WasiCtx::builder();
 
@@ -162,8 +160,8 @@ pub async fn extract_agent_types(
 ) -> anyhow::Result<Vec<AgentType>> {
     extract_agent_types_with_streams(
         wasm_path,
-        None::<pipe::MemoryOutputPipe>,
-        None::<pipe::MemoryOutputPipe>,
+        None::<wasmtime_wasi::cli::AsyncStdoutStream>,
+        None::<wasmtime_wasi::cli::AsyncStdoutStream>,
         fail_on_missing_discover_method,
         enable_fs_cache,
     )
@@ -183,35 +181,6 @@ struct Host {
     pub table: Arc<Mutex<ResourceTable>>,
     pub wasi: Arc<Mutex<WasiCtx>>,
     pub io: Arc<Mutex<IoCtx>>,
-}
-
-impl IoView for Host {
-    fn table(&mut self) -> &mut ResourceTable {
-        Arc::get_mut(&mut self.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail")
-    }
-
-    fn io_ctx(&mut self) -> &mut IoCtx {
-        Arc::get_mut(&mut self.io)
-            .expect("IoCtx is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("IoCtx mutex must never fail")
-    }
-
-    fn io_data(&mut self) -> IoData<'_> {
-        IoData {
-            table: Arc::get_mut(&mut self.table)
-                .expect("ResourceTable is shared and cannot be borrowed mutably")
-                .get_mut()
-                .expect("ResourceTable mutex must never fail"),
-            io_ctx: Arc::get_mut(&mut self.io)
-                .expect("IoCtx is shared and cannot be borrowed mutably")
-                .get_mut()
-                .expect("IoCtx mutex must never fail"),
-        }
-    }
 }
 
 impl WasiView for Host {

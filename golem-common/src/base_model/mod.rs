@@ -55,7 +55,7 @@ pub use worker_filter::*;
 use crate::base_model::component::ComponentId;
 use crate::{declare_structs, newtype_uuid};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
+use golem_wasm::analysis::analysed_type::{field, record, s64, u32};
 use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -135,15 +135,15 @@ impl IntoValue for Timestamp {
             .0
             .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH);
         Value::Record(vec![
-            Value::U64(d.whole_seconds() as u64),
+            Value::S64(d.whole_seconds()),
             Value::U32(d.subsec_nanoseconds() as u32),
         ])
     }
 
     fn get_type() -> AnalysedType {
-        record(vec![field("seconds", u64()), field("nanoseconds", u32())])
-            .named("datetime")
-            .owned("wasi:clocks@0.2.3/wall-clock")
+        record(vec![field("seconds", s64()), field("nanoseconds", u32())])
+            .named("instant")
+            .owned("wasi:clocks@0.3.0-rc-2026-03-15/system-clock")
     }
 }
 
@@ -152,11 +152,11 @@ impl FromValue for Timestamp {
         match value {
             Value::Record(fields) if fields.len() == 2 => {
                 let mut iter = fields.into_iter();
-                let seconds = u64::from_value(iter.next().unwrap())?;
+                let seconds = i64::from_value(iter.next().unwrap())?;
                 let nanos = u32::from_value(iter.next().unwrap())?;
                 Ok(Self(
                     iso8601_timestamp::Timestamp::UNIX_EPOCH
-                        .add(Duration::from_secs(seconds))
+                        .add(Duration::from_secs(seconds.max(0) as u64))
                         .add(Duration::from_nanos(nanos as u64)),
                 ))
             }
@@ -176,11 +176,11 @@ newtype_uuid!(
 );
 
 #[cfg(feature = "full")]
-impl From<Timestamp> for golem_wasm::wasi::clocks::wall_clock::Datetime {
+impl From<Timestamp> for golem_wasm::wasi::clocks::system_clock::Instant {
     fn from(value: Timestamp) -> Self {
         let ms = value.to_millis();
         Self {
-            seconds: ms / 1000,
+            seconds: (ms / 1000) as i64,
             nanoseconds: ((ms % 1000) * 1_000_000) as u32,
         }
     }

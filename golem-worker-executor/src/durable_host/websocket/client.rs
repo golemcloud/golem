@@ -86,22 +86,7 @@ pub enum WebSocketConnectionEntry {
     Terminal(TerminalWebSocketError),
 }
 
-#[async_trait::async_trait]
-impl wasmtime_wasi::p2::Pollable for WebSocketConnectionEntry {
-    async fn ready(&mut self) {
-        match self {
-            WebSocketConnectionEntry::Live(live) => {
-                let mut reader = live.reader.lock().await;
-                if reader.pending.is_some() {
-                    return;
-                }
-                let next = read_next_user_or_close(&mut reader.stream).await;
-                reader.pending = Some(next);
-            }
-            WebSocketConnectionEntry::Replay | WebSocketConnectionEntry::Terminal(_) => {}
-        }
-    }
-}
+// TODO(p3) Blocker 1: pollable removed; needs p3 accessor-based async access.
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
@@ -685,17 +670,6 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             mark_websocket_terminal(self, &self_, terminal_error)?;
         }
         Ok(live_result)
-    }
-
-    async fn subscribe(
-        &mut self,
-        self_: Resource<WebSocketConnectionEntry>,
-    ) -> anyhow::Result<Resource<wasmtime_wasi::p2::bindings::io::poll::Pollable>> {
-        self.observe_function_call("golem:websocket/client", "subscribe");
-        if self.state.is_live() {
-            self.process_pending_replay_events().await?;
-        }
-        Ok(wasmtime_wasi::subscribe(self.table(), self_, None)?)
     }
 
     async fn drop(&mut self, rep: Resource<WebSocketConnectionEntry>) -> anyhow::Result<()> {

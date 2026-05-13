@@ -12,21 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::sync::{Arc, RwLock};
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use wasmtime::component::Resource;
-use wasmtime_wasi::{
-    DynInputStream, DynOutputStream, InputStream, IoView, OutputStream, Pollable, StreamResult,
-};
+use wasmtime::component::{Resource, StreamReader};
+use wasmtime_wasi::IoView;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 
 use crate::preview2::wasi::blobstore::types::{
-    Error, Host, HostIncomingValue, HostOutgoingValue, IncomingValue, IncomingValueAsyncBody,
-    IncomingValueSyncBody, OutputStream as OutgoingValueBodyAsync,
+    Error, Host, HostIncomingValue, HostOutgoingValue, IncomingValue,
 };
 use crate::workerctx::WorkerCtx;
 
@@ -42,21 +36,13 @@ impl<Ctx: WorkerCtx> HostOutgoingValue for DurableWorkerCtx<Ctx> {
 
     async fn outgoing_value_write_body(
         &mut self,
-        self_: Resource<OutgoingValueEntry>,
-    ) -> anyhow::Result<Result<Resource<OutgoingValueBodyAsync>, ()>> {
+        _self_: Resource<OutgoingValueEntry>,
+    ) -> anyhow::Result<Result<StreamReader<u8>, ()>> {
         self.observe_function_call(
             "blobstore::types::outgoing_value",
             "outgoing_value_write_body",
         );
-        let body = self
-            .as_wasi_view()
-            .table()
-            .get::<OutgoingValueEntry>(&self_)?
-            .body
-            .clone();
-        let body: DynOutputStream = Box::new(OutgoingValueEntryStream::new(body));
-        let outgoing_value_async_body = self.as_wasi_view().table().push(body)?;
-        Ok(Ok(outgoing_value_async_body))
+        unimplemented!("outgoing_value_write_body is not yet implemented for WASI p3 streams")
     }
 
     async fn drop(&mut self, rep: Resource<OutgoingValueEntry>) -> anyhow::Result<()> {
@@ -72,7 +58,7 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
     async fn incoming_value_consume_sync(
         &mut self,
         self_: Resource<IncomingValue>,
-    ) -> anyhow::Result<Result<IncomingValueSyncBody, Error>> {
+    ) -> anyhow::Result<Result<Vec<u8>, Error>> {
         self.observe_function_call(
             "blobstore::types::incoming_value",
             "incoming_value_consume_sync",
@@ -89,21 +75,13 @@ impl<Ctx: WorkerCtx> HostIncomingValue for DurableWorkerCtx<Ctx> {
 
     async fn incoming_value_consume_async(
         &mut self,
-        self_: Resource<IncomingValue>,
-    ) -> anyhow::Result<Result<Resource<IncomingValueAsyncBody>, Error>> {
+        _self_: Resource<IncomingValue>,
+    ) -> anyhow::Result<Result<StreamReader<u8>, Error>> {
         self.observe_function_call(
             "blobstore::types::incoming_value",
             "incoming_value_consume_async",
         );
-        let body = self
-            .as_wasi_view()
-            .table()
-            .get::<IncomingValueEntry>(&self_)?
-            .body
-            .clone();
-        let body: DynInputStream = Box::new(IncomingValueEntryStream::new(body));
-        let incoming_value_async_body = self.as_wasi_view().table().push(body)?;
-        Ok(Ok(incoming_value_async_body))
+        unimplemented!("incoming_value_consume_async is not yet implemented for WASI p3 streams")
     }
 
     async fn size(&mut self, self_: Resource<IncomingValue>) -> anyhow::Result<u64> {
@@ -158,44 +136,6 @@ impl OutgoingValueEntry {
     }
 }
 
-pub struct OutgoingValueEntryStream {
-    pub body: Arc<RwLock<Vec<u8>>>,
-}
-
-impl OutgoingValueEntryStream {
-    pub fn new(body: Arc<RwLock<Vec<u8>>>) -> Self {
-        Self { body }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-#[async_trait]
-impl Pollable for OutgoingValueEntryStream {
-    async fn ready(&mut self) {}
-}
-
-impl OutputStream for OutgoingValueEntryStream {
-    fn as_any(&self) -> &dyn Any {
-        OutgoingValueEntryStream::as_any(self)
-    }
-
-    fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
-        self.body.write().unwrap().extend_from_slice(&bytes);
-        Ok(())
-    }
-
-    fn flush(&mut self) -> StreamResult<()> {
-        Ok(())
-    }
-
-    fn check_write(&mut self) -> StreamResult<usize> {
-        Ok(usize::MAX)
-    }
-}
-
 pub struct IncomingValueEntry {
     body: Arc<RwLock<Vec<u8>>>,
 }
@@ -206,36 +146,6 @@ impl IncomingValueEntry {
         IncomingValueEntry {
             body: Arc::new(RwLock::new(body)),
         }
-    }
-}
-
-pub struct IncomingValueEntryStream {
-    body: Arc<RwLock<Vec<u8>>>,
-}
-
-impl IncomingValueEntryStream {
-    pub fn new(body: Arc<RwLock<Vec<u8>>>) -> IncomingValueEntryStream {
-        IncomingValueEntryStream { body }
-    }
-}
-
-#[async_trait]
-impl Pollable for IncomingValueEntryStream {
-    async fn ready(&mut self) {}
-}
-
-impl InputStream for IncomingValueEntryStream {
-    fn read(&mut self, size: usize) -> StreamResult<Bytes> {
-        let mut buf = vec![0u8; size];
-        let mut body = self.body.write().unwrap();
-        let size = std::cmp::min(buf.len(), body.len());
-        buf[..size].copy_from_slice(&body[..size]);
-        body.drain(..size);
-        Ok(buf.into())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

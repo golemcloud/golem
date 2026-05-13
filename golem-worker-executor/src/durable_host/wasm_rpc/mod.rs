@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable, Resolution};
-use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::durability::{HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::{
-    CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
-    HostWasmRpc, RpcError,
+    CancellationToken, DataValue, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
+    HostFutureInvokeResultWithStore, HostWasmRpc, RpcError,
 };
 use crate::services::HasWorker;
 use crate::services::environment_state::EnvironmentStateService;
-use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use anyhow::Error;
@@ -36,17 +35,15 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::{
-    GolemRpcCancellationTokenCancel, GolemRpcFutureInvokeResultCancel,
-    GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
-    GolemRpcWasmRpcNew, GolemRpcWasmRpcScheduleInvocation,
+    GolemRpcCancellationTokenCancel, GolemRpcFutureInvokeResultCancel, GolemRpcWasmRpcInvoke,
+    GolemRpcWasmRpcInvokeAndAwaitResult, GolemRpcWasmRpcNew, GolemRpcWasmRpcScheduleInvocation,
 };
 use golem_common::model::oplog::types::{SerializableInvokeResult, SerializableScheduleId};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
-    HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
-    HostResponse, HostResponseGolemRpcCreate, HostResponseGolemRpcInvokeAndAwait,
-    HostResponseGolemRpcInvokeGet, HostResponseGolemRpcScheduledInvocation,
-    HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure, PersistenceLevel,
+    DurableFunctionType, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
+    HostRequestGolemRpcScheduledInvocationCancellation, HostResponseGolemRpcCreate,
+    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcScheduledInvocation,
+    HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
@@ -69,12 +66,11 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{Instrument, error};
-use wasmtime::component::{Resource, ResourceTableError};
+use wasmtime::component::{Accessor, HasSelf, Resource, ResourceTableError};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
@@ -97,7 +93,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         >,
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         let mut env =
-            wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
+            self.get_environment()?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let agent_type = crate::preview2::golem::agent::host::Host::get_agent_type(
@@ -200,7 +196,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .map_err(wasmtime::Error::from)?;
 
         let mut env =
-            wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
+            self.get_environment()?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let own_agent_id = self.owned_agent_id().clone();
@@ -407,7 +403,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .map_err(wasmtime::Error::from)?;
 
         let mut env =
-            wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
+            self.get_environment()?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let own_agent_id = self.owned_agent_id().clone();
@@ -537,7 +533,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .map_err(wasmtime::Error::from)?;
 
         let mut env =
-            wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
+            self.get_environment()?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let own_agent_id = self.owned_agent_id().clone();
@@ -718,7 +714,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn schedule_invocation(
         &mut self,
         this: Resource<WasmRpcEntry>,
-        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<()> {
@@ -732,7 +728,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn schedule_cancelable_invocation(
         &mut self,
         this: Resource<WasmRpcEntry>,
-        datetime: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        datetime: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Resource<CancellationToken>> {
@@ -880,341 +876,22 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     }
 }
 
+// TODO(p3): port `HostFutureInvokeResult::get` (the previous `&mut self` body
+// removed below) to the `Accessor`-based `HostFutureInvokeResultWithStore::get`
+// pattern; it cannot be wrapped trivially because the existing logic awaits on
+// `&mut self` across many steps (`Durability::new`, `try_trigger_retry`,
+// `commit_oplog_and_update_state`, replay reads, etc.) which the `Accessor`
+// API cannot express directly.
+impl<Ctx: WorkerCtx> HostFutureInvokeResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn get<T: Send>(
+        _accessor: &Accessor<T, Self>,
+        _this: Resource<FutureInvokeResult>,
+    ) -> anyhow::Result<Result<DataValue, RpcError>> {
+        unimplemented!("HostFutureInvokeResultWithStore::get (p3 migration)")
+    }
+}
+
 impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
-    async fn subscribe(
-        &mut self,
-        this: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
-        self.observe_function_call("golem::rpc::future-invoke-result", "subscribe");
-        let parent_rep = this.rep();
-        let pollable = wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?;
-        let child_rep = pollable.rep();
-        let parent: Resource<FutureInvokeResult> = Resource::new_borrow(parent_rep);
-        let entry = self.table().get_mut(&parent)?;
-        entry.child_pollables.push(child_rep);
-        self.state
-            .rpc_pollable_to_parent
-            .insert(child_rep, parent_rep);
-        Ok(pollable)
-    }
-
-    async fn get(
-        &mut self,
-        this: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<
-        Option<
-            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-        >,
-    > {
-        self.observe_function_call("golem::rpc::future-invoke-result", "get");
-        let rpc = self.rpc();
-
-        let span_id = {
-            let entry = self.table().get_mut(&this)?;
-            let entry = entry
-                .payload
-                .as_any_mut()
-                .downcast_mut::<FutureInvokeResultState>()
-                .unwrap();
-            entry.span_id().clone()
-        };
-
-        if self.state.is_live() || self.state.snapshotting_mode.is_some() {
-            // Main state machine match
-            let stack = self.clone_as_inherited_stack(&span_id);
-
-            let in_atomic_region = self.in_atomic_region();
-            let allow_retry = !in_atomic_region;
-            let environment_state_service = self.state.environment_state_service.clone();
-            let environment_id = self.state.owned_agent_id.environment_id;
-            let default_retry_policy =
-                NamedRetryPolicy::default_from_config(&self.state.config.retry);
-            let agent_config_retry_policies = self.state.agent_config_retry_policies();
-            let runtime_retry_policy_mutations = self.state.runtime_retry_policy_mutations.clone();
-            let max_delay = self.durable_execution_state().max_in_function_retry_delay;
-            let worker = self.public_state.worker();
-            let execution_status = self.execution_status.clone();
-            let enrichment_agent_id = self.state.agent_id.clone();
-            let enrichment_idempotence = self.state.assume_idempotence;
-
-            let entry = self.table().get_mut(&this)?;
-            let entry = entry
-                .payload
-                .as_any_mut()
-                .downcast_mut::<FutureInvokeResultState>()
-                .unwrap();
-
-            #[allow(clippy::type_complexity)]
-            let (result, serializable_invoke_request, serializable_invoke_result, begin_index): (
-                Result<Option<Result<TypedSchemaValue, RpcError>>, anyhow::Error>,
-                HostRequestGolemRpcInvoke,
-                SerializableInvokeResult,
-                OplogIndex,
-            ) = match entry {
-                FutureInvokeResultState::Consumed {
-                    request,
-                    begin_index,
-                    ..
-                } => {
-                    let begin_index = *begin_index;
-                    let message = "future-invoke-result already consumed";
-                    (
-                        Err(anyhow::Error::new(ClassifiedHostError {
-                            kind: HostFailureKind::Permanent,
-                            message: message.to_string(),
-                        })),
-                        request.clone(),
-                        SerializableInvokeResult::Failed(message.to_string()),
-                        begin_index,
-                    )
-                }
-                FutureInvokeResultState::Pending {
-                    request,
-                    begin_index,
-                    ..
-                } => {
-                    let begin_index = *begin_index;
-
-                    (
-                        Ok(None),
-                        request.clone(),
-                        SerializableInvokeResult::Pending,
-                        begin_index,
-                    )
-                }
-                FutureInvokeResultState::Completed { .. } => {
-                    handle_completed_rpc_result(entry, &span_id)?
-                }
-                FutureInvokeResultState::Cancelled {
-                    request,
-                    span_id,
-                    begin_index,
-                } => {
-                    let begin_index = *begin_index;
-                    let request = request.clone();
-                    let rpc_error = InternalRpcError::ProtocolError {
-                        details: "Invocation cancelled".to_string(),
-                    };
-                    let serializable_result = SerializableInvokeResult::Completed(Err(
-                        rpc_error.clone().into(),
-                    ));
-                    *entry = FutureInvokeResultState::Consumed {
-                        request: request.clone(),
-                        span_id: span_id.clone(),
-                        begin_index,
-                    };
-                    (
-                        Ok(Some(Err(rpc_error.into()))),
-                        request,
-                        serializable_result,
-                        begin_index,
-                    )
-                }
-                FutureInvokeResultState::Deferred { .. } => {
-                    let enrichment = enrichment_agent_id
-                        .as_ref()
-                        .map(|id| (id, enrichment_idempotence));
-                    handle_deferred_rpc_dispatch(
-                        entry,
-                        rpc,
-                        stack,
-                        allow_retry,
-                        environment_state_service,
-                        environment_id,
-                        default_retry_policy,
-                        agent_config_retry_policies,
-                        runtime_retry_policy_mutations,
-                        enrichment,
-                        max_delay,
-                        worker,
-                        execution_status,
-                    )?
-                }
-            };
-
-            // For non-retried transient errors (e.g., from Err(anyhow::Error) path
-            // or non-RPC transient errors), fall back to trap+replay
-            let for_retry = match &result {
-                Err(err) => {
-                    let kind = err
-                        .downcast_ref::<ClassifiedHostError>()
-                        .map(|c| c.kind)
-                        .unwrap_or(HostFailureKind::Transient);
-                    if kind == HostFailureKind::Transient {
-                        Some((err.to_string(), kind))
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-
-            if let Some((message, kind)) = for_retry
-                && kind == HostFailureKind::Transient
-            {
-                self.state.current_retry_point = begin_index;
-                let failure = anyhow::Error::new(ClassifiedHostError { kind, message });
-                let mut properties = RetryProperties::new();
-                properties.set("error-type", PredicateValue::Text("transient".to_string()));
-                self.try_trigger_retry(failure, properties).await?;
-            }
-
-            if self.state.snapshotting_mode.is_none() {
-                let is_pending = matches!(
-                    serializable_invoke_result,
-                    SerializableInvokeResult::Pending
-                );
-
-                // The RPC invocation opens a durable scope at `begin_index` only when it is a
-                // non-idempotent `WriteRemote` (the usual case). When `assume_idempotence` is set no
-                // scope is opened and `begin_index` is just the pre-call index, not a scope `Start`,
-                // so this poll has no parent. `child_parent_start_index` resolves both cases.
-                let parent_start_index = self
-                    .state
-                    .child_parent_start_index(&DurableFunctionType::WriteRemote, begin_index);
-                self.append_completed_child_call(
-                    GolemRpcFutureInvokeResultGet::HOST_FUNCTION_NAME,
-                    &HostRequest::GolemRpcInvoke(serializable_invoke_request),
-                    &HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
-                        result: serializable_invoke_result,
-                    }),
-                    DurableFunctionType::WriteRemote,
-                    parent_start_index,
-                )
-                .await
-                .unwrap_or_else(|err| panic!("failed to serialize RPC response: {err}"));
-
-                if !is_pending {
-                    self.end_function(&DurableFunctionType::WriteRemote, begin_index)
-                        .await?;
-
-                    self.finish_span(&span_id).await?;
-                }
-
-                self.public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await;
-            }
-
-            match result {
-                Ok(Some(Ok(typed))) => {
-                    // Typed → untyped → bindings::DataValue at the
-                    // guest-facing boundary.
-                    let untyped = typed_rpc_output_to_untyped(&typed)?;
-                    let data_value: golem_common::model::agent::bindings::golem::agent::common::DataValue = untyped.into();
-                    Ok(Some(Ok(data_value)))
-                }
-                Ok(Some(Err(error))) => Ok(Some(Err(error))),
-                Ok(None) => Ok(None),
-                Err(err) => Err(err),
-            }
-        } else if self.state.persistence_level == PersistenceLevel::PersistNothing {
-            Err(WorkerExecutorError::runtime(
-                "Trying to replay an RPC call in a PersistNothing block",
-            )
-            .into())
-        } else {
-            // Propagate WorkerExecutorError via `?` (From) so the downcast
-            // survives the anyhow::Error chain — TrapType::from_error
-            // classifies UnexpectedOplogEntry as non-retriable.
-            //
-            // Each poll persists a completed RPC durable call as a `Start` + `End` pair (see the
-            // live branch's `append_completed_child_call`). Replay it through the concurrent
-            // resolver: claim the call's `Start` — validating the function identity the `End` does
-            // not carry — and await the matching `End` instead of reading the pair positionally.
-            let begin_index = {
-                let entry = self.table().get_mut(&this)?;
-                let entry = entry
-                    .payload
-                    .as_any_mut()
-                    .downcast_mut::<FutureInvokeResultState>()
-                    .unwrap();
-                entry.begin_index()
-            };
-            let claim = self
-                .state
-                .replay_state
-                .claim_concurrent_start(
-                    &GolemRpcFutureInvokeResultGet::HOST_FUNCTION_NAME,
-                    &DurableFunctionType::WriteRemote,
-                )
-                .await
-                .map_err(anyhow::Error::from)?;
-            let resolution = self
-                .state
-                .replay_state
-                .await_resolution(claim)
-                .await
-                .map_err(anyhow::Error::from)?;
-
-            let serialized_invoke_result = match resolution {
-                Resolution::Completed { response, .. } => {
-                    let response_payload = response.ok_or_else(|| {
-                        anyhow::Error::from(WorkerExecutorError::unexpected_oplog_entry(
-                            "End { response: Some(..) }",
-                            "End { response: None }".to_string(),
-                        ))
-                    })?;
-                    let response = self
-                        .state
-                        .oplog
-                        .download_payload(response_payload)
-                        .await
-                        .map_err(|err| {
-                            WorkerExecutorError::runtime(format!(
-                                "Failed to download golem::rpc::future-invoke-result oplog payload: {err}"
-                            ))
-                        })?;
-
-                    match response {
-                        HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
-                            result,
-                        }) => result,
-                        other => {
-                            return Err(anyhow::Error::from(
-                                WorkerExecutorError::unexpected_oplog_entry(
-                                    "HostResponse::GolemRpcInvokeGet",
-                                    format!("{other:?}"),
-                                ),
-                            ));
-                        }
-                    }
-                }
-                Resolution::Cancelled { cancelled_idx, .. } => {
-                    return Err(anyhow::Error::from(
-                        WorkerExecutorError::unexpected_oplog_entry(
-                            "End",
-                            format!("Cancelled at {cancelled_idx}"),
-                        ),
-                    ));
-                }
-            };
-
-            if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
-                self.end_function(&DurableFunctionType::WriteRemote, begin_index)
-                    .await?;
-
-                self.finish_span(&span_id).await?;
-            }
-
-            match serialized_invoke_result {
-                SerializableInvokeResult::Pending => Ok(None),
-                SerializableInvokeResult::Completed(result) => match result {
-                    Ok(untyped) => {
-                        let data_value: golem_common::model::agent::bindings::golem::agent::common::DataValue = untyped.into();
-                        Ok(Some(Ok(data_value)))
-                    }
-                    Err(error) => {
-                        let rpc_error: InternalRpcError = error.into();
-                        let rpc_error: RpcError = rpc_error.into();
-                        Ok(Some(Err(rpc_error)))
-                    }
-                },
-                SerializableInvokeResult::Failed(error) => Err(anyhow::anyhow!(error)),
-            }
-        }
-    }
 
     async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::future-invoke-result", "cancel");

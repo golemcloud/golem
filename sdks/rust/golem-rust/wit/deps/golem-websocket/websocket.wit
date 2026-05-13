@@ -1,8 +1,6 @@
 package golem:websocket@1.5.0;
 
 interface client {
-  use wasi:io/poll@0.2.3.{pollable};
-
   variant error {
     connection-failure(string),
     send-failure(string),
@@ -44,8 +42,5 @@ interface client {
 
     /// Send a close frame with optional code and reason
     close: func(code: option<u16>, reason: option<string>) -> result<_, error>;
-
-    /// Returns a pollable that resolves when a message is available to read
-    subscribe: func() -> pollable;
   }
 }

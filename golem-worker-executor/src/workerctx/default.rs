@@ -648,7 +648,7 @@ impl HostWasmRpc for Context {
     async fn schedule_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<()> {
@@ -660,7 +660,7 @@ impl HostWasmRpc for Context {
     async fn schedule_cancelable_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Resource<CancellationToken>> {
@@ -675,24 +675,6 @@ impl HostWasmRpc for Context {
 }
 
 impl HostFutureInvokeResult for Context {
-    async fn subscribe(
-        &mut self,
-        self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
-        HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
-    }
-
-    async fn get(
-        &mut self,
-        self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<
-        Option<
-            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-        >,
-    > {
-        HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
-    }
-
     async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::cancel(&mut self.durable_ctx, this).await
     }
@@ -773,19 +755,20 @@ impl AgentHost for Context {
     }
 }
 
-impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
-    fn get_environment(
-        &mut self,
-    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
-        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
-    }
+// TODO(p3) Blocker 3: durable cli::environment::Host implementation removed during the p2 -> p3
+// migration. The bulk `wasmtime_wasi::p3::add_to_linker` call now provides the default p3
+// environment host; durable instrumentation will need to be re-introduced via the new
+// accessor-based pattern.
 
-    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
-        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
+impl wasmtime_wasi::WasiView for Context {
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        self.durable_ctx.wasi_ctx_view()
     }
+}
 
-    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
-        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
+impl wasmtime_wasi_http::p3::WasiHttpView for Context {
+    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
+        self.durable_ctx.as_wasi_http_view()
     }
 }
 
@@ -927,7 +910,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.as_wasi_view()
     }
 
-    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
+    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
         self.durable_ctx.as_wasi_http_view()
     }
 

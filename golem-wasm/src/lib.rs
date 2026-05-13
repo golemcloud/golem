@@ -102,8 +102,7 @@ pub use golem_core_1_5_x::types::{
 #[cfg(feature = "guest")]
 pub use wasip2::io::poll::Pollable;
 
-#[cfg(feature = "host")]
-pub use wasmtime_wasi::p2::DynPollable;
+// TODO(p3) Blocker 1: pollables removed in p3; FutureInvokeResultEntry must be exposed via the p3 accessor pattern instead.
 
 #[cfg(feature = "host")]
 mod generated {
@@ -118,8 +117,7 @@ mod generated {
         require_store_data_send: true,
         anyhow: true,
         with: {
-            "wasi:io/poll": wasmtime_wasi::p2::bindings::io::poll,
-            "wasi:clocks/wall-clock": wasmtime_wasi::p2::bindings::clocks::wall_clock,
+            "wasi:clocks/system-clock": wasmtime_wasi::p3::bindings::clocks::system_clock,
         },
         wasmtime_crate: ::wasmtime,
     });
@@ -183,20 +181,9 @@ pub struct FutureInvokeResultEntry {
     pub drop_pending: bool,
 }
 
-#[cfg(feature = "host")]
-#[async_trait::async_trait]
-impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
-    async fn ready(&mut self) {
-        self.payload.ready().await
-    }
-}
+// TODO(p3) Blocker 1: p2 Pollable impl removed; FutureInvokeResultEntry needs the p3 accessor-based async readiness pattern.
 
-#[cfg(feature = "host")]
-impl wasmtime_wasi::DynamicPollable for FutureInvokeResultEntry {
-    fn override_index(&self) -> Option<u32> {
-        None
-    }
-}
+// TODO(p3) Blocker 1: DynamicPollable impl removed (depends on the now-gone p2 Pollable trait); revisit with the p3 accessor pattern.
 
 #[cfg(feature = "host")]
 pub struct CancellationTokenEntry {

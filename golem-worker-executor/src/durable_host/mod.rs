@@ -16,28 +16,20 @@
 // implementing the Golem specific instrumentation on top of it.
 
 pub mod blobstore;
-mod cli;
-mod clocks;
 mod concurrent;
 mod config;
 pub mod durability;
-mod filesystem;
 pub mod golem;
-pub mod http;
-pub mod io;
 pub mod keyvalue;
 mod logging;
 pub mod quota;
-mod random;
 pub mod rdbms;
 mod replay_state;
-mod sockets;
 pub mod wasm_rpc;
 pub mod websocket;
 
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
-use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::storage::{
@@ -174,69 +166,16 @@ use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
-use wasmtime_wasi::p2::FsResult;
-use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView,
     WasiView,
 };
-use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
-use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
-use wasmtime_wasi_http::p2::{
-    BodyCompletionReceiver, HttpResult, WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
-    default_send_request_with_pool,
-};
+use wasmtime_wasi_http::p3::{WasiHttpCtxView, WasiHttpView};
+// TODO(p3) Blocker 3: durable HTTP machinery (HttpRequestState etc.) needs to be
+// re-implemented against p3-native wasi-http hooks. The previous code referenced
+// `wasmtime_wasi_http::p2::types::OutgoingRequestConfig` which no longer exists in
+// our build surface; the helper method that produced it has been removed.
 use wasmtime_wasi_http::{HttpConnectionPool, WasiHttpCtx};
-
-/// Hooks providing the custom HTTP request handling needed for durable
-/// execution. Stored on `DurableWorkerCtx` and exposed via `WasiHttpCtxView`
-/// for `wasmtime-wasi-http`.
-pub struct DurableHttpHooks {
-    /// Connection pool used for outgoing HTTP requests. Mirror of
-    /// `WasiHttpCtx::connection_pool` so that `WasiHttpHooks::send_request`
-    /// can construct the deferred future without re-borrowing `WasiHttpCtx`.
-    pub connection_pool: Option<HttpConnectionPool>,
-    /// Shared replay flag that durable execution toggles when transitioning
-    /// between live and replay modes. When `true`, outgoing HTTP requests are
-    /// deferred so that they can be replayed from the oplog instead.
-    pub is_replay: Arc<AtomicBool>,
-}
-
-impl WasiHttpHooks for DurableHttpHooks {
-    fn send_request(
-        &mut self,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-        body_completion: Option<BodyCompletionReceiver>,
-    ) -> HttpResult<HostFutureIncomingResponse> {
-        let connection_pool = self.connection_pool.clone();
-        if self.is_replay.load(std::sync::atomic::Ordering::Acquire) {
-            // If this is a replay, we must not actually send the request, but we have to store it in the
-            // FutureIncomingResponse because it is possible that there wasn't any response recorded in the oplog.
-            // If that is the case, the request has to be sent as soon as we get into live mode and trying to await
-            // or poll the response future.
-            Ok(HostFutureIncomingResponse::deferred(Box::new(move || {
-                Ok(default_send_request_with_pool(
-                    request,
-                    config,
-                    body_completion,
-                    connection_pool,
-                ))
-            })))
-        } else {
-            Ok(default_send_request_with_pool(
-                request,
-                config,
-                body_completion,
-                connection_pool,
-            ))
-        }
-    }
-
-    fn connection_pool(&self) -> Option<&HttpConnectionPool> {
-        self.connection_pool.as_ref()
-    }
-}
 
 /// Controls how strictly the host filters side-effects performed by user code during an
 /// agent invocation.
@@ -255,14 +194,12 @@ pub enum InvocationStrictness {
     /// trap immediately with [`AgentError::ReadOnlyViolation`].
     ReadOnly,
 }
-
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
     wasi: Arc<Mutex<WasiCtx>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
     io_ctx: Arc<Mutex<IoCtx>>,
     wasi_http: WasiHttpCtx,
-    http_hooks: DurableHttpHooks,
     pub owned_agent_id: OwnedAgentId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
@@ -417,9 +354,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             HashMap::new()
         };
 
-        let stdin = ManagedStdIn::disabled();
-        let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
-        let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
+        // TODO(p3) Blocker 3: ManagedStd{In,Out,Err} from durable_host/io were the
+        // mechanism for capturing/redirecting worker stdio (events, log forwarding,
+        // disabled stdin during replay). They are temporarily replaced with raw
+        // wasmtime-wasi async streams to keep the workspace compiling. Restore the
+        // managed streams when WASI durability is re-implemented under p3.
+        let stdin = wasmtime_wasi::cli::AsyncStdinStream::new(tokio::io::empty());
+        let stdout = wasmtime_wasi::cli::AsyncStdoutStream::new(64 * 1024, tokio::io::stdout());
+        let stderr = wasmtime_wasi::cli::AsyncStdoutStream::new(64 * 1024, tokio::io::stderr());
         let suspend_threshold = match execution_status.read().unwrap().agent_mode() {
             AgentMode::Durable => config.suspend.suspend_after,
             AgentMode::Ephemeral => config.suspend.ephemeral_max_sleep,
@@ -436,16 +378,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
         let mut wasi_http = WasiHttpCtx::new();
         wasi_http.connection_pool = http_connection_pool.clone();
-        let http_hooks = DurableHttpHooks {
-            connection_pool: http_connection_pool,
-            is_replay: Arc::new(AtomicBool::new(false)),
-        };
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),
             io_ctx: Arc::new(Mutex::new(io_ctx)),
             wasi_http,
-            http_hooks,
             owned_agent_id: owned_agent_id.clone(),
             websocket_connection_pool,
             public_state: PublicDurableWorkerState {
@@ -545,32 +482,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn check_if_file_is_readonly(
-        &mut self,
-        fd: &Resource<Descriptor>,
-    ) -> Result<bool, ResourceTableError> {
-        let table = Arc::get_mut(&mut self.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail");
-
-        match table.get(fd)? {
-            Descriptor::File(f) => {
-                let read_only = self.state.read_only_paths.read().unwrap().contains(&f.path);
-
-                Ok(read_only)
-            }
-            Descriptor::Dir(_) => Ok(false),
-        }
-    }
-
-    fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
-        if self.check_if_file_is_readonly(fd)? {
-            Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())
-        } else {
-            Ok(())
-        }
-    }
+    // TODO(p3) Blocker 3: re-implement filesystem read-only enforcement against p3 filesystem types.
+    // The previous implementation depended on `wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor`,
+    // which has been removed as part of the p2 -> p3 WASI migration.
 
     fn io_ctx(&mut self) -> &mut IoCtx {
         Arc::get_mut(&mut self.io_ctx)
@@ -626,14 +540,40 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         DurableWorkerCtxWasiView(self)
     }
 
+    pub fn wasi_ctx_view(&mut self) -> WasiCtxView<'_> {
+        let inner = &mut *self;
+        let ctx = Arc::get_mut(&mut inner.wasi)
+            .expect("WasiCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("WasiCtx mutex must never fail");
+        let table = Arc::get_mut(&mut inner.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        let io_ctx = Arc::get_mut(&mut inner.io_ctx)
+            .expect("IoCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("IoCtx mutex must never fail");
+        WasiCtxView { ctx, table, io_ctx }
+    }
+
+    /// Reads the worker's WASI environment variables synchronously by going
+    /// through the p3 `cli::environment` Host implementation provided by
+    /// wasmtime-wasi. Replaces the previous `wasmtime_wasi::p2::bindings::cli::
+    /// environment::Host::get_environment(self).await` call sites that no
+    /// longer exist after the p2 durable wrappers were removed.
+    pub fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
+        use wasmtime_wasi::cli::WasiCliView;
+        let mut view = self.as_wasi_view();
+        let mut cli_view = WasiCliView::cli(&mut view);
+        wasmtime_wasi::p3::bindings::cli::environment::Host::get_environment(&mut cli_view)
+    }
+
     pub fn as_wasi_http_view(&mut self) -> WasiHttpCtxView<'_> {
-        // Sync the replay flag observed by `WasiHttpHooks::send_request` with
-        // the current durable execution state before exposing the view to
-        // wasmtime-wasi-http.
-        let is_replay = self.state.is_replay();
-        self.http_hooks
-            .is_replay
-            .store(is_replay, std::sync::atomic::Ordering::Release);
+        // TODO(p3) Blocker 3: durable HTTP semantics regressed during the p2 -> p3
+        // migration. The custom `WasiHttpHooks` implementation that intercepted
+        // outgoing requests for replay/oplog handling will need to be ported to
+        // p3's accessor-based hooks.
         let inner = &mut *self;
         let table = Arc::get_mut(&mut inner.table)
             .expect("ResourceTable is shared and cannot be borrowed mutably")
@@ -642,7 +582,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         WasiHttpCtxView {
             ctx: &mut inner.wasi_http,
             table,
-            hooks: &mut inner.http_hooks,
+            hooks: wasmtime_wasi_http::p3::default_hooks(),
         }
     }
 
@@ -4224,16 +4164,11 @@ pub(crate) struct HttpRequestState {
     pub retry: HttpRetryEligibility,
 }
 
-impl HttpRequestState {
-    pub fn outgoing_request_config(&self) -> OutgoingRequestConfig {
-        OutgoingRequestConfig {
-            use_tls: self.use_tls,
-            connect_timeout: self.connect_timeout,
-            first_byte_timeout: self.first_byte_timeout,
-            between_bytes_timeout: self.between_bytes_timeout,
-        }
-    }
-}
+// TODO(p3) Blocker 3: `outgoing_request_config()` returned a
+// `wasmtime_wasi_http::p2::types::OutgoingRequestConfig` and was unused after the
+// p2 durable wrappers were deleted. Re-introduce a p3-native equivalent (likely on
+// the new `wasmtime_wasi_http::p3` hooks API) when WASI HTTP durability is rebuilt.
+impl HttpRequestState {}
 
 /// Extracted view of the begin_index and request from an HttpRequestState,
 /// used when processing outgoing body output stream operations.

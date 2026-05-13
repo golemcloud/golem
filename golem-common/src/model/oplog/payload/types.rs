@@ -33,7 +33,7 @@ use golem_wasm::analysis::AnalysedType;
 use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
 use golem_wasm::{FromValue, IntoValue, NodeIndex, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
-use http::{HeaderName, HeaderValue, Version};
+use http::Version;
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
 use sqlx::ValueRef;
@@ -48,16 +48,11 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 use wasmtime_wasi::StreamError;
-use wasmtime_wasi::p2::bindings::filesystem;
-use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
-use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
-use wasmtime_wasi::p2::{FsError, SocketError};
-use wasmtime_wasi_http::FieldMap;
-use wasmtime_wasi_http::p2::bindings::http::types::{
-    DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
-};
-use wasmtime_wasi_http::p2::body::HostIncomingBody;
-use wasmtime_wasi_http::p2::types::HostIncomingResponse;
+
+// TODO(p3) Blocker 3: removed all wasmtime p2 imports (filesystem, sockets, FsError, SocketError,
+// http types, HostIncomingBody, HostIncomingResponse, FieldMap) and the conversions that depended
+// on them. They will be re-added against p3 wasmtime types when HTTP / filesystem / sockets
+// durability is re-implemented on top of WASI p3.
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
@@ -75,19 +70,19 @@ pub struct SerializableDateTime {
     pub nanoseconds: u32,
 }
 
-impl From<golem_wasm::wasi::clocks::wall_clock::Datetime> for SerializableDateTime {
-    fn from(value: golem_wasm::wasi::clocks::wall_clock::Datetime) -> Self {
+impl From<golem_wasm::wasi::clocks::system_clock::Instant> for SerializableDateTime {
+    fn from(value: golem_wasm::wasi::clocks::system_clock::Instant) -> Self {
         Self {
-            seconds: value.seconds,
+            seconds: value.seconds.max(0) as u64,
             nanoseconds: value.nanoseconds,
         }
     }
 }
 
-impl From<SerializableDateTime> for wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
+impl From<SerializableDateTime> for wasmtime_wasi::p3::bindings::clocks::system_clock::Instant {
     fn from(value: SerializableDateTime) -> Self {
         Self {
-            seconds: value.seconds,
+            seconds: value.seconds as i64,
             nanoseconds: value.nanoseconds,
         }
     }
@@ -136,69 +131,106 @@ pub enum FileSystemError {
 }
 
 impl FileSystemError {
-    pub fn from_result(result: Result<filesystem::types::ErrorCode, String>) -> Self {
+    pub fn from_result(result: Result<SerializableFsErrorCode, String>) -> Self {
         match result {
-            Ok(error_code) => Self::ErrorCode(SerializableFsErrorCode(error_code)),
+            Ok(error_code) => Self::ErrorCode(error_code),
             Err(msg) => FileSystemError::Generic(msg),
         }
     }
 }
 
-impl From<FileSystemError> for FsError {
-    fn from(value: FileSystemError) -> Self {
-        match value {
-            FileSystemError::ErrorCode(SerializableFsErrorCode(error_code)) => error_code.into(),
-            FileSystemError::Generic(error) => FsError::trap(wasmtime::Error::msg(error)),
-        }
-    }
-}
+// TODO(p3) Blocker 3: removed `impl From<FileSystemError> for wasmtime_wasi::p2::FsError`
+// pending p3-native filesystem durability support.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SerializableFsErrorCode(filesystem::types::ErrorCode);
+/// Mirror of the WASI filesystem `error-code` variant. Kept as a local enum so the oplog
+/// payload is not coupled to a specific wasmtime bindings version.
+///
+/// The numeric tags below MUST match the previous `SerializableFsErrorCode` binary layout
+/// to preserve oplog backward compatibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SerializableFsErrorCode {
+    Access,
+    WouldBlock,
+    Already,
+    BadDescriptor,
+    Busy,
+    Deadlock,
+    Quota,
+    Exist,
+    FileTooLarge,
+    IllegalByteSequence,
+    InProgress,
+    Interrupted,
+    Invalid,
+    Io,
+    IsDirectory,
+    Loop,
+    TooManyLinks,
+    MessageSize,
+    NameTooLong,
+    NoDevice,
+    NoEntry,
+    NoLock,
+    InsufficientMemory,
+    InsufficientSpace,
+    NotDirectory,
+    NotEmpty,
+    NotRecoverable,
+    Unsupported,
+    NoTty,
+    NoSuchDevice,
+    Overflow,
+    NotPermitted,
+    Pipe,
+    ReadOnly,
+    InvalidSeek,
+    TextFileBusy,
+    CrossDevice,
+}
 
 impl BinarySerializer for SerializableFsErrorCode {
     fn serialize<Output: BinaryOutput>(
         &self,
         context: &mut SerializationContext<Output>,
     ) -> desert_rust::Result<()> {
-        match &self.0 {
-            filesystem::types::ErrorCode::Access => context.write_u8(0),
-            filesystem::types::ErrorCode::WouldBlock => context.write_u8(1),
-            filesystem::types::ErrorCode::Already => context.write_u8(2),
-            filesystem::types::ErrorCode::BadDescriptor => context.write_u8(3),
-            filesystem::types::ErrorCode::Busy => context.write_u8(4),
-            filesystem::types::ErrorCode::Deadlock => context.write_u8(5),
-            filesystem::types::ErrorCode::Quota => context.write_u8(6),
-            filesystem::types::ErrorCode::Exist => context.write_u8(7),
-            filesystem::types::ErrorCode::FileTooLarge => context.write_u8(8),
-            filesystem::types::ErrorCode::IllegalByteSequence => context.write_u8(9),
-            filesystem::types::ErrorCode::InProgress => context.write_u8(10),
-            filesystem::types::ErrorCode::Interrupted => context.write_u8(11),
-            filesystem::types::ErrorCode::Invalid => context.write_u8(12),
-            filesystem::types::ErrorCode::Io => context.write_u8(13),
-            filesystem::types::ErrorCode::IsDirectory => context.write_u8(14),
-            filesystem::types::ErrorCode::Loop => context.write_u8(15),
-            filesystem::types::ErrorCode::TooManyLinks => context.write_u8(16),
-            filesystem::types::ErrorCode::MessageSize => context.write_u8(17),
-            filesystem::types::ErrorCode::NameTooLong => context.write_u8(18),
-            filesystem::types::ErrorCode::NoDevice => context.write_u8(19),
-            filesystem::types::ErrorCode::NoEntry => context.write_u8(20),
-            filesystem::types::ErrorCode::NoLock => context.write_u8(21),
-            filesystem::types::ErrorCode::InsufficientMemory => context.write_u8(22),
-            filesystem::types::ErrorCode::InsufficientSpace => context.write_u8(23),
-            filesystem::types::ErrorCode::NotDirectory => context.write_u8(24),
-            filesystem::types::ErrorCode::NotEmpty => context.write_u8(25),
-            filesystem::types::ErrorCode::NotRecoverable => context.write_u8(26),
-            filesystem::types::ErrorCode::Unsupported => context.write_u8(27),
-            filesystem::types::ErrorCode::NoTty => context.write_u8(28),
-            filesystem::types::ErrorCode::NoSuchDevice => context.write_u8(29),
-            filesystem::types::ErrorCode::Overflow => context.write_u8(30),
-            filesystem::types::ErrorCode::NotPermitted => context.write_u8(31),
-            filesystem::types::ErrorCode::Pipe => context.write_u8(32),
-            filesystem::types::ErrorCode::ReadOnly => context.write_u8(33),
-            filesystem::types::ErrorCode::InvalidSeek => context.write_u8(34),
-            filesystem::types::ErrorCode::TextFileBusy => context.write_u8(35),
-            filesystem::types::ErrorCode::CrossDevice => context.write_u8(36),
+        match self {
+            SerializableFsErrorCode::Access => context.write_u8(0),
+            SerializableFsErrorCode::WouldBlock => context.write_u8(1),
+            SerializableFsErrorCode::Already => context.write_u8(2),
+            SerializableFsErrorCode::BadDescriptor => context.write_u8(3),
+            SerializableFsErrorCode::Busy => context.write_u8(4),
+            SerializableFsErrorCode::Deadlock => context.write_u8(5),
+            SerializableFsErrorCode::Quota => context.write_u8(6),
+            SerializableFsErrorCode::Exist => context.write_u8(7),
+            SerializableFsErrorCode::FileTooLarge => context.write_u8(8),
+            SerializableFsErrorCode::IllegalByteSequence => context.write_u8(9),
+            SerializableFsErrorCode::InProgress => context.write_u8(10),
+            SerializableFsErrorCode::Interrupted => context.write_u8(11),
+            SerializableFsErrorCode::Invalid => context.write_u8(12),
+            SerializableFsErrorCode::Io => context.write_u8(13),
+            SerializableFsErrorCode::IsDirectory => context.write_u8(14),
+            SerializableFsErrorCode::Loop => context.write_u8(15),
+            SerializableFsErrorCode::TooManyLinks => context.write_u8(16),
+            SerializableFsErrorCode::MessageSize => context.write_u8(17),
+            SerializableFsErrorCode::NameTooLong => context.write_u8(18),
+            SerializableFsErrorCode::NoDevice => context.write_u8(19),
+            SerializableFsErrorCode::NoEntry => context.write_u8(20),
+            SerializableFsErrorCode::NoLock => context.write_u8(21),
+            SerializableFsErrorCode::InsufficientMemory => context.write_u8(22),
+            SerializableFsErrorCode::InsufficientSpace => context.write_u8(23),
+            SerializableFsErrorCode::NotDirectory => context.write_u8(24),
+            SerializableFsErrorCode::NotEmpty => context.write_u8(25),
+            SerializableFsErrorCode::NotRecoverable => context.write_u8(26),
+            SerializableFsErrorCode::Unsupported => context.write_u8(27),
+            SerializableFsErrorCode::NoTty => context.write_u8(28),
+            SerializableFsErrorCode::NoSuchDevice => context.write_u8(29),
+            SerializableFsErrorCode::Overflow => context.write_u8(30),
+            SerializableFsErrorCode::NotPermitted => context.write_u8(31),
+            SerializableFsErrorCode::Pipe => context.write_u8(32),
+            SerializableFsErrorCode::ReadOnly => context.write_u8(33),
+            SerializableFsErrorCode::InvalidSeek => context.write_u8(34),
+            SerializableFsErrorCode::TextFileBusy => context.write_u8(35),
+            SerializableFsErrorCode::CrossDevice => context.write_u8(36),
         }
         Ok(())
     }
@@ -208,93 +240,93 @@ impl BinaryDeserializer for SerializableFsErrorCode {
     fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
         let tag = context.read_u8()?;
         let error_code = match tag {
-            0 => filesystem::types::ErrorCode::Access,
-            1 => filesystem::types::ErrorCode::WouldBlock,
-            2 => filesystem::types::ErrorCode::Already,
-            3 => filesystem::types::ErrorCode::BadDescriptor,
-            4 => filesystem::types::ErrorCode::Busy,
-            5 => filesystem::types::ErrorCode::Deadlock,
-            6 => filesystem::types::ErrorCode::Quota,
-            7 => filesystem::types::ErrorCode::Exist,
-            8 => filesystem::types::ErrorCode::FileTooLarge,
-            9 => filesystem::types::ErrorCode::IllegalByteSequence,
-            10 => filesystem::types::ErrorCode::InProgress,
-            11 => filesystem::types::ErrorCode::Interrupted,
-            12 => filesystem::types::ErrorCode::Invalid,
-            13 => filesystem::types::ErrorCode::Io,
-            14 => filesystem::types::ErrorCode::IsDirectory,
-            15 => filesystem::types::ErrorCode::Loop,
-            16 => filesystem::types::ErrorCode::TooManyLinks,
-            17 => filesystem::types::ErrorCode::MessageSize,
-            18 => filesystem::types::ErrorCode::NameTooLong,
-            19 => filesystem::types::ErrorCode::NoDevice,
-            20 => filesystem::types::ErrorCode::NoEntry,
-            21 => filesystem::types::ErrorCode::NoLock,
-            22 => filesystem::types::ErrorCode::InsufficientMemory,
-            23 => filesystem::types::ErrorCode::InsufficientSpace,
-            24 => filesystem::types::ErrorCode::NotDirectory,
-            25 => filesystem::types::ErrorCode::NotEmpty,
-            26 => filesystem::types::ErrorCode::NotRecoverable,
-            27 => filesystem::types::ErrorCode::Unsupported,
-            28 => filesystem::types::ErrorCode::NoTty,
-            29 => filesystem::types::ErrorCode::NoSuchDevice,
-            30 => filesystem::types::ErrorCode::Overflow,
-            31 => filesystem::types::ErrorCode::NotPermitted,
-            32 => filesystem::types::ErrorCode::Pipe,
-            33 => filesystem::types::ErrorCode::ReadOnly,
-            34 => filesystem::types::ErrorCode::InvalidSeek,
-            35 => filesystem::types::ErrorCode::TextFileBusy,
-            36 => filesystem::types::ErrorCode::CrossDevice,
+            0 => SerializableFsErrorCode::Access,
+            1 => SerializableFsErrorCode::WouldBlock,
+            2 => SerializableFsErrorCode::Already,
+            3 => SerializableFsErrorCode::BadDescriptor,
+            4 => SerializableFsErrorCode::Busy,
+            5 => SerializableFsErrorCode::Deadlock,
+            6 => SerializableFsErrorCode::Quota,
+            7 => SerializableFsErrorCode::Exist,
+            8 => SerializableFsErrorCode::FileTooLarge,
+            9 => SerializableFsErrorCode::IllegalByteSequence,
+            10 => SerializableFsErrorCode::InProgress,
+            11 => SerializableFsErrorCode::Interrupted,
+            12 => SerializableFsErrorCode::Invalid,
+            13 => SerializableFsErrorCode::Io,
+            14 => SerializableFsErrorCode::IsDirectory,
+            15 => SerializableFsErrorCode::Loop,
+            16 => SerializableFsErrorCode::TooManyLinks,
+            17 => SerializableFsErrorCode::MessageSize,
+            18 => SerializableFsErrorCode::NameTooLong,
+            19 => SerializableFsErrorCode::NoDevice,
+            20 => SerializableFsErrorCode::NoEntry,
+            21 => SerializableFsErrorCode::NoLock,
+            22 => SerializableFsErrorCode::InsufficientMemory,
+            23 => SerializableFsErrorCode::InsufficientSpace,
+            24 => SerializableFsErrorCode::NotDirectory,
+            25 => SerializableFsErrorCode::NotEmpty,
+            26 => SerializableFsErrorCode::NotRecoverable,
+            27 => SerializableFsErrorCode::Unsupported,
+            28 => SerializableFsErrorCode::NoTty,
+            29 => SerializableFsErrorCode::NoSuchDevice,
+            30 => SerializableFsErrorCode::Overflow,
+            31 => SerializableFsErrorCode::NotPermitted,
+            32 => SerializableFsErrorCode::Pipe,
+            33 => SerializableFsErrorCode::ReadOnly,
+            34 => SerializableFsErrorCode::InvalidSeek,
+            35 => SerializableFsErrorCode::TextFileBusy,
+            36 => SerializableFsErrorCode::CrossDevice,
             other => {
                 return Err(desert_rust::Error::DeserializationFailure(format!(
                     "Invalid tag for SerializableFsErrorCode: {other}"
                 )));
             }
         };
-        Ok(SerializableFsErrorCode(error_code))
+        Ok(error_code)
     }
 }
 
 impl IntoValue for SerializableFsErrorCode {
     fn into_value(self) -> Value {
-        match &self.0 {
-            filesystem::types::ErrorCode::Access => Value::Enum(0),
-            filesystem::types::ErrorCode::WouldBlock => Value::Enum(1),
-            filesystem::types::ErrorCode::Already => Value::Enum(2),
-            filesystem::types::ErrorCode::BadDescriptor => Value::Enum(3),
-            filesystem::types::ErrorCode::Busy => Value::Enum(4),
-            filesystem::types::ErrorCode::Deadlock => Value::Enum(5),
-            filesystem::types::ErrorCode::Quota => Value::Enum(6),
-            filesystem::types::ErrorCode::Exist => Value::Enum(7),
-            filesystem::types::ErrorCode::FileTooLarge => Value::Enum(8),
-            filesystem::types::ErrorCode::IllegalByteSequence => Value::Enum(9),
-            filesystem::types::ErrorCode::InProgress => Value::Enum(10),
-            filesystem::types::ErrorCode::Interrupted => Value::Enum(11),
-            filesystem::types::ErrorCode::Invalid => Value::Enum(12),
-            filesystem::types::ErrorCode::Io => Value::Enum(13),
-            filesystem::types::ErrorCode::IsDirectory => Value::Enum(14),
-            filesystem::types::ErrorCode::Loop => Value::Enum(15),
-            filesystem::types::ErrorCode::TooManyLinks => Value::Enum(16),
-            filesystem::types::ErrorCode::MessageSize => Value::Enum(17),
-            filesystem::types::ErrorCode::NameTooLong => Value::Enum(18),
-            filesystem::types::ErrorCode::NoDevice => Value::Enum(19),
-            filesystem::types::ErrorCode::NoEntry => Value::Enum(20),
-            filesystem::types::ErrorCode::NoLock => Value::Enum(21),
-            filesystem::types::ErrorCode::InsufficientMemory => Value::Enum(22),
-            filesystem::types::ErrorCode::InsufficientSpace => Value::Enum(23),
-            filesystem::types::ErrorCode::NotDirectory => Value::Enum(24),
-            filesystem::types::ErrorCode::NotEmpty => Value::Enum(25),
-            filesystem::types::ErrorCode::NotRecoverable => Value::Enum(26),
-            filesystem::types::ErrorCode::Unsupported => Value::Enum(27),
-            filesystem::types::ErrorCode::NoTty => Value::Enum(28),
-            filesystem::types::ErrorCode::NoSuchDevice => Value::Enum(29),
-            filesystem::types::ErrorCode::Overflow => Value::Enum(30),
-            filesystem::types::ErrorCode::NotPermitted => Value::Enum(31),
-            filesystem::types::ErrorCode::Pipe => Value::Enum(32),
-            filesystem::types::ErrorCode::ReadOnly => Value::Enum(33),
-            filesystem::types::ErrorCode::InvalidSeek => Value::Enum(34),
-            filesystem::types::ErrorCode::TextFileBusy => Value::Enum(35),
-            filesystem::types::ErrorCode::CrossDevice => Value::Enum(36),
+        match self {
+            SerializableFsErrorCode::Access => Value::Enum(0),
+            SerializableFsErrorCode::WouldBlock => Value::Enum(1),
+            SerializableFsErrorCode::Already => Value::Enum(2),
+            SerializableFsErrorCode::BadDescriptor => Value::Enum(3),
+            SerializableFsErrorCode::Busy => Value::Enum(4),
+            SerializableFsErrorCode::Deadlock => Value::Enum(5),
+            SerializableFsErrorCode::Quota => Value::Enum(6),
+            SerializableFsErrorCode::Exist => Value::Enum(7),
+            SerializableFsErrorCode::FileTooLarge => Value::Enum(8),
+            SerializableFsErrorCode::IllegalByteSequence => Value::Enum(9),
+            SerializableFsErrorCode::InProgress => Value::Enum(10),
+            SerializableFsErrorCode::Interrupted => Value::Enum(11),
+            SerializableFsErrorCode::Invalid => Value::Enum(12),
+            SerializableFsErrorCode::Io => Value::Enum(13),
+            SerializableFsErrorCode::IsDirectory => Value::Enum(14),
+            SerializableFsErrorCode::Loop => Value::Enum(15),
+            SerializableFsErrorCode::TooManyLinks => Value::Enum(16),
+            SerializableFsErrorCode::MessageSize => Value::Enum(17),
+            SerializableFsErrorCode::NameTooLong => Value::Enum(18),
+            SerializableFsErrorCode::NoDevice => Value::Enum(19),
+            SerializableFsErrorCode::NoEntry => Value::Enum(20),
+            SerializableFsErrorCode::NoLock => Value::Enum(21),
+            SerializableFsErrorCode::InsufficientMemory => Value::Enum(22),
+            SerializableFsErrorCode::InsufficientSpace => Value::Enum(23),
+            SerializableFsErrorCode::NotDirectory => Value::Enum(24),
+            SerializableFsErrorCode::NotEmpty => Value::Enum(25),
+            SerializableFsErrorCode::NotRecoverable => Value::Enum(26),
+            SerializableFsErrorCode::Unsupported => Value::Enum(27),
+            SerializableFsErrorCode::NoTty => Value::Enum(28),
+            SerializableFsErrorCode::NoSuchDevice => Value::Enum(29),
+            SerializableFsErrorCode::Overflow => Value::Enum(30),
+            SerializableFsErrorCode::NotPermitted => Value::Enum(31),
+            SerializableFsErrorCode::Pipe => Value::Enum(32),
+            SerializableFsErrorCode::ReadOnly => Value::Enum(33),
+            SerializableFsErrorCode::InvalidSeek => Value::Enum(34),
+            SerializableFsErrorCode::TextFileBusy => Value::Enum(35),
+            SerializableFsErrorCode::CrossDevice => Value::Enum(36),
         }
     }
 
@@ -344,103 +376,43 @@ impl IntoValue for SerializableFsErrorCode {
 impl FromValue for SerializableFsErrorCode {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
-            Value::Enum(0) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Access,
-            )),
-            Value::Enum(1) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::WouldBlock,
-            )),
-            Value::Enum(2) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Already,
-            )),
-            Value::Enum(3) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::BadDescriptor,
-            )),
-            Value::Enum(4) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Busy)),
-            Value::Enum(5) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Deadlock,
-            )),
-            Value::Enum(6) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Quota)),
-            Value::Enum(7) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Exist)),
-            Value::Enum(8) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::FileTooLarge,
-            )),
-            Value::Enum(9) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::IllegalByteSequence,
-            )),
-            Value::Enum(10) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::InProgress,
-            )),
-            Value::Enum(11) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Interrupted,
-            )),
-            Value::Enum(12) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Invalid,
-            )),
-            Value::Enum(13) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Io)),
-            Value::Enum(14) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::IsDirectory,
-            )),
-            Value::Enum(15) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Loop)),
-            Value::Enum(16) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::TooManyLinks,
-            )),
-            Value::Enum(17) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::MessageSize,
-            )),
-            Value::Enum(18) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NameTooLong,
-            )),
-            Value::Enum(19) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NoDevice,
-            )),
-            Value::Enum(20) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NoEntry,
-            )),
-            Value::Enum(21) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NoLock,
-            )),
-            Value::Enum(22) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::InsufficientMemory,
-            )),
-            Value::Enum(23) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::InsufficientSpace,
-            )),
-            Value::Enum(24) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NotDirectory,
-            )),
-            Value::Enum(25) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NotEmpty,
-            )),
-            Value::Enum(26) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NotRecoverable,
-            )),
-            Value::Enum(27) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Unsupported,
-            )),
-            Value::Enum(28) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::NoTty)),
-            Value::Enum(29) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NoSuchDevice,
-            )),
-            Value::Enum(30) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::Overflow,
-            )),
-            Value::Enum(31) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::NotPermitted,
-            )),
-            Value::Enum(32) => Ok(SerializableFsErrorCode(filesystem::types::ErrorCode::Pipe)),
-            Value::Enum(33) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::ReadOnly,
-            )),
-            Value::Enum(34) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::InvalidSeek,
-            )),
-            Value::Enum(35) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::TextFileBusy,
-            )),
-            Value::Enum(36) => Ok(SerializableFsErrorCode(
-                filesystem::types::ErrorCode::CrossDevice,
-            )),
+            Value::Enum(0) => Ok(SerializableFsErrorCode::Access),
+            Value::Enum(1) => Ok(SerializableFsErrorCode::WouldBlock),
+            Value::Enum(2) => Ok(SerializableFsErrorCode::Already),
+            Value::Enum(3) => Ok(SerializableFsErrorCode::BadDescriptor),
+            Value::Enum(4) => Ok(SerializableFsErrorCode::Busy),
+            Value::Enum(5) => Ok(SerializableFsErrorCode::Deadlock),
+            Value::Enum(6) => Ok(SerializableFsErrorCode::Quota),
+            Value::Enum(7) => Ok(SerializableFsErrorCode::Exist),
+            Value::Enum(8) => Ok(SerializableFsErrorCode::FileTooLarge),
+            Value::Enum(9) => Ok(SerializableFsErrorCode::IllegalByteSequence),
+            Value::Enum(10) => Ok(SerializableFsErrorCode::InProgress),
+            Value::Enum(11) => Ok(SerializableFsErrorCode::Interrupted),
+            Value::Enum(12) => Ok(SerializableFsErrorCode::Invalid),
+            Value::Enum(13) => Ok(SerializableFsErrorCode::Io),
+            Value::Enum(14) => Ok(SerializableFsErrorCode::IsDirectory),
+            Value::Enum(15) => Ok(SerializableFsErrorCode::Loop),
+            Value::Enum(16) => Ok(SerializableFsErrorCode::TooManyLinks),
+            Value::Enum(17) => Ok(SerializableFsErrorCode::MessageSize),
+            Value::Enum(18) => Ok(SerializableFsErrorCode::NameTooLong),
+            Value::Enum(19) => Ok(SerializableFsErrorCode::NoDevice),
+            Value::Enum(20) => Ok(SerializableFsErrorCode::NoEntry),
+            Value::Enum(21) => Ok(SerializableFsErrorCode::NoLock),
+            Value::Enum(22) => Ok(SerializableFsErrorCode::InsufficientMemory),
+            Value::Enum(23) => Ok(SerializableFsErrorCode::InsufficientSpace),
+            Value::Enum(24) => Ok(SerializableFsErrorCode::NotDirectory),
+            Value::Enum(25) => Ok(SerializableFsErrorCode::NotEmpty),
+            Value::Enum(26) => Ok(SerializableFsErrorCode::NotRecoverable),
+            Value::Enum(27) => Ok(SerializableFsErrorCode::Unsupported),
+            Value::Enum(28) => Ok(SerializableFsErrorCode::NoTty),
+            Value::Enum(29) => Ok(SerializableFsErrorCode::NoSuchDevice),
+            Value::Enum(30) => Ok(SerializableFsErrorCode::Overflow),
+            Value::Enum(31) => Ok(SerializableFsErrorCode::NotPermitted),
+            Value::Enum(32) => Ok(SerializableFsErrorCode::Pipe),
+            Value::Enum(33) => Ok(SerializableFsErrorCode::ReadOnly),
+            Value::Enum(34) => Ok(SerializableFsErrorCode::InvalidSeek),
+            Value::Enum(35) => Ok(SerializableFsErrorCode::TextFileBusy),
+            Value::Enum(36) => Ok(SerializableFsErrorCode::CrossDevice),
             _ => Err(format!(
                 "Invalid value for SerializableFsErrorCode: {:?}",
                 value
@@ -457,63 +429,75 @@ pub enum SerializableSocketError {
 }
 
 impl SerializableSocketError {
-    pub fn from_result(result: Result<SocketErrorCode, String>) -> Self {
+    pub fn from_result(result: Result<SerializableSocketErrorCode, String>) -> Self {
         match result {
-            Ok(error_code) => Self::ErrorCode(SerializableSocketErrorCode(error_code)),
+            Ok(error_code) => Self::ErrorCode(error_code),
             Err(msg) => SerializableSocketError::Generic(msg),
         }
     }
 }
 
-impl From<SocketError> for SerializableSocketError {
-    fn from(value: SocketError) -> Self {
-        Self::from_result(value.downcast().map_err(|err| err.to_string()))
-    }
-}
+// TODO(p3) Blocker 3: removed `impl From<wasmtime_wasi::p2::SocketError> for SerializableSocketError`
+// and `impl From<SerializableSocketError> for wasmtime_wasi::p2::SocketError` pending p3-native
+// sockets durability support.
 
-impl From<SerializableSocketError> for SocketError {
-    fn from(value: SerializableSocketError) -> Self {
-        match value {
-            SerializableSocketError::ErrorCode(SerializableSocketErrorCode(error_code)) => {
-                error_code.into()
-            }
-            SerializableSocketError::Generic(error) => {
-                SocketError::trap(wasmtime::Error::msg(error))
-            }
-        }
-    }
+/// Mirror of the WASI sockets `error-code` variant. Kept as a local enum so the oplog payload is
+/// not coupled to a specific wasmtime bindings version.
+///
+/// The numeric tags below MUST match the previous `SerializableSocketErrorCode` binary layout
+/// to preserve oplog backward compatibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SerializableSocketErrorCode {
+    Unknown,
+    AccessDenied,
+    NotSupported,
+    InvalidArgument,
+    OutOfMemory,
+    Timeout,
+    ConcurrencyConflict,
+    NotInProgress,
+    WouldBlock,
+    InvalidState,
+    NewSocketLimit,
+    AddressNotBindable,
+    AddressInUse,
+    RemoteUnreachable,
+    ConnectionRefused,
+    ConnectionReset,
+    ConnectionAborted,
+    DatagramTooLarge,
+    NameUnresolvable,
+    TemporaryResolverFailure,
+    PermanentResolverFailure,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SerializableSocketErrorCode(SocketErrorCode);
 
 impl BinarySerializer for SerializableSocketErrorCode {
     fn serialize<Output: BinaryOutput>(
         &self,
         context: &mut SerializationContext<Output>,
     ) -> desert_rust::Result<()> {
-        match &self.0 {
-            SocketErrorCode::Unknown => context.write_u8(0),
-            SocketErrorCode::AccessDenied => context.write_u8(1),
-            SocketErrorCode::NotSupported => context.write_u8(2),
-            SocketErrorCode::InvalidArgument => context.write_u8(3),
-            SocketErrorCode::OutOfMemory => context.write_u8(4),
-            SocketErrorCode::Timeout => context.write_u8(5),
-            SocketErrorCode::ConcurrencyConflict => context.write_u8(6),
-            SocketErrorCode::NotInProgress => context.write_u8(7),
-            SocketErrorCode::WouldBlock => context.write_u8(8),
-            SocketErrorCode::InvalidState => context.write_u8(9),
-            SocketErrorCode::NewSocketLimit => context.write_u8(10),
-            SocketErrorCode::AddressNotBindable => context.write_u8(11),
-            SocketErrorCode::AddressInUse => context.write_u8(12),
-            SocketErrorCode::RemoteUnreachable => context.write_u8(13),
-            SocketErrorCode::ConnectionRefused => context.write_u8(14),
-            SocketErrorCode::ConnectionReset => context.write_u8(15),
-            SocketErrorCode::ConnectionAborted => context.write_u8(16),
-            SocketErrorCode::DatagramTooLarge => context.write_u8(17),
-            SocketErrorCode::NameUnresolvable => context.write_u8(18),
-            SocketErrorCode::TemporaryResolverFailure => context.write_u8(19),
-            SocketErrorCode::PermanentResolverFailure => context.write_u8(20),
+        match self {
+            SerializableSocketErrorCode::Unknown => context.write_u8(0),
+            SerializableSocketErrorCode::AccessDenied => context.write_u8(1),
+            SerializableSocketErrorCode::NotSupported => context.write_u8(2),
+            SerializableSocketErrorCode::InvalidArgument => context.write_u8(3),
+            SerializableSocketErrorCode::OutOfMemory => context.write_u8(4),
+            SerializableSocketErrorCode::Timeout => context.write_u8(5),
+            SerializableSocketErrorCode::ConcurrencyConflict => context.write_u8(6),
+            SerializableSocketErrorCode::NotInProgress => context.write_u8(7),
+            SerializableSocketErrorCode::WouldBlock => context.write_u8(8),
+            SerializableSocketErrorCode::InvalidState => context.write_u8(9),
+            SerializableSocketErrorCode::NewSocketLimit => context.write_u8(10),
+            SerializableSocketErrorCode::AddressNotBindable => context.write_u8(11),
+            SerializableSocketErrorCode::AddressInUse => context.write_u8(12),
+            SerializableSocketErrorCode::RemoteUnreachable => context.write_u8(13),
+            SerializableSocketErrorCode::ConnectionRefused => context.write_u8(14),
+            SerializableSocketErrorCode::ConnectionReset => context.write_u8(15),
+            SerializableSocketErrorCode::ConnectionAborted => context.write_u8(16),
+            SerializableSocketErrorCode::DatagramTooLarge => context.write_u8(17),
+            SerializableSocketErrorCode::NameUnresolvable => context.write_u8(18),
+            SerializableSocketErrorCode::TemporaryResolverFailure => context.write_u8(19),
+            SerializableSocketErrorCode::PermanentResolverFailure => context.write_u8(20),
         }
         Ok(())
     }
@@ -523,61 +507,61 @@ impl BinaryDeserializer for SerializableSocketErrorCode {
     fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
         let tag = context.read_u8()?;
         let error_code = match tag {
-            0 => SocketErrorCode::Unknown,
-            1 => SocketErrorCode::AccessDenied,
-            2 => SocketErrorCode::NotSupported,
-            3 => SocketErrorCode::InvalidArgument,
-            4 => SocketErrorCode::OutOfMemory,
-            5 => SocketErrorCode::Timeout,
-            6 => SocketErrorCode::ConcurrencyConflict,
-            7 => SocketErrorCode::NotInProgress,
-            8 => SocketErrorCode::WouldBlock,
-            9 => SocketErrorCode::InvalidState,
-            10 => SocketErrorCode::NewSocketLimit,
-            11 => SocketErrorCode::AddressNotBindable,
-            12 => SocketErrorCode::AddressInUse,
-            13 => SocketErrorCode::RemoteUnreachable,
-            14 => SocketErrorCode::ConnectionRefused,
-            15 => SocketErrorCode::ConnectionReset,
-            16 => SocketErrorCode::ConnectionAborted,
-            17 => SocketErrorCode::DatagramTooLarge,
-            18 => SocketErrorCode::NameUnresolvable,
-            19 => SocketErrorCode::TemporaryResolverFailure,
-            20 => SocketErrorCode::PermanentResolverFailure,
+            0 => SerializableSocketErrorCode::Unknown,
+            1 => SerializableSocketErrorCode::AccessDenied,
+            2 => SerializableSocketErrorCode::NotSupported,
+            3 => SerializableSocketErrorCode::InvalidArgument,
+            4 => SerializableSocketErrorCode::OutOfMemory,
+            5 => SerializableSocketErrorCode::Timeout,
+            6 => SerializableSocketErrorCode::ConcurrencyConflict,
+            7 => SerializableSocketErrorCode::NotInProgress,
+            8 => SerializableSocketErrorCode::WouldBlock,
+            9 => SerializableSocketErrorCode::InvalidState,
+            10 => SerializableSocketErrorCode::NewSocketLimit,
+            11 => SerializableSocketErrorCode::AddressNotBindable,
+            12 => SerializableSocketErrorCode::AddressInUse,
+            13 => SerializableSocketErrorCode::RemoteUnreachable,
+            14 => SerializableSocketErrorCode::ConnectionRefused,
+            15 => SerializableSocketErrorCode::ConnectionReset,
+            16 => SerializableSocketErrorCode::ConnectionAborted,
+            17 => SerializableSocketErrorCode::DatagramTooLarge,
+            18 => SerializableSocketErrorCode::NameUnresolvable,
+            19 => SerializableSocketErrorCode::TemporaryResolverFailure,
+            20 => SerializableSocketErrorCode::PermanentResolverFailure,
             other => {
                 return Err(desert_rust::Error::DeserializationFailure(format!(
                     "Invalid tag for SerializableSocketErrorCode: {other}"
                 )));
             }
         };
-        Ok(SerializableSocketErrorCode(error_code))
+        Ok(error_code)
     }
 }
 
 impl IntoValue for SerializableSocketErrorCode {
     fn into_value(self) -> Value {
-        match &self.0 {
-            SocketErrorCode::Unknown => Value::Enum(0),
-            SocketErrorCode::AccessDenied => Value::Enum(1),
-            SocketErrorCode::NotSupported => Value::Enum(2),
-            SocketErrorCode::InvalidArgument => Value::Enum(3),
-            SocketErrorCode::OutOfMemory => Value::Enum(4),
-            SocketErrorCode::Timeout => Value::Enum(5),
-            SocketErrorCode::ConcurrencyConflict => Value::Enum(6),
-            SocketErrorCode::NotInProgress => Value::Enum(7),
-            SocketErrorCode::WouldBlock => Value::Enum(8),
-            SocketErrorCode::InvalidState => Value::Enum(9),
-            SocketErrorCode::NewSocketLimit => Value::Enum(10),
-            SocketErrorCode::AddressNotBindable => Value::Enum(11),
-            SocketErrorCode::AddressInUse => Value::Enum(12),
-            SocketErrorCode::RemoteUnreachable => Value::Enum(13),
-            SocketErrorCode::ConnectionRefused => Value::Enum(14),
-            SocketErrorCode::ConnectionReset => Value::Enum(15),
-            SocketErrorCode::ConnectionAborted => Value::Enum(16),
-            SocketErrorCode::DatagramTooLarge => Value::Enum(17),
-            SocketErrorCode::NameUnresolvable => Value::Enum(18),
-            SocketErrorCode::TemporaryResolverFailure => Value::Enum(19),
-            SocketErrorCode::PermanentResolverFailure => Value::Enum(20),
+        match self {
+            SerializableSocketErrorCode::Unknown => Value::Enum(0),
+            SerializableSocketErrorCode::AccessDenied => Value::Enum(1),
+            SerializableSocketErrorCode::NotSupported => Value::Enum(2),
+            SerializableSocketErrorCode::InvalidArgument => Value::Enum(3),
+            SerializableSocketErrorCode::OutOfMemory => Value::Enum(4),
+            SerializableSocketErrorCode::Timeout => Value::Enum(5),
+            SerializableSocketErrorCode::ConcurrencyConflict => Value::Enum(6),
+            SerializableSocketErrorCode::NotInProgress => Value::Enum(7),
+            SerializableSocketErrorCode::WouldBlock => Value::Enum(8),
+            SerializableSocketErrorCode::InvalidState => Value::Enum(9),
+            SerializableSocketErrorCode::NewSocketLimit => Value::Enum(10),
+            SerializableSocketErrorCode::AddressNotBindable => Value::Enum(11),
+            SerializableSocketErrorCode::AddressInUse => Value::Enum(12),
+            SerializableSocketErrorCode::RemoteUnreachable => Value::Enum(13),
+            SerializableSocketErrorCode::ConnectionRefused => Value::Enum(14),
+            SerializableSocketErrorCode::ConnectionReset => Value::Enum(15),
+            SerializableSocketErrorCode::ConnectionAborted => Value::Enum(16),
+            SerializableSocketErrorCode::DatagramTooLarge => Value::Enum(17),
+            SerializableSocketErrorCode::NameUnresolvable => Value::Enum(18),
+            SerializableSocketErrorCode::TemporaryResolverFailure => Value::Enum(19),
+            SerializableSocketErrorCode::PermanentResolverFailure => Value::Enum(20),
         }
     }
 
@@ -611,49 +595,27 @@ impl IntoValue for SerializableSocketErrorCode {
 impl FromValue for SerializableSocketErrorCode {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
-            Value::Enum(0) => Ok(SerializableSocketErrorCode(SocketErrorCode::Unknown)),
-            Value::Enum(1) => Ok(SerializableSocketErrorCode(SocketErrorCode::AccessDenied)),
-            Value::Enum(2) => Ok(SerializableSocketErrorCode(SocketErrorCode::NotSupported)),
-            Value::Enum(3) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::InvalidArgument,
-            )),
-            Value::Enum(4) => Ok(SerializableSocketErrorCode(SocketErrorCode::OutOfMemory)),
-            Value::Enum(5) => Ok(SerializableSocketErrorCode(SocketErrorCode::Timeout)),
-            Value::Enum(6) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::ConcurrencyConflict,
-            )),
-            Value::Enum(7) => Ok(SerializableSocketErrorCode(SocketErrorCode::NotInProgress)),
-            Value::Enum(8) => Ok(SerializableSocketErrorCode(SocketErrorCode::WouldBlock)),
-            Value::Enum(9) => Ok(SerializableSocketErrorCode(SocketErrorCode::InvalidState)),
-            Value::Enum(10) => Ok(SerializableSocketErrorCode(SocketErrorCode::NewSocketLimit)),
-            Value::Enum(11) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::AddressNotBindable,
-            )),
-            Value::Enum(12) => Ok(SerializableSocketErrorCode(SocketErrorCode::AddressInUse)),
-            Value::Enum(13) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::RemoteUnreachable,
-            )),
-            Value::Enum(14) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::ConnectionRefused,
-            )),
-            Value::Enum(15) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::ConnectionReset,
-            )),
-            Value::Enum(16) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::ConnectionAborted,
-            )),
-            Value::Enum(17) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::DatagramTooLarge,
-            )),
-            Value::Enum(18) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::NameUnresolvable,
-            )),
-            Value::Enum(19) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::TemporaryResolverFailure,
-            )),
-            Value::Enum(20) => Ok(SerializableSocketErrorCode(
-                SocketErrorCode::PermanentResolverFailure,
-            )),
+            Value::Enum(0) => Ok(SerializableSocketErrorCode::Unknown),
+            Value::Enum(1) => Ok(SerializableSocketErrorCode::AccessDenied),
+            Value::Enum(2) => Ok(SerializableSocketErrorCode::NotSupported),
+            Value::Enum(3) => Ok(SerializableSocketErrorCode::InvalidArgument),
+            Value::Enum(4) => Ok(SerializableSocketErrorCode::OutOfMemory),
+            Value::Enum(5) => Ok(SerializableSocketErrorCode::Timeout),
+            Value::Enum(6) => Ok(SerializableSocketErrorCode::ConcurrencyConflict),
+            Value::Enum(7) => Ok(SerializableSocketErrorCode::NotInProgress),
+            Value::Enum(8) => Ok(SerializableSocketErrorCode::WouldBlock),
+            Value::Enum(9) => Ok(SerializableSocketErrorCode::InvalidState),
+            Value::Enum(10) => Ok(SerializableSocketErrorCode::NewSocketLimit),
+            Value::Enum(11) => Ok(SerializableSocketErrorCode::AddressNotBindable),
+            Value::Enum(12) => Ok(SerializableSocketErrorCode::AddressInUse),
+            Value::Enum(13) => Ok(SerializableSocketErrorCode::RemoteUnreachable),
+            Value::Enum(14) => Ok(SerializableSocketErrorCode::ConnectionRefused),
+            Value::Enum(15) => Ok(SerializableSocketErrorCode::ConnectionReset),
+            Value::Enum(16) => Ok(SerializableSocketErrorCode::ConnectionAborted),
+            Value::Enum(17) => Ok(SerializableSocketErrorCode::DatagramTooLarge),
+            Value::Enum(18) => Ok(SerializableSocketErrorCode::NameUnresolvable),
+            Value::Enum(19) => Ok(SerializableSocketErrorCode::TemporaryResolverFailure),
+            Value::Enum(20) => Ok(SerializableSocketErrorCode::PermanentResolverFailure),
             _ => Err(format!(
                 "Invalid value for SerializableSocketErrorCode: {:?}",
                 value
@@ -723,49 +685,10 @@ pub struct SerializableResponseHeaders {
     pub headers: HashMap<String, Vec<Vec<u8>>>,
 }
 
-impl TryFrom<&HostIncomingResponse> for SerializableResponseHeaders {
-    type Error = anyhow::Error;
-
-    fn try_from(response: &HostIncomingResponse) -> Result<Self, Self::Error> {
-        let mut headers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
-        for (key, value) in response.headers.iter() {
-            headers
-                .entry(key.as_str().to_string())
-                .or_default()
-                .push(value.as_bytes().to_vec());
-        }
-
-        Ok(Self {
-            status: response.status,
-            headers,
-        })
-    }
-}
-
-impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
-    type Error = anyhow::Error;
-
-    fn try_from(value: SerializableResponseHeaders) -> Result<Self, Self::Error> {
-        let mut header_map = http::HeaderMap::new();
-        for (key, values) in value.headers {
-            let name = HeaderName::from_str(&key)?;
-            for value in values {
-                header_map.append(name.clone(), HeaderValue::try_from(value)?);
-            }
-        }
-        let headers = FieldMap::new_immutable(header_map);
-
-        Ok(Self {
-            status: value.status,
-            headers,
-            body: Some(HostIncomingBody::failing(
-                "Body stream was interrupted due to a restart".to_string(),
-            )), // NOTE: high enough timeout so it does not matter, but not as high to overflow instants
-            // Synthetic response: not produced via the connection pool.
-            pooled_connection: None,
-        })
-    }
-}
+// TODO(p3) Blocker 3: removed `impl TryFrom<&HostIncomingResponse> for SerializableResponseHeaders`
+// and `impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse` (used the
+// wasmtime_wasi_http p2 `HostIncomingResponse`, `HostIncomingBody`, and `FieldMap` types) pending
+// p3-native HTTP durability support.
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
@@ -774,23 +697,9 @@ pub struct SerializableTlsAlertReceivedPayload {
     pub alert_message: Option<String>,
 }
 
-impl From<&TlsAlertReceivedPayload> for SerializableTlsAlertReceivedPayload {
-    fn from(value: &TlsAlertReceivedPayload) -> Self {
-        Self {
-            alert_id: value.alert_id,
-            alert_message: value.alert_message.clone(),
-        }
-    }
-}
-
-impl From<SerializableTlsAlertReceivedPayload> for TlsAlertReceivedPayload {
-    fn from(value: SerializableTlsAlertReceivedPayload) -> Self {
-        Self {
-            alert_id: value.alert_id,
-            alert_message: value.alert_message,
-        }
-    }
-}
+// TODO(p3) Blocker 3: removed `impl From<&TlsAlertReceivedPayload> for SerializableTlsAlertReceivedPayload`
+// and `impl From<SerializableTlsAlertReceivedPayload> for TlsAlertReceivedPayload` (wasmtime
+// p2 HTTP types) pending p3-native HTTP durability support.
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
@@ -799,23 +708,9 @@ pub struct SerializableDnsErrorPayload {
     pub info_code: Option<u16>,
 }
 
-impl From<&DnsErrorPayload> for SerializableDnsErrorPayload {
-    fn from(value: &DnsErrorPayload) -> Self {
-        Self {
-            rcode: value.rcode.clone(),
-            info_code: value.info_code,
-        }
-    }
-}
-
-impl From<SerializableDnsErrorPayload> for DnsErrorPayload {
-    fn from(value: SerializableDnsErrorPayload) -> Self {
-        Self {
-            rcode: value.rcode,
-            info_code: value.info_code,
-        }
-    }
-}
+// TODO(p3) Blocker 3: removed `impl From<&DnsErrorPayload> for SerializableDnsErrorPayload`
+// and `impl From<SerializableDnsErrorPayload> for DnsErrorPayload` (wasmtime p2 HTTP types)
+// pending p3-native HTTP durability support.
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
@@ -824,23 +719,9 @@ pub struct SerializableFieldSizePayload {
     pub field_size: Option<u32>,
 }
 
-impl From<&FieldSizePayload> for SerializableFieldSizePayload {
-    fn from(value: &FieldSizePayload) -> Self {
-        Self {
-            field_name: value.field_name.clone(),
-            field_size: value.field_size,
-        }
-    }
-}
-
-impl From<SerializableFieldSizePayload> for FieldSizePayload {
-    fn from(value: SerializableFieldSizePayload) -> Self {
-        Self {
-            field_name: value.field_name,
-            field_size: value.field_size,
-        }
-    }
-}
+// TODO(p3) Blocker 3: removed `impl From<&FieldSizePayload> for SerializableFieldSizePayload`
+// and `impl From<SerializableFieldSizePayload> for FieldSizePayload` (wasmtime p2 HTTP types)
+// pending p3-native HTTP durability support.
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
@@ -886,177 +767,11 @@ pub enum SerializableHttpErrorCode {
     InternalError(Option<String>),
 }
 
-impl From<wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> for SerializableHttpErrorCode {
-    fn from(value: wasmtime_wasi_http::p2::bindings::http::types::ErrorCode) -> Self {
-        (&value).into()
-    }
-}
-
-impl From<&wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> for SerializableHttpErrorCode {
-    fn from(value: &wasmtime_wasi_http::p2::bindings::http::types::ErrorCode) -> Self {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
-        match value {
-            ErrorCode::DnsTimeout => SerializableHttpErrorCode::DnsTimeout,
-            ErrorCode::DnsError(payload) => SerializableHttpErrorCode::DnsError(payload.into()),
-            ErrorCode::DestinationNotFound => SerializableHttpErrorCode::DestinationNotFound,
-            ErrorCode::DestinationUnavailable => SerializableHttpErrorCode::DestinationUnavailable,
-            ErrorCode::DestinationIpProhibited => {
-                SerializableHttpErrorCode::DestinationIpProhibited
-            }
-            ErrorCode::DestinationIpUnroutable => {
-                SerializableHttpErrorCode::DestinationIpUnroutable
-            }
-            ErrorCode::ConnectionRefused => SerializableHttpErrorCode::ConnectionRefused,
-            ErrorCode::ConnectionTerminated => SerializableHttpErrorCode::ConnectionTerminated,
-            ErrorCode::ConnectionTimeout => SerializableHttpErrorCode::ConnectionTimeout,
-            ErrorCode::ConnectionReadTimeout => SerializableHttpErrorCode::ConnectionReadTimeout,
-            ErrorCode::ConnectionWriteTimeout => SerializableHttpErrorCode::ConnectionWriteTimeout,
-            ErrorCode::ConnectionLimitReached => SerializableHttpErrorCode::ConnectionLimitReached,
-            ErrorCode::TlsProtocolError => SerializableHttpErrorCode::TlsProtocolError,
-            ErrorCode::TlsCertificateError => SerializableHttpErrorCode::TlsCertificateError,
-            ErrorCode::TlsAlertReceived(payload) => {
-                SerializableHttpErrorCode::TlsAlertReceived(payload.into())
-            }
-            ErrorCode::HttpRequestDenied => SerializableHttpErrorCode::HttpRequestDenied,
-            ErrorCode::HttpRequestLengthRequired => {
-                SerializableHttpErrorCode::HttpRequestLengthRequired
-            }
-            ErrorCode::HttpRequestBodySize(payload) => {
-                SerializableHttpErrorCode::HttpRequestBodySize(*payload)
-            }
-            ErrorCode::HttpRequestMethodInvalid => {
-                SerializableHttpErrorCode::HttpRequestMethodInvalid
-            }
-            ErrorCode::HttpRequestUriInvalid => SerializableHttpErrorCode::HttpRequestUriInvalid,
-            ErrorCode::HttpRequestUriTooLong => SerializableHttpErrorCode::HttpRequestUriTooLong,
-            ErrorCode::HttpRequestHeaderSectionSize(payload) => {
-                SerializableHttpErrorCode::HttpRequestHeaderSectionSize(*payload)
-            }
-            ErrorCode::HttpRequestHeaderSize(payload) => {
-                SerializableHttpErrorCode::HttpRequestHeaderSize(payload.as_ref().map(|p| p.into()))
-            }
-            ErrorCode::HttpRequestTrailerSectionSize(payload) => {
-                SerializableHttpErrorCode::HttpRequestTrailerSectionSize(*payload)
-            }
-            ErrorCode::HttpRequestTrailerSize(payload) => {
-                SerializableHttpErrorCode::HttpRequestTrailerSize(payload.into())
-            }
-            ErrorCode::HttpResponseIncomplete => SerializableHttpErrorCode::HttpResponseIncomplete,
-            ErrorCode::HttpResponseHeaderSectionSize(payload) => {
-                SerializableHttpErrorCode::HttpResponseHeaderSectionSize(*payload)
-            }
-            ErrorCode::HttpResponseHeaderSize(payload) => {
-                SerializableHttpErrorCode::HttpResponseHeaderSize(payload.into())
-            }
-            ErrorCode::HttpResponseBodySize(payload) => {
-                SerializableHttpErrorCode::HttpResponseBodySize(*payload)
-            }
-            ErrorCode::HttpResponseTrailerSectionSize(payload) => {
-                SerializableHttpErrorCode::HttpResponseTrailerSectionSize(*payload)
-            }
-            ErrorCode::HttpResponseTrailerSize(payload) => {
-                SerializableHttpErrorCode::HttpResponseTrailerSize(payload.into())
-            }
-            ErrorCode::HttpResponseTransferCoding(payload) => {
-                SerializableHttpErrorCode::HttpResponseTransferCoding(payload.clone())
-            }
-            ErrorCode::HttpResponseContentCoding(payload) => {
-                SerializableHttpErrorCode::HttpResponseContentCoding(payload.clone())
-            }
-            ErrorCode::HttpResponseTimeout => SerializableHttpErrorCode::HttpResponseTimeout,
-            ErrorCode::HttpUpgradeFailed => SerializableHttpErrorCode::HttpUpgradeFailed,
-            ErrorCode::HttpProtocolError => SerializableHttpErrorCode::HttpProtocolError,
-            ErrorCode::LoopDetected => SerializableHttpErrorCode::LoopDetected,
-            ErrorCode::ConfigurationError => SerializableHttpErrorCode::ConfigurationError,
-            ErrorCode::InternalError(payload) => {
-                SerializableHttpErrorCode::InternalError(payload.clone())
-            }
-        }
-    }
-}
-
-impl From<SerializableHttpErrorCode> for wasmtime_wasi_http::p2::bindings::http::types::ErrorCode {
-    fn from(value: SerializableHttpErrorCode) -> Self {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
-        match value {
-            SerializableHttpErrorCode::DnsTimeout => ErrorCode::DnsTimeout,
-            SerializableHttpErrorCode::DnsError(payload) => ErrorCode::DnsError(payload.into()),
-            SerializableHttpErrorCode::DestinationNotFound => ErrorCode::DestinationNotFound,
-            SerializableHttpErrorCode::DestinationUnavailable => ErrorCode::DestinationUnavailable,
-            SerializableHttpErrorCode::DestinationIpProhibited => {
-                ErrorCode::DestinationIpProhibited
-            }
-            SerializableHttpErrorCode::DestinationIpUnroutable => {
-                ErrorCode::DestinationIpUnroutable
-            }
-            SerializableHttpErrorCode::ConnectionRefused => ErrorCode::ConnectionRefused,
-            SerializableHttpErrorCode::ConnectionTerminated => ErrorCode::ConnectionTerminated,
-            SerializableHttpErrorCode::ConnectionTimeout => ErrorCode::ConnectionTimeout,
-            SerializableHttpErrorCode::ConnectionReadTimeout => ErrorCode::ConnectionReadTimeout,
-            SerializableHttpErrorCode::ConnectionWriteTimeout => ErrorCode::ConnectionWriteTimeout,
-            SerializableHttpErrorCode::ConnectionLimitReached => ErrorCode::ConnectionLimitReached,
-            SerializableHttpErrorCode::TlsProtocolError => ErrorCode::TlsProtocolError,
-            SerializableHttpErrorCode::TlsCertificateError => ErrorCode::TlsCertificateError,
-            SerializableHttpErrorCode::TlsAlertReceived(payload) => {
-                ErrorCode::TlsAlertReceived(payload.into())
-            }
-            SerializableHttpErrorCode::HttpRequestDenied => ErrorCode::HttpRequestDenied,
-            SerializableHttpErrorCode::HttpRequestLengthRequired => {
-                ErrorCode::HttpRequestLengthRequired
-            }
-            SerializableHttpErrorCode::HttpRequestBodySize(payload) => {
-                ErrorCode::HttpRequestBodySize(payload)
-            }
-            SerializableHttpErrorCode::HttpRequestMethodInvalid => {
-                ErrorCode::HttpRequestMethodInvalid
-            }
-            SerializableHttpErrorCode::HttpRequestUriInvalid => ErrorCode::HttpRequestUriInvalid,
-            SerializableHttpErrorCode::HttpRequestUriTooLong => ErrorCode::HttpRequestUriTooLong,
-            SerializableHttpErrorCode::HttpRequestHeaderSectionSize(payload) => {
-                ErrorCode::HttpRequestHeaderSectionSize(payload)
-            }
-            SerializableHttpErrorCode::HttpRequestHeaderSize(payload) => {
-                ErrorCode::HttpRequestHeaderSize(payload.map(|p| p.into()))
-            }
-            SerializableHttpErrorCode::HttpRequestTrailerSectionSize(payload) => {
-                ErrorCode::HttpRequestTrailerSectionSize(payload)
-            }
-            SerializableHttpErrorCode::HttpRequestTrailerSize(payload) => {
-                ErrorCode::HttpRequestTrailerSize(payload.into())
-            }
-            SerializableHttpErrorCode::HttpResponseIncomplete => ErrorCode::HttpResponseIncomplete,
-            SerializableHttpErrorCode::HttpResponseHeaderSectionSize(payload) => {
-                ErrorCode::HttpResponseHeaderSectionSize(payload)
-            }
-            SerializableHttpErrorCode::HttpResponseHeaderSize(payload) => {
-                ErrorCode::HttpResponseHeaderSize(payload.into())
-            }
-            SerializableHttpErrorCode::HttpResponseBodySize(payload) => {
-                ErrorCode::HttpResponseBodySize(payload)
-            }
-            SerializableHttpErrorCode::HttpResponseTrailerSectionSize(payload) => {
-                ErrorCode::HttpResponseTrailerSectionSize(payload)
-            }
-            SerializableHttpErrorCode::HttpResponseTrailerSize(payload) => {
-                ErrorCode::HttpResponseTrailerSize(payload.into())
-            }
-            SerializableHttpErrorCode::HttpResponseTransferCoding(payload) => {
-                ErrorCode::HttpResponseTransferCoding(payload)
-            }
-            SerializableHttpErrorCode::HttpResponseContentCoding(payload) => {
-                ErrorCode::HttpResponseContentCoding(payload)
-            }
-            SerializableHttpErrorCode::HttpResponseTimeout => ErrorCode::HttpResponseTimeout,
-            SerializableHttpErrorCode::HttpUpgradeFailed => ErrorCode::HttpUpgradeFailed,
-            SerializableHttpErrorCode::HttpProtocolError => ErrorCode::HttpProtocolError,
-            SerializableHttpErrorCode::LoopDetected => ErrorCode::LoopDetected,
-            SerializableHttpErrorCode::ConfigurationError => ErrorCode::ConfigurationError,
-            SerializableHttpErrorCode::InternalError(payload) => ErrorCode::InternalError(payload),
-        }
-    }
-}
+// TODO(p3) Blocker 3: removed
+//   - `impl From<wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> for SerializableHttpErrorCode`
+//   - `impl From<&wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> for SerializableHttpErrorCode`
+//   - `impl From<SerializableHttpErrorCode> for wasmtime_wasi_http::p2::bindings::http::types::ErrorCode`
+// pending p3-native HTTP durability support.
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
@@ -1073,22 +788,8 @@ pub enum SerializableHttpMethod {
     Other(String),
 }
 
-impl From<Method> for SerializableHttpMethod {
-    fn from(value: Method) -> Self {
-        match value {
-            Method::Get => SerializableHttpMethod::Get,
-            Method::Post => SerializableHttpMethod::Post,
-            Method::Put => SerializableHttpMethod::Put,
-            Method::Delete => SerializableHttpMethod::Delete,
-            Method::Head => SerializableHttpMethod::Head,
-            Method::Connect => SerializableHttpMethod::Connect,
-            Method::Options => SerializableHttpMethod::Options,
-            Method::Trace => SerializableHttpMethod::Trace,
-            Method::Patch => SerializableHttpMethod::Patch,
-            Method::Other(method) => SerializableHttpMethod::Other(method),
-        }
-    }
-}
+// TODO(p3) Blocker 3: removed `impl From<wasmtime_wasi_http::p2::bindings::http::types::Method>
+// for SerializableHttpMethod` pending p3-native HTTP durability support.
 
 impl TryFrom<&SerializableHttpMethod> for http::Method {
     type Error = anyhow::Error;
@@ -1198,35 +899,9 @@ pub enum SerializableIpAddress {
     IPv6 { address: [u16; 8] },
 }
 
-impl From<IpAddress> for SerializableIpAddress {
-    fn from(value: IpAddress) -> Self {
-        match value {
-            IpAddress::Ipv4(address) => SerializableIpAddress::IPv4 {
-                address: [address.0, address.1, address.2, address.3],
-            },
-            IpAddress::Ipv6(address) => SerializableIpAddress::IPv6 {
-                address: [
-                    address.0, address.1, address.2, address.3, address.4, address.5, address.6,
-                    address.7,
-                ],
-            },
-        }
-    }
-}
-
-impl From<SerializableIpAddress> for IpAddress {
-    fn from(value: SerializableIpAddress) -> Self {
-        match value {
-            SerializableIpAddress::IPv4 { address } => {
-                IpAddress::Ipv4((address[0], address[1], address[2], address[3]))
-            }
-            SerializableIpAddress::IPv6 { address } => IpAddress::Ipv6((
-                address[0], address[1], address[2], address[3], address[4], address[5], address[6],
-                address[7],
-            )),
-        }
-    }
-}
+// TODO(p3) Blocker 3: removed `impl From<wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress>
+// for SerializableIpAddress` and `impl From<SerializableIpAddress> for ...IpAddress` pending
+// p3-native sockets durability support.
 
 impl IntoValue for SerializableIpAddress {
     fn into_value(self) -> Value {
@@ -1283,17 +958,9 @@ impl From<SerializableIpAddress> for IpAddr {
 #[desert(transparent)]
 pub struct SerializableIpAddresses(pub Vec<SerializableIpAddress>);
 
-impl From<Vec<IpAddress>> for SerializableIpAddresses {
-    fn from(value: Vec<IpAddress>) -> Self {
-        SerializableIpAddresses(value.into_iter().map(|v| v.into()).collect())
-    }
-}
-
-impl From<SerializableIpAddresses> for Vec<IpAddress> {
-    fn from(value: SerializableIpAddresses) -> Self {
-        value.0.into_iter().map(|v| v.into()).collect()
-    }
-}
+// TODO(p3) Blocker 3: removed `impl From<Vec<wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress>>
+// for SerializableIpAddresses` and `impl From<SerializableIpAddresses> for Vec<...IpAddress>`
+// pending p3-native sockets durability support.
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]

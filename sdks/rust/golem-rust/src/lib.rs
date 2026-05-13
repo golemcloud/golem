@@ -16,8 +16,7 @@
 test_r::enable!();
 
 pub use uuid::Uuid;
-pub use wasip2;
-pub use wstd;
+pub use wasip3;
 
 pub mod bindings {
     use wit_bindgen::generate;
@@ -30,8 +29,8 @@ pub mod bindings {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "wasi:io/poll@0.2.3": wasip2::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
+            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": wasip3::clocks::system_clock,
+            "wasi:clocks/types@0.3.0-rc-2026-03-15": wasip3::clocks::types,
         }
     });
 }
@@ -48,8 +47,8 @@ pub mod load_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "wasi:io/poll@0.2.3": wasip2::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
+            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": wasip3::clocks::system_clock,
+            "wasi:clocks/types@0.3.0-rc-2026-03-15": wasip3::clocks::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -86,8 +85,8 @@ pub mod save_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "wasi:io/poll@0.2.3": wasip2::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
+            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": wasip3::clocks::system_clock,
+            "wasi:clocks/types@0.3.0-rc-2026-03-15": wasip3::clocks::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -125,8 +124,8 @@ pub mod golem_agentic {
 
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "wasi:io/poll@0.2.3": wasip2::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
+            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": wasip3::clocks::system_clock,
+            "wasi:clocks/types@0.3.0-rc-2026-03-15": wasip3::clocks::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -175,8 +174,8 @@ pub mod oplog_processor {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "wasi:io/poll@0.2.3": wasip2::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
+            "wasi:clocks/system-clock@0.3.0-rc-2026-03-15": wasip3::clocks::system_clock,
+            "wasi:clocks/types@0.3.0-rc-2026-03-15": wasip3::clocks::types,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
@@ -245,10 +244,7 @@ pub use golem_rust_macro::*;
 /// Use `await_promise` for an async version of this function, allowing to interleave
 /// awaiting of the promise with other operations.
 pub fn blocking_await_promise(promise_id: &PromiseId) -> Vec<u8> {
-    let promise = get_promise(promise_id);
-    let pollable = promise.subscribe();
-    pollable.block();
-    promise.get().unwrap()
+    wit_bindgen::block_on(await_promise(promise_id))
 }
 
 /// Awaits a promise.
@@ -257,9 +253,7 @@ pub fn blocking_await_promise(promise_id: &PromiseId) -> Vec<u8> {
 /// suspended until any of them completes.
 pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
     let promise = get_promise(promise_id);
-    let pollable = promise.subscribe();
-    wstd::io::AsyncPollable::new(pollable).wait_for().await;
-    promise.get().unwrap()
+    promise.get().await
 }
 
 pub struct PersistenceLevelGuard {

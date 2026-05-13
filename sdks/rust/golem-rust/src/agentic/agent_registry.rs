@@ -23,7 +23,7 @@ use golem_wasm::{AgentId, ComponentId};
 use std::rc::Rc;
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
-use wstd::runtime::block_on;
+use wit_bindgen::block_on;
 
 #[derive(Default)]
 pub struct State {
@@ -136,7 +136,8 @@ pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
 pub fn with_agent_instance_async<F, Fut, R>(f: F) -> R
 where
     F: FnOnce(Rc<ResolvedAgent>) -> Fut,
-    Fut: Future<Output = R>,
+    Fut: Future<Output = R> + 'static,
+    R: 'static,
 {
     let agent_instance = get_state()
         .agent_instance
@@ -164,7 +165,7 @@ where
 
 pub fn get_agent_id() -> AgentId {
     let env_vars: HashMap<String, String> =
-        HashMap::from_iter(wasip2::cli::environment::get_environment());
+        HashMap::from_iter(wasip3::cli::environment::get_environment());
     let raw_agent_id = env_vars
         .get("GOLEM_AGENT_ID")
         .expect("Missing GOLEM_AGENT_ID environment variable"); // This is always provided by the Golem runtime
@@ -274,7 +275,8 @@ fn extract_parameter_schema(
 pub fn with_agent_initiator<F, Fut, R>(f: F, agent_type_name: &AgentTypeName) -> R
 where
     F: FnOnce(Arc<dyn AgentInitiator>) -> Fut,
-    Fut: Future<Output = R>,
+    Fut: Future<Output = R> + 'static,
+    R: 'static,
 {
     let state = get_state();
 

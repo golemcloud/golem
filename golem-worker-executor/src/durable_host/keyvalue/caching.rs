@@ -12,114 +12,79 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use wasmtime::component::Resource;
+use wasmtime::component::{Accessor, HasSelf, Resource};
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::cache::{
     Error, FutureExistsResult, FutureGetOrSetResult, FutureGetResult, FutureResult, GetOrSetEntry,
-    Host, HostFutureExistsResult, HostFutureGetOrSetResult, HostFutureGetResult, HostFutureResult,
-    HostVacancy, IncomingValue, Key, OutgoingValue, Pollable, Vacancy,
+    Host, HostFutureExistsResult, HostFutureExistsResultWithStore, HostFutureGetOrSetResult,
+    HostFutureGetOrSetResultWithStore, HostFutureGetResult, HostFutureGetResultWithStore,
+    HostFutureResult, HostFutureResultWithStore, HostVacancy, IncomingValue, Key, OutgoingValue,
+    Vacancy,
 };
 use crate::workerctx::WorkerCtx;
 
 impl<Ctx: WorkerCtx> HostFutureGetResult for DurableWorkerCtx<Ctx> {
-    async fn future_get_result_get(
-        &mut self,
-        _self_: Resource<FutureGetResult>,
-    ) -> anyhow::Result<Option<Result<Option<Resource<IncomingValue>>, Resource<Error>>>> {
-        self.observe_function_call("keyvalue::cache::future_get", "future_get_result_get");
-        unimplemented!("future_get_result_get")
-    }
-
-    async fn listen_to_future_get_result(
-        &mut self,
-        _self_: Resource<FutureGetResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        self.observe_function_call("keyvalue::cache::future_get", "listen_to_future_get_result");
-        unimplemented!("listen_to_future_get_result")
-    }
-
     async fn drop(&mut self, _rep: Resource<FutureGetResult>) -> anyhow::Result<()> {
         self.observe_function_call("keyvalue::cache::future_get", "drop");
         unimplemented!("drop")
     }
 }
 
+impl<Ctx: WorkerCtx> HostFutureGetResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn get<T: Send>(
+        _accessor: &Accessor<T, Self>,
+        _self_: Resource<FutureGetResult>,
+    ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
+        unimplemented!("future_get_result_get")
+    }
+}
+
 impl<Ctx: WorkerCtx> HostFutureExistsResult for DurableWorkerCtx<Ctx> {
-    async fn future_exists_result_get(
-        &mut self,
-        _self_: Resource<FutureExistsResult>,
-    ) -> anyhow::Result<Option<Result<bool, Resource<Error>>>> {
-        self.observe_function_call("keyvalue::cache::future_exists", "future_exists_result_get");
-        unimplemented!("future_exists_result_get")
-    }
-
-    async fn listen_to_future_exists_result(
-        &mut self,
-        _self_: Resource<FutureExistsResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        self.observe_function_call(
-            "keyvalue::cache::future_exists",
-            "listen_to_future_exists_result",
-        );
-        unimplemented!("listen_to_future_exists_result")
-    }
-
     async fn drop(&mut self, _rep: Resource<FutureExistsResult>) -> anyhow::Result<()> {
         self.observe_function_call("keyvalue::cache::future_exists", "drop");
         unimplemented!("drop")
     }
 }
 
+impl<Ctx: WorkerCtx> HostFutureExistsResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn get<T: Send>(
+        _accessor: &Accessor<T, Self>,
+        _self_: Resource<FutureExistsResult>,
+    ) -> anyhow::Result<Result<bool, Resource<Error>>> {
+        unimplemented!("future_exists_result_get")
+    }
+}
+
 impl<Ctx: WorkerCtx> HostFutureResult for DurableWorkerCtx<Ctx> {
-    async fn future_result_get(
-        &mut self,
-        _self_: Resource<FutureResult>,
-    ) -> anyhow::Result<Option<Result<(), Resource<Error>>>> {
-        self.observe_function_call("keyvalue::cache::future_result", "future_result_get");
-        unimplemented!("future_result_get")
-    }
-
-    async fn listen_to_future_result(
-        &mut self,
-        _self_: Resource<FutureResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        self.observe_function_call("keyvalue::cache::future_result", "listen_to_future_result");
-        unimplemented!("listen_to_future_result")
-    }
-
     async fn drop(&mut self, _rep: Resource<FutureResult>) -> anyhow::Result<()> {
         self.observe_function_call("keyvalue::cache::future_result", "drop");
         unimplemented!("drop")
     }
 }
 
+impl<Ctx: WorkerCtx> HostFutureResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn get<T: Send>(
+        _accessor: &Accessor<T, Self>,
+        _self_: Resource<FutureResult>,
+    ) -> anyhow::Result<Result<(), Resource<Error>>> {
+        unimplemented!("future_result_get")
+    }
+}
+
 impl<Ctx: WorkerCtx> HostFutureGetOrSetResult for DurableWorkerCtx<Ctx> {
-    async fn future_get_or_set_result_get(
-        &mut self,
-        _self_: Resource<FutureGetOrSetResult>,
-    ) -> anyhow::Result<Option<Result<GetOrSetEntry, Resource<Error>>>> {
-        self.observe_function_call(
-            "keyvalue::cache::future_get_or_set",
-            "future_get_or_set_result_get",
-        );
-        unimplemented!("future_get_or_set_result_get")
-    }
-
-    async fn listen_to_future_get_or_set_result(
-        &mut self,
-        _self_: Resource<FutureGetOrSetResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
-        self.observe_function_call(
-            "keyvalue::cache::future_get_or_set",
-            "listen_to_future_get_or_set_result",
-        );
-        unimplemented!("listen_to_future_get_or_set_result")
-    }
-
     async fn drop(&mut self, _rep: Resource<FutureGetOrSetResult>) -> anyhow::Result<()> {
         self.observe_function_call("keyvalue::cache::future_get_or_set", "drop");
         unimplemented!("drop")
+    }
+}
+
+impl<Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn get<T: Send>(
+        _accessor: &Accessor<T, Self>,
+        _self_: Resource<FutureGetOrSetResult>,
+    ) -> anyhow::Result<Result<GetOrSetEntry, Resource<Error>>> {
+        unimplemented!("future_get_or_set_result_get")
     }
 }
 
