@@ -265,7 +265,9 @@ fn cleanup_stale_file(path : String) -> Unit {
   if @fs.path_exists(path) {
     @fs.remove_file(path) catch {
       e => {
-        println("Warning: could not remove stale file \{path}: \{e}")
+        println(
+          "Warning: could not remove stale file \{path}: \{@debug.to_string(e)}",
+        )
         return
       }
     }

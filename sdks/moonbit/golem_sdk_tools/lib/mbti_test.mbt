@@ -6,11 +6,17 @@ test "parse_mbt_source parses pub fn with return type" {
     #|  42
     #|}
   let fns = parse_mbt_source(content)
-  inspect(fns.length(), content="1")
-  inspect(fns[0].gen_name, content="wasmExportSave")
-  inspect(fns[0].user_name, content="wasmExportSave")
-  inspect(fns[0].params.length(), content="0")
-  inspect(fns[0].return_type, content="Int")
+  debug_inspect(fns.length(), content="1")
+  debug_inspect(fns[0].gen_name, content=(
+    #|"wasmExportSave"
+  ))
+  debug_inspect(fns[0].user_name, content=(
+    #|"wasmExportSave"
+  ))
+  debug_inspect(fns[0].params.length(), content="0")
+  debug_inspect(fns[0].return_type, content=(
+    #|"Int"
+  ))
 }
 
 ///|
@@ -21,10 +27,14 @@ test "parse_mbt_source parses pub fn with params" {
     #|  0
     #|}
   let fns = parse_mbt_source(content)
-  inspect(fns.length(), content="1")
-  inspect(fns[0].gen_name, content="wasmExportInitialize")
-  inspect(fns[0].params.length(), content="5")
-  inspect(fns[0].params[0], content="Int")
+  debug_inspect(fns.length(), content="1")
+  debug_inspect(fns[0].gen_name, content=(
+    #|"wasmExportInitialize"
+  ))
+  debug_inspect(fns[0].params.length(), content="5")
+  debug_inspect(fns[0].params[0], content=(
+    #|"Int"
+  ))
 }
 
 ///|
@@ -35,8 +45,10 @@ test "parse_mbt_source parses pub fn returning Unit" {
     #|  ()
     #|}
   let fns = parse_mbt_source(content)
-  inspect(fns.length(), content="1")
-  inspect(fns[0].return_type, content="Unit")
+  debug_inspect(fns.length(), content="1")
+  debug_inspect(fns[0].return_type, content=(
+    #|"Unit"
+  ))
 }
 
 ///|
@@ -47,9 +59,13 @@ test "parse_mbt_source strips mbt_ffi_ prefix for user_name" {
     #|  0
     #|}
   let fns = parse_mbt_source(content)
-  inspect(fns.length(), content="1")
-  inspect(fns[0].gen_name, content="mbt_ffi_cabi_realloc")
-  inspect(fns[0].user_name, content="cabi_realloc")
+  debug_inspect(fns.length(), content="1")
+  debug_inspect(fns[0].gen_name, content=(
+    #|"mbt_ffi_cabi_realloc"
+  ))
+  debug_inspect(fns[0].user_name, content=(
+    #|"cabi_realloc"
+  ))
 }
 
 ///|
@@ -68,8 +84,10 @@ test "parse_mbt_source skips non-pub and extern fns" {
     #|///|
     #|let return_area : Int = 0
   let fns = parse_mbt_source(content)
-  inspect(fns.length(), content="1")
-  inspect(fns[0].user_name, content="wasmExportSave")
+  debug_inspect(fns.length(), content="1")
+  debug_inspect(fns[0].user_name, content=(
+    #|"wasmExportSave"
+  ))
 }
 
 ///|
@@ -90,8 +108,14 @@ test "parse_mbt_source handles multiple pub fns" {
     #|  ()
     #|}
   let fns = parse_mbt_source(content)
-  inspect(fns.length(), content="3")
-  inspect(fns[0].user_name, content="cabi_realloc")
-  inspect(fns[1].user_name, content="wasmExportSave")
-  inspect(fns[2].user_name, content="wasmExportSavePostReturn")
+  debug_inspect(fns.length(), content="3")
+  debug_inspect(fns[0].user_name, content=(
+    #|"cabi_realloc"
+  ))
+  debug_inspect(fns[1].user_name, content=(
+    #|"wasmExportSave"
+  ))
+  debug_inspect(fns[2].user_name, content=(
+    #|"wasmExportSavePostReturn"
+  ))
 }

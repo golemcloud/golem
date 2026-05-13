@@ -4,25 +4,25 @@
 pub(all) struct Uuid {
   high_bits : UInt64
   low_bits : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) enum IpAddress {
   Ipv4((Byte, Byte, Byte, Byte))
   Ipv6((UInt, UInt, UInt, UInt, UInt, UInt, UInt, UInt))
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct MacAddress {
   octets : (Byte, Byte, Byte, Byte, Byte, Byte)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct Date {
   year : Int
   month : Byte
   day : Byte
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct Time {
@@ -30,22 +30,22 @@ pub(all) struct Time {
   minute : Byte
   second : Byte
   nanosecond : UInt
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct Timestamp {
   date : Date
   time : Time
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct Timestamptz {
   timestamp : Timestamp
   offset : Int
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct Timetz {
   time : Time
   offset : Int
-} derive(Show, Eq)
+} derive(Debug, Eq)

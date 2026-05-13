@@ -62,9 +62,6 @@ use wasmtime_wasi_http::p2::body::HostIncomingBody;
 use wasmtime_wasi_http::p2::types::HostIncomingResponse;
 use wasmtime_wasi_http::FieldMap;
 
-/// Must match `DEFAULT_FIELD_SIZE_LIMIT` in wasmtime-wasi-http's `WasiHttpCtx`
-const DEFAULT_FIELD_SIZE_LIMIT: usize = 128 * 1024;
-
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 pub struct ObjectMetadata {

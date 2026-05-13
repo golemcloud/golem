@@ -162,6 +162,6 @@ fn[T] panic_on_rpc_error(e : @agentHost.RpcError) -> T {
     @agentHost.RpcError::RemoteInternalError(msg) =>
       abort("RPC remote internal error: " + msg)
     @agentHost.RpcError::RemoteAgentError(e) =>
-      abort("RPC remote agent error: " + e.to_string())
+      abort("RPC remote agent error: " + @debug.to_string(e))
   }
 }

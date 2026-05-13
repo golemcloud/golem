@@ -8,7 +8,7 @@ pub(all) suberror Error_ {
   QueryExecutionFailure(String)
   QueryResponseFailure(String)
   Other(String)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// ── Value types (maps 1-to-1 onto ignite_client::IgniteValue) ─────────────
@@ -29,29 +29,29 @@ pub(all) enum DbValue {
   DbTime(Int64)
   DbDecimal(String)
   DbByteArray(FixedArray[Byte])
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// ── Metadata ───────────────────────────────────────────────────────────────
 pub(all) struct DbColumn {
   ordinal : UInt64
   name : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct DbRow {
   values : Array[DbValue]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct DbResult {
   columns : Array[DbColumn]
   rows : Array[DbRow]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// ── Resources ──────────────────────────────────────────────────────────────
-pub(all) struct DbResultStream(Int) derive(Show, Eq)
+pub(all) struct DbResultStream(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -61,7 +61,7 @@ pub fn DbResultStream::drop(self : DbResultStream) -> Unit {
 }
 
 ///|
-pub(all) struct DbTransaction(Int) derive(Show, Eq)
+pub(all) struct DbTransaction(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -71,7 +71,7 @@ pub fn DbTransaction::drop(self : DbTransaction) -> Unit {
 }
 
 ///|
-pub(all) struct DbConnection(Int) derive(Show, Eq)
+pub(all) struct DbConnection(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.

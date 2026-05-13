@@ -4,7 +4,7 @@ pub(all) enum VariantPayload {
   None
   Single(ParamType)
   Multi(Array[(String, ParamType)], Bool)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Discriminates between the three supported custom type shapes: record, simple enum, and variant enum.
@@ -12,21 +12,21 @@ pub(all) enum ValueTypeKind {
   Record(Array[(String, ParamType)])
   SimpleEnum(Array[String])
   VariantEnum(Array[(String, VariantPayload)])
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Parsed information about a custom data type annotated with `#derive.golem_schema`.
 pub(all) struct ValueTypeInfo {
   name : String
   kind : ValueTypeKind
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Parsed information about a multimodal enum annotated with `#derive.multimodal`.
 pub(all) struct MultimodalEnumInfo {
   name : String
   variants : Array[(String, ParamType)]
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Parses `#derive.multimodal` annotated enum types from source files.

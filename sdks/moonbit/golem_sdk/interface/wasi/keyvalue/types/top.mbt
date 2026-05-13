@@ -17,7 +17,7 @@
 ///
 /// In this interface, we use the term `bucket` to refer to a collection of key-value
 /// Soon: switch to `resource bucket { ... }`
-pub(all) struct Bucket(Int) derive(Show, Eq)
+pub(all) struct Bucket(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -31,7 +31,7 @@ pub fn Bucket::drop(self : Bucket) -> Unit {
 /// that can be represented in a byte array. It provides a way to write the value
 /// to the output-stream defined in the `wasi-io` interface.
 /// Soon: switch to `resource value { ... }`
-pub(all) struct OutgoingValue(Int) derive(Show, Eq)
+pub(all) struct OutgoingValue(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -53,7 +53,7 @@ pub fn OutgoingValue::drop(self : OutgoingValue) -> Unit {
 /// This is useful when the value is large and the caller wants to allocate a buffer of
 /// the right size to consume the value.
 /// Soon: switch to `resource incoming-value { ... }`
-pub(all) struct IncomingValue(Int) derive(Show, Eq)
+pub(all) struct IncomingValue(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
