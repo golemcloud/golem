@@ -21,9 +21,8 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::{Duration, Instant};
 use tokio::sync::mpsc as tokio_mpsc;
 use uuid::Uuid;
 
@@ -31,7 +30,6 @@ pub const REPL_CONTROL_ADDR_ENV: &str = "GOLEM_REPL_CONTROL_ADDR";
 pub const REPL_CONTROL_TOKEN_ENV: &str = "GOLEM_REPL_CONTROL_TOKEN";
 const GOLEM_REPL_PTY_DEBUG_ENV: &str = "GOLEM_REPL_PTY_DEBUG";
 const GOLEM_REPL_PTY_DEBUG_LOG_ENV: &str = "GOLEM_REPL_PTY_DEBUG_LOG";
-const STARTUP_STABILIZATION_DELAY: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Debug)]
 pub struct ReplCommandSpec {
@@ -114,13 +112,11 @@ struct Supervisor {
     control_token: String,
     debug_log: DebugLog,
     state: SupervisorState,
-    state_since: Instant,
     terminal_state: TerminalState,
     node: Option<SessionRuntime>,
     cli: Option<SessionRuntime>,
     pending_cli_response: Option<Sender<control::RunCliResponse>>,
     reload: Option<ReloadCoordinator>,
-    cli_cancel_pending: bool,
     ctrl_c_debounced: bool,
 }
 
@@ -138,13 +134,11 @@ impl Supervisor {
             control_token,
             debug_log,
             state: SupervisorState::NodeStarting,
-            state_since: Instant::now(),
             terminal_state: TerminalState::Raw,
             node: None,
             cli: None,
             pending_cli_response: None,
             reload,
-            cli_cancel_pending: false,
             ctrl_c_debounced: false,
         }
     }
@@ -161,17 +155,14 @@ impl Supervisor {
         self.set_state(SupervisorState::NodeStarting);
 
         loop {
-            self.tick(&event_tx)?;
-
-            match event_rx.recv_timeout(Duration::from_millis(50)) {
+            match event_rx.recv() {
                 Ok(event) => {
                     if let Some(result) = self.handle_event(event, &event_tx)? {
                         self.cleanup_all();
                         return Ok(result);
                     }
                 }
-                Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => {
+                Err(_) => {
                     self.cleanup_all();
                     return Err(anyhow!("REPL supervisor event loop stopped unexpectedly"));
                 }
@@ -280,7 +271,6 @@ impl Supervisor {
 
         self.cli = Some(cli);
         self.pending_cli_response = Some(request.response);
-        self.cli_cancel_pending = false;
         self.ctrl_c_debounced = false;
         self.set_state(SupervisorState::CliStarting);
         Ok(())
@@ -323,7 +313,6 @@ impl Supervisor {
 
     fn request_cli_cancel(&mut self) -> anyhow::Result<()> {
         self.ctrl_c_debounced = true;
-        self.cli_cancel_pending = true;
         self.set_state(SupervisorState::CliCancelling);
         if let Some(cli) = self.cli.as_mut() {
             self.debug_log.log("forwarding ctrl-c to CLI PTY");
@@ -361,7 +350,6 @@ impl Supervisor {
             }
             SessionId::Cli => {
                 self.cli = None;
-                self.cli_cancel_pending = false;
                 self.ctrl_c_debounced = false;
                 self.set_state(SupervisorState::CliExiting);
 
@@ -410,29 +398,6 @@ impl Supervisor {
         self.enter_raw_mode()?;
         self.spawn_session(SessionId::Node, node_spec, event_tx)
             .map(Some)
-    }
-
-    fn tick(&mut self, _event_tx: &Sender<SupervisorEvent>) -> anyhow::Result<()> {
-        match self.state {
-            SupervisorState::NodeStarting => {
-                if self.state_since.elapsed() >= STARTUP_STABILIZATION_DELAY {
-                    self.set_state(SupervisorState::ReplActive);
-                }
-            }
-            SupervisorState::CliStarting => {
-                if self.state_since.elapsed() >= STARTUP_STABILIZATION_DELAY {
-                    if self.cli_cancel_pending {
-                        self.request_cli_cancel()?;
-                    } else {
-                        self.set_state(SupervisorState::CliActive);
-                    }
-                }
-            }
-            SupervisorState::CliCancelling => {}
-            _ => {}
-        }
-
-        Ok(())
     }
 
     fn spawn_session(
@@ -496,7 +461,6 @@ impl Supervisor {
             self.debug_log
                 .log(format!("state {:?} -> {:?}", self.state, state));
             self.state = state;
-            self.state_since = Instant::now();
         }
     }
 }

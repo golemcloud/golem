@@ -36,7 +36,7 @@ inherit_test_dep!(Tracing);
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
 use colored::Colorize;
-use expectrl::Expect;
+use expectrl::{Eof, Expect};
 use golem_cli::app::edit;
 use golem_cli::fs;
 use golem_cli::sdk_overrides::sdk_overrides;
@@ -841,6 +841,7 @@ pub trait InteractiveSession {
     fn set_expect_timeout(&mut self, timeout: Option<Duration>);
     fn send(&mut self, line: &str) -> anyhow::Result<()>;
     fn send_line(&mut self, line: &str) -> anyhow::Result<()>;
+    fn expect_eof(&mut self) -> anyhow::Result<()>;
     fn expect_str(&mut self, expected: &str) -> anyhow::Result<()>;
     fn expect_regex(&mut self, expected: &str) -> anyhow::Result<()>;
 
@@ -983,8 +984,16 @@ impl<'a> ReplTestSession<'a> {
         self.repl.expect_regex(expected)
     }
 
+    pub fn send_line(&mut self, line: &str) -> anyhow::Result<()> {
+        self.repl.send_line(line)
+    }
+
     pub fn send_line_and_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
         self.repl.send_line_and_expect_regex(line, expected)
+    }
+
+    pub fn send_line_and_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
+        self.repl.send_line_and_expect_str(line, expected)
     }
 
     pub fn send_line_wait_eval_expect_str(
@@ -1034,6 +1043,14 @@ impl<'a> ReplTestSession<'a> {
     pub fn kill_line(&mut self) -> anyhow::Result<()> {
         self.repl.send("\u{15}")
     }
+
+    pub fn send_ctrl_c(&mut self) -> anyhow::Result<()> {
+        self.repl.send("\u{3}")
+    }
+
+    pub fn expect_eof(&mut self) -> anyhow::Result<()> {
+        self.repl.expect_eof()
+    }
 }
 
 impl<P, S> InteractiveSession for expectrl::Session<P, S>
@@ -1051,6 +1068,11 @@ where
 
     fn send_line(&mut self, line: &str) -> anyhow::Result<()> {
         Expect::send_line(self, line).with_context(|| format!("failed to send line: {line}"))?;
+        Ok(())
+    }
+
+    fn expect_eof(&mut self) -> anyhow::Result<()> {
+        self.expect(Eof).context("failed to match EOF")?;
         Ok(())
     }
 
