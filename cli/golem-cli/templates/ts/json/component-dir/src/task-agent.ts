@@ -19,8 +19,8 @@ interface CreateTaskRequest {
 }
 
 @agent({
-  mount: '/task-agents/{name}',
-  cors: [ "*" ]
+    mount: "/task-agents/{name}",
+    cors: ["*"],
 })
 class TaskAgent extends BaseAgent {
     private tasks: Task[] = [];
@@ -29,7 +29,7 @@ class TaskAgent extends BaseAgent {
     private readonly name: string;
 
     constructor(name: string) {
-        super()
+        super();
         this.name = name;
     }
 
@@ -55,8 +55,8 @@ class TaskAgent extends BaseAgent {
         return this.tasks;
     }
 
-  @description("Marks a task as completed by its ID")
-  @endpoint({ post: "/tasks/{id}/complete" })
+    @description("Marks a task as completed by its ID")
+    @endpoint({ post: "/tasks/{id}/complete" })
     async completeTask(id: number): Promise<Task | null> {
         const task = this.tasks.find(t => t.id === id);
         if (task) {
