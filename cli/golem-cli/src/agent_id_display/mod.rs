@@ -105,7 +105,7 @@ impl std::fmt::Display for SourceLanguage {
 ///
 /// For [`SourceLanguage::Rust`], produces Rust literal syntax (e.g. `"hello"`, `Some(42)`).
 /// For [`SourceLanguage::TypeScript`], produces TypeScript/JSON-like syntax (e.g. `{ ok: 42 }`).
-/// For other languages, falls back to the canonical structural format.
+/// For other languages, falls back to the canonical TypeScript-based format.
 pub fn render_data_value(data_value: &DataValue, source_language: &SourceLanguage) -> String {
     match source_language {
         SourceLanguage::Rust => render_rust::render_data_value_rust(data_value),
@@ -120,7 +120,8 @@ pub fn render_data_value(data_value: &DataValue, source_language: &SourceLanguag
 /// Renders a single [`ValueAndType`] using language-specific syntax.
 ///
 /// This is useful for displaying individual component model values (a subtree of [`DataValue`])
-/// in the source language's native format.
+/// in the source language's native format. Unknown languages fall back to the canonical
+/// TypeScript-based format.
 pub fn render_value_and_type(vat: &ValueAndType, source_language: &SourceLanguage) -> String {
     match source_language {
         SourceLanguage::Rust => render_rust::render_value_and_type_rust(vat),
@@ -147,7 +148,8 @@ pub fn render_agent_id(parsed: &ParsedAgentId, source_language: &SourceLanguage)
 /// Renders an [`AnalysedType`] as a human-readable type expression using language-specific syntax.
 ///
 /// When `prefer_name` is true and the type has a name (e.g., named records, variants),
-/// the name is used instead of the inline structural representation.
+/// the name is used instead of the inline structural representation. Unknown languages fall back
+/// to the canonical TypeScript-based format.
 pub fn render_type_for_language(
     lang: &SourceLanguage,
     typ: &golem_wasm::analysis::AnalysedType,

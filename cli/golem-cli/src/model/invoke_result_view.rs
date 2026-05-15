@@ -17,8 +17,9 @@ use crate::log::log_error;
 use anyhow::{anyhow, bail};
 use golem_client::model::AgentInvocationResult;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::agent::{AgentType, DataSchema, DataValue, ElementSchema};
-use golem_wasm::ValueAndType;
+use golem_common::model::agent::{AgentType, DataSchema, DataValue, ElementValue};
+use golem_wasm::analysis::{AnalysedType, TypeTuple};
+use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -27,13 +28,13 @@ pub struct InvokeResultView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub result_json: Option<ValueAndType>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub result_wave: Option<Vec<String>>,
-    #[serde(default = "default_result_format")]
-    pub result_format: String,
-}
-
-fn default_result_format() -> String {
-    "WAVE".to_string()
+    pub results_json: Option<Vec<ValueAndType>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub result_format: Option<String>,
+    #[serde(skip)]
+    pub is_void_result: bool,
 }
 
 impl InvokeResultView {
@@ -50,66 +51,51 @@ impl InvokeResultView {
             SourceLanguage::TypeScript => "TypeScript syntax",
             SourceLanguage::Scala => "Scala syntax",
             SourceLanguage::MoonBit => "MoonBit syntax",
-            SourceLanguage::Other(_) => "WAVE",
+            SourceLanguage::Other(_) => "fallback TypeScript syntax",
         }
         .to_string();
 
-        let rendered =
-            match Self::try_render_agent_result(&result, agent_type, method_name, &source_language)
-            {
-                Ok(r) => Some(r),
+        let (is_void_result, result_values) =
+            match Self::try_get_agent_results(&result, agent_type, method_name) {
+                Ok(r) => r,
                 Err(err) => {
                     log_error(format!("{err}"));
-                    None
+                    (false, vec![])
                 }
             };
 
-        let result_json = result.result.and_then(|untyped| {
-            let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
-            let data_value =
-                match DataValue::try_from_untyped_json(untyped, method.output_schema.clone()) {
-                    Ok(dv) => dv,
-                    Err(err) => {
-                        log_error(format!("Failed to parse agent result: {err}"));
-                        return None;
-                    }
-                };
-            let value = match data_value.into_return_value() {
-                Some(v) => v,
-                None => {
-                    log_error("Agent result is not a single return value");
-                    return None;
-                }
-            };
-            let output_schemas = match &method.output_schema {
-                DataSchema::Tuple(schemas) => &schemas.elements,
-                _ => {
-                    log_error("Non-tuple output schema not supported for result display");
-                    return None;
-                }
-            };
-            let first_schema = match output_schemas.first() {
-                Some(s) => s,
-                None => {
-                    log_error("Empty output schema");
-                    return None;
-                }
-            };
-            let analysed_type = match &first_schema.schema {
-                ElementSchema::ComponentModel(cm) => cm.element_type.clone(),
-                _ => {
-                    log_error("Non-ComponentModel output schema not supported for result display");
-                    return None;
-                }
-            };
-            Some(ValueAndType::new(value, analysed_type))
-        });
+        let (result_json, results_json, rendered_result, result_format) = match result_values.len()
+        {
+            0 => (None, None, None, None),
+            1 => {
+                let result_json = result_values.into_iter().next().expect("checked length");
+                let rendered_result = render_value_and_type(&result_json, &source_language);
+                (
+                    Some(result_json),
+                    None,
+                    Some(rendered_result),
+                    Some(result_format),
+                )
+            }
+            _ => {
+                let rendered_result =
+                    Self::render_multiple_results(&result_values, &source_language);
+                (
+                    None,
+                    Some(result_values),
+                    Some(rendered_result),
+                    Some(result_format),
+                )
+            }
+        };
 
         Self {
             idempotency_key: idempotency_key.value,
             result_json,
-            result_wave: rendered,
+            results_json,
+            result: rendered_result,
             result_format,
+            is_void_result,
         }
     }
 
@@ -117,50 +103,69 @@ impl InvokeResultView {
         Self {
             idempotency_key: idempotency_key.value,
             result_json: None,
-            result_wave: None,
-            result_format: default_result_format(),
+            results_json: None,
+            result: None,
+            result_format: None,
+            is_void_result: false,
         }
     }
 
-    fn try_render_agent_result(
+    fn try_get_agent_results(
         result: &AgentInvocationResult,
         agent_type: &AgentType,
         method_name: &str,
-        source_language: &SourceLanguage,
-    ) -> anyhow::Result<Vec<String>> {
-        let Some(ref untyped) = result.result else {
-            return Ok(vec![]);
-        };
-
+    ) -> anyhow::Result<(bool, Vec<ValueAndType>)> {
         let method = agent_type
             .methods
             .iter()
             .find(|m| m.name == method_name)
             .ok_or_else(|| anyhow!("Method '{method_name}' not found in agent type"))?;
 
-        let data_value =
-            DataValue::try_from_untyped_json(untyped.clone(), method.output_schema.clone())
-                .map_err(|e| anyhow!("Failed to parse agent result: {e}"))?;
-
-        let Some(value) = data_value.into_return_value() else {
-            return Ok(vec![]);
-        };
-
         let output_schemas = match &method.output_schema {
             DataSchema::Tuple(schemas) => &schemas.elements,
             _ => bail!("Non-tuple output schema not supported for result rendering"),
         };
 
-        let first_schema = output_schemas
-            .first()
-            .ok_or_else(|| anyhow!("Empty output schema"))?;
+        if output_schemas.is_empty() {
+            return Ok((true, vec![]));
+        }
 
-        let analysed_type = match &first_schema.schema {
-            ElementSchema::ComponentModel(cm) => cm.element_type.clone(),
-            _ => bail!("Non-ComponentModel output schema not supported for result rendering"),
+        let Some(ref untyped) = result.result else {
+            return Ok((false, vec![]));
         };
 
-        let vt = ValueAndType::new(value, analysed_type);
-        Ok(vec![render_value_and_type(&vt, source_language)])
+        let data_value =
+            DataValue::try_from_untyped_json(untyped.clone(), method.output_schema.clone())
+                .map_err(|e| anyhow!("Failed to parse agent result: {e}"))?;
+
+        let DataValue::Tuple(elements) = data_value else {
+            bail!("Non-tuple agent result not supported for result rendering");
+        };
+
+        let values = elements
+            .elements
+            .into_iter()
+            .map(|element| match element {
+                ElementValue::ComponentModel(component_model) => Ok(component_model.value),
+                _ => bail!("Non-ComponentModel output schema not supported for result rendering"),
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok((false, values))
+    }
+
+    fn render_multiple_results(
+        results: &[ValueAndType],
+        source_language: &SourceLanguage,
+    ) -> String {
+        let value = Value::Tuple(results.iter().map(|result| result.value.clone()).collect());
+        let typ = AnalysedType::Tuple(TypeTuple {
+            name: None,
+            owner: None,
+            items: results.iter().map(|result| result.typ.clone()).collect(),
+        });
+        let value_and_type = ValueAndType::new(value, typ);
+
+        render_value_and_type(&value_and_type, source_language)
     }
 }
