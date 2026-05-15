@@ -212,6 +212,8 @@ impl OidcHandler {
             .cloned()
             .collect();
 
+        debug!("getting auth url for oidc");
+
         let auth_url = self
             .identity_provider
             .get_authorization_url(security_scheme, scopes, state, nonce)
