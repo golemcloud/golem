@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import childProcess, { ChildProcess } from 'node:child_process';
+import net from 'node:net';
 import repl from 'node:repl';
 import pc from 'picocolors';
 import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig } from './config';
@@ -72,9 +73,6 @@ export class CliReplInterop {
       replServer.defineCommand(command.replCommand, {
         help: command.about,
         action(rawArgs: string) {
-          // Do not call this.pause() — it blocks stdin which prevents the readline
-          // Interface from emitting 'SIGINT' events when the user presses Ctrl-C.
-          // Instead we suppress concurrent eval for the duration of the command.
           const abortController = new AbortController();
           suppressNextSigint = true;
           const onSigint = () => abortController.abort();
@@ -89,15 +87,25 @@ export class CliReplInterop {
           ) => cb(null, undefined);
 
           const self = this;
-          void (async () => {
+          return (async () => {
+            let reload = false;
             try {
-              await interop.runReplCliCommand(command, rawArgs, abortController.signal);
+              const result = await interop.runReplCliCommand(
+                command,
+                rawArgs,
+                abortController.signal,
+              );
+              reload = result.reload;
             } finally {
               suppressNextSigint = false;
               (replServer as any).eval = savedEval;
               replServer.off('SIGINT', onSigint);
-              self.displayPrompt();
               self.clearBufferedCommand();
+              if (reload) {
+                await CliReplInterop.exitWithReloadCode();
+                return;
+              }
+              self.displayPrompt();
             }
           })();
         },
@@ -174,8 +182,12 @@ export class CliReplInterop {
   }
 
   static async exitWithReloadCode() {
+    await CliReplInterop.exitWithCode(75);
+  }
+
+  static async exitWithCode(code: number) {
     await flushStdIO();
-    process.exit(75);
+    process.exit(code);
   }
 
   startAgentStream(request: base.AgentInvocationRequest) {
@@ -260,6 +272,7 @@ export class CliReplInterop {
   ): Promise<{
     ok: boolean;
     code: number | null;
+    reload: boolean;
   }> {
     let args = parseRawArgs(rawArgs);
 
@@ -275,11 +288,11 @@ export class CliReplInterop {
       signal,
     });
 
-    if (hook) {
-      await hook.handleResult(command.commandPath.concat(args), result);
-    }
+    const reload = hook
+      ? await hook.shouldReloadAfterResult(command.commandPath.concat(args), result)
+      : false;
 
-    return result;
+    return { ...result, reload };
   }
 
   private async completeArgValue(
@@ -313,7 +326,10 @@ export class CliReplInterop {
 type CommandHookId = string;
 type CommandHook = {
   adaptArgs: (args: string[]) => string[];
-  handleResult: (args: string[], result: { ok: boolean; code: number | null }) => Promise<void>;
+  shouldReloadAfterResult: (
+    args: string[],
+    result: { ok: boolean; code: number | null },
+  ) => Promise<boolean>;
 };
 
 type AgentStreamState = {
@@ -375,10 +391,9 @@ function safeJsonStringify(value: unknown): string {
 const COMMAND_HOOKS: Partial<Record<CommandHookId, CommandHook>> = {
   deploy: {
     adaptArgs: (args) => ['--repl-bridge-sdk-target', 'ts', ...args],
-    handleResult: async (args, result) => {
-      if (args.includes('--plan') || args.includes('stage')) return;
-      if (!result.ok) return;
-      await CliReplInterop.exitWithReloadCode();
+    shouldReloadAfterResult: async (args, result) => {
+      if (args.includes('--plan') || args.includes('stage')) return false;
+      return result.ok;
     },
   },
 };
@@ -443,22 +458,33 @@ class GolemCli {
   private readonly binaryName: string;
   private readonly cwd: string;
   private readonly clientConfig: base.Configuration;
+  private readonly controlClient: RustReplControlClient | undefined;
 
   constructor(opts: { binary: string; cwd: string; clientConfig: base.Configuration }) {
     this.binaryName = opts.binary;
     this.cwd = opts.cwd;
     this.clientConfig = opts.clientConfig;
+    this.controlClient = RustReplControlClient.fromEnv();
   }
 
-  async run(opts: { args: string[]; mode: 'inherit' | 'collect'; signal?: AbortSignal }): Promise<{
+  async run(opts: {
+    args: string[];
+    mode: 'inherit' | 'collect';
+    signal?: AbortSignal;
+  }): Promise<{
     ok: boolean;
     code: number | null;
     stdout: string;
     stderr: string;
   }> {
+    const fullArgs = ['--environment', this.clientConfig.environment, ...opts.args];
+    if (opts.mode === 'inherit' && this.controlClient) {
+      return this.controlClient.runCli(fullArgs);
+    }
+
     const child = childProcess.spawn(
       this.binaryName,
-      ['--environment', this.clientConfig.environment, ...opts.args],
+      fullArgs,
       {
         cwd: this.cwd,
         stdio: ((mode) => {
@@ -506,6 +532,122 @@ class GolemCli {
   }): Promise<{ ok: boolean; code: number | null; json: any }> {
     const result = await this.run({ args: ['--format', 'json', ...opts.args], mode: 'collect' });
     return { ok: result.ok, code: result.code, json: JSON.parse(result.stdout) };
+  }
+}
+
+type ControlResponse = {
+  type: 'cliResult' | 'error';
+  id?: string;
+  ok: boolean;
+  code?: number | null;
+  stdout?: string | null;
+  stderr?: string | null;
+  error?: string | null;
+};
+
+class RustReplControlClient {
+  private readonly addr: string;
+  private readonly token: string;
+  private socket: net.Socket | undefined;
+  private buffer = '';
+  private readonly pending = new Map<
+    string,
+    { resolve: (response: ControlResponse) => void; reject: (err: Error) => void }
+  >();
+
+  private constructor(addr: string, token: string) {
+    this.addr = addr;
+    this.token = token;
+  }
+
+  static fromEnv(): RustReplControlClient | undefined {
+    const addr = process.env.GOLEM_REPL_CONTROL_ADDR;
+    const token = process.env.GOLEM_REPL_CONTROL_TOKEN;
+    if (!addr || !token) return;
+    return new RustReplControlClient(addr, token);
+  }
+
+  async runCli(args: string[]): Promise<{
+    ok: boolean;
+    code: number | null;
+    stdout: string;
+    stderr: string;
+  }> {
+    const response = await this.request({ type: 'runCli', args });
+    if (response.type === 'error') {
+      throw new Error(response.error ?? 'REPL control request failed');
+    }
+    return {
+      ok: response.ok,
+      code: response.code ?? null,
+      stdout: response.stdout ?? '',
+      stderr: response.stderr ?? '',
+    };
+  }
+
+  private async request(message: { type: string; args: string[] }): Promise<ControlResponse> {
+    const id = uuid.v4().toString();
+    const socket = await this.connect();
+    const response = new Promise<ControlResponse>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+    });
+    socket.write(JSON.stringify({ ...message, id, token: this.token }) + '\n');
+    return response;
+  }
+
+  private connect(): Promise<net.Socket> {
+    if (this.socket && !this.socket.destroyed) {
+      return Promise.resolve(this.socket);
+    }
+
+    const separator = this.addr.lastIndexOf(':');
+    if (separator === -1) {
+      return Promise.reject(new Error(`Invalid REPL control address: ${this.addr}`));
+    }
+
+    const host = this.addr.slice(0, separator);
+    const port = Number(this.addr.slice(separator + 1));
+    if (!Number.isInteger(port)) {
+      return Promise.reject(new Error(`Invalid REPL control port: ${this.addr}`));
+    }
+
+    return new Promise((resolve, reject) => {
+      const socket = net.createConnection({ host, port }, () => {
+        socket.off('error', reject);
+        this.socket = socket;
+        resolve(socket);
+      });
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk) => this.onData(String(chunk)));
+      socket.once('error', reject);
+      socket.once('close', () => {
+        for (const { reject } of this.pending.values()) {
+          reject(new Error('REPL control connection closed'));
+        }
+        this.pending.clear();
+        if (this.socket === socket) {
+          this.socket = undefined;
+        }
+      });
+    });
+  }
+
+  private onData(chunk: string): void {
+    this.buffer += chunk;
+    for (;;) {
+      const newline = this.buffer.indexOf('\n');
+      if (newline === -1) return;
+      const line = this.buffer.slice(0, newline);
+      this.buffer = this.buffer.slice(newline + 1);
+      if (!line.trim()) continue;
+
+      const response = JSON.parse(line) as ControlResponse;
+      if (!response.id) continue;
+      const pending = this.pending.get(response.id);
+      if (!pending) continue;
+      this.pending.delete(response.id);
+      pending.resolve(response);
+    }
   }
 }
 

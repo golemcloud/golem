@@ -70,6 +70,7 @@ lenient_bool = { workspace = true }
 minijinja = { workspace = true }
 native-tls = { workspace = true }
 phf = { workspace = true }
+portable-pty = { workspace = true }
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
