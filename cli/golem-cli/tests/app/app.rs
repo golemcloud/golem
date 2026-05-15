@@ -667,6 +667,161 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 }
 
 #[test]
+async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "test-app-directory-source-ifs";
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    fs::create_dir_all(ctx.cwd_path_join(Path::new("scratch").join("workspace"))).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("scratch").join("workspace").join(".keep")),
+        "seed\n",
+    )
+    .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("scratch").join("workspace").join("nested.txt")),
+        "nested seed\n",
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("ifs-probe-agent.ts")),
+        indoc! {
+            r#"
+            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import * as fs from 'node:fs';
+
+            @agent({})
+            class IfsProbeAgent extends BaseAgent {
+                constructor(name: string) {
+                    super();
+                }
+
+                async probe(): Promise<string> {
+                    fs.mkdirSync('/workspace/generated', { recursive: true });
+                    fs.writeFileSync('/workspace/generated/output.txt', 'generated', 'utf8');
+
+                    return JSON.stringify({
+                        keep: fs.readFileSync('/workspace/.keep', 'utf8'),
+                        nested: fs.readFileSync('/workspace/nested.txt', 'utf8'),
+                        generated: fs.readFileSync('/workspace/generated/output.txt', 'utf8'),
+                    });
+                }
+            }
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("main.ts")),
+        indoc! {
+            r#"
+            export * from './counter-agent';
+            export * from './ifs-probe-agent';
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+            manifestVersion: 1.5.0
+
+            app: test-app-directory-source-ifs
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-directory-source-ifs:ts-main:
+                templates: ts
+
+            agents:
+              IfsProbeAgent:
+                files:
+                - sourcePath: ./scratch/workspace/.keep
+                  targetPath: /workspace/.keep
+                  permissions: read-write
+        "},
+    )
+    .unwrap();
+
+    ctx.start_server().await;
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("/workspace/.keep:"));
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+            manifestVersion: 1.5.0
+
+            app: test-app-directory-source-ifs
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-directory-source-ifs:ts-main:
+                templates: ts
+
+            agents:
+              IfsProbeAgent:
+                files:
+                - sourcePath: ./scratch/workspace
+                  targetPath: /workspace
+                  permissions: read-write
+        "},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("/workspace/nested.txt:"));
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "IfsProbeAgent(\"directory-source\")",
+            "probe",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("seed\\n"));
+    assert!(outputs.stdout_contains("nested seed\\n"));
+    assert!(outputs.stdout_contains("generated"));
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            "files",
+            "IfsProbeAgent(\"directory-source\")",
+            "/workspace",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_row_with_cells(&[".keep", "file", "rw"]));
+    assert!(outputs.stdout_contains_row_with_cells(&["nested.txt", "file", "rw"]));
+    assert!(outputs.stdout_contains_row_with_cells(&["generated", "directory"]));
+}
+
+#[test]
 async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-reset-incompatible";
