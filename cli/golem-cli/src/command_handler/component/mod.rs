@@ -623,6 +623,7 @@ impl ComponentCommandHandler {
                     plan: false,
                     stage: false,
                     approve_staging_steps: false,
+                    full_diff: false,
                     force_build: None,
                     post_deploy_args: post_deploy_args
                         .cloned()
@@ -680,6 +681,7 @@ impl ComponentCommandHandler {
                             plan: false,
                             stage: false,
                             approve_staging_steps: false,
+                            full_diff: false,
                             force_build: None,
                             post_deploy_args: PostDeployArgs::none(),
                             repl_bridge_sdk_target,
@@ -871,7 +873,11 @@ impl ComponentCommandHandler {
                 agent_type.type_name.clone(),
                 AgentTypeManifestProvisionConfig {
                     env: resolve_env_vars(component_name, resolved_agent.env())?,
-                    config: materialize_agent_config_entries(agent_type, resolved_agent.config()),
+                    config: resolve_config_values(
+                        component_name,
+                        &agent_type.type_name,
+                        materialize_agent_config_entries(agent_type, resolved_agent.config()),
+                    )?,
                     files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
                     plugins: resolve_plugin_parameters(component_name, resolved_agent.plugins())?,
@@ -1409,6 +1415,79 @@ fn resolve_plugin_parameters(
             component_name.as_str().log_color_highlight()
         ),
         validation.build(resolved_plugins),
+        None,
+    )
+}
+
+fn resolve_config_values(
+    component_name: &ComponentName,
+    agent_type_name: &AgentTypeName,
+    entries: Vec<AgentConfigEntryDto>,
+) -> anyhow::Result<Vec<AgentConfigEntryDto>> {
+    let renderer = crate::command_handler::template::EnvVarRenderer::new();
+
+    let mut resolved_entries = Vec::with_capacity(entries.len());
+    let mut validation = ValidationBuilder::new();
+    validation.with_context(
+        vec![
+            ("component", component_name.to_string()),
+            ("agentType", agent_type_name.0.clone()),
+        ],
+        |validation| {
+            for entry in entries {
+                let raw_value: serde_json::Value = entry.value.clone().into();
+                match renderer.render_json_value(&raw_value) {
+                    Ok(resolved_value) => {
+                        resolved_entries.push(AgentConfigEntryDto {
+                            path: entry.path,
+                            value: resolved_value.into(),
+                        });
+                    }
+                    Err(err) => {
+                        let template = raw_value.to_string();
+                        let missing_env_vars = renderer.missing_env_vars(&template, &err);
+                        let path = entry.path.join(".");
+                        let error_message = if missing_env_vars.is_empty() {
+                            format!(
+                                "Failed to substitute environment variable(s) for config {}",
+                                path.log_color_highlight()
+                            )
+                        } else {
+                            format!(
+                                "Failed to substitute environment variable(s) ({}) for config {}",
+                                missing_env_vars
+                                    .iter()
+                                    .map(|key| key.log_color_highlight())
+                                    .join(", "),
+                                path.log_color_highlight()
+                            )
+                        };
+                        let mut context = vec![
+                            ("path", path),
+                            ("template", template),
+                            (
+                                "error",
+                                err.to_string().log_color_error_highlight().to_string(),
+                            ),
+                        ];
+                        if !missing_env_vars.is_empty() {
+                            context.push(("missing", missing_env_vars.join(", ")));
+                        }
+                        validation.with_context(context, |validation| {
+                            validation.add_error(error_message)
+                        });
+                    }
+                }
+            }
+        },
+    );
+
+    validated_to_anyhow(
+        &format!(
+            "Failed to prepare config values for component: {}",
+            component_name.as_str().log_color_highlight()
+        ),
+        validation.build(resolved_entries),
         None,
     )
 }

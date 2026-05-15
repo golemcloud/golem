@@ -101,9 +101,17 @@ pub trait VecDiffable: Diffable {
 }
 
 pub fn unified_diff(current: impl AsRef<str>, new: impl AsRef<str>) -> String {
+    unified_diff_with_context(current, new, 4)
+}
+
+pub fn unified_diff_with_context(
+    current: impl AsRef<str>,
+    new: impl AsRef<str>,
+    context_radius: usize,
+) -> String {
     TextDiff::from_lines(current.as_ref(), new.as_ref())
         .unified_diff()
-        .context_radius(4)
+        .context_radius(context_radius)
         .to_string()
 }
 

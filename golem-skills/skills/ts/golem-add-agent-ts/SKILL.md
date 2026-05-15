@@ -105,6 +105,8 @@ class Wallet extends BaseAgent {
 
 Returning `Result.err(...)` completes the invocation successfully — the caller receives the error as a value. Throwing (e.g. `throw new Error(...)`) or returning a rejected promise will instead trigger a retry and eventually fail the whole agent.
 
+If the throw happens **after** a durable side effect has already completed, retry replays that side effect's recorded result. A common example is `const response = await fetch(...); if (!response.ok) throw ...`: the HTTP response status/body are recorded before the exception is thrown. Wrap the fetch, body read, and status check in `atomically(...)` when the exception should make Golem re-execute the HTTP request instead of replaying the recorded response.
+
 ## Related Skills
 
 - Load `golem-js-runtime` for details on the QuickJS runtime environment, available Web/Node.js APIs, and npm compatibility

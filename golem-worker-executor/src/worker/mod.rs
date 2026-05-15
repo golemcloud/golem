@@ -1707,6 +1707,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 error.to_string(),
                             ),
                             retry_from: OplogIndex::INITIAL,
+                            semantic_trap_retry_override: None,
                         },
                         stderr: String::new(),
                     }),
@@ -2821,7 +2822,11 @@ impl InvocationResult {
                     let stderr =
                         recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
                     Err(FailedInvocationResult {
-                        trap_type: TrapType::Error { error, retry_from },
+                        trap_type: TrapType::Error {
+                            error,
+                            retry_from,
+                            semantic_trap_retry_override: None,
+                        },
                         stderr,
                     })
                 }
@@ -2930,6 +2935,7 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::TransientError("in-function retry".to_string()),
                         retry_from: OplogIndex::from_u64(17),
+                        semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),
                 }),
@@ -2950,6 +2956,7 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::TransientError("in-function retry".to_string()),
                         retry_from: OplogIndex::from_u64(17),
+                        semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),
                 }),

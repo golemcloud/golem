@@ -514,6 +514,78 @@ cargo clippy --target wasm32-wasip1  # Lint (must target wasm32-wasip1)
 <!-- golem-managed:guide:ts:start -->
 <!-- Golem manages this section. Do not edit manually. -->
 
+# Skills
+
+This project includes coding-agent skills in `.agents/skills/`. Load a skill when the task matches its description.
+
+| Skill | Description |
+|-------|-------------|
+| `golem-cloud-account-setup` | Setting up a Golem Cloud account — authentication, cloud profiles, API tokens, and first cloud deployment |
+| `golem-new-project` | Creating a new Golem application project with `golem new` |
+| `golem-add-component` | Adding a new component or agent templates to an existing application |
+| `golem-edit-manifest` | Editing the Golem Application Manifest (golem.yaml) — components, agents, templates, environments, httpApi, mcp, bridge SDKs, plugins, and more |
+| `golem-build` | Building a Golem application with `golem build` |
+| `golem-troubleshoot-build` | Troubleshooting Golem build failures and debugging manifest file (golem.yaml) configuration — diagnosing tool, dependency, env var, config, and manifest layer issues with `golem component manifest-trace` |
+| `golem-deploy` | Deploying a Golem application with `golem deploy` |
+| `golem-local-dev-server` | Starting, configuring, and debugging the local Golem development server with `golem server` — verbosity flags, useful tracing targets, and key log lines |
+| `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
+| `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
+| `golem-create-agent-instance-ts` | Creating a new agent instance with `golem agent new` |
+| `golem-invoke-agent-ts` | Invoking a Golem agent method from the CLI |
+| `golem-trigger-agent-ts` | Triggering a fire-and-forget invocation on a Golem agent |
+| `golem-schedule-agent-ts` | Scheduling a future invocation on a Golem agent |
+| `golem-add-npm-package` | Adding an npm package dependency to the project |
+| `golem-add-postgres-ts` | Connecting to PostgreSQL with `golem:rdbms/postgres` from TypeScript agents |
+| `golem-add-mysql-ts` | Connecting to MySQL with `golem:rdbms/mysql` from TypeScript agents |
+| `golem-add-ignite-ts` | Connecting to Apache Ignite 2 with `golem:rdbms/ignite2` from TypeScript agents |
+| `golem-add-agent-ts` | Adding a new agent type to a TypeScript Golem component |
+| `golem-configure-durability-ts` | Choosing between durable and ephemeral agents |
+| `golem-stateless-agent-ts` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
+| `golem-annotate-agent-ts` | Adding prompt and description annotations to agent methods |
+| `golem-call-another-agent-ts` | Calling another agent and awaiting the result (RPC) |
+| `golem-call-from-external-ts` | Calling agents from external TypeScript/Node.js applications using generated bridge SDKs |
+| `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result |
+| `golem-parallel-workers-ts` | Fan out work to multiple parallel agents and collect results |
+| `golem-schedule-future-call-ts` | Scheduling a future agent invocation |
+| `golem-recurring-task-ts` | Implementing recurring (cron-like) tasks via self-scheduling — periodic polling, cleanup, heartbeats, backoff, and cancellation |
+| `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
+| `golem-add-webhook-ts` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
+| `golem-multi-instance-agent-ts` | Creating multiple agent instances with the same constructor parameters using phantom agents |
+| `golem-atomic-block-ts` | Atomic blocks, persistence control, and idempotency |
+| `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
+| `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths and endpoint decorators |
+| `golem-http-params-ts` | Mapping path, query, header, and body parameters for HTTP endpoints |
+| `golem-add-http-auth-ts` | Enabling authentication and receiving Principal on HTTP endpoints |
+| `golem-add-cors-ts` | Configuring CORS allowed origins for HTTP endpoints |
+| `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
+| `golem-configure-mcp-server` | Configuring MCP (Model Context Protocol) server deployments in golem.yaml |
+| `golem-manage-plugins` | Managing Golem plugins — listing available plugins, installing and configuring plugins via golem.yaml or CLI, and understanding built-in plugins like the OTLP exporter |
+| `golem-add-config-ts` | Adding typed configuration to a TypeScript Golem agent |
+| `golem-add-secret-ts` | Adding secrets to TypeScript Golem agents |
+| `golem-quota-ts` | Adding resource quotas (rate limiting, capacity, concurrency) to TypeScript Golem agents using QuotaToken and reservations |
+| `golem-retry-policies-ts` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `withRetryPolicy`, and live CLI management |
+| `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
+| `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
+| `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
+| `golem-file-io-ts` | Reading and writing files from agent code |
+| `golem-js-runtime` | JavaScript runtime environment: available Web APIs, Node.js modules, and npm compatibility |
+| `golem-add-llm-ts` | Adding LLM and AI capabilities using third-party npm libraries |
+| `golem-make-http-request-ts` | Making outgoing HTTP requests from agent code using fetch |
+| `golem-logging-ts` | Adding logging to a TypeScript Golem agent using `console` methods |
+| `golem-enable-otlp-ts` | Enabling the OpenTelemetry (OTLP) plugin for a TypeScript agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the invocation context API or `node:diagnostics_channel` |
+| `golem-view-agent-logs` | Viewing agent logs and output via streaming |
+| `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
+| `golem-list-and-filter-agents` | Listing and querying agents with filters |
+| `golem-get-agent-metadata` | Checking agent metadata and status |
+| `golem-debug-agent-history` | Querying the operation log |
+| `golem-undo-agent-state` | Reverting agent state by undoing operations |
+| `golem-interrupt-resume-agent` | Interrupting and resuming a Golem agent |
+| `golem-test-crash-recovery` | Simulating a crash on an agent for testing crash recovery |
+| `golem-integration-test-setup` | Setting up a dedicated Golem environment for integration testing — isolated local server, test environment in golem.yaml, dynamic port discovery, and non-interactive deploys |
+| `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
+| `golem-delete-agent` | Deleting an agent instance |
+| `golem-interactive-repl-ts` | Using the Golem REPL for interactive testing and scripting of agents |
+
 # Golem Application Development Guide (TypeScript)
 
 ## Overview
@@ -532,6 +604,20 @@ Key concepts:
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see Agent-to-Agent Communication)
 - An agent is created implicitly on first invocation — no separate creation step needed
+- **Promises cannot outlive invocations** — every `Promise` created during an invocation must settle (be `await`ed or `.then`-chained to completion) before the invocation returns; do not store unresolved promises in agent state to `await` them from a later invocation
+
+## Durability & Automatic Retries
+
+Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `try/catch` + retry patterns, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter, clamped to [100ms, 1s]) applies when no user-defined policy matches.
+
+The following are retried transparently:
+
+- **HTTP requests** to external services (via `fetch`, `node:http`, `node:https`, etc.)
+- **RPC calls** between agents
+- **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
+- **Uncaught exceptions** (thrown errors / unhandled promise rejections) escaping an agent method — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
+
+Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-ts` skill.
 
 ## Project Structure
 
@@ -572,422 +658,6 @@ golem-temp/                           # Build artifacts (gitignored)
 - Node.js (with npm)
 - Golem CLI (`golem`): download from https://github.com/golemcloud/golem/releases
 
-## Building
-
-```shell
-npm install                      # Install dependencies (run once, or after adding packages)
-golem build                      # Build all components
-golem component build my:comp    # Build a specific component
-```
-
-The build runs TypeScript type-checking, type metadata generation via `golem-typegen`, Rollup bundling, QuickJS WASM injection, agent wrapper generation, and WASM composition. Output goes to `golem-temp/`.
-
-Do NOT run `npx rollup` or `npx tsc` directly — always use `golem build` which orchestrates the full pipeline including type metadata generation and WASM component linking.
-
-## Deploying and Running
-
-```shell
-golem server run                 # Start local Golem server
-golem deploy                     # Deploy all components to the configured server
-golem deploy --try-update-agents # Deploy and update running agents
-golem deploy --reset             # Deploy and delete all previously created agents
-```
-
-**WARNING**: `golem server run --clean` deletes all existing state (agents, data, deployed components). Never run it without explicitly asking the user for confirmation first.
-
-After starting the server, components must be deployed with `golem deploy` before agents can be invoked. When iterating on code changes, use `golem deploy --reset` to delete all previously created agents — without this, existing agent instances continue running with the old component version. This is by design: Golem updates do not break existing running instances.
-
-To try out agents after deploying, use `golem agent invoke` for individual method calls, or write a Rib script and run it with `golem repl` for interactive testing. The Golem server must be running in a separate process before invoking or testing agents.
-
-## Name Mapping (Kebab-Case Convention)
-
-All TypeScript identifiers are converted to **kebab-case** when used externally (in CLI commands, Rib scripts, REPL, agent IDs, and WAVE values). This applies to:
-
-- **Agent type names**: `CounterAgent` → `counter-agent`
-- **Method names**: `getCount` → `get-count`, `increment` → `increment`
-- **Record/object field names**: `fieldName` → `field-name`
-- **Variant/union tag names**: `myCase` → `my-case`
-
-This conversion is automatic and consistent across all external interfaces.
-
-## Testing Agents
-
-### Using the REPL
-
-```shell
-golem repl                       # Interactive Rib scripting REPL
-```
-
-In the REPL, use kebab-case names and WAVE-encoded values:
-```rib
-let agent = counter-agent("my-counter")
-agent.increment()
-agent.increment()
-```
-
-### Using `golem agent invoke`
-
-Invoke agent methods directly from the CLI. The method name must be fully qualified:
-
-```shell
-# Method name format: <component-name>/<agent-type>.{method-name}
-# All names in kebab-case
-
-golem agent invoke 'counter-agent("my-counter")' \
-  'my:example/counter-agent.{increment}'
-
-# With arguments (WAVE-encoded)
-golem agent invoke 'my-agent("id")' \
-  'my:example/my-agent.{set-value}' '"hello world"'
-
-# With a record argument
-golem agent invoke 'my-agent("id")' \
-  'my:example/my-agent.{update}' '{field-name: "value", count: 42.0}'
-
-# Fire-and-forget (enqueue without waiting for result)
-golem agent invoke --enqueue 'counter-agent("c1")' \
-  'my:example/counter-agent.{increment}'
-
-# With idempotency key
-golem agent invoke --idempotency-key 'unique-key-123' \
-  'counter-agent("c1")' 'my:example/counter-agent.{increment}'
-```
-
-## WAVE Value Encoding
-
-All argument values passed to `golem agent invoke` and used in Rib scripts follow the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) format. See the full [type mapping reference](https://learn.golem.cloud/type-mapping).
-
-### TypeScript Type to WAVE Mapping
-
-| TypeScript Type | WIT Type | WAVE Example |
-|-----------------|----------|--------------|
-| `string` | `string` | `"hello world"` |
-| `boolean` | `bool` | `true`, `false` |
-| `number` | `f64` | `1234.0` |
-| `Array<T>` | `list<T>` | `[1.0, 2.0, 3.0]` |
-| `Map<K, V>` | `list<tuple<K, V>>` | `[("key1", 100.0), ("key2", 200.0)]` |
-| `T \| undefined` or `T \| null` | `option<T>` | `some("value")`, `none` |
-| `object` / interface | `record { ... }` | `{field-name: "value", count: 42.0}` |
-| `{ tag: "x", val: T }` union | `variant { ... }` | `my-case("data")` |
-| `"x" \| "y"` string literal union | `enum { ... }` | `my-variant` |
-| tuple | `tuple<...>` | `("hello", 1234.0, true)` |
-| `Uint8Array` | `list<u8>` | `[104, 101, 108]` |
-
-### WAVE Encoding Rules
-
-**Strings**: double-quoted with escape sequences (`\"`, `\\`, `\n`, `\t`, `\r`, `\u{...}`)
-```
-"hello \"world\""
-```
-
-**Records**: field names in kebab-case, optional fields (`T | undefined`) can be omitted (defaults to `none`)
-```
-{required-field: "value", optional-field: some(42.0)}
-{required-field: "value"}
-```
-
-**Variants**: case name in kebab-case, with optional payload in parentheses
-```
-my-case
-my-case("payload")
-```
-
-**Options**: can use shorthand (bare value = `some`)
-```
-some(42.0)    // explicit
-42.0          // shorthand for some(42.0), only for non-option/non-result inner types
-none
-```
-
-**Results**: can use shorthand (bare value = `ok`)
-```
-ok("value")   // explicit ok
-err("oops")   // explicit err
-"value"       // shorthand for ok("value")
-```
-
-**Flags**: set of labels in curly braces
-```
-{read, write}
-{}
-```
-
-**Keywords as identifiers**: prefix with `%` if a name conflicts with `true`, `false`, `some`, `none`, `ok`, `err`, `inf`, `nan`
-```
-%true
-%none
-```
-
-## Defining Agents
-
-Agents are defined using the `@agent()` decorator on classes extending `BaseAgent` from `@golemcloud/golem-ts-sdk`:
-
-```typescript
-import {
-    BaseAgent,
-    agent,
-    prompt,
-    description,
-} from '@golemcloud/golem-ts-sdk';
-
-@agent()
-class CounterAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
-
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    @prompt("Increase the count by one")
-    @description("Increments the counter and returns the new value")
-    async increment(): Promise<number> {
-        this.value += 1;
-        return this.value;
-    }
-
-    async getCount(): Promise<number> {
-        return this.value;
-    }
-}
-```
-
-### Ephemeral agents
-
-By default agents are durable (state persists indefinitely). For stateless per-invocation agents:
-
-```typescript
-@agent({ mode: "ephemeral" })
-class StatelessAgent extends BaseAgent {
-    async handle(input: string): Promise<string> {
-        return `processed: ${input}`;
-    }
-}
-```
-
-### Custom types
-
-Use TypeScript type aliases or interfaces for parameters and return types. Although not required, using **named types** (type aliases or interfaces) instead of anonymous inline object types leads to better interoperability with other Golem features. **TypeScript enums are not supported** — use string literal unions instead:
-
-```typescript
-type Coordinates = { lat: number; lon: number };
-type WeatherReport = { temperature: number; description: string };
-type Priority = "low" | "medium" | "high";
-
-@agent()
-class WeatherAgent extends BaseAgent {
-    constructor(apiKey: string) {
-        super();
-    }
-
-    async getWeather(coords: Coordinates): Promise<WeatherReport> {
-        // ...
-    }
-}
-```
-
-### Method annotations
-
-```typescript
-import { BaseAgent, agent, prompt, description } from '@golemcloud/golem-ts-sdk';
-
-@agent()
-class MyAgent extends BaseAgent {
-    constructor(name: string) {
-        super();
-    }
-
-    @prompt("Increment the counter")
-    @description("Increments the counter by 1 and returns the new value")
-    async increment(): Promise<number> {
-        // ...
-    }
-}
-```
-
-## Agent-to-Agent Communication (RPC)
-
-The `@agent()` decorator auto-generates a static `get()` method for calling agents remotely. The returned `Client<T>` type exposes each method along with `trigger` (fire-and-forget) and `schedule` (delayed invocation) variants:
-
-```typescript
-// Awaited call (blocks until result)
-const other = OtherAgent.get("param");
-const result = await other.someMethod(arg);
-
-// Fire-and-forget (returns immediately)
-other.someMethod.trigger(arg);
-
-// Scheduled invocation
-import { Datetime } from 'golem:rpc/types@0.2.2';
-other.someMethod.schedule({ seconds: BigInt(ts), nanoseconds: 0 }, arg);
-
-// Phantom agents (multiple instances with same constructor params)
-const phantom = OtherAgent.newPhantom("param"); // new random phantom ID
-const knownPhantom = OtherAgent.getPhantom(existingUuid, "param"); // existing phantom
-```
-
-Avoid RPC cycles (A calls B calls A) — use `.trigger()` to break deadlocks.
-
-## Durability Features
-
-Golem provides **automatic durable execution** — all agents are durable by default without any special code. State is persisted via an oplog (operation log) and agents survive failures, restarts, and updates transparently.
-
-The APIs below are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity, idempotency, or transactional compensation:
-
-```typescript
-import {
-    withPersistenceLevel,
-    withIdempotenceMode,
-    atomically,
-    withRetryPolicy,
-    oplogCommit,
-    generateIdempotencyKey,
-} from '@golemcloud/golem-ts-sdk';
-
-// Atomic operations — retried together on failure
-const result = atomically(() => {
-    const a = sideEffect1();
-    const b = sideEffect2(a);
-    return [a, b];
-});
-
-// Control persistence level
-withPersistenceLevel({ tag: 'persist-nothing' }, () => {
-    // No oplog entries — side effects replayed on recovery
-});
-
-// Control idempotence mode
-withIdempotenceMode(false, () => {
-    // HTTP requests won't be retried if result is uncertain
-});
-
-// Ensure oplog is replicated
-oplogCommit(3); // Wait for 3 replicas
-
-// Generate a durable idempotency key
-const key = generateIdempotencyKey();
-```
-
-### Transactions
-
-For saga-pattern compensation:
-
-```typescript
-import {
-    operation,
-    fallibleTransaction,
-    infallibleTransaction,
-    Result,
-} from '@golemcloud/golem-ts-sdk';
-
-const op1 = operation<string, string, string>(
-    (input) => Result.ok(`executed: ${input}`),
-    (input, result) => Result.ok(undefined),
-);
-
-// Fallible: compensates on failure, returns error
-const result = fallibleTransaction((tx) => {
-    const r = tx.execute(op1, "input");
-    if (r.isErr()) return r;
-    return Result.ok(r.val);
-});
-
-// Infallible: compensates and retries on failure
-const result2 = infallibleTransaction((tx) => {
-    const r = tx.execute(op1, "input");
-    return r;
-});
-```
-
-## Using `golem new`
-
-Use `golem new` to create new applications and to add new components or agents to existing applications.
-
-### Create a new application
-
-```shell
-golem new my-app --template ts
-```
-
-This creates a new application directory, initializes `golem.yaml`, and creates the first TypeScript component with a default agent template.
-
-You can also run `golem new .` in an empty directory to initialize the current folder as a new application.
-
-If the folder name is not a valid Golem application name (lowercase kebab-case), specify one explicitly:
-
-```shell
-golem new . --application-name my-app --template ts
-```
-
-### Add to an existing application
-
-From inside an existing application, use `.` as the path:
-
-```shell
-golem new . --template ts
-```
-
-By default this applies the TypeScript template to a matching TypeScript component, or creates one if needed.
-
-### Create or target a specific component
-
-```shell
-golem new . --template ts --component-name my-app:billing
-```
-
-- If `my-app:billing` exists and is TypeScript, the template is applied there.
-- If it does not exist, `golem new` creates the component and applies the template.
-
-### Applying multiple templates
-
-You can apply multiple templates to the same component in one command:
-
-```shell
-golem new . --template ts --template my:agent-template --component-name my-app:billing
-```
-
-You can also apply templates incrementally by running `golem new` multiple times for the same component.
-
-If multiple templates affect the same files, `golem new` merges the changes and shows the planned updates before applying them.
-
-### Component directory behavior
-
-- If the application has exactly one component, its `dir` in `golem.yaml` is `.`.
-- If the application has multiple components, each component has an explicit `dir` in `golem.yaml`.
-- When needed, `golem new` can promote an existing root component layout into explicit per-component directories.
-
-### Choosing one vs multiple components
-
-In most cases, prefer a single component with multiple agents.
-
-Use multiple components only when you have a technical reason, for example:
-- using different guest languages in the same application (for example Rust + TypeScript)
-- separating components with distinct operational or ownership constraints
-
-### Useful flags
-
-- `--template <name>`: can be used multiple times to apply and merge several templates into one component (in non-interactive mode, at least one template is required)
-- `--component-name <namespace:name>`: target or create a specific component
-- `--application-name <name>`: set the application name when creating a new application
-
-To discover available templates:
-
-```shell
-golem templates
-```
-
-## Application Manifest (golem.yaml)
-
-- Root `golem.yaml`: app name, includes, environments, and `components` entries
-- `golem-temp/common/ts/golem.yaml`: generated on-demand build templates (TypeScript compilation, Rollup bundling, WASM composition) shared by all TS components
-
-Key fields in each `components.<name>` entry:
-- `dir`: component directory (`"."` for single-component apps)
-- `templates`: references a template from common golem.yaml (e.g., `ts`)
-- `env`: environment variables passed to agents at runtime
-- `dependencies`: WASM dependencies (e.g., LLM providers from golem-ai)
-
 ## Available Libraries
 
 From root `package.json`:
@@ -998,23 +668,14 @@ From root `package.json`:
 
 To enable AI features, uncomment the relevant provider dependency in the component's `golem.yaml` and set the corresponding environment variables.
 
-## Debugging
-
-```shell
-golem agent get '<agent-id>'                    # Check agent state
-golem agent stream '<agent-id>'                 # Stream live logs
-golem agent oplog '<agent-id>'                  # View operation log
-golem agent revert '<agent-id>' --number-of-invocations 1  # Revert last invocation
-golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
-```
-
 ## Key Constraints
 
 - Target is WebAssembly via [QuickJS](https://github.com/DelSkayn/rquickjs/) — supports ES2020 including modules, async/await, async generators, Proxies, BigInt, WeakRef, FinalizationRegistry, and all standard built-ins (Array, Map, Set, Promise, RegExp, Date, JSON, Math, typed arrays, etc.)
-- Golem's JS runtime implements a subset of Browser and Node.js APIs (documented in the [wasm-rquickjs README](https://github.com/golemcloud/wasm-rquickjs)). The following are available out of the box:
-    - **Browser APIs**: `fetch`, `Headers`, `Request`, `Response`, `FormData`, `Blob`, `File`, `URL`, `URLSearchParams`, `console`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`, `setImmediate`, `AbortController`, `AbortSignal`, `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `ReadableStream`, `WritableStream`, `TransformStream`, `structuredClone`, `crypto.randomUUID`, `crypto.getRandomValues`
-    - **Node.js APIs**: `node:buffer` (`Buffer`), `node:fs` (`readFile`, `readFileSync`, `writeFile`, `writeFileSync`), `node:path`, `node:process` (`argv`, `env`, `cwd`), `node:stream`, `node:util`
-- Additional npm dependencies can be installed with `npm install`, but they will only work if they use the APIs listed above
+- Golem's JS runtime implements a broad set of Browser and Node.js APIs (documented in the [wasm-rquickjs README](https://github.com/golemcloud/wasm-rquickjs)). The following are available out of the box:
+    - **Web Platform APIs**: `fetch`, `Headers`, `Request`, `Response`, `FormData`, `Blob`, `File`, `URL`, `URLSearchParams`, `console`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`, `setImmediate`, `AbortController`, `AbortSignal`, `DOMException`, `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `ReadableStream`, `WritableStream`, `TransformStream`, `structuredClone`, `crypto.randomUUID`, `crypto.getRandomValues`, `Event`, `EventTarget`, `CustomEvent`, `MessageChannel`, `MessagePort`, `Intl` (DateTimeFormat, NumberFormat, Collator, PluralRules)
+    - **Node.js modules**: `node:buffer`, `node:crypto` (hashes, HMAC, ciphers, key generation, sign/verify, DH, ECDH, X509, etc.), `node:dgram` (UDP sockets), `node:dns`, `node:events` (EventEmitter), `node:fs` and `node:fs/promises` (comprehensive filesystem API), `node:http`/`node:https` (client and server), `node:module`, `node:net` (TCP sockets and servers), `node:os`, `node:path`, `node:perf_hooks`, `node:process`, `node:punycode`, `node:querystring`, `node:readline`, `node:sqlite` (embedded SQLite, requires feature flag), `node:stream` and `node:stream/promises`, `node:string_decoder`, `node:test`, `node:timers`, `node:url`, `node:util`, `node:v8`, `node:vm`, `node:zlib` (gzip, deflate, brotli)
+    - **Stubs** (throw or no-op for compatibility): `node:child_process`, `node:cluster`, `node:http2`, `node:inspector`, `node:tls`, `node:worker_threads`
+- Additional npm dependencies can be installed with `npm install` — most packages targeting browsers or using the Node.js APIs listed above will work
 - Check the [wasm-rquickjs README](https://github.com/golemcloud/wasm-rquickjs) for the most up-to-date list of available APIs
 - TypeScript **enums are not supported** — use string literal unions instead
 - All agent classes must extend `BaseAgent` and be decorated with `@agent()`

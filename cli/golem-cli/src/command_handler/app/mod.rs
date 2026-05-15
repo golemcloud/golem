@@ -36,8 +36,8 @@ use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
     LogColorize, LogIndent, LogOutput, Output, log_action, log_error, log_failed_to,
-    log_finished_ok, log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action,
-    logged_failed_to, logged_finished_or_failed_to, logln,
+    log_finished_ok, log_finished_up_to_date, log_preformatted, log_skipping_up_to_date, log_warn,
+    log_warn_action, logged_failed_to, logged_finished_or_failed_to, logln,
 };
 use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
@@ -46,27 +46,30 @@ use crate::model::app::{
 };
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
-    DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
-    PostDeploySummary, UpdateStagedComponentError,
+    DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan, PostDeployError,
+    PostDeployResult, PostDeploySummary, UpdateStagedComponentError, build_environment_setup_plan,
+    preferred_source_language_for_setup,
 };
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
-use crate::model::text::diff::{log_unified_diff, log_unified_diff_for_path};
+use crate::model::text::diff::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
 use crate::model::{GuestLanguage, TemplateDescription};
 use anyhow::{anyhow, bail};
-use applying::Apply;
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
-use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
+use golem_client::api::{
+    AgentSecretsClient, ApplicationClient, ComponentClient, EnvironmentClient, ResourcesClient,
+    RetryPoliciesClient,
+};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType};
-use golem_common::model::agent_secret::AgentSecretPath;
+use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
@@ -183,6 +186,7 @@ impl AppCommandHandler {
         plan: bool,
         stage: bool,
         approve_staging_steps: bool,
+        full_diff: bool,
         version: Option<String>,
         revision: Option<DeploymentRevision>,
         force_build: ForceBuildArg,
@@ -191,16 +195,17 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         let deploy_result = {
             if let Some(version) = version {
-                self.deploy_by_version(version, plan, post_deploy_args)
+                self.deploy_by_version(version, plan, full_diff, post_deploy_args)
                     .await
             } else if let Some(revision) = revision {
-                self.deploy_by_revision(revision, plan, post_deploy_args)
+                self.deploy_by_revision(revision, plan, full_diff, post_deploy_args)
                     .await
             } else {
                 self.deploy(DeployConfig {
                     plan,
                     stage,
                     approve_staging_steps,
+                    full_diff,
                     force_build: Some(force_build),
                     post_deploy_args,
                     repl_bridge_sdk_target,
@@ -256,6 +261,23 @@ impl AppCommandHandler {
             }
         }
 
+        fn log_deployment_status(label: &str, status: &str) {
+            logln(format!(
+                "{} {} {}",
+                "Deployment:".log_color_help_group(),
+                label,
+                status,
+            ));
+        }
+
+        fn log_environment_setup_status(label: &str, status: &str) {
+            logln(format!(
+                "{} {} {}",
+                "Environment setup:".log_color_help_group(),
+                label,
+                status,
+            ));
+        }
         let outcome: anyhow::Result<()> = match deploy_result {
             Ok(ok) => match ok {
                 DeploySummary::PlanOk => {
@@ -268,6 +290,17 @@ impl AppCommandHandler {
                     );
                     Ok(())
                 }
+                DeploySummary::PlanSkippedOnly => {
+                    log_deployment_status(
+                        "no changes required",
+                        "[UP-TO-DATE]".cyan().to_string().as_str(),
+                    );
+                    log_environment_setup_status(
+                        "requested entries already exist",
+                        "[SKIPPED]".yellow().to_string().as_str(),
+                    );
+                    Ok(())
+                }
                 DeploySummary::StagingOk => {
                     log_finished_ok("staging");
                     Ok(())
@@ -277,8 +310,20 @@ impl AppCommandHandler {
                     logged_post_deploy_result(post_deploy)
                 }
                 DeploySummary::DeployUpToDate(post_deploy_result) => {
-                    log_finished_up_to_date(
-                        "deployment planning, no changes are required for the environment",
+                    log_deployment_status(
+                        "no changes required",
+                        "[UP-TO-DATE]".cyan().to_string().as_str(),
+                    );
+                    logged_post_deploy_result(post_deploy_result)
+                }
+                DeploySummary::DeploySkippedOnly(post_deploy_result) => {
+                    log_deployment_status(
+                        "no changes required",
+                        "[UP-TO-DATE]".cyan().to_string().as_str(),
+                    );
+                    log_environment_setup_status(
+                        "requested entries already exist",
+                        "[SKIPPED]".yellow().to_string().as_str(),
                     );
                     logged_post_deploy_result(post_deploy_result)
                 }
@@ -530,6 +575,7 @@ impl AppCommandHandler {
         &self,
         version: String,
         plan: bool,
+        full_diff: bool,
         post_deploy_args: PostDeployArgs,
     ) -> DeployResult {
         let environment = self
@@ -579,6 +625,7 @@ impl AppCommandHandler {
                 .map(|d| d.revision)
                 .expect("No deployments"),
             plan,
+            full_diff,
             post_deploy_args,
         )
         .await
@@ -588,6 +635,7 @@ impl AppCommandHandler {
         &self,
         target_revision: DeploymentRevision,
         plan: bool,
+        full_diff: bool,
         post_deploy_args: PostDeployArgs,
     ) -> DeployResult {
         let environment = self
@@ -598,7 +646,7 @@ impl AppCommandHandler {
             .map_err(DeployError::PrepareError)?;
 
         let Some(rollback_diff) = self
-            .prepare_rollback(environment.clone(), target_revision)
+            .prepare_rollback(environment.clone(), target_revision, full_diff)
             .await
             .map_err(DeployError::PrepareError)?
         else {
@@ -703,7 +751,7 @@ impl AppCommandHandler {
         }
 
         let Some(deploy_diff) = self
-            .prepare_deployment(environment.clone())
+            .prepare_deployment(environment.clone(), config.full_diff)
             .await
             .map_err(DeployError::PrepareError)?
         else {
@@ -728,7 +776,52 @@ impl AppCommandHandler {
         };
 
         if config.plan {
-            return Ok(DeploySummary::PlanOk);
+            return Ok(
+                if deploy_diff.has_deployment_changes()
+                    || deploy_diff.has_environment_setup_entries_to_apply()
+                {
+                    DeploySummary::PlanOk
+                } else if deploy_diff.has_environment_setup_entries_skipped_already_exists() {
+                    DeploySummary::PlanSkippedOnly
+                } else {
+                    DeploySummary::PlanUpToDate
+                },
+            );
+        }
+
+        let has_deployment_changes = deploy_diff.has_deployment_changes();
+        let has_environment_setup_apply = deploy_diff.has_environment_setup_entries_to_apply();
+        let has_environment_setup_skipped =
+            deploy_diff.has_environment_setup_entries_skipped_already_exists();
+
+        if !has_deployment_changes && !has_environment_setup_apply {
+            return Ok(if has_environment_setup_skipped {
+                DeploySummary::DeploySkippedOnly(
+                    self.apply_post_deploy_args(
+                        &environment.environment_id,
+                        environment
+                            .server_environment
+                            .current_deployment
+                            .as_ref()
+                            .map(|d| d.deployment_revision),
+                        &config.post_deploy_args,
+                    )
+                    .await,
+                )
+            } else {
+                DeploySummary::DeployUpToDate(
+                    self.apply_post_deploy_args(
+                        &environment.environment_id,
+                        environment
+                            .server_environment
+                            .current_deployment
+                            .as_ref()
+                            .map(|d| d.deployment_revision),
+                        &config.post_deploy_args,
+                    )
+                    .await,
+                )
+            });
         }
 
         if !self
@@ -783,6 +876,7 @@ impl AppCommandHandler {
     async fn prepare_deployment(
         &self,
         environment: ResolvedEnvironmentIdentity,
+        full_diff: bool,
     ) -> anyhow::Result<Option<DeployDiff>> {
         log_action("Preparing", "deployment");
         let _indent = LogIndent::new();
@@ -791,7 +885,29 @@ impl AppCommandHandler {
 
         debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
 
-        if deploy_quick_diff.is_up_to_date() {
+        let deployment_is_up_to_date = deploy_quick_diff.is_up_to_date();
+
+        let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
+        debug!("deploy_diff: {:#?}", deploy_diff);
+
+        let environment_setup = if deployment_is_up_to_date {
+            let plan = self.build_environment_setup_plan(&deploy_diff).await?;
+            if !plan.display.has_entries_to_apply()
+                && !plan.display.has_entries_skipped_already_exists()
+            {
+                return Ok(None);
+            }
+            Some(plan)
+        } else {
+            None
+        };
+
+        let deploy_diff = self
+            .detailed_deploy_diff(deploy_diff, full_diff, environment_setup)
+            .await?;
+        debug!("detailed deploy_diff: {:#?}", deploy_diff);
+
+        if deployment_is_up_to_date && !deploy_diff.has_environment_setup_work() {
             return Ok(None);
         }
 
@@ -799,13 +915,7 @@ impl AppCommandHandler {
             log_action("Diffing", "");
             let _indent = self.ctx.log_handler().decorated_indent_primary();
 
-            let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
-            debug!("deploy_diff: {:#?}", deploy_diff);
-
-            let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
-            debug!("detailed deploy_diff: {:#?}", deploy_diff);
-
-            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive())?;
+            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive(), full_diff)?;
             let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
 
             log_action(
@@ -821,15 +931,11 @@ impl AppCommandHandler {
             );
 
             if !stage_is_same_as_current {
-                match &unified_diffs.deployment_diff_stage {
+                match &unified_diffs.display_diff_stage {
                     Some(diff) => {
                         log_action("Diffing", "with staging area");
                         let _indent = self.ctx.log_handler().decorated_indent_secondary();
                         log_unified_diff(diff);
-                        if let Some(diff) = unified_diffs.agent_diff_stage {
-                            logln("");
-                            log_unified_diff(&diff);
-                        }
                     }
                     None => {
                         log_skipping_up_to_date("diffing with staging area");
@@ -844,11 +950,16 @@ impl AppCommandHandler {
                     log_action("Diffing", "with current deployment");
                 }
 
-                let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                log_unified_diff(&unified_diffs.deployment_diff);
-                if let Some(diff) = unified_diffs.agent_diff {
+                if deploy_diff.has_deployment_changes() || full_diff {
+                    let _indent = self.ctx.log_handler().decorated_indent_secondary();
+                    log_unified_diff(&unified_diffs.display_diff);
+                }
+
+                if let Some(report) = &unified_diffs.environment_setup_report {
                     logln("");
-                    log_unified_diff(&diff);
+                    log_action("Checking", "environment setup against current environment");
+                    let _indent = self.ctx.log_handler().decorated_indent_secondary();
+                    log_preformatted(report);
                 }
             }
 
@@ -871,16 +982,29 @@ impl AppCommandHandler {
             }
 
             {
-                if stage_is_same_as_current {
+                if stage_is_same_as_current && deploy_diff.has_environment_setup_entries_to_apply()
+                {
                     log_action(
                         "Planned",
                         "changes to be applied to the staging area and to the environment:",
                     );
+                } else if deploy_diff.has_environment_setup_entries_skipped_already_exists()
+                    && !deploy_diff.has_deployment_changes()
+                {
+                    log_action(
+                        "Planned",
+                        "requested environment setup entries already exist:",
+                    );
                 } else {
                     log_action("Planned", "changes to be applied to the environment:");
                 }
-                let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                self.ctx.log_handler().log_view(&deploy_diff.diff)
+                if deploy_diff.has_deployment_changes() || deploy_diff.environment_setup.is_some() {
+                    let _indent = self.ctx.log_handler().decorated_indent_secondary();
+                    self.ctx.log_handler().log_view(&DeployPlanView {
+                        deployment_diff: &deploy_diff.diff,
+                        environment_setup: deploy_diff.environment_setup.as_ref(),
+                    });
+                }
             }
         }
 
@@ -1037,13 +1161,9 @@ impl AppCommandHandler {
 
         let staged_deployment_hash = diffable_staged_deployment.hash()?;
 
-        let Some(diff) = diffable_current_deployment
+        let diff = diffable_current_deployment
             .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?
-        else {
-            bail!(anyhow!(
-                "The environment was changed concurrently while diffing. Retry planning and deploying!"
-            ))
-        };
+            .unwrap_or_else(DeployDiff::empty_deployment_diff);
 
         let diff_stage = diffable_staged_deployment
             .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?;
@@ -1066,24 +1186,38 @@ impl AppCommandHandler {
             diffable_staged_deployment,
             diff,
             diff_stage,
+            environment_setup: None,
         })
     }
 
     async fn detailed_deploy_diff(
         &self,
         mut deploy_diff: DeployDiff,
+        full_diff: bool,
+        environment_setup: Option<EnvironmentSetupPlan>,
     ) -> anyhow::Result<DeployDiff> {
         let parallelism = self.ctx.http_parallelism();
         let limiter = Arc::new(tokio::sync::Semaphore::new(parallelism));
 
         for kind in [DeployDiffKind::Stage, DeployDiffKind::Current] {
             if let Some(details) = self
-                .collect_deploy_diff_details(kind, parallelism, limiter.clone(), &deploy_diff)
+                .collect_deploy_diff_details(
+                    kind,
+                    parallelism,
+                    limiter.clone(),
+                    &deploy_diff,
+                    full_diff,
+                )
                 .await?
             {
                 deploy_diff.add_details(kind, details)?;
             }
         }
+
+        deploy_diff.environment_setup = Some(match environment_setup {
+            Some(plan) => plan,
+            None => self.build_environment_setup_plan(&deploy_diff).await?,
+        });
 
         debug!(
             "diffable_server_staged_deployment hash: {:#?}",
@@ -1093,12 +1227,108 @@ impl AppCommandHandler {
         Ok(deploy_diff)
     }
 
+    async fn build_environment_setup_plan(
+        &self,
+        deploy_diff: &DeployDiff,
+    ) -> anyhow::Result<EnvironmentSetupPlan> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        let raw_agent_secret_defaults = app_ctx
+            .application()
+            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
+
+        let declared_secret_types = collect_declared_agent_secret_types(deploy_diff)?;
+        let declared_secret_paths = declared_secret_types
+            .keys()
+            .map(|path| path.split('.').map(str::to_string).collect())
+            .collect();
+
+        let (agent_secret_defaults, unused_secret_default_paths) =
+            materialize_agent_secret_defaults(
+                raw_agent_secret_defaults.as_ref(),
+                &declared_secret_paths,
+            );
+
+        if !unused_secret_default_paths.is_empty() {
+            let rendered_unused_secret_default_paths = unused_secret_default_paths
+                .iter()
+                .map(|path| path.join("."))
+                .collect::<Vec<_>>();
+
+            log_warn_action(
+                "Ignoring unused secret default paths",
+                rendered_unused_secret_default_paths.join(", "),
+            );
+
+            if !self
+                .ctx
+                .interactive_handler()
+                .confirm_ignore_unused_agent_secret_defaults(
+                    &rendered_unused_secret_default_paths,
+                )?
+            {
+                bail!(NonSuccessfulExit);
+            }
+        }
+
+        let resolved_agent_secret_defaults = resolve_secret_defaults(agent_secret_defaults)?;
+
+        let retry_policy_defaults = app_ctx
+            .application()
+            .deployment_retry_policy_defaults(&deploy_diff.environment.environment_name);
+
+        let resource_defaults = app_ctx
+            .application()
+            .resource_definition_defaults(&deploy_diff.environment.environment_name);
+
+        let clients = self.ctx.golem_clients().await?;
+        let current_agent_secrets = clients
+            .agent_secrets
+            .list_environment_agent_secrets(&deploy_diff.environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .values;
+        let current_retry_policies = clients
+            .retry_policies
+            .list_environment_retry_policies(&deploy_diff.environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .values;
+        let current_resources = clients
+            .resources
+            .list_environment_resources(&deploy_diff.environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .values;
+
+        let source_language = preferred_source_language_for_setup(
+            &deploy_diff
+                .deployable_components
+                .iter()
+                .map(|(name, component)| (name.0.clone(), component.agent_types.clone()))
+                .collect(),
+        );
+
+        build_environment_setup_plan(
+            resolved_agent_secret_defaults,
+            retry_policy_defaults,
+            resource_defaults,
+            current_agent_secrets,
+            current_retry_policies,
+            current_resources,
+            &declared_secret_types,
+            &source_language,
+        )
+    }
+
     async fn collect_deploy_diff_details(
         &self,
         kind: DeployDiffKind,
         parallelism: usize,
         limiter: Arc<tokio::sync::Semaphore>,
         deploy_diff: &DeployDiff,
+        full_diff: bool,
     ) -> anyhow::Result<Option<DeployDetails>> {
         let diff = match kind {
             DeployDiffKind::Stage => match deploy_diff.diff_stage.as_ref() {
@@ -1112,46 +1342,101 @@ impl AppCommandHandler {
 
         let component_handler = self.ctx.component_handler();
         let http_api_deployment_handler = self.ctx.api_deployment_handler();
+        let mcp_deployment_handler = self.ctx.api_deployment_handler();
 
-        let component_details = stream::iter(diff.components.iter().filter_map(
-            |(component_name, component_diff)| {
-                match component_diff {
-                    diff::BTreeMapDiffValue::Create => None,
-                    diff::BTreeMapDiffValue::Update(_) | diff::BTreeMapDiffValue::Delete => {
-                        // NOTE: Unlike other entities, for components we also fetch
-                        //       details for deletes (not just for updates),
-                        //       so we can show agent type diffs too
-                        Some(component_name)
-                    }
-                }
-            },
-        ))
-        .map(|component_name| {
-            let component_name = ComponentName(component_name.clone());
-            let component_identity = deploy_diff.component_identity(kind, &component_name);
-            async {
-                let _permit = limiter.acquire().await?;
-                let component = component_handler
-                    .get_component_revision_by_id(
-                        &component_identity.id,
-                        component_identity.revision,
-                    )
-                    .await?;
-                Ok::<_, anyhow::Error>((component_name, component))
+        let component_names = if full_diff {
+            match kind {
+                DeployDiffKind::Stage => deploy_diff
+                    .staged_deployment
+                    .components
+                    .iter()
+                    .map(|component| component.name.0.clone())
+                    .collect::<Vec<_>>(),
+                DeployDiffKind::Current => deploy_diff
+                    .current_deployment
+                    .as_ref()
+                    .map(|deployment| {
+                        deployment
+                            .components
+                            .iter()
+                            .map(|component| component.name.0.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
             }
-        })
-        .buffer_unordered(parallelism)
-        .try_collect::<Vec<_>>();
+        } else {
+            diff.components
+                .iter()
+                .filter_map(|(component_name, component_diff)| {
+                    match component_diff {
+                        diff::BTreeMapDiffValue::Create => None,
+                        diff::BTreeMapDiffValue::Update(_) | diff::BTreeMapDiffValue::Delete => {
+                            // NOTE: Unlike other entities, for components we also fetch
+                            //       details for deletes (not just for updates),
+                            //       so we can show agent type diffs too
+                            Some(component_name.clone())
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
 
-        let http_api_deployment_details =
-            stream::iter(diff.http_api_deployments.iter().filter_map(
-                |(domain, http_api_deployment_diff)| match http_api_deployment_diff {
-                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => None,
-                    diff::BTreeMapDiffValue::Update(_) => Some(domain),
-                },
-            ))
+        let component_details = stream::iter(component_names)
+            .map(|component_name| {
+                let component_name = ComponentName(component_name);
+                let component_identity = deploy_diff.component_identity(kind, &component_name);
+                async {
+                    let _permit = limiter.acquire().await?;
+                    let component = component_handler
+                        .get_component_revision_by_id(
+                            &component_identity.id,
+                            component_identity.revision,
+                        )
+                        .await?;
+                    Ok::<_, anyhow::Error>((component_name, component))
+                }
+            })
+            .buffer_unordered(parallelism)
+            .try_collect::<Vec<_>>();
+
+        let http_domains = if full_diff {
+            match kind {
+                DeployDiffKind::Stage => deploy_diff
+                    .staged_deployment
+                    .http_api_deployments
+                    .iter()
+                    .map(|deployment| deployment.domain.0.clone())
+                    .collect::<Vec<_>>(),
+                DeployDiffKind::Current => deploy_diff
+                    .current_deployment
+                    .as_ref()
+                    .map(|deployment| {
+                        deployment
+                            .http_api_deployments
+                            .iter()
+                            .map(|deployment| deployment.domain.0.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+            }
+        } else {
+            diff.http_api_deployments
+                .iter()
+                .filter_map(
+                    |(domain, http_api_deployment_diff)| match http_api_deployment_diff {
+                        diff::BTreeMapDiffValue::Create => None,
+                        diff::BTreeMapDiffValue::Update(_) | diff::BTreeMapDiffValue::Delete => {
+                            Some(domain)
+                        }
+                    },
+                )
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        let http_api_deployment_details = stream::iter(http_domains)
             .map(|domain| {
-                let domain = Domain(domain.clone());
+                let domain = Domain(domain);
                 let deployment_identity = deploy_diff.http_api_deployment_identity(kind, &domain);
                 async {
                     let _permit = limiter.acquire().await?;
@@ -1167,12 +1452,67 @@ impl AppCommandHandler {
             .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>();
 
-        let (component, http_api_deployment) =
-            tokio::try_join!(component_details, http_api_deployment_details,)?;
+        let mcp_domains = if full_diff {
+            match kind {
+                DeployDiffKind::Stage => deploy_diff
+                    .staged_deployment
+                    .mcp_deployments
+                    .iter()
+                    .map(|deployment| deployment.domain.0.clone())
+                    .collect::<Vec<_>>(),
+                DeployDiffKind::Current => deploy_diff
+                    .current_deployment
+                    .as_ref()
+                    .map(|deployment| {
+                        deployment
+                            .mcp_deployments
+                            .iter()
+                            .map(|deployment| deployment.domain.0.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+            }
+        } else {
+            diff.mcp_deployments
+                .iter()
+                .filter_map(|(domain, mcp_deployment_diff)| match mcp_deployment_diff {
+                    diff::BTreeMapDiffValue::Create => None,
+                    diff::BTreeMapDiffValue::Update(_) | diff::BTreeMapDiffValue::Delete => {
+                        Some(domain)
+                    }
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        let mcp_deployment_details = stream::iter(mcp_domains)
+            .map(|domain| {
+                let domain = Domain(domain);
+                let deployment_identity = deploy_diff.mcp_deployment_identity(kind, &domain);
+                async {
+                    let _permit = limiter.acquire().await?;
+                    let deployment = mcp_deployment_handler
+                        .get_mcp_deployment_revision_by_id(
+                            &deployment_identity.id,
+                            deployment_identity.revision,
+                        )
+                        .await?;
+                    Ok::<_, anyhow::Error>((domain, deployment))
+                }
+            })
+            .buffer_unordered(parallelism)
+            .try_collect::<Vec<_>>();
+
+        let (component, http_api_deployment, mcp_deployment) = tokio::try_join!(
+            component_details,
+            http_api_deployment_details,
+            mcp_deployment_details,
+        )?;
 
         Ok(Some(DeployDetails {
             component,
             http_api_deployment,
+            mcp_deployment,
         }))
     }
 
@@ -1180,6 +1520,7 @@ impl AppCommandHandler {
         &self,
         environment: ResolvedEnvironmentIdentity,
         deployment_revision: DeploymentRevision,
+        full_diff: bool,
     ) -> anyhow::Result<Option<RollbackDiff>> {
         log_action("Preparing", "rollback");
         let _indent = self.ctx.log_handler().decorated_indent_primary();
@@ -1198,18 +1539,16 @@ impl AppCommandHandler {
         let rollback_diff = self.rollback_diff(rollback_quick_diff).await?;
         debug!("rollback_diff: {:#?}", rollback_diff);
 
-        let rollback_diff = self.detailed_rollback_diff(rollback_diff).await?;
+        let rollback_diff = self
+            .detailed_rollback_diff(rollback_diff, full_diff)
+            .await?;
         debug!("detailed rollback_diff: {:#?}", rollback_diff);
 
-        let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive())?;
+        let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive(), full_diff)?;
 
         {
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
-            log_unified_diff(&unified_diffs.deployment_diff);
-            if let Some(diff) = unified_diffs.agent_diff {
-                logln("");
-                log_unified_diff(&diff);
-            }
+            log_unified_diff(&unified_diffs.display_diff);
         }
 
         {
@@ -1291,50 +1630,126 @@ impl AppCommandHandler {
     async fn detailed_rollback_diff(
         &self,
         mut rollback_diff: RollbackDiff,
+        full_diff: bool,
     ) -> anyhow::Result<RollbackDiff> {
         let parallelism = self.ctx.http_parallelism();
         let limiter = Arc::new(tokio::sync::Semaphore::new(parallelism));
 
-        let component_details = stream::iter(rollback_diff.diff.components.iter().map(
-            |(component_name, component_diff)| {
-                RollbackEntityDetails::new_identity(
-                    ComponentName(component_name.clone()),
-                    RollbackDiff::target_component_identity,
-                    RollbackDiff::current_component_identity,
-                    &rollback_diff,
-                    component_diff,
+        let component_identities = if full_diff {
+            rollback_diff
+                .target_deployment
+                .components
+                .iter()
+                .map(|component| component.name.0.clone())
+                .chain(
+                    rollback_diff
+                        .current_deployment
+                        .components
+                        .iter()
+                        .map(|component| component.name.0.clone()),
                 )
-            },
-        ))
-        .map(|details| {
-            let ctx = self.ctx.clone();
-            let limiter = limiter.clone();
-            async move {
-                let get = async |identity: Option<&DeploymentPlanComponentEntry>| match identity {
-                    Some(identity) => {
-                        let _permit = limiter.acquire().await?;
-                        Ok::<_, anyhow::Error>(Some(
-                            ctx.component_handler()
-                                .get_component_revision_by_id(&identity.id, identity.revision)
-                                .await?,
-                        ))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .map(|component_name| {
+                    let component_name = ComponentName(component_name);
+                    RollbackEntityDetails {
+                        new: rollback_diff
+                            .target_deployment
+                            .components
+                            .iter()
+                            .find(|component| component.name == component_name),
+                        current: rollback_diff
+                            .current_deployment
+                            .components
+                            .iter()
+                            .find(|component| component.name == component_name),
+                        name: component_name,
                     }
-                    None => Ok::<_, anyhow::Error>(None),
-                };
-
-                Ok::<_, anyhow::Error>(RollbackEntityDetails {
-                    name: details.name,
-                    new: get(details.new).await?,
-                    current: get(details.current).await?,
                 })
-            }
-        })
-        .buffer_unordered(parallelism)
-        .try_collect::<Vec<_>>();
+                .collect::<Vec<_>>()
+        } else {
+            rollback_diff
+                .diff
+                .components
+                .iter()
+                .map(|(component_name, component_diff)| {
+                    RollbackEntityDetails::new_identity(
+                        ComponentName(component_name.clone()),
+                        RollbackDiff::target_component_identity,
+                        RollbackDiff::current_component_identity,
+                        &rollback_diff,
+                        component_diff,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
 
-        let http_api_deployment_details =
-            stream::iter(rollback_diff.diff.http_api_deployments.iter().map(
-                |(domain, http_api_deployment_diff)| {
+        let component_details = stream::iter(component_identities)
+            .map(|details| {
+                let ctx = self.ctx.clone();
+                let limiter = limiter.clone();
+                async move {
+                    let get = async |identity: Option<&DeploymentPlanComponentEntry>| match identity
+                    {
+                        Some(identity) => {
+                            let _permit = limiter.acquire().await?;
+                            Ok::<_, anyhow::Error>(Some(
+                                ctx.component_handler()
+                                    .get_component_revision_by_id(&identity.id, identity.revision)
+                                    .await?,
+                            ))
+                        }
+                        None => Ok::<_, anyhow::Error>(None),
+                    };
+
+                    Ok::<_, anyhow::Error>(RollbackEntityDetails {
+                        name: details.name,
+                        new: get(details.new).await?,
+                        current: get(details.current).await?,
+                    })
+                }
+            })
+            .buffer_unordered(parallelism)
+            .try_collect::<Vec<_>>();
+
+        let http_api_deployment_identities = if full_diff {
+            rollback_diff
+                .target_deployment
+                .http_api_deployments
+                .iter()
+                .map(|deployment| deployment.domain.0.clone())
+                .chain(
+                    rollback_diff
+                        .current_deployment
+                        .http_api_deployments
+                        .iter()
+                        .map(|deployment| deployment.domain.0.clone()),
+                )
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .map(|domain| {
+                    let domain = Domain(domain);
+                    RollbackEntityDetails {
+                        new: rollback_diff
+                            .target_deployment
+                            .http_api_deployments
+                            .iter()
+                            .find(|deployment| deployment.domain == domain),
+                        current: rollback_diff
+                            .current_deployment
+                            .http_api_deployments
+                            .iter()
+                            .find(|deployment| deployment.domain == domain),
+                        name: domain,
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            rollback_diff
+                .diff
+                .http_api_deployments
+                .iter()
+                .map(|(domain, http_api_deployment_diff)| {
                     RollbackEntityDetails::new_identity(
                         Domain(domain.clone()),
                         RollbackDiff::target_http_api_deployment_identity,
@@ -1342,8 +1757,11 @@ impl AppCommandHandler {
                         &rollback_diff,
                         http_api_deployment_diff,
                     )
-                },
-            ))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let http_api_deployment_details = stream::iter(http_api_deployment_identities)
             .map(|details| {
                 let ctx = self.ctx.clone();
                 let limiter = limiter.clone();
@@ -1375,12 +1793,99 @@ impl AppCommandHandler {
             .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>();
 
-        let (component, http_api_deployment) =
-            tokio::try_join!(component_details, http_api_deployment_details,)?;
+        let mcp_deployment_identities = if full_diff {
+            rollback_diff
+                .target_deployment
+                .mcp_deployments
+                .iter()
+                .map(|deployment| deployment.domain.0.clone())
+                .chain(
+                    rollback_diff
+                        .current_deployment
+                        .mcp_deployments
+                        .iter()
+                        .map(|deployment| deployment.domain.0.clone()),
+                )
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .map(|domain| {
+                    let domain = Domain(domain);
+                    RollbackEntityDetails {
+                        new: rollback_diff
+                            .target_deployment
+                            .mcp_deployments
+                            .iter()
+                            .find(|deployment| deployment.domain == domain),
+                        current: rollback_diff
+                            .current_deployment
+                            .mcp_deployments
+                            .iter()
+                            .find(|deployment| deployment.domain == domain),
+                        name: domain,
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            rollback_diff
+                .diff
+                .mcp_deployments
+                .iter()
+                .map(|(domain, mcp_deployment_diff)| {
+                    RollbackEntityDetails::new_identity(
+                        Domain(domain.clone()),
+                        RollbackDiff::target_mcp_deployment_identity,
+                        RollbackDiff::current_mcp_deployment_identity,
+                        &rollback_diff,
+                        mcp_deployment_diff,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mcp_deployment_details = stream::iter(mcp_deployment_identities)
+            .map(|details| {
+                let ctx = self.ctx.clone();
+                let limiter = limiter.clone();
+                async move {
+                    let get = async |identity: Option<
+                        &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry,
+                    >| {
+                        match identity {
+                            Some(identity) => {
+                                let _permit = limiter.acquire().await?;
+                                Ok::<_, anyhow::Error>(Some(
+                                    ctx.api_deployment_handler()
+                                        .get_mcp_deployment_revision_by_id(
+                                            &identity.id,
+                                            identity.revision,
+                                        )
+                                        .await?,
+                                ))
+                            }
+                            None => Ok::<_, anyhow::Error>(None),
+                        }
+                    };
+
+                    Ok::<_, anyhow::Error>(RollbackEntityDetails {
+                        name: details.name,
+                        new: get(details.new).await?,
+                        current: get(details.current).await?,
+                    })
+                }
+            })
+            .buffer_unordered(parallelism)
+            .try_collect::<Vec<_>>();
+
+        let (component, http_api_deployment, mcp_deployment) = tokio::try_join!(
+            component_details,
+            http_api_deployment_details,
+            mcp_deployment_details,
+        )?;
 
         rollback_diff.add_details(RollbackDetails {
             component,
             http_api_deployment,
+            mcp_deployment,
         })?;
 
         Ok(rollback_diff)
@@ -1585,54 +2090,10 @@ impl AppCommandHandler {
         deploy_diff: &DeployDiff,
         allow_incompatible_changes_fallback: bool,
     ) -> anyhow::Result<CurrentDeployment> {
-        let app_ctx = self.ctx.app_context_lock().await;
-
-        let raw_agent_secret_defaults = app_ctx
-            .some_or_err()?
-            .application()
-            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
-
-        let declared_secret_paths = collect_declared_agent_secret_paths(deploy_diff)?;
-
-        let (agent_secret_defaults, unused_secret_default_paths) =
-            materialize_agent_secret_defaults(
-                raw_agent_secret_defaults.as_ref(),
-                &declared_secret_paths,
-            );
-
-        if !unused_secret_default_paths.is_empty() {
-            let rendered_unused_secret_default_paths = unused_secret_default_paths
-                .iter()
-                .map(|path| path.join("."))
-                .collect::<Vec<_>>();
-
-            log_warn_action(
-                "Ignoring unused secret default paths",
-                rendered_unused_secret_default_paths.join(", "),
-            );
-
-            if !self
-                .ctx
-                .interactive_handler()
-                .confirm_ignore_unused_agent_secret_defaults(
-                    &rendered_unused_secret_default_paths,
-                )?
-            {
-                bail!(NonSuccessfulExit);
-            }
-        }
-
-        let agent_secret_defaults = agent_secret_defaults.apply(resolve_secret_defaults)?;
-
-        let retry_policy_defaults = app_ctx
-            .some_or_err()?
-            .application()
-            .deployment_retry_policy_defaults(&deploy_diff.environment.environment_name);
-
-        let quota_resource_defaults = app_ctx
-            .some_or_err()?
-            .application()
-            .resource_definition_defaults(&deploy_diff.environment.environment_name);
+        let environment_setup = deploy_diff
+            .environment_setup
+            .as_ref()
+            .expect("Environment setup should be prepared during deployment planning");
 
         let clients = self.ctx.golem_clients().await?;
 
@@ -1649,9 +2110,19 @@ impl AppCommandHandler {
                         current_revision: deploy_diff.current_deployment_revision(),
                         expected_deployment_hash: deploy_diff.local_deployment_hash,
                         version: DeploymentVersion("".to_string()), // TODO: atomic
-                        agent_secret_defaults: agent_secret_defaults.clone(),
-                        quota_resource_defaults: quota_resource_defaults.clone(),
-                        retry_policy_defaults: retry_policy_defaults.clone(),
+                        agent_secret_defaults: if replace_incompatible_agent_secrets {
+                            let mut defaults = environment_setup.agent_secret_defaults.clone();
+                            defaults.extend(
+                                environment_setup
+                                    .skipped_existing_agent_secret_defaults
+                                    .clone(),
+                            );
+                            defaults
+                        } else {
+                            environment_setup.agent_secret_defaults.clone()
+                        },
+                        quota_resource_defaults: environment_setup.resource_defaults.clone(),
+                        retry_policy_defaults: environment_setup.retry_policy_defaults.clone(),
                         replace_incompatible_agent_secrets,
                     },
                 )
@@ -2246,9 +2717,9 @@ fn resolve_secret_defaults(
         .collect()
 }
 
-fn collect_declared_agent_secret_paths(
+fn collect_declared_agent_secret_types(
     deploy_diff: &DeployDiff,
-) -> anyhow::Result<BTreeSet<Vec<String>>> {
+) -> anyhow::Result<BTreeMap<String, AnalysedType>> {
     let mut declared_secret_types = BTreeMap::<Vec<String>, (AnalysedType, String)>::new();
 
     for component in deploy_diff.deployable_components.values() {
@@ -2281,21 +2752,32 @@ fn collect_declared_agent_secret_paths(
         }
     }
 
-    Ok(declared_secret_types.into_keys().collect())
+    Ok(declared_secret_types
+        .into_iter()
+        .map(|(path, (typ, _))| {
+            (
+                CanonicalAgentSecretPath::from(AgentSecretPath(path))
+                    .0
+                    .join("."),
+                typ,
+            )
+        })
+        .collect())
 }
 
 fn materialize_agent_secret_defaults(
-    raw_default: Option<&WithSource<serde_json::Value>>,
+    raw_default: Option<&WithSource<crate::model::app_raw::JsonObject>>,
     declared_secret_paths: &BTreeSet<Vec<String>>,
 ) -> (Vec<DeploymentAgentSecretDefault>, Vec<Vec<String>>) {
     let mut materialized_defaults = Vec::new();
     let mut unused_paths = Vec::new();
 
     if let Some(raw_default) = raw_default {
+        let root = serde_json::Value::Object(raw_default.value.clone());
         let mut consumed_paths = Vec::new();
 
         for declared_path in declared_secret_paths {
-            if let Some(secret_value) = value_at_path(&raw_default.value, declared_path) {
+            if let Some(secret_value) = value_at_path(&root, declared_path) {
                 materialized_defaults.push(DeploymentAgentSecretDefault {
                     path: AgentSecretPath(declared_path.clone()),
                     secret_value: secret_value.clone(),
@@ -2304,7 +2786,7 @@ fn materialize_agent_secret_defaults(
             }
         }
 
-        unused_paths.extend(collect_unused_leaf_paths(&raw_default.value, |leaf_path| {
+        unused_paths.extend(collect_unused_leaf_paths(&root, |leaf_path| {
             consumed_paths
                 .iter()
                 .any(|consumed_path| leaf_path.starts_with(consumed_path))

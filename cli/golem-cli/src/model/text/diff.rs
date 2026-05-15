@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::log::{LogColorize, logln};
+use crate::model::deploy::EnvironmentSetupPlan;
 use crate::model::text::fmt::TextView;
 use colored::Colorize;
 use golem_common::model::diff::{
@@ -155,7 +156,7 @@ impl TextView for DeploymentDiff {
                                         }
                                         BTreeMapDiffValue::Delete => {
                                             logln(format!(
-                                                "      - {} file {}",
+                                                "      - {} agent {}",
                                                 "delete".red(),
                                                 agent_name.log_color_highlight()
                                             ));
@@ -168,6 +169,9 @@ impl TextView for DeploymentDiff {
                                             ));
                                             if diff.security_scheme_changed {
                                                 logln("        - security_scheme");
+                                            }
+                                            if diff.test_session_header_changed {
+                                                logln("        - test_session_header");
                                             }
                                         }
                                     }
@@ -197,13 +201,53 @@ impl TextView for DeploymentDiff {
                             domain.log_color_highlight()
                         ));
                     }
-                    BTreeMapDiffValue::Update(_diff) => {
-                        logln(format!(
-                            "  - {} MCP deployment {}",
-                            "update".yellow(),
-                            domain.log_color_highlight()
-                        ));
-                    }
+                    BTreeMapDiffValue::Update(diff) => match diff {
+                        DiffForHashOf::HashDiff { .. } => {
+                            logln(format!(
+                                "  - {} MCP deployment {}",
+                                "update".yellow(),
+                                domain.log_color_highlight()
+                            ));
+                        }
+                        DiffForHashOf::ValueDiff { diff } => {
+                            logln(format!(
+                                "  - {} MCP deployment {}, changes:",
+                                "update".yellow(),
+                                domain.log_color_highlight()
+                            ));
+                            if !diff.agents_changes.is_empty() {
+                                logln("    - agents");
+                                for (agent_name, agent_diff) in &diff.agents_changes {
+                                    match agent_diff {
+                                        BTreeMapDiffValue::Create => {
+                                            logln(format!(
+                                                "      - {} agent {}",
+                                                "create".green(),
+                                                agent_name.log_color_highlight()
+                                            ));
+                                        }
+                                        BTreeMapDiffValue::Delete => {
+                                            logln(format!(
+                                                "      - {} agent {}",
+                                                "delete".red(),
+                                                agent_name.log_color_highlight()
+                                            ));
+                                        }
+                                        BTreeMapDiffValue::Update(diff) => {
+                                            logln(format!(
+                                                "      - {} agent {}, changes:",
+                                                "update".yellow(),
+                                                agent_name.log_color_highlight()
+                                            ));
+                                            if diff.security_scheme_changed {
+                                                logln("        - security_scheme");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
                 }
             }
             logln("");
@@ -272,6 +316,112 @@ pub fn log_unified_diff_for_path(path: &Path, diff: &str) {
         log_unified_diff_compact(diff);
     } else {
         log_unified_diff(diff);
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct EnvironmentSetupPlanView<'a>(pub &'a EnvironmentSetupPlan);
+
+#[derive(serde::Serialize)]
+pub struct DeployPlanView<'a> {
+    pub deployment_diff: &'a DeploymentDiff,
+    pub environment_setup: Option<&'a EnvironmentSetupPlan>,
+}
+
+impl TextView for EnvironmentSetupPlanView<'_> {
+    fn log(&self) {
+        let setup = self.0;
+
+        if !setup.display.to_be_applied.is_empty() {
+            logln(
+                "Environment setup to apply:"
+                    .log_color_help_group()
+                    .to_string(),
+            );
+            if !setup.display.to_be_applied.secret_values.is_empty() {
+                for key in setup.display.to_be_applied.secret_values.keys() {
+                    logln(format!(
+                        "  - create secret value {}",
+                        key.log_color_highlight()
+                    ));
+                }
+            }
+            if !setup.display.to_be_applied.retry_policies.is_empty() {
+                for key in setup.display.to_be_applied.retry_policies.keys() {
+                    logln(format!(
+                        "  - create retry policy {}",
+                        key.log_color_highlight()
+                    ));
+                }
+            }
+            if !setup.display.to_be_applied.resources.is_empty() {
+                for key in setup.display.to_be_applied.resources.keys() {
+                    logln(format!("  - create resource {}", key.log_color_highlight()));
+                }
+            }
+        }
+
+        if !setup.display.skipped_already_exists.is_empty() {
+            if !setup.display.to_be_applied.is_empty() {
+                logln("");
+            }
+            logln(
+                "Environment setup skipped because it already exists:"
+                    .log_color_help_group()
+                    .to_string(),
+            );
+            if !setup
+                .display
+                .skipped_already_exists
+                .secret_values
+                .is_empty()
+            {
+                for key in &setup.display.skipped_already_exists.secret_values {
+                    logln(format!("  - secret value {}", key.log_color_highlight()));
+                }
+            }
+            if !setup
+                .display
+                .skipped_already_exists
+                .retry_policies
+                .is_empty()
+            {
+                for key in &setup.display.skipped_already_exists.retry_policies {
+                    logln(format!("  - retry policy {}", key.log_color_highlight()));
+                }
+            }
+            if !setup.display.skipped_already_exists.resources.is_empty() {
+                for key in &setup.display.skipped_already_exists.resources {
+                    logln(format!("  - resource {}", key.log_color_highlight()));
+                }
+            }
+        }
+    }
+}
+
+impl EnvironmentSetupPlanView<'_> {
+    pub fn has_entries_to_apply(&self) -> bool {
+        !self.0.display.to_be_applied.is_empty()
+    }
+}
+
+impl TextView for DeployPlanView<'_> {
+    fn log(&self) {
+        let has_deployment_changes = !self.deployment_diff.components.is_empty()
+            || !self.deployment_diff.http_api_deployments.is_empty()
+            || !self.deployment_diff.mcp_deployments.is_empty();
+
+        let environment_setup_view = self.environment_setup.map(EnvironmentSetupPlanView);
+
+        if has_deployment_changes {
+            self.deployment_diff.log();
+        }
+
+        if let Some(environment_setup) = environment_setup_view
+            && !environment_setup.0.display.is_empty()
+        {
+            environment_setup.log();
+        }
     }
 }
 

@@ -28,12 +28,12 @@
 //!   was partially consumed. Requires re-sending the request and verifying the
 //!   response prefix matches.
 
-use crate::durable_host::HttpRequestState;
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableExecutionState, HostFailureKind,
     InFunctionRetryHost, InFunctionRetryState,
 };
 use crate::durable_host::http::types::classify_http_error_code;
+use crate::durable_host::{HttpOutgoingBodyState, HttpRequestState, PendingStatusRetryDecision};
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::{HasOplog, HasWorker};
@@ -45,7 +45,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponse, OplogEntry, OplogIndex,
     PersistenceLevel,
 };
-use golem_common::model::{NamedRetryPolicy, PredicateValue, RetryProperties};
+use golem_common::model::{NamedRetryPolicy, PredicateValue, RetryContext, RetryProperties};
 use http::{HeaderName, HeaderValue};
 use http_body_util::BodyExt;
 use std::str::FromStr;
@@ -62,6 +62,25 @@ use wasmtime_wasi_http::types::{
     FutureIncomingResponseHandle, HostFutureIncomingResponse, IncomingResponse,
     OutgoingRequestConfig, default_send_request_with_pool,
 };
+
+fn resolve_matching_status_retry_policy(
+    policies: Vec<NamedRetryPolicy>,
+    properties: &RetryProperties,
+) -> Result<Option<NamedRetryPolicy>, golem_common::model::RetryEvaluationError> {
+    let status_policies: Vec<NamedRetryPolicy> = policies
+        .into_iter()
+        .filter(|policy| {
+            policy.predicate.references_property("status-code")
+                || policy.policy.references_property("status-code")
+        })
+        .collect();
+
+    NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
+        &status_policies,
+        properties,
+    )
+    .map(|policy| policy.cloned())
+}
 
 #[derive(Debug, Clone)]
 struct HttpBackgroundRetryFallbackToTrap {
@@ -112,6 +131,8 @@ pub enum InlineRetryIneligible {
     HasOutgoingTrailers,
     /// The outgoing body is not yet finished (awaiting-response phase only).
     BodyNotFinished,
+    /// The outgoing body was closed before it was finished.
+    BodyClosedWithoutFinish,
     /// The request method is not idempotent and assume_idempotence is false.
     NotIdempotent,
     /// The response body used skip/blocking_skip (response-body resumption only).
@@ -171,8 +192,12 @@ pub(crate) fn is_http_inline_retry_eligible(
         return Err(InlineRetryIneligible::HasOutgoingTrailers);
     }
 
+    if request_state.retry.body_closed_without_finish {
+        return Err(InlineRetryIneligible::BodyClosedWithoutFinish);
+    }
+
     if zone == InlineRetryPhase::AwaitingResponse
-        && request_state.output_stream_rep.is_some()
+        && request_state.outgoing_body_rep.is_some()
         && !request_state.retry.body_finished
     {
         return Err(InlineRetryIneligible::BodyNotFinished);
@@ -409,7 +434,11 @@ pub fn reconstruct_http_request(
         .parse()
         .map_err(|e| anyhow::anyhow!("failed to parse stored URI '{}': {e}", request.uri))?;
 
+    let authority = uri.authority().map(|a| a.to_string());
+
     let mut builder = hyper::Request::builder().method(method).uri(uri);
+
+    let mut has_host_header = false;
 
     // Replay stored headers exactly
     for (name, value) in &request.headers {
@@ -417,6 +446,9 @@ pub fn reconstruct_http_request(
             .map_err(|e| anyhow::anyhow!("invalid stored header name '{name}': {e}"))?;
         let header_value = HeaderValue::from_str(value)
             .map_err(|e| anyhow::anyhow!("invalid stored header value for '{name}': {e}"))?;
+        if header_name == http::header::HOST {
+            has_host_header = true;
+        }
         builder = builder.header(header_name, header_value);
     }
 
@@ -426,7 +458,26 @@ pub fn reconstruct_http_request(
             .map_err(|e| anyhow::anyhow!("invalid extra header name '{name}': {e}"))?;
         let header_value = HeaderValue::from_str(value)
             .map_err(|e| anyhow::anyhow!("invalid extra header value for '{name}': {e}"))?;
+        if header_name == http::header::HOST {
+            has_host_header = true;
+        }
         builder = builder.header(header_name, header_value);
+    }
+
+    // When the retry resend takes the no-pool path it goes through
+    // `default_send_request_handler` (raw hyper `http1::SendRequest`), which
+    // does NOT inject a Host header automatically the way hyper-util's pooled
+    // `Client` does. Without an explicit Host header, HTTP/1.1 servers reject
+    // the request with 400 Bad Request — and crucially, that 400 surfaces to
+    // the guest as a non-5xx response, bypassing any 5xx retry policy. The
+    // pooled path adds Host on its own, but adding it unconditionally here is
+    // safe (and required whenever no pool is configured) so we add it from
+    // the URI's authority if the captured headers don't already include one.
+    if !has_host_header
+        && let Some(authority) = authority
+        && let Ok(value) = HeaderValue::from_str(&authority)
+    {
+        builder = builder.header(http::header::HOST, value);
     }
 
     builder
@@ -494,6 +545,7 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
     body_chunks: &[BodyChunk],
     extra_headers: &[(String, String)],
     retry_function_name: Option<&'static str>,
+    connection_pool: Option<HttpConnectionPool>,
 ) -> Result<Option<IncomingResponse>, anyhow::Error> {
     let mut retry_state = retry_function_name.map(|_| InFunctionRetryState::new());
     let reconstructed_body_len: u64 = body_chunks
@@ -526,10 +578,8 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
             reconstruct_http_request(&request_state.request, hyper_body, &merged_extra_headers)?;
         let config = request_state.outgoing_request_config();
 
-        // Force a fresh transport for each inline retry attempt. Reusing pooled
-        // connections after mid-body failures can keep retrying a poisoned
-        // socket and repeatedly hit read timeouts.
-        let mut future_resp = default_send_request_with_pool(http_request, config, None, None);
+        let mut future_resp =
+            default_send_request_with_pool(http_request, config, None, connection_pool.clone());
 
         use wasmtime_wasi::Pollable;
         future_resp.ready().await;
@@ -599,6 +649,147 @@ pub struct RebuiltStreamingRequest {
     pub outgoing_body: HostOutgoingBody,
     /// The new output stream (boxed) to replace the old one.
     pub output_stream: Box<dyn OutputStream>,
+}
+
+async fn wait_for_outgoing_body_finish(
+    body_state: &mut tokio::sync::watch::Receiver<HttpOutgoingBodyState>,
+) -> bool {
+    loop {
+        let current = *body_state.borrow();
+        match current {
+            HttpOutgoingBodyState::Finished => return true,
+            HttpOutgoingBodyState::Closed => return false,
+            HttpOutgoingBodyState::Open => {
+                if body_state.changed().await.is_err() {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+/// Wraps an HTTP response task for requests whose response can arrive before
+/// their outgoing body is finished.
+///
+/// The wrapper only gates readiness: when the first response status matches an
+/// explicit status-code retry policy, it waits until the outgoing body is either
+/// finished or closed. It does not perform the retry itself; once the body is
+/// finished, `FutureIncomingResponse::get()` observes the original response and
+/// runs the normal in-context status retry path with full durable bookkeeping.
+pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::WorkerCtx>(
+    original_handle: FutureIncomingResponseHandle,
+    request: HostRequestHttpRequest,
+    mut body_state: tokio::sync::watch::Receiver<HttpOutgoingBodyState>,
+    pending_status_retry_decision: tokio::sync::watch::Sender<PendingStatusRetryDecision>,
+    worker: Arc<crate::worker::Worker<Ctx>>,
+    environment_state_service: Arc<dyn EnvironmentStateService>,
+    environment_id: EnvironmentId,
+    default_retry_policy: NamedRetryPolicy,
+    agent_config_retry_policies: Vec<NamedRetryPolicy>,
+    runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
+    assume_idempotence: bool,
+    agent_type: Option<String>,
+    max_delay: Duration,
+    begin_index: OplogIndex,
+) -> FutureIncomingResponseHandle {
+    wasmtime_wasi::runtime::spawn(
+        async move {
+            let result = original_handle.await;
+            let Ok(Ok(response)) = result else {
+                // No response to evaluate against — publish a definitive non-match
+                // so any consumer waiting on the decision wakes up immediately
+                // (rather than waiting on the sender drop).
+                let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::NotMatched);
+                return result;
+            };
+
+            if *body_state.borrow() != HttpOutgoingBodyState::Open {
+                let _ = pending_status_retry_decision.send(PendingStatusRetryDecision::NotMatched);
+                return Ok(Ok(response));
+            }
+
+            let status = response.resp.status().as_u16();
+            let mut properties = RetryContext::http_with_response(
+                &request.method.to_string(),
+                &request.uri,
+                Some(status),
+                "http-status",
+            );
+            if let Some(agent_type) = agent_type {
+                properties.set("agent-type", PredicateValue::Text(agent_type));
+            }
+            properties.set("is-idempotent", PredicateValue::Boolean(assume_idempotence));
+
+            let current_retry_policy_state = worker
+                .get_non_detached_last_known_status()
+                .await
+                .current_retry_state
+                .get(&begin_index)
+                .cloned();
+            let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
+                retry_point: begin_index,
+                environment_state_service,
+                environment_id,
+                default_retry_policy,
+                agent_config_retry_policies,
+                runtime_retry_policy_mutations,
+                max_in_function_retry_delay: max_delay,
+                current_retry_policy_state,
+                retry_properties: properties.clone(),
+                worker,
+            };
+
+            let policies = task_ctx.named_retry_policies().await;
+            match resolve_matching_status_retry_policy(policies, &properties) {
+                Ok(Some(matched)) => {
+                    // Publish the decision *before* waiting for the body to finish.
+                    // Stream write paths can now deterministically observe `Matched`
+                    // via `watch::Receiver::wait_for(...)` instead of polling and
+                    // hoping a single `yield_now()` is enough.
+                    let _ = pending_status_retry_decision
+                        .send(PendingStatusRetryDecision::Matched);
+                    tracing::debug!(
+                        policy = %matched.name,
+                        status,
+                        uri = %request.uri,
+                        "HTTP status retry matched before request body finished; delaying response readiness"
+                    );
+                    if wait_for_outgoing_body_finish(&mut body_state).await {
+                        tracing::debug!(
+                            policy = %matched.name,
+                            status,
+                            uri = %request.uri,
+                            "HTTP request body finished after pending status retry match; exposing response to retry path"
+                        );
+                    } else {
+                        tracing::debug!(
+                            policy = %matched.name,
+                            status,
+                            uri = %request.uri,
+                            "HTTP request body closed before pending status retry could become replayable"
+                        );
+                    }
+                }
+                Ok(None) => {
+                    let _ = pending_status_retry_decision
+                        .send(PendingStatusRetryDecision::NotMatched);
+                }
+                Err(err) => {
+                    let _ = pending_status_retry_decision
+                        .send(PendingStatusRetryDecision::NotMatched);
+                    tracing::warn!(
+                        ?err,
+                        status,
+                        uri = %request.uri,
+                        "Failed evaluating status-code retry policies for pending HTTP status retry"
+                    );
+                }
+            }
+
+            Ok(Ok(response))
+        }
+        .in_current_span(),
+    )
 }
 
 /// Writes a sequence of `BodyChunk`s into an `OutputStream`, respecting
@@ -723,7 +914,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     original_handle: FutureIncomingResponseHandle,
     request: HostRequestHttpRequest,
     config: OutgoingRequestConfig,
-    _connection_pool: Option<HttpConnectionPool>,
+    connection_pool: Option<HttpConnectionPool>,
     worker: Arc<crate::worker::Worker<Ctx>>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     environment_id: EnvironmentId,
@@ -827,6 +1018,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                         let result = {
                             let oplog = oplog.clone();
                             let request = request.clone();
+                            let connection_pool = connection_pool.clone();
 
                             async move {
                                 let body_chunks =
@@ -859,11 +1051,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                                     http_request,
                                     retry_config,
                                     None,
-                                    // Force a fresh connection for each in-task retry attempt.
-                                    // Reusing pooled connections after mid-body failures can
-                                    // keep retrying a poisoned transport and lead to repeated
-                                    // read timeouts.
-                                    None,
+                                    connection_pool,
                                 );
 
                                 use wasmtime_wasi::Pollable;
@@ -1195,12 +1383,14 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
         vec![]
     };
     // 6. Send the reconstructed request (with interrupt-aware retries)
+    let connection_pool = ctx.wasi_http.connection_pool.clone();
     let response = match send_with_interrupt_aware_retries(
         ctx,
         &request_state,
         &body_chunks,
         &extra_headers,
         Some("http-resume-response-body-send"),
+        connection_pool,
     )
     .await?
     {
@@ -1370,6 +1560,255 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
 /// Attempts awaiting-response inline retry from `FutureIncomingResponse::get()`
 /// after a transient response error.
 ///
+/// Outcome of an attempted HTTP status-code retry.
+#[derive(Debug)]
+pub(crate) enum StatusRetryOutcome {
+    /// No matching user-defined policy, or eligibility/atomic-region checks failed.
+    /// Caller should expose the existing response as-is.
+    NoRetry,
+    /// A retry attempt was performed; this is the latest attempt's response.
+    /// On `Ok`, the caller MUST wrap it in a `HostFutureIncomingResponse::ready(...)`
+    /// and re-enter the get-flow to allow further status retries (or to expose the
+    /// successful response). On `Err`, the caller MUST route through the existing
+    /// transient-failure HTTP retry path.
+    ///
+    /// Boxed because `IncomingResponse` is large (it carries the captured pooled
+    /// connection handle plus connection permits and other fields), and we don't
+    /// want every other (zero-sized) variant to pay that size cost.
+    Retried(Box<Result<IncomingResponse, wasi_http_types::ErrorCode>>),
+    /// User-defined policy matched but the retry budget is exhausted; expose the
+    /// most recent response (the one that triggered this call).
+    Exhausted,
+    /// User-defined policy matched and signalled trap+replay (delay too large, etc.).
+    /// Caller MUST escalate to the existing transient-host-failure trap path keyed on
+    /// `request_state.begin_index`.
+    FallBackToTrap,
+}
+
+/// Attempts to apply a user-defined HTTP retry policy keyed on response status code.
+///
+/// This is invoked from `HostFutureIncomingResponse::get` *after* the response has
+/// arrived (so its status is known) but *before* the response is exposed to guest
+/// code or persisted. Behavior:
+/// - In replay mode, snapshotting mode, `PersistNothing`, or inside an atomic region
+///   the function is a no-op (`NoRetry`) — by design (atomic-region semantics: skip
+///   in v1, the user-land throw triggers atomic-region replay).
+/// - Otherwise eligibility is checked using the same rules as
+///   `try_awaiting_response_inline_retry` (idempotency, body-finished, no trailers,
+///   reconstructable body, …).
+/// - Only named retry policies whose predicate **explicitly references the
+///   `status-code` property** are considered. Catch-all policies (e.g.
+///   `Predicate::True`, including the synthesized default catch-all) are filtered
+///   out so that the entire status-retry behavior remains opt-in: a user must
+///   explicitly write a policy keyed on `status-code` for status-based retries to
+///   apply. The matching policies are resolved against
+///   `RetryContext::http_with_response(..., status, "http-status")` enriched with
+///   worker-level context. If none match, returns `NoRetry` — guaranteeing backward
+///   compatibility when no `status-code` policy is configured.
+/// - If a matching policy decides to retry, the rejected response is replaced by
+///   reconstructing the request body from the oplog and re-sending the request
+///   exactly once via `default_send_request_with_pool`. Each call corresponds to one
+///   retry attempt; the caller drives the loop.
+pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
+    ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
+    request_state: &HttpRequestState,
+    status: u16,
+    rejected_response_rep: Option<u32>,
+) -> Result<StatusRetryOutcome, anyhow::Error> {
+    // Build retry properties (including `status-code`) and resolve a matching
+    // user-defined status-code policy *before* doing eligibility / atomic-region
+    // checks. We need to know whether a status-code policy matches in order to
+    // decide between `NoRetry` (fall through to user code) and `FallBackToTrap`
+    // (let the trap-recovery path honour the policy verdict via the carried
+    // override marker).
+    let mut properties = RetryContext::http_with_response(
+        &request_state.request.method.to_string(),
+        &request_state.request.uri,
+        Some(status),
+        "http-status",
+    );
+    ctx.state.enrich_retry_properties(&mut properties);
+
+    // Only consider policies that explicitly reference the `status-code` property —
+    // either in the named selector predicate or inside a `RetryPolicy::FilteredOn`
+    // nested in the policy body. Catch-all policies (e.g. `Predicate::True`, including
+    // the synthesized default and any user-defined "matches all" policy) are filtered
+    // out so the entire status-retry behavior remains opt-in: a user must explicitly
+    // key a policy on `status-code` for status-based retries to apply.
+    let matched = match resolve_matching_status_retry_policy(
+        ctx.state.named_retry_policies().await,
+        &properties,
+    ) {
+        Ok(Some(policy)) => policy,
+        Ok(None) => return Ok(StatusRetryOutcome::NoRetry),
+        Err(err) => {
+            tracing::warn!(
+                ?err,
+                status,
+                uri = %request_state.request.uri,
+                "Failed evaluating status-code retry policies for HTTP status retry"
+            );
+            return Ok(StatusRetryOutcome::NoRetry);
+        }
+    };
+
+    // A user-defined status-code policy matched this rejected response. The
+    // underlying TCP connection may be in an unsafe state for keep-alive reuse
+    // (for example, the server returned the rejected status without draining
+    // our request body, leaving leftover bytes in its receive buffer that
+    // would corrupt the next request line). Poison the pooled connection now
+    // so the connection pool will not hand it back — neither for the retry
+    // resend below, nor for any unrelated subsequent request from another
+    // worker sharing the same `HttpConnectionPool`. Healthy idle connections
+    // (or freshly opened ones) remain available through the pool. This is
+    // a no-op when the response was not produced through the pool.
+    if let Some(rep) = rejected_response_rep {
+        let resource = wasmtime::component::Resource::<
+            wasmtime_wasi_http::types::HostIncomingResponse,
+        >::new_borrow(rep);
+        if let Ok(resp) = ctx
+            .table()
+            .get::<wasmtime_wasi_http::types::HostIncomingResponse>(&resource)
+        {
+            resp.poison_pooled_connection();
+        }
+    }
+
+    // Inside an atomic region, inline retry is forbidden (it would skip the
+    // atomic-region rollback semantics). Escalate to trap+replay so the
+    // trap-recovery path can honour the resolved policy via the
+    // `SemanticTrapRetryOverride` marker that `try_trigger_retry` will attach
+    // — without this escalation the V2 guest would see the rejected response,
+    // throw, and trap with an impoverished context (no `status-code`), causing
+    // the user's status-code-keyed policy to silently fall back to the default
+    // trap-context policy.
+    if ctx.in_atomic_region() {
+        tracing::debug!(
+            policy = %matched.name,
+            status,
+            uri = %request_state.request.uri,
+            "HTTP status retry matched inside atomic region; falling back to trap+replay"
+        );
+        return Ok(StatusRetryOutcome::FallBackToTrap);
+    }
+
+    let exec_state = ctx.durable_execution_state();
+    let streaming_body_retry =
+        request_state.outgoing_body_rep.is_some() && !request_state.retry.body_finished;
+    let mut eligibility_state = request_state.clone();
+    let eligibility_phase = if streaming_body_retry {
+        InlineRetryPhase::WritingRequestBody
+    } else {
+        // AwaitingResponse get-time resend for a finished body does not swap output
+        // stream resources, so an output-stream subscribe() pollable cannot go stale
+        // here (mirrors `try_awaiting_response_inline_retry`).
+        eligibility_state.retry.output_stream_subscribed = false;
+        InlineRetryPhase::AwaitingResponse
+    };
+
+    if let Err(reason) =
+        is_http_inline_retry_eligible(&exec_state, &eligibility_state, eligibility_phase)
+    {
+        tracing::debug!(
+            ?reason,
+            policy = %matched.name,
+            status,
+            uri = %request_state.request.uri,
+            "HTTP status retry skipped"
+        );
+        return Ok(StatusRetryOutcome::NoRetry);
+    }
+
+    if streaming_body_retry {
+        tracing::debug!(
+            policy = %matched.name,
+            status,
+            uri = %request_state.request.uri,
+            "HTTP status retry matched before request body finished; falling back to trap+replay"
+        );
+        return Ok(StatusRetryOutcome::FallBackToTrap);
+    }
+
+    // The retry decision must land error entries on the request's begin index.
+    ctx.state.current_retry_point = request_state.begin_index;
+
+    // Drive the retry decision against the *exact* matched policy. We cannot call
+    // `decide_retry_with_properties`, because that function re-resolves through
+    // the full `named_retry_policies()` set (which contains catch-all policies that
+    // we have intentionally filtered out) and could silently activate the wrong
+    // policy.
+    let mut retry_state = InFunctionRetryState::new();
+    let decision = retry_state
+        .decide_retry_for_named_policy(ctx, "http-status-retry", &properties, &matched)
+        .await;
+
+    match decision {
+        AsyncRetryDecision::RetryAfterDelay(delay) => {
+            tracing::debug!(
+                policy = %matched.name,
+                ?delay,
+                status,
+                uri = %request_state.request.uri,
+                "HTTP response status matched user-defined retry policy; retrying"
+            );
+
+            // Interrupt-aware sleep
+            let interrupt = ctx.create_interrupt_signal();
+            let sleep = tokio::time::sleep(delay);
+            tokio::pin!(sleep);
+
+            match futures::future::select(sleep, interrupt).await {
+                futures::future::Either::Left(_) => {}
+                futures::future::Either::Right((interrupt_kind, _)) => {
+                    return Err(anyhow::Error::from(interrupt_kind));
+                }
+            }
+
+            // Reconstruct the original outgoing body and request, then send.
+            let oplog = ctx.public_state.oplog();
+            let body_chunks =
+                reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
+            let hyper_body = body_chunks_to_hyper_body(body_chunks);
+            let http_request = reconstruct_http_request(&request_state.request, hyper_body, &[])?;
+            let config = request_state.outgoing_request_config();
+
+            let connection_pool = ctx.wasi_http.connection_pool.clone();
+            let mut future_resp =
+                default_send_request_with_pool(http_request, config, None, connection_pool);
+
+            use wasmtime_wasi::Pollable;
+            future_resp.ready().await;
+
+            let retried = match future_resp.unwrap_ready() {
+                Ok(result) => result,
+                Err(trap) => Err(wasi_http_types::ErrorCode::InternalError(Some(format!(
+                    "request failed with trap: {trap}"
+                )))),
+            };
+
+            Ok(StatusRetryOutcome::Retried(Box::new(retried)))
+        }
+        AsyncRetryDecision::Exhausted => {
+            tracing::debug!(
+                policy = %matched.name,
+                status,
+                uri = %request_state.request.uri,
+                "HTTP status retry policy exhausted; exposing latest response"
+            );
+            Ok(StatusRetryOutcome::Exhausted)
+        }
+        AsyncRetryDecision::FallBackToTrap => {
+            tracing::debug!(
+                policy = %matched.name,
+                status,
+                uri = %request_state.request.uri,
+                "HTTP status retry policy requested trap+replay"
+            );
+            Ok(StatusRetryOutcome::FallBackToTrap)
+        }
+    }
+}
+
 pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     request_state: &HttpRequestState,
@@ -1403,7 +1842,9 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
     if body_chunks.is_empty() {
         body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
     }
-    send_with_interrupt_aware_retries(ctx, request_state, &body_chunks, &[], None).await
+    let connection_pool = ctx.wasi_http.connection_pool.clone();
+    send_with_interrupt_aware_retries(ctx, request_state, &body_chunks, &[], None, connection_pool)
+        .await
 }
 
 /// Parses the start byte position from a Content-Range header value.
@@ -1419,6 +1860,7 @@ fn parse_content_range_start(value: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::{Predicate, RetryPolicy};
     use test_r::test;
 
     #[test]
@@ -1494,11 +1936,90 @@ mod tests {
             connect_timeout: Duration::from_secs(5),
             first_byte_timeout: Duration::from_secs(5),
             between_bytes_timeout: Duration::from_secs(5),
+            outgoing_body_state: None,
+            pending_status_retry_decision: None,
             retry: HttpRetryEligibility {
                 body_finished: true,
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn status_retry_policy_resolution_skips_missing_context_properties() {
+        let high_priority_context_incompatible = NamedRetryPolicy {
+            name: "http-500-for-specific-agent-type".to_string(),
+            priority: 100,
+            predicate: Predicate::And(
+                Box::new(Predicate::PropEq {
+                    property: "status-code".to_string(),
+                    value: PredicateValue::Integer(500),
+                }),
+                Box::new(Predicate::PropEq {
+                    property: "target-agent-type".to_string(),
+                    value: PredicateValue::Text("checkout".to_string()),
+                }),
+            ),
+            policy: RetryPolicy::Immediate,
+        };
+        let fallback = NamedRetryPolicy {
+            name: "http-500-fallback".to_string(),
+            priority: 10,
+            predicate: Predicate::PropEq {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(500),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+
+        let mut properties = RetryProperties::new();
+        properties.set("status-code", PredicateValue::Integer(500));
+
+        let resolved = resolve_matching_status_retry_policy(
+            vec![high_priority_context_incompatible, fallback],
+            &properties,
+        )
+        .expect("missing status-context properties should skip only the incompatible policy")
+        .expect("fallback status retry policy should match");
+
+        assert_eq!(resolved.name, "http-500-fallback");
+    }
+
+    #[test]
+    fn status_retry_policy_resolution_uses_filtered_on_as_applicability() {
+        let high_priority_filtered_500 = NamedRetryPolicy {
+            name: "http-500-filtered-body".to_string(),
+            priority: 100,
+            predicate: Predicate::True,
+            policy: RetryPolicy::FilteredOn {
+                predicate: Predicate::PropEq {
+                    property: "status-code".to_string(),
+                    value: PredicateValue::Integer(500),
+                },
+                inner: Box::new(RetryPolicy::Immediate),
+            },
+        };
+        let lower_priority_404 = NamedRetryPolicy {
+            name: "http-404".to_string(),
+            priority: 10,
+            predicate: Predicate::PropEq {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(404),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+
+        let mut properties = RetryProperties::new();
+        properties.set("status-code", PredicateValue::Integer(404));
+
+        let resolved = resolve_matching_status_retry_policy(
+            vec![high_priority_filtered_500, lower_priority_404],
+            &properties,
+        )
+        .expect("status retry resolution should succeed")
+        .expect("404 policy should match");
+
+        assert_eq!(resolved.name, "http-404");
     }
 
     #[test]
@@ -1568,25 +2089,6 @@ mod tests {
         assert_eq!(
             is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody),
             Err(InlineRetryIneligible::HadBodySkip)
-        );
-    }
-
-    #[test]
-    fn test_body_not_finished_disqualifies_awaiting_response_only() {
-        let exec = make_exec_state();
-        let mut req = make_request_state();
-        req.output_stream_rep = Some(1);
-        req.retry.body_finished = false;
-        req.output_stream_rep = Some(1);
-        // AwaitingResponse should be disqualified
-        assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
-            Err(InlineRetryIneligible::BodyNotFinished)
-        );
-        // ResumingResponseBody should still be eligible
-        assert!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody)
-                .is_ok()
         );
     }
 
