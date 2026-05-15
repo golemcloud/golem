@@ -802,8 +802,10 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
         ])
         .await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("seed\\n"));
-    assert!(outputs.stdout_contains("nested seed\\n"));
+    assert!(outputs.stdout_contains("keep"));
+    assert!(outputs.stdout_contains("seed"));
+    assert!(outputs.stdout_contains("nested"));
+    assert!(outputs.stdout_contains("nested seed"));
     assert!(outputs.stdout_contains("generated"));
 
     let outputs = ctx
