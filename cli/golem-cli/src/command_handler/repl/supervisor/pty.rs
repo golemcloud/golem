@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{CommandExit, ReplCommandSpec};
+use crate::command_handler::repl::supervisor::{CommandExit, ReplCommandSpec};
 use anyhow::Context;
 use portable_pty::{ChildKiller, CommandBuilder, PtyPair, PtySize, native_pty_system};
 use std::io::{Read, Write};

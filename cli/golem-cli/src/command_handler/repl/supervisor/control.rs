@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::SupervisorEvent;
+use crate::command_handler::repl::supervisor::SupervisorEvent;
 use anyhow::Context;
 use serde_derive::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
