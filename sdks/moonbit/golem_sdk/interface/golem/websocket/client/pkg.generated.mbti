@@ -3,6 +3,7 @@ package "golemcloud/golem_sdk/interface/golem/websocket/client"
 
 import {
   "golemcloud/golem_sdk/interface/wasi/io/poll",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -15,25 +16,23 @@ pub(all) suberror Error_ {
   ProtocolError(String)
   Closed(CloseInfo?)
   Other(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) struct CloseInfo {
   code : UInt
   reason : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum Message {
   Text(String)
   Binary(FixedArray[Byte])
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct WebsocketConnection(Int) derive(Eq, Show)
+pub(all) struct WebsocketConnection(Int) derive(Eq, @debug.Debug)
 pub fn WebsocketConnection::close(Self, UInt?, String?) -> Result[Unit, Error_]
 pub fn WebsocketConnection::connect(String, Array[(String, String)]?) -> Result[Self, Error_]
 pub fn WebsocketConnection::drop(Self) -> Unit
-#deprecated
-pub fn WebsocketConnection::inner(Self) -> Int
 pub fn WebsocketConnection::receive(Self) -> Result[Message, Error_]
 pub fn WebsocketConnection::receive_with_timeout(Self, UInt64) -> Result[Message?, Error_]
 pub fn WebsocketConnection::send(Self, Message) -> Result[Unit, Error_]

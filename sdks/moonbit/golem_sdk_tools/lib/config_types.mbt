@@ -4,7 +4,7 @@ pub(all) struct ConfigTypeInfo {
   name : String
   package : String
   fields : Array[(String, ParamType)]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Parses `#derive.config` annotated struct types from source files.

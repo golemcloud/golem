@@ -5,7 +5,7 @@
 pub(all) struct DurableExecutionState {
   is_live : Bool
   persistence_level : @host.PersistenceLevel
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Represents the oplog entry version; this is for backward compatibility and most use cases should always use
@@ -13,7 +13,7 @@ pub(all) struct DurableExecutionState {
 pub(all) enum OplogEntryVersion {
   V1
   V2
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn OplogEntryVersion::ordinal(self : OplogEntryVersion) -> Int {
@@ -41,12 +41,12 @@ pub(all) struct PersistedDurableFunctionInvocation {
   response : @types.ValueAndType
   function_type : @oplog.WrappedFunctionType
   entry_version : OplogEntryVersion
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A pollable which can be later attached to a real `pollable`, but it can be subscribed to even
 /// before that.
-pub(all) struct LazyInitializedPollable(Int) derive(Show, Eq)
+pub(all) struct LazyInitializedPollable(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.

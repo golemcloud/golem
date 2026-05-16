@@ -5,26 +5,26 @@
 pub(all) struct Uuid {
   high_bits : UInt64
   low_bits : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Represents a Golem component
 pub(all) struct ComponentId {
   uuid : Uuid
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Represents a Golem agent
 pub(all) struct AgentId {
   component_id : ComponentId
   agent_id : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Represents a Golem account
 pub(all) struct AccountId {
   uuid : Uuid
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A promise ID is a value that can be passed to an external Golem API to complete that promise
@@ -32,14 +32,14 @@ pub(all) struct AccountId {
 pub(all) struct PromiseId {
   agent_id : AgentId
   oplog_idx : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Resource handle modes
 pub(all) enum ResourceMode {
   OWNED
   BORROWED
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn ResourceMode::ordinal(self : ResourceMode) -> Int {
@@ -84,7 +84,7 @@ pub(all) enum WitTypeNode {
   PrimBoolType
   PrimStringType
   HandleType((UInt64, ResourceMode))
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Represents a node of `wit-type`, with attached metadata
@@ -92,19 +92,19 @@ pub(all) struct NamedWitTypeNode {
   name : String?
   owner : String?
   type_ : WitTypeNode
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Describes a type of a `wit-value`
 pub(all) struct WitType {
   nodes : Array[NamedWitTypeNode]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// URI value
 pub(all) struct Uri {
   value : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// One node of a `wit-value`
@@ -131,72 +131,72 @@ pub(all) enum WitNode {
   PrimBool(Bool)
   PrimString(String)
   Handle((Uri, UInt64))
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Describes an arbitrary value
 pub(all) struct WitValue {
   nodes : Array[WitNode]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A value and its type
 pub(all) struct ValueAndType {
   value : WitValue
   typ : WitType
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Text type descriptor
 pub(all) struct TextType {
   language_code : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Inline text source
 pub(all) struct TextSource {
   data : String
   text_type : TextType?
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Reference to a text value
 pub(all) enum TextReference {
   Url(String)
   Inline(TextSource)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Binary type descriptor
 pub(all) struct BinaryType {
   mime_type : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Inline binary source
 pub(all) struct BinarySource {
   data : FixedArray[Byte]
   binary_type : BinaryType
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Reference to a binary value
 pub(all) enum BinaryReference {
   Url(String)
   Inline(BinarySource)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Descriptor for text-type element schemas
 pub(all) struct TextDescriptor {
   restrictions : Array[TextType]?
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Descriptor for binary-type element schemas
 pub(all) struct BinaryDescriptor {
   restrictions : Array[BinaryType]?
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Schema for a single element within a data-schema
@@ -204,7 +204,7 @@ pub(all) enum ElementSchema {
   ComponentModel(WitType)
   UnstructuredText(TextDescriptor)
   UnstructuredBinary(BinaryDescriptor)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Value of a single element within a data-value
@@ -212,21 +212,21 @@ pub(all) enum ElementValue {
   ComponentModel(WitValue)
   UnstructuredText(TextReference)
   UnstructuredBinary(BinaryReference)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Schema describing the structure of a data-value
 pub(all) enum DataSchema {
   Tuple(Array[(String, ElementSchema)])
   Multimodal(Array[(String, ElementSchema)])
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A structured value consisting of typed elements
 pub(all) enum DataValue {
   Tuple(Array[ElementValue])
   Multimodal(Array[(String, ElementValue)])
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Parses a UUID from a string

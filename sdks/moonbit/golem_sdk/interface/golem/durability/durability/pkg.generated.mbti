@@ -7,6 +7,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
   "golemcloud/golem_sdk/interface/wasi/io/poll",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -28,12 +29,10 @@ pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionI
 pub(all) struct DurableExecutionState {
   is_live : Bool
   persistence_level : @host.PersistenceLevel
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct LazyInitializedPollable(Int) derive(Eq, Show)
+pub(all) struct LazyInitializedPollable(Int) derive(Eq, @debug.Debug)
 pub fn LazyInitializedPollable::drop(Self) -> Unit
-#deprecated
-pub fn LazyInitializedPollable::inner(Self) -> Int
 pub fn LazyInitializedPollable::lazy_initialized_pollable() -> Self
 pub fn LazyInitializedPollable::set(Self, @poll.Pollable) -> Unit
 pub fn LazyInitializedPollable::subscribe(Self) -> @poll.Pollable
@@ -41,7 +40,7 @@ pub fn LazyInitializedPollable::subscribe(Self) -> @poll.Pollable
 pub(all) enum OplogEntryVersion {
   V1
   V2
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn OplogEntryVersion::from(Int) -> Self
 pub fn OplogEntryVersion::ordinal(Self) -> Int
 
@@ -51,7 +50,7 @@ pub(all) struct PersistedDurableFunctionInvocation {
   response : @types.ValueAndType
   function_type : @oplog.WrappedFunctionType
   entry_version : OplogEntryVersion
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

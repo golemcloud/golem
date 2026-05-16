@@ -193,7 +193,6 @@ pub enum EnvironmentAction {
     CreateComponent,
     CreateDomainRegistration,
     CreateEnvironmentPluginGrant,
-    CreateHttpApiDefinition,
     CreateHttpApiDeployment,
     CreateMcpDeployment,
     CreateResourceDefinition,
@@ -206,7 +205,6 @@ pub enum EnvironmentAction {
     DeleteDomainRegistration,
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
-    DeleteHttpApiDefinition,
     DeleteHttpApiDeployment,
     DeleteMcpDeployment,
     DeleteResourceDefinition,
@@ -218,7 +216,6 @@ pub enum EnvironmentAction {
     UpdateAgentSecret,
     UpdateComponent,
     UpdateEnvironment,
-    UpdateHttpApiDefinition,
     UpdateHttpApiDeployment,
     UpdateMcpDeployment,
     UpdateResourceDefinition,
@@ -234,7 +231,6 @@ pub enum EnvironmentAction {
     ViewDomainRegistration,
     ViewEnvironment,
     ViewEnvironmentPluginGrant,
-    ViewHttpApiDefinition,
     ViewHttpApiDeployment,
     ViewMcpDeployment,
     ViewResourceDefinition,
@@ -585,27 +581,6 @@ impl AuthCtx {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
             EnvironmentAction::ViewSecurityScheme => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            // Http api definitions
-            EnvironmentAction::CreateHttpApiDefinition => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::UpdateHttpApiDefinition => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::DeleteHttpApiDefinition => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::ViewHttpApiDefinition => has_any_role(
                 roles_from_shares,
                 &[
                     EnvironmentRole::Admin,

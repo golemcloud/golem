@@ -5,6 +5,7 @@ import {
   "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
   "golemcloud/golem_sdk/interface/wasi/io/error",
   "golemcloud/golem_sdk/interface/wasi/io/streams",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -49,7 +50,7 @@ pub(all) suberror ErrorCode {
   INVALID_SEEK
   TEXT_FILE_BUSY
   CROSS_DEVICE
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn ErrorCode::from(Int) -> Self
 pub fn ErrorCode::ordinal(Self) -> Int
 
@@ -61,19 +62,17 @@ pub(all) enum Advice {
   WILL_NEED
   DONT_NEED
   NO_REUSE
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Advice::from(Int) -> Self
 pub fn Advice::ordinal(Self) -> Int
 
-pub(all) struct Descriptor(Int) derive(Eq, Show)
+pub(all) struct Descriptor(Int) derive(Eq, @debug.Debug)
 pub fn Descriptor::advise(Self, UInt64, UInt64, Advice) -> Result[Unit, ErrorCode]
 pub fn Descriptor::append_via_stream(Self) -> Result[@streams.OutputStream, ErrorCode]
 pub fn Descriptor::create_directory_at(Self, String) -> Result[Unit, ErrorCode]
 pub fn Descriptor::drop(Self) -> Unit
 pub fn Descriptor::get_flags(Self) -> Result[DescriptorFlags, ErrorCode]
 pub fn Descriptor::get_type(Self) -> Result[DescriptorType, ErrorCode]
-#deprecated
-pub fn Descriptor::inner(Self) -> Int
 pub fn Descriptor::is_same_object(Self, Self) -> Bool
 pub fn Descriptor::link_at(Self, PathFlags, String, Self, String) -> Result[Unit, ErrorCode]
 pub fn Descriptor::metadata_hash(Self) -> Result[MetadataHashValue, ErrorCode]
@@ -97,10 +96,8 @@ pub fn Descriptor::unlink_file_at(Self, String) -> Result[Unit, ErrorCode]
 pub fn Descriptor::write(Self, FixedArray[Byte], UInt64) -> Result[UInt64, ErrorCode]
 pub fn Descriptor::write_via_stream(Self, UInt64) -> Result[@streams.OutputStream, ErrorCode]
 
-pub(all) struct DescriptorFlags(Byte) derive(Eq, Show)
+pub(all) struct DescriptorFlags(Byte) derive(Eq, @debug.Debug)
 pub fn DescriptorFlags::default() -> Self
-#deprecated
-pub fn DescriptorFlags::inner(Self) -> Byte
 pub fn DescriptorFlags::is_set(Self, DescriptorFlagsFlag) -> Bool
 pub fn DescriptorFlags::set(Self, DescriptorFlagsFlag) -> Self
 pub fn DescriptorFlags::unset(Self, DescriptorFlagsFlag) -> Self
@@ -121,7 +118,7 @@ pub(all) struct DescriptorStat {
   data_access_timestamp : @wallClock.Datetime?
   data_modification_timestamp : @wallClock.Datetime?
   status_change_timestamp : @wallClock.Datetime?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum DescriptorType {
   UNKNOWN
@@ -132,36 +129,32 @@ pub(all) enum DescriptorType {
   SYMBOLIC_LINK
   REGULAR_FILE
   SOCKET
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn DescriptorType::from(Int) -> Self
 pub fn DescriptorType::ordinal(Self) -> Int
 
 pub(all) struct DirectoryEntry {
   type_ : DescriptorType
   name : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct DirectoryEntryStream(Int) derive(Eq, Show)
+pub(all) struct DirectoryEntryStream(Int) derive(Eq, @debug.Debug)
 pub fn DirectoryEntryStream::drop(Self) -> Unit
-#deprecated
-pub fn DirectoryEntryStream::inner(Self) -> Int
 pub fn DirectoryEntryStream::read_directory_entry(Self) -> Result[DirectoryEntry?, ErrorCode]
 
 pub(all) struct MetadataHashValue {
   lower : UInt64
   upper : UInt64
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum NewTimestamp {
   NoChange
   Now
   Timestamp(@wallClock.Datetime)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct OpenFlags(Byte) derive(Eq, Show)
+pub(all) struct OpenFlags(Byte) derive(Eq, @debug.Debug)
 pub fn OpenFlags::default() -> Self
-#deprecated
-pub fn OpenFlags::inner(Self) -> Byte
 pub fn OpenFlags::is_set(Self, OpenFlagsFlag) -> Bool
 pub fn OpenFlags::set(Self, OpenFlagsFlag) -> Self
 pub fn OpenFlags::unset(Self, OpenFlagsFlag) -> Self
@@ -173,10 +166,8 @@ pub(all) enum OpenFlagsFlag {
   TRUNCATE
 }
 
-pub(all) struct PathFlags(Byte) derive(Eq, Show)
+pub(all) struct PathFlags(Byte) derive(Eq, @debug.Debug)
 pub fn PathFlags::default() -> Self
-#deprecated
-pub fn PathFlags::inner(Self) -> Byte
 pub fn PathFlags::is_set(Self, PathFlagsFlag) -> Bool
 pub fn PathFlags::set(Self, PathFlagsFlag) -> Self
 pub fn PathFlags::unset(Self, PathFlagsFlag) -> Self

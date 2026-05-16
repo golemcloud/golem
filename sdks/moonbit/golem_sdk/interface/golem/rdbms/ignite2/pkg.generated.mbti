@@ -1,6 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/golem/rdbms/ignite2"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
 
 // Errors
@@ -10,20 +14,18 @@ pub(all) suberror Error_ {
   QueryExecutionFailure(String)
   QueryResponseFailure(String)
   Other(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) struct DbColumn {
   ordinal : UInt64
   name : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct DbConnection(Int) derive(Eq, Show)
+pub(all) struct DbConnection(Int) derive(Eq, @debug.Debug)
 pub fn DbConnection::begin_transaction(Self) -> Result[DbTransaction, Error_]
 pub fn DbConnection::drop(Self) -> Unit
 pub fn DbConnection::execute(Self, String, Array[DbValue]) -> Result[Int64, Error_]
-#deprecated
-pub fn DbConnection::inner(Self) -> Int
 pub fn DbConnection::open(String) -> Result[Self, Error_]
 pub fn DbConnection::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
 pub fn DbConnection::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
@@ -31,25 +33,21 @@ pub fn DbConnection::query_stream(Self, String, Array[DbValue]) -> Result[DbResu
 pub(all) struct DbResult {
   columns : Array[DbColumn]
   rows : Array[DbRow]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct DbResultStream(Int) derive(Eq, Show)
+pub(all) struct DbResultStream(Int) derive(Eq, @debug.Debug)
 pub fn DbResultStream::drop(Self) -> Unit
 pub fn DbResultStream::get_columns(Self) -> Result[Array[DbColumn], Error_]
 pub fn DbResultStream::get_next(Self) -> Result[Array[DbRow]?, Error_]
-#deprecated
-pub fn DbResultStream::inner(Self) -> Int
 
 pub(all) struct DbRow {
   values : Array[DbValue]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct DbTransaction(Int) derive(Eq, Show)
+pub(all) struct DbTransaction(Int) derive(Eq, @debug.Debug)
 pub fn DbTransaction::commit(Self) -> Result[Unit, Error_]
 pub fn DbTransaction::drop(Self) -> Unit
 pub fn DbTransaction::execute(Self, String, Array[DbValue]) -> Result[Int64, Error_]
-#deprecated
-pub fn DbTransaction::inner(Self) -> Int
 pub fn DbTransaction::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
 pub fn DbTransaction::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
 pub fn DbTransaction::rollback(Self) -> Result[Unit, Error_]
@@ -71,7 +69,7 @@ pub(all) enum DbValue {
   DbTime(Int64)
   DbDecimal(String)
   DbByteArray(FixedArray[Byte])
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

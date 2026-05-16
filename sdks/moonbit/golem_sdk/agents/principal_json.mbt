@@ -2,7 +2,7 @@
 /// Error type for JSON codec operations on Principal and related types.
 pub suberror JsonCodecError {
   JsonCodecError(String)
-} derive(Show)
+} derive(Debug)
 
 ///|
 let hex_chars : FixedArray[Char] = [

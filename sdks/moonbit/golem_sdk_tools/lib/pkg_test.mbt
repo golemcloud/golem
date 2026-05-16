@@ -19,10 +19,15 @@ test "parse_pkg_exports extracts export entries from moon.pkg" {
     #|  },
     #|)
   let exports = @lib.parse_pkg_exports(content)
-  inspect(
+  debug_inspect(
     exports,
     content=(
-      #|["cabi_realloc:cabi_realloc", "wasmExportInit:golem:agent/guest#initialize", "wasmExportSave:golem:api/save-snapshot@1.1.7#save"]
+      #|[
+      #|  "cabi_realloc:cabi_realloc",
+      #|  "wasmExportInit:golem:agent/guest#initialize",
+      #|  "wasmExportSave:golem:api/save-snapshot@1.1.7#save",
+      #|]
+
     ),
   )
 }
@@ -50,26 +55,11 @@ test "update_pkg_link replaces existing link block" {
     "cabi_realloc:cabi_realloc", "wasmExportInit:golem:agent/guest#initialize",
   ]
   let result = @lib.update_pkg_link(content, exports)
-  inspect(
+  debug_inspect(
     result,
     content=(
-      #|import {
-      #|  "some/pkg",
-      #|}
-      #|
-      #|options(
-      #|  "is-main": true,
-      #|  link: {
-      #|    "wasm": {
-      #|      "export-memory-name": "memory",
-      #|      "exports": [
-      #|        "cabi_realloc:cabi_realloc",
-      #|        "wasmExportInit:golem:agent/guest#initialize",
-      #|      ],
-      #|      "heap-start-address": 16,
-      #|    },
-      #|  },
-      #|)
+      #|"import {\n  \"some/pkg\",\n}\n\noptions(\n  \"is-main\": true,\n  link: {\n    \"wasm\": {\n      \"export-memory-name\": \"memory\",\n      \"exports\": [\n        \"cabi_realloc:cabi_realloc\",\n        \"wasmExportInit:golem:agent/guest#initialize\",\n      ],\n      \"heap-start-address\": 16,\n    },\n  },\n)"
+
     ),
   )
 }
@@ -86,25 +76,11 @@ test "update_pkg_link inserts link into existing options" {
     #|)
   let exports = ["cabi_realloc:cabi_realloc"]
   let result = @lib.update_pkg_link(content, exports)
-  inspect(
+  debug_inspect(
     result,
     content=(
-      #|import {
-      #|  "some/pkg",
-      #|}
-      #|
-      #|options(
-      #|  "is-main": true,
-      #|  link: {
-      #|    "wasm": {
-      #|      "export-memory-name": "memory",
-      #|      "exports": [
-      #|        "cabi_realloc:cabi_realloc",
-      #|      ],
-      #|      "heap-start-address": 16,
-      #|    },
-      #|  },
-      #|)
+      #|"import {\n  \"some/pkg\",\n}\n\noptions(\n  \"is-main\": true,\n  link: {\n    \"wasm\": {\n      \"export-memory-name\": \"memory\",\n      \"exports\": [\n        \"cabi_realloc:cabi_realloc\",\n      ],\n      \"heap-start-address\": 16,\n    },\n  },\n)"
+
     ),
   )
 }
@@ -122,17 +98,11 @@ test "ensure_pkg_import adds import to existing block" {
   let result = @lib.ensure_pkg_import(
     content, "golemcloud/golem_sdk/agents/types", "@types",
   )
-  inspect(
+  debug_inspect(
     result,
     content=(
-      #|import {
-      #|  "some/pkg",
-      #|  "golemcloud/golem_sdk/agents/types" @types,
-      #|}
-      #|
-      #|options(
-      #|  "is-main": true,
-      #|)
+      #|"import {\n  \"some/pkg\",\n  \"golemcloud/golem_sdk/agents/types\" @types,\n}\n\noptions(\n  \"is-main\": true,\n)"
+
     ),
   )
 }
@@ -151,17 +121,11 @@ test "ensure_pkg_import is idempotent" {
   let result = @lib.ensure_pkg_import(
     content, "golemcloud/golem_sdk/agents/types", "@types",
   )
-  inspect(
+  debug_inspect(
     result,
     content=(
-      #|import {
-      #|  "some/pkg",
-      #|  "golemcloud/golem_sdk/agents/types" @types,
-      #|}
-      #|
-      #|options(
-      #|  "is-main": true,
-      #|)
+      #|"import {\n  \"some/pkg\",\n  \"golemcloud/golem_sdk/agents/types\" @types,\n}\n\noptions(\n  \"is-main\": true,\n)"
+
     ),
   )
 }
@@ -175,16 +139,11 @@ test "ensure_pkg_import adds import block when none exists" {
   let result = @lib.ensure_pkg_import(
     content, "golemcloud/golem_sdk/agents/types", "@types",
   )
-  inspect(
+  debug_inspect(
     result,
     content=(
-      #|import {
-      #|  "golemcloud/golem_sdk/agents/types" @types,
-      #|}
-      #|
-      #|options(
-      #|  "is-main": true,
-      #|)
+      #|"import {\n  \"golemcloud/golem_sdk/agents/types\" @types,\n}\n\noptions(\n  \"is-main\": true,\n)"
+
     ),
   )
 }
@@ -197,24 +156,11 @@ test "update_pkg_link appends options when none exist" {
     #|}
   let exports = ["cabi_realloc:cabi_realloc"]
   let result = @lib.update_pkg_link(content, exports)
-  inspect(
+  debug_inspect(
     result,
     content=(
-      #|import {
-      #|  "some/pkg",
-      #|}
-      #|
-      #|options(
-      #|  link: {
-      #|    "wasm": {
-      #|      "export-memory-name": "memory",
-      #|      "exports": [
-      #|        "cabi_realloc:cabi_realloc",
-      #|      ],
-      #|      "heap-start-address": 16,
-      #|    },
-      #|  },
-      #|)
+      #|"import {\n  \"some/pkg\",\n}\n\noptions(\n  link: {\n    \"wasm\": {\n      \"export-memory-name\": \"memory\",\n      \"exports\": [\n        \"cabi_realloc:cabi_realloc\",\n      ],\n      \"heap-start-address\": 16,\n    },\n  },\n)"
+
     ),
   )
 }
