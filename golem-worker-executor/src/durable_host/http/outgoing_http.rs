@@ -296,6 +296,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await
                 .unwrap_or(IdempotencyKey::fresh());
             let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, begin_index);
+            let idempotency_key = idempotency_key.to_string();
 
             let header_name = HeaderName::from_static("idempotency-key");
 
@@ -305,9 +306,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .headers
                     .append(
                         &header_name,
-                        HeaderValue::from_str(&idempotency_key.to_string()).unwrap(),
+                        HeaderValue::from_str(&idempotency_key).unwrap(),
                     )
                     .map_err(HttpError::trap)?;
+                headers.insert("idempotency-key".to_string(), idempotency_key);
             }
         }
 
