@@ -1,7 +1,7 @@
 ///|
 priv suberror SnapshotLoadError {
   SnapshotLoadError(String)
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Tries to load a snapshot, parsing the versioned envelope and restoring agent state.
@@ -43,9 +43,9 @@ pub fn load(snapshot : @host.Snapshot) -> Result[Unit, String] {
                   }
                 None => Err("Failed to construct agent instance")
               }
-            Err(e) => Err("Failed to construct agent: \{e}")
+            Err(e) => Err("Failed to construct agent: \{@debug.to_string(e)}")
           }
-        Err(e) => Err("Failed to parse agent ID: \{e}")
+        Err(e) => Err("Failed to parse agent ID: \{@debug.to_string(e)}")
       }
     }
   }
@@ -91,7 +91,10 @@ fn parse_snapshot_envelope(
     let principal = match obj.get("principal") {
       Some(p) =>
         @agents.principal_from_json(p) catch {
-          e => raise SnapshotLoadError("Failed to parse principal: \{e}")
+          e =>
+            raise SnapshotLoadError(
+              "Failed to parse principal: \{@debug.to_string(e)}",
+            )
         }
       None => @common.Principal::Anonymous
     }
@@ -142,7 +145,10 @@ fn parse_snapshot_envelope(
             )
         }
         let principal = @agents.principal_from_json(principal_json) catch {
-          e => raise SnapshotLoadError("Failed to deserialize principal: \{e}")
+          e =>
+            raise SnapshotLoadError(
+              "Failed to deserialize principal: \{@debug.to_string(e)}",
+            )
         }
         let state_bytes = slice_fixedarray_to_bytes(data, 5 + principal_len)
         (principal, state_bytes)

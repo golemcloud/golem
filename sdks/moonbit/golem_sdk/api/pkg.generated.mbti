@@ -6,6 +6,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/api/retry",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/io/poll",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -102,7 +103,7 @@ pub fn AgentsPager::next_page(Self) -> Array[@host.AgentMetadata]?
 
 pub struct Duration {
   repr : DurationRepr
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Duration::hours(UInt64) -> Self
 pub fn Duration::micros(UInt64) -> Self
 pub fn Duration::millis(UInt64) -> Self
@@ -111,14 +112,14 @@ pub fn Duration::nanos(UInt64) -> Self
 pub fn Duration::seconds(UInt64) -> Self
 pub fn Duration::to_nanos(Self) -> UInt64 raise RetryBuilderError
 
-type DurationRepr derive(Eq, Show)
+type DurationRepr derive(Eq, @debug.Debug)
 
 pub struct NamedPolicy {
   name : String
   priority : UInt
   predicate : Predicate
   policy : Policy
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn NamedPolicy::applies_when(Self, Predicate) -> Self
 pub fn NamedPolicy::named(String, Policy) -> Self
 pub fn NamedPolicy::priority(Self, UInt) -> Self
@@ -126,7 +127,7 @@ pub fn NamedPolicy::to_raw(Self) -> @retry.NamedRetryPolicy raise RetryBuilderEr
 
 pub struct Policy {
   repr : PolicyRepr
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Policy::add_delay(Self, Duration) -> Self
 pub fn Policy::and_then(Self, Self) -> Self
 pub fn Policy::clamp(Self, Duration, Duration) -> Self
@@ -143,11 +144,11 @@ pub fn Policy::union(Self, Self) -> Self
 pub fn Policy::with_jitter(Self, Double) -> Self
 pub fn Policy::within(Self, Duration) -> Self
 
-type PolicyRepr derive(Eq, Show)
+type PolicyRepr derive(Eq, @debug.Debug)
 
 pub struct Predicate {
   repr : PredicateRepr
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Predicate::always() -> Self
 pub fn Predicate::and_(Self, Self) -> Self
 pub fn Predicate::contains(Props, String) -> Self
@@ -166,7 +167,7 @@ pub fn Predicate::or_(Self, Self) -> Self
 pub fn Predicate::starts_with(Props, String) -> Self
 pub fn Predicate::to_raw(Self) -> @retry.RetryPredicate raise RetryBuilderError
 
-type PredicateRepr derive(Eq, Show)
+type PredicateRepr derive(Eq, @debug.Debug)
 
 pub(all) struct PromiseResult {
   // private fields
@@ -177,7 +178,7 @@ pub fn PromiseResult::subscribe(Self) -> @poll.Pollable
 
 pub struct Props {
   key : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Props::custom(String) -> Self
 pub fn Props::db_type() -> Self
 pub fn Props::error_type() -> Self
@@ -202,7 +203,7 @@ pub fn RetryPolicyGuard::drop(Self) -> Unit
 
 pub struct Value {
   repr : ValueRepr
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Value::boolean(Bool) -> Self
 pub fn Value::int(Int) -> Self
 pub fn Value::integer(Int64) -> Self
@@ -211,7 +212,7 @@ pub fn Value::to_raw(Self) -> @retry.PredicateValue raise RetryBuilderError
 pub fn Value::uint(UInt) -> Self
 pub fn Value::uint64(UInt64) -> Self
 
-type ValueRepr derive(Eq, Show)
+type ValueRepr derive(Eq, @debug.Debug)
 
 // Type aliases
 pub using @host {type AgentAllFilter}

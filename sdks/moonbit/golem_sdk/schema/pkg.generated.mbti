@@ -5,6 +5,7 @@ import {
   "golemcloud/golem_sdk/extractor",
   "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -50,7 +51,7 @@ pub fn[T : ToElementValue] to_element_value_as(T) -> @types.ElementValue raise @
 pub(all) struct SchemaOptions {
   text_languages : Array[String]
   binary_mime_types : Array[String]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct TypeTag[T] {
 }
