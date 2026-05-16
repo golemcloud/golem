@@ -3,7 +3,7 @@ test "unstructured_text_url_roundtrip" {
   let original = UnstructuredText::from_url("https://example.com/doc.txt")
   let element = @schema.to_element_value_as(original)
   let restored : UnstructuredText = @schema.from_element_value_as(element)
-  inspect(restored, content="Url(\"https://example.com/doc.txt\")")
+  debug_inspect(restored, content="Url(\"https://example.com/doc.txt\")")
 }
 
 ///|
@@ -11,7 +11,10 @@ test "unstructured_text_inline_roundtrip" {
   let original = UnstructuredText::from_inline("hello world")
   let element = @schema.to_element_value_as(original)
   let restored : UnstructuredText = @schema.from_element_value_as(element)
-  inspect(restored, content="Inline(text=\"hello world\", language_code=None)")
+  debug_inspect(
+    restored,
+    content="Inline(text=\"hello world\", language_code=None)",
+  )
 }
 
 ///|
@@ -22,7 +25,7 @@ test "unstructured_text_inline_with_language_roundtrip" {
   )
   let element = @schema.to_element_value_as(original)
   let restored : UnstructuredText = @schema.from_element_value_as(element)
-  inspect(
+  debug_inspect(
     restored,
     content="Inline(text=\"hello world\", language_code=Some(\"en\"))",
   )
@@ -30,9 +33,11 @@ test "unstructured_text_inline_with_language_roundtrip" {
 
 ///|
 test "unstructured_text_schema" {
-  inspect(
+  debug_inspect(
     @schema.schema_of(UnstructuredText::from_url("")),
-    content="UnstructuredText({restrictions: None})",
+    content=(
+      #|UnstructuredText({ restrictions: None })
+    ),
   )
 }
 
@@ -41,7 +46,7 @@ test "unstructured_binary_url_roundtrip" {
   let original = UnstructuredBinary::from_url("https://example.com/image.png")
   let element = @schema.to_element_value_as(original)
   let restored : UnstructuredBinary = @schema.from_element_value_as(element)
-  inspect(restored, content="Url(\"https://example.com/image.png\")")
+  debug_inspect(restored, content="Url(\"https://example.com/image.png\")")
 }
 
 ///|
@@ -52,17 +57,21 @@ test "unstructured_binary_inline_roundtrip" {
   )
   let element = @schema.to_element_value_as(original)
   let restored : UnstructuredBinary = @schema.from_element_value_as(element)
-  inspect(
+  debug_inspect(
     restored,
-    content="Inline(data=b\"\\x89PNG\", mime_type=\"image/png\")",
+    content=(
+      #|Inline(data=<Bytes: [0x89, 0x50, 0x4e, 0x47]>, mime_type="image/png")
+    ),
   )
 }
 
 ///|
 test "unstructured_binary_schema" {
-  inspect(
+  debug_inspect(
     @schema.schema_of(UnstructuredBinary::from_url("")),
-    content="UnstructuredBinary({restrictions: None})",
+    content=(
+      #|UnstructuredBinary({ restrictions: None })
+    ),
   )
 }
 
@@ -72,9 +81,11 @@ test "unstructured_text_schema_with_restrictions" {
     (@schema.TypeTag::{  } : @schema.TypeTag[UnstructuredText]),
     { text_languages: ["en", "de"], binary_mime_types: [] },
   )
-  inspect(
+  debug_inspect(
     schema,
-    content="UnstructuredText({restrictions: Some([{language_code: \"en\"}, {language_code: \"de\"}])})",
+    content=(
+      #|UnstructuredText({ restrictions: Some([{ language_code: "en" }, { language_code: "de" }]) })
+    ),
   )
 }
 
@@ -84,9 +95,11 @@ test "unstructured_binary_schema_with_restrictions" {
     (@schema.TypeTag::{  } : @schema.TypeTag[UnstructuredBinary]),
     { text_languages: [], binary_mime_types: ["image/png", "image/jpeg"] },
   )
-  inspect(
+  debug_inspect(
     schema,
-    content="UnstructuredBinary({restrictions: Some([{mime_type: \"image/png\"}, {mime_type: \"image/jpeg\"}])})",
+    content=(
+      #|UnstructuredBinary({ restrictions: Some([{ mime_type: "image/png" }, { mime_type: "image/jpeg" }]) })
+    ),
   )
 }
 
@@ -96,7 +109,7 @@ test "schema_options_rejected_for_component_model" {
     (@schema.TypeTag::{  } : @schema.TypeTag[String]),
     { text_languages: ["en"], binary_mime_types: [] },
   )
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(InvalidInput("#derive.text_languages requires the parameter type to implement HasElementSchema with UnstructuredText schema"))
@@ -114,7 +127,7 @@ test "option_unstructured_text_deserialization_rejected" {
   let result : Result[UnstructuredText?, _] = try? @schema.from_element_value_as(
     element,
   )
-  inspect(
+  debug_inspect(
     result,
     content="Err(InvalidInput(\"UnstructuredText does not use the Extractor path\"))",
   )
@@ -128,7 +141,7 @@ test "array_unstructured_binary_deserialization_rejected" {
   let result : Result[Array[UnstructuredBinary], _] = try? @schema.from_element_value_as(
     element,
   )
-  inspect(
+  debug_inspect(
     result,
     content="Err(InvalidInput(\"UnstructuredBinary does not use the Extractor path\"))",
   )
@@ -140,7 +153,7 @@ test "option_unstructured_text_serialization_rejected" {
     UnstructuredText::from_url("https://x.com"),
   )
   let result : Result[_, _] = try? @schema.to_element_value_as(val)
-  inspect(
+  debug_inspect(
     result,
     content="Err(InvalidInput(\"Expected ComponentModel for Option inner value\"))",
   )
@@ -152,7 +165,7 @@ test "array_unstructured_binary_serialization_rejected" {
     UnstructuredBinary::from_url("https://x.com"),
   ]
   let result : Result[_, _] = try? @schema.to_element_value_as(val)
-  inspect(
+  debug_inspect(
     result,
     content="Err(InvalidInput(\"Expected ComponentModel for Array element\"))",
   )
@@ -164,7 +177,7 @@ test "schema_of_tag_rejects_mime_types_on_string" {
     (@schema.TypeTag::{  } : @schema.TypeTag[String]),
     { text_languages: [], binary_mime_types: ["image/png"] },
   )
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(InvalidInput("#derive.mime_types requires the parameter type to implement HasElementSchema with UnstructuredBinary schema"))
@@ -178,7 +191,7 @@ test "schema_of_tag_rejects_text_languages_on_unstructured_binary" {
     (@schema.TypeTag::{  } : @schema.TypeTag[UnstructuredBinary]),
     { text_languages: ["en"], binary_mime_types: [] },
   )
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(InvalidInput("#derive.text_languages requires the parameter type to implement HasElementSchema with UnstructuredText schema"))
@@ -192,7 +205,7 @@ test "schema_of_tag_rejects_mime_types_on_unstructured_text" {
     (@schema.TypeTag::{  } : @schema.TypeTag[UnstructuredText]),
     { text_languages: [], binary_mime_types: ["image/png"] },
   )
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(InvalidInput("#derive.mime_types requires the parameter type to implement HasElementSchema with UnstructuredBinary schema"))
@@ -206,7 +219,7 @@ test "unstructured_text_from_wrong_element_value" {
   let result : Result[UnstructuredText, _] = try? @schema.from_element_value_as(
     element,
   )
-  inspect(
+  debug_inspect(
     result,
     content="Err(InvalidInput(\"Expected UnstructuredText ElementValue\"))",
   )
@@ -218,7 +231,7 @@ test "unstructured_binary_from_wrong_element_value" {
   let result : Result[UnstructuredBinary, _] = try? @schema.from_element_value_as(
     element,
   )
-  inspect(
+  debug_inspect(
     result,
     content="Err(InvalidInput(\"Expected UnstructuredBinary ElementValue\"))",
   )
@@ -236,7 +249,7 @@ test "multimodal_text_or_binary_roundtrip" {
   ])
   let data = original.to_data_value()
   let restored : Multimodal[TextOrBinary] = Multimodal::from_data_value(data)
-  assert_eq(restored, original)
+  @debug.assert_eq(restored, original)
 }
 
 ///|
@@ -252,7 +265,7 @@ test "multimodal_custom_modality_string_roundtrip" {
   let restored : Multimodal[CustomModality[String]] = Multimodal::from_data_value(
     data,
   )
-  assert_eq(restored, original)
+  @debug.assert_eq(restored, original)
 }
 
 ///|
@@ -261,7 +274,7 @@ test "multimodal_from_tuple_data_value_raises_error" {
   let result : Result[Multimodal[TextOrBinary], _] = try? Multimodal::from_data_value(
     data,
   )
-  inspect(
+  debug_inspect(
     result,
     content="Err(InvalidInput(\"Expected Multimodal DataValue\"))",
   )

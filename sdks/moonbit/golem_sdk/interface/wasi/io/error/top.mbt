@@ -20,7 +20,7 @@
 /// concrete type is open.
 pub(all) suberror Error_ {
   Error_(Int)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.

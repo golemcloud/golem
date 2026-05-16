@@ -13,7 +13,7 @@ pub(all) enum DescriptorType {
   SYMBOLIC_LINK
   REGULAR_FILE
   SOCKET
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn DescriptorType::ordinal(self : DescriptorType) -> Int {
@@ -48,7 +48,7 @@ pub fn DescriptorType::from(self : Int) -> DescriptorType {
 /// Descriptor flags.
 ///
 /// Note: This was called `fdflags` in earlier versions of WASI.
-pub(all) struct DescriptorFlags(Byte) derive(Show, Eq)
+pub(all) struct DescriptorFlags(Byte) derive(Debug, Eq)
 
 ///|
 pub fn DescriptorFlags::default() -> DescriptorFlags {
@@ -106,7 +106,7 @@ pub fn DescriptorFlags::is_set(
 
 ///|
 /// Flags determining the method of how paths are resolved.
-pub(all) struct PathFlags(Byte) derive(Show, Eq)
+pub(all) struct PathFlags(Byte) derive(Debug, Eq)
 
 ///|
 pub fn PathFlags::default() -> PathFlags {
@@ -145,7 +145,7 @@ pub fn PathFlags::is_set(self : Self, other : PathFlagsFlag) -> Bool {
 
 ///|
 /// Open flags used by `open-at`.
-pub(all) struct OpenFlags(Byte) derive(Show, Eq)
+pub(all) struct OpenFlags(Byte) derive(Debug, Eq)
 
 ///|
 pub fn OpenFlags::default() -> OpenFlags {
@@ -199,7 +199,7 @@ pub(all) struct DescriptorStat {
   data_access_timestamp : @wallClock.Datetime?
   data_modification_timestamp : @wallClock.Datetime?
   status_change_timestamp : @wallClock.Datetime?
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// When setting a timestamp, this gives the value to set it to.
@@ -207,14 +207,14 @@ pub(all) enum NewTimestamp {
   NoChange
   Now
   Timestamp(@wallClock.Datetime)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A directory entry.
 pub(all) struct DirectoryEntry {
   type_ : DescriptorType
   name : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Error codes returned by functions, similar to `errno` in POSIX.
@@ -259,7 +259,7 @@ pub(all) suberror ErrorCode {
   INVALID_SEEK
   TEXT_FILE_BUSY
   CROSS_DEVICE
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn ErrorCode::ordinal(self : ErrorCode) -> Int {
@@ -357,7 +357,7 @@ pub(all) enum Advice {
   WILL_NEED
   DONT_NEED
   NO_REUSE
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn Advice::ordinal(self : Advice) -> Int {
@@ -390,13 +390,13 @@ pub fn Advice::from(self : Int) -> Advice {
 pub(all) struct MetadataHashValue {
   lower : UInt64
   upper : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A descriptor is a reference to a filesystem object, which may be a file,
 /// directory, named pipe, special file, or other object on which filesystem
 /// calls may be made.
-pub(all) struct Descriptor(Int) derive(Show, Eq)
+pub(all) struct Descriptor(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -407,7 +407,7 @@ pub fn Descriptor::drop(self : Descriptor) -> Unit {
 
 ///|
 /// A stream of directory entries.
-pub(all) struct DirectoryEntryStream(Int) derive(Show, Eq)
+pub(all) struct DirectoryEntryStream(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.

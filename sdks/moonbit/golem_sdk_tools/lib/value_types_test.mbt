@@ -8,9 +8,11 @@ test "parse struct with primitive fields" {
     #|  y : Double
     #|}
   let types = parse_value_types([("point.mbt", content)])
-  inspect(types.length(), content="1")
-  inspect(types[0].name, content="Point")
-  inspect(
+  debug_inspect(types.length(), content="1")
+  debug_inspect(types[0].name, content=(
+    #|"Point"
+  ))
+  debug_inspect(
     types[0].kind,
     content="Record([(\"x\", Simple(\"Double\")), (\"y\", Simple(\"Double\"))])",
   )
@@ -27,11 +29,21 @@ test "parse struct with compound fields" {
     #|  description : String?
     #|}
   let types = parse_value_types([("config.mbt", content)])
-  inspect(types.length(), content="1")
-  inspect(types[0].name, content="Config")
-  inspect(
+  debug_inspect(types.length(), content="1")
+  debug_inspect(types[0].name, content=(
+    #|"Config"
+  ))
+  debug_inspect(
     types[0].kind,
-    content="Record([(\"name\", Simple(\"String\")), (\"tags\", List(Simple(\"String\"))), (\"description\", Optional(Simple(\"String\")))])",
+    content=(
+      #|Record(
+      #|  [
+      #|    ("name", Simple("String")),
+      #|    ("tags", List(Simple("String"))),
+      #|    ("description", Optional(Simple("String"))),
+      #|  ],
+      #|)
+    ),
   )
 }
 
@@ -46,9 +58,11 @@ test "parse simple enum (all unit cases)" {
     #|  High
     #|}
   let types = parse_value_types([("priority.mbt", content)])
-  inspect(types.length(), content="1")
-  inspect(types[0].name, content="Priority")
-  inspect(types[0].kind, content="SimpleEnum([\"Low\", \"Medium\", \"High\"])")
+  debug_inspect(types.length(), content="1")
+  debug_inspect(types[0].name, content=(
+    #|"Priority"
+  ))
+  debug_inspect(types[0].kind, content="SimpleEnum([\"Low\", \"Medium\", \"High\"])")
 }
 
 ///|
@@ -62,11 +76,21 @@ test "parse enum with mixed unit and payload cases" {
     #|  None_
     #|}
   let types = parse_value_types([("shape.mbt", content)])
-  inspect(types.length(), content="1")
-  inspect(types[0].name, content="Shape")
-  inspect(
+  debug_inspect(types.length(), content="1")
+  debug_inspect(types[0].name, content=(
+    #|"Shape"
+  ))
+  debug_inspect(
     types[0].kind,
-    content="VariantEnum([(\"Circle\", Single(Simple(\"Double\"))), (\"Square\", Single(Simple(\"Double\"))), (\"None_\", None)])",
+    content=(
+      #|VariantEnum(
+      #|  [
+      #|    ("Circle", Single(Simple("Double"))),
+      #|    ("Square", Single(Simple("Double"))),
+      #|    ("None_", None),
+      #|  ],
+      #|)
+    ),
   )
 }
 
@@ -80,12 +104,26 @@ test "parse enum with multi-field positional case" {
     #|  Rectangle(Double, Double)
     #|}
   let types = parse_value_types([("shape.mbt", content)])
-  inspect(types.length(), content="1")
-  inspect(types[0].name, content="Shape")
-  inspect(
+  debug_inspect(types.length(), content="1")
+  debug_inspect(types[0].name, content=(
+    #|"Shape"
+  ))
+  debug_inspect(
     types[0].kind,
     content=(
-      #|VariantEnum([("Circle", Single(Simple("Double"))), ("Rectangle", Multi([("field0", Simple("Double")), ("field1", Simple("Double"))], false))])
+      #|VariantEnum(
+      #|  [
+      #|    ("Circle", Single(Simple("Double"))),
+      #|    (
+      #|      "Rectangle",
+      #|      Multi(
+      #|        [("field0", Simple("Double")), ("field1", Simple("Double"))],
+      #|        false,
+      #|      ),
+      #|    ),
+      #|  ],
+      #|)
+
     ),
   )
 }
@@ -100,12 +138,26 @@ test "parse enum with labelled fields" {
     #|  Rect(width~ : Double, height~ : Double)
     #|}
   let types = parse_value_types([("shape.mbt", content)])
-  inspect(types.length(), content="1")
-  inspect(types[0].name, content="Shape")
-  inspect(
+  debug_inspect(types.length(), content="1")
+  debug_inspect(types[0].name, content=(
+    #|"Shape"
+  ))
+  debug_inspect(
     types[0].kind,
     content=(
-      #|VariantEnum([("Circle", Multi([("radius", Simple("Double"))], true)), ("Rect", Multi([("width", Simple("Double")), ("height", Simple("Double"))], true))])
+      #|VariantEnum(
+      #|  [
+      #|    ("Circle", Multi([("radius", Simple("Double"))], true)),
+      #|    (
+      #|      "Rect",
+      #|      Multi(
+      #|        [("width", Simple("Double")), ("height", Simple("Double"))],
+      #|        true,
+      #|      ),
+      #|    ),
+      #|  ],
+      #|)
+
     ),
   )
 }
@@ -128,14 +180,18 @@ test "multiple types in one file" {
     #|  Blue
     #|}
   let types = parse_value_types([("types.mbt", content)])
-  inspect(types.length(), content="2")
-  inspect(types[0].name, content="Point")
-  inspect(
+  debug_inspect(types.length(), content="2")
+  debug_inspect(types[0].name, content=(
+    #|"Point"
+  ))
+  debug_inspect(
     types[0].kind,
     content="Record([(\"x\", Simple(\"Double\")), (\"y\", Simple(\"Double\"))])",
   )
-  inspect(types[1].name, content="Color")
-  inspect(types[1].kind, content="SimpleEnum([\"Red\", \"Green\", \"Blue\"])")
+  debug_inspect(types[1].name, content=(
+    #|"Color"
+  ))
+  debug_inspect(types[1].kind, content="SimpleEnum([\"Red\", \"Green\", \"Blue\"])")
 }
 
 ///|
@@ -157,14 +213,18 @@ test "types across multiple files" {
     #|  West
     #|}
   let types = parse_value_types([("point.mbt", file1), ("direction.mbt", file2)])
-  inspect(types.length(), content="2")
-  inspect(types[0].name, content="Point")
-  inspect(
+  debug_inspect(types.length(), content="2")
+  debug_inspect(types[0].name, content=(
+    #|"Point"
+  ))
+  debug_inspect(
     types[0].kind,
     content="Record([(\"x\", Simple(\"Double\")), (\"y\", Simple(\"Double\"))])",
   )
-  inspect(types[1].name, content="Direction")
-  inspect(
+  debug_inspect(types[1].name, content=(
+    #|"Direction"
+  ))
+  debug_inspect(
     types[1].kind,
     content="SimpleEnum([\"North\", \"South\", \"East\", \"West\"])",
   )
@@ -180,12 +240,20 @@ test "parse struct with tuple field" {
     #|  triple : (String, Int, Bool)
     #|}
   let types = parse_value_types([("pair.mbt", content)])
-  inspect(types.length(), content="1")
-  inspect(types[0].name, content="PairHolder")
-  inspect(
+  debug_inspect(types.length(), content="1")
+  debug_inspect(types[0].name, content=(
+    #|"PairHolder"
+  ))
+  debug_inspect(
     types[0].kind,
     content=(
-      #|Record([("pair", Tuple([Simple("String"), Simple("Int")])), ("triple", Tuple([Simple("String"), Simple("Int"), Simple("Bool")]))])
+      #|Record(
+      #|  [
+      #|    ("pair", ([Simple("String"), Simple("Int")])),
+      #|    ("triple", ([Simple("String"), Simple("Int"), Simple("Bool")])),
+      #|  ],
+      #|)
+
     ),
   )
 }
@@ -202,11 +270,22 @@ test "parse struct with cross-package type field" {
     #|  note : @types.Note?
     #|}
   let types = parse_value_types([("order.mbt", content)])
-  inspect(types.length(), content="1")
-  inspect(types[0].name, content="Order")
-  inspect(
+  debug_inspect(types.length(), content="1")
+  debug_inspect(types[0].name, content=(
+    #|"Order"
+  ))
+  debug_inspect(
     types[0].kind,
-    content="Record([(\"id\", Simple(\"UInt64\")), (\"status\", Simple(\"@types.OrderStatus\")), (\"items\", List(Simple(\"@types.Item\"))), (\"note\", Optional(Simple(\"@types.Note\")))])",
+    content=(
+      #|Record(
+      #|  [
+      #|    ("id", Simple("UInt64")),
+      #|    ("status", Simple("@types.OrderStatus")),
+      #|    ("items", List(Simple("@types.Item"))),
+      #|    ("note", Optional(Simple("@types.Note"))),
+      #|  ],
+      #|)
+    ),
   )
 }
 
@@ -221,12 +300,30 @@ test "parse variant enum with cross-package payload" {
     #|  Deleted
     #|}
   let types = parse_value_types([("event.mbt", content)])
-  inspect(types.length(), content="1")
-  inspect(types[0].name, content="Event")
-  inspect(
+  debug_inspect(types.length(), content="1")
+  debug_inspect(types[0].name, content=(
+    #|"Event"
+  ))
+  debug_inspect(
     types[0].kind,
     content=(
-      #|VariantEnum([("Created", Single(Simple("@types.Info"))), ("Updated", Multi([("field0", Simple("@types.Info")), ("field1", Simple("@types.Metadata"))], false)), ("Deleted", None)])
+      #|VariantEnum(
+      #|  [
+      #|    ("Created", Single(Simple("@types.Info"))),
+      #|    (
+      #|      "Updated",
+      #|      Multi(
+      #|        [
+      #|          ("field0", Simple("@types.Info")),
+      #|          ("field1", Simple("@types.Metadata")),
+      #|        ],
+      #|        false,
+      #|      ),
+      #|    ),
+      #|    ("Deleted", None),
+      #|  ],
+      #|)
+
     ),
   )
 }
@@ -241,10 +338,16 @@ test "parse_multimodal_enum" {
     #|  Image(Bytes)
     #|}
   let result = parse_multimodal_enums([("test.mbt", content)])
-  inspect(
+  debug_inspect(
     result,
     content=(
-      #|[{name: "TextOrImage", variants: [("Text", Simple("String")), ("Image", Simple("Bytes"))]}]
+      #|[
+      #|  {
+      #|    name: "TextOrImage",
+      #|    variants: [("Text", Simple("String")), ("Image", Simple("Bytes"))],
+      #|  },
+      #|]
+
     ),
   )
 }
@@ -269,7 +372,9 @@ test "non-annotated types are skipped" {
     #|  Inactive
     #|}
   let types = parse_value_types([("mixed.mbt", content)])
-  inspect(types.length(), content="1")
-  inspect(types[0].name, content="Public")
-  inspect(types[0].kind, content="Record([(\"name\", Simple(\"String\"))])")
+  debug_inspect(types.length(), content="1")
+  debug_inspect(types[0].name, content=(
+    #|"Public"
+  ))
+  debug_inspect(types[0].kind, content="Record([(\"name\", Simple(\"String\"))])")
 }
