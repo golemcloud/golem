@@ -1,6 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/golem/api/retry"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
 pub fn get_retry_policies() -> Array[NamedRetryPolicy]
 
@@ -18,45 +22,45 @@ pub fn set_retry_policy(NamedRetryPolicy) -> Unit
 pub(all) struct AddDelayConfig {
   delay : UInt64
   inner : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct ClampConfig {
   min_delay : UInt64
   max_delay : UInt64
   inner : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct CountBoxConfig {
   max_retries : UInt
   inner : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct ExponentialConfig {
   base_delay : UInt64
   factor : Double
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct FibonacciConfig {
   first : UInt64
   second : UInt64
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct FilteredConfig {
   predicate : RetryPredicate
   inner : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct JitterConfig {
   factor : Double
   inner : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct NamedRetryPolicy {
   name : String
   priority : UInt
   predicate : RetryPredicate
   policy : RetryPolicy
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum PolicyNode {
   Periodic(UInt64)
@@ -73,7 +77,7 @@ pub(all) enum PolicyNode {
   AndThen((Int, Int))
   PolicyUnion((Int, Int))
   PolicyIntersect((Int, Int))
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum PredicateNode {
   PropEq(PropertyComparison)
@@ -92,41 +96,41 @@ pub(all) enum PredicateNode {
   PredNot(Int)
   PredTrue
   PredFalse
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum PredicateValue {
   Text(String)
   Integer(Int64)
   Boolean(Bool)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct PropertyComparison {
   property_name : String
   value : PredicateValue
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct PropertyPattern {
   property_name : String
   pattern : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct PropertySetCheck {
   property_name : String
   values : Array[PredicateValue]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct RetryPolicy {
   nodes : Array[PolicyNode]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct RetryPredicate {
   nodes : Array[PredicateNode]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct TimeBoxConfig {
   limit : UInt64
   inner : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

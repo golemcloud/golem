@@ -1,13 +1,18 @@
 ///|
 test "simple literal path" {
   let (segments, query) = @lib.parse_path_and_query("/api/v1/items")
-  inspect(
+  debug_inspect(
     segments,
     content=(
-      #|[{kind: Literal("api")}, {kind: Literal("v1")}, {kind: Literal("items")}]
+      #|[
+      #|  { kind: Literal("api") },
+      #|  { kind: Literal("v1") },
+      #|  { kind: Literal("items") },
+      #|]
+
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
       #|[]
@@ -18,13 +23,18 @@ test "simple literal path" {
 ///|
 test "path with variables" {
   let (segments, query) = @lib.parse_path_and_query("/api/{city}/weather")
-  inspect(
+  debug_inspect(
     segments,
     content=(
-      #|[{kind: Literal("api")}, {kind: PathVariable("city")}, {kind: Literal("weather")}]
+      #|[
+      #|  { kind: Literal("api") },
+      #|  { kind: PathVariable("city") },
+      #|  { kind: Literal("weather") },
+      #|]
+
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
       #|[]
@@ -35,13 +45,14 @@ test "path with variables" {
 ///|
 test "system variables - agent-type" {
   let (segments, query) = @lib.parse_path_and_query("/{agent-type}/status")
-  inspect(
+  debug_inspect(
     segments,
     content=(
-      #|[{kind: SystemVariable(AgentType)}, {kind: Literal("status")}]
+      #|[{ kind: SystemVariable(AgentType) }, { kind: Literal("status") }]
+
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
       #|[]
@@ -52,13 +63,14 @@ test "system variables - agent-type" {
 ///|
 test "system variables - agent-version" {
   let (segments, query) = @lib.parse_path_and_query("/{agent-version}/info")
-  inspect(
+  debug_inspect(
     segments,
     content=(
-      #|[{kind: SystemVariable(AgentVersion)}, {kind: Literal("info")}]
+      #|[{ kind: SystemVariable(AgentVersion) }, { kind: Literal("info") }]
+
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
       #|[]
@@ -69,13 +81,14 @@ test "system variables - agent-version" {
 ///|
 test "catch-all remaining path variable" {
   let (segments, query) = @lib.parse_path_and_query("/files/{*path}")
-  inspect(
+  debug_inspect(
     segments,
     content=(
-      #|[{kind: Literal("files")}, {kind: RemainingPathVariable("path")}]
+      #|[{ kind: Literal("files") }, { kind: RemainingPathVariable("path") }]
+
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
       #|[]
@@ -88,16 +101,21 @@ test "path with query" {
   let (segments, query) = @lib.parse_path_and_query(
     "/search?q={query}&limit={n}",
   )
-  inspect(
+  debug_inspect(
     segments,
     content=(
-      #|[{kind: Literal("search")}]
+      #|[{ kind: Literal("search") }]
+
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
-      #|[{query_param_name: "q", variable_name: "query"}, {query_param_name: "limit", variable_name: "n"}]
+      #|[
+      #|  { query_param_name: "q", variable_name: "query" },
+      #|  { query_param_name: "limit", variable_name: "n" },
+      #|]
+
     ),
   )
 }
@@ -105,13 +123,13 @@ test "path with query" {
 ///|
 test "empty path" {
   let (segments, query) = @lib.parse_path_and_query("")
-  inspect(
+  debug_inspect(
     segments,
     content=(
       #|[]
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
       #|[]
@@ -122,13 +140,13 @@ test "empty path" {
 ///|
 test "root path" {
   let (segments, query) = @lib.parse_path_and_query("/")
-  inspect(
+  debug_inspect(
     segments,
     content=(
       #|[]
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
       #|[]
@@ -139,13 +157,13 @@ test "root path" {
 ///|
 test "collapsed double slash" {
   let (segments, query) = @lib.parse_path_and_query("//")
-  inspect(
+  debug_inspect(
     segments,
     content=(
       #|[]
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
       #|[]
@@ -156,16 +174,17 @@ test "collapsed double slash" {
 ///|
 test "query only" {
   let (segments, query) = @lib.parse_path_and_query("?q={v}")
-  inspect(
+  debug_inspect(
     segments,
     content=(
       #|[]
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
-      #|[{query_param_name: "q", variable_name: "v"}]
+      #|[{ query_param_name: "q", variable_name: "v" }]
+
     ),
   )
 }
@@ -173,7 +192,7 @@ test "query only" {
 ///|
 test "error: catch-all not at end" {
   let result : Result[_, _] = try? @lib.parse_path_and_query("/{*rest}/more")
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(HttpPathParseError("remaining path variable {*...} must be the last segment"))
@@ -184,7 +203,7 @@ test "error: catch-all not at end" {
 ///|
 test "error: empty variable name" {
   let result : Result[_, _] = try? @lib.parse_path_and_query("/api/{}")
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(HttpPathParseError("empty variable name in path segment: {}"))
@@ -195,7 +214,7 @@ test "error: empty variable name" {
 ///|
 test "error: query value not a variable" {
   let result : Result[_, _] = try? @lib.parse_path_and_query("/search?q=hello")
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(HttpPathParseError("query value must be a variable in {name} format, got: hello"))
@@ -206,10 +225,15 @@ test "error: query value not a variable" {
 ///|
 test "parse_path_only success" {
   let segments = @lib.parse_path_only("/api/{city}/weather")
-  inspect(
+  debug_inspect(
     segments,
     content=(
-      #|[{kind: Literal("api")}, {kind: PathVariable("city")}, {kind: Literal("weather")}]
+      #|[
+      #|  { kind: Literal("api") },
+      #|  { kind: PathVariable("city") },
+      #|  { kind: Literal("weather") },
+      #|]
+
     ),
   )
 }
@@ -217,7 +241,7 @@ test "parse_path_only success" {
 ///|
 test "parse_path_only error with query" {
   let result : Result[_, _] = try? @lib.parse_path_only("/search?q={v}")
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(HttpPathParseError("parse_path_only does not accept query parameters, use parse_path_and_query instead"))
@@ -228,13 +252,14 @@ test "parse_path_only error with query" {
 ///|
 test "catch-all at end with trailing slash" {
   let (segments, query) = @lib.parse_path_and_query("/files/{*path}/")
-  inspect(
+  debug_inspect(
     segments,
     content=(
-      #|[{kind: Literal("files")}, {kind: RemainingPathVariable("path")}]
+      #|[{ kind: Literal("files") }, { kind: RemainingPathVariable("path") }]
+
     ),
   )
-  inspect(
+  debug_inspect(
     query,
     content=(
       #|[]
@@ -249,7 +274,7 @@ test "http_reorder_params: no endpoint returns original order" {
     ("source", Simple("String")),
   ]
   let result = @lib.http_reorder_params(vis, None)
-  inspect(
+  debug_inspect(
     result.map(fn(p) { p.0 }),
     content=(
       #|["temperature", "source"]
@@ -271,7 +296,7 @@ test "http_reorder_params: header-bound param moves before body param" {
     cors: [],
   }
   let result = @lib.http_reorder_params(vis, Some(endpoint))
-  inspect(
+  debug_inspect(
     result.map(fn(p) { p.0 }),
     content=(
       #|["source", "temperature"]
@@ -290,7 +315,7 @@ test "http_reorder_params: query-bound param stays first" {
     cors: [],
   }
   let result = @lib.http_reorder_params(vis, Some(endpoint))
-  inspect(
+  debug_inspect(
     result.map(fn(p) { p.0 }),
     content=(
       #|["unit"]
@@ -315,7 +340,7 @@ test "http_reorder_params: mixed path, header, and body params" {
   }
   let result = @lib.http_reorder_params(vis, Some(endpoint))
   // HTTP-bound (city from path, api_key from header) first, then body params
-  inspect(
+  debug_inspect(
     result.map(fn(p) { p.0 }),
     content=(
       #|["city", "api_key", "body_data", "extra_body"]

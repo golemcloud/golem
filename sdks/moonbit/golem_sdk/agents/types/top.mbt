@@ -4,7 +4,7 @@
 pub(all) enum UnstructuredText {
   Url(String)
   Inline(text~ : String, language_code~ : String?)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Creates an `UnstructuredText` from a URL pointing to the text content.
@@ -27,7 +27,7 @@ pub fn UnstructuredText::from_inline(
 pub(all) enum UnstructuredBinary {
   Url(String)
   Inline(data~ : Bytes, mime_type~ : String)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Creates an `UnstructuredBinary` from a URL pointing to the binary content.

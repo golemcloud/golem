@@ -13,14 +13,22 @@ test "parse_agents finds simple agent struct" {
     #|  { name, value: 0 }
     #|}
   let agents = parse_agents([("counter.mbt", content)])
-  inspect(agents.length(), content="1")
-  inspect(agents[0].name, content="Counter")
-  inspect(agents[0].description, content="A counter agent")
-  inspect(agents[0].constructor_description, content="Creates a new counter")
-  inspect(agents[0].constructor_params.length(), content="1")
-  inspect(agents[0].constructor_params[0].0, content="name")
-  inspect(agents[0].constructor_params[0].1, content="Simple(\"String\")")
-  inspect(agents[0].methods.length(), content="0")
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(agents[0].name, content=(
+    #|"Counter"
+  ))
+  debug_inspect(agents[0].description, content=(
+    #|"A counter agent"
+  ))
+  debug_inspect(agents[0].constructor_description, content=(
+    #|"Creates a new counter"
+  ))
+  debug_inspect(agents[0].constructor_params.length(), content="1")
+  debug_inspect(agents[0].constructor_params[0].0, content=(
+    #|"name"
+  ))
+  debug_inspect(agents[0].constructor_params[0].1, content="Simple(\"String\")")
+  debug_inspect(agents[0].methods.length(), content="0")
 }
 
 ///|
@@ -38,14 +46,20 @@ test "parse_agents finds agent with multiple params" {
     #|  { greeting, count }
     #|}
   let agents = parse_agents([("greeter.mbt", content)])
-  inspect(agents.length(), content="1")
-  inspect(agents[0].name, content="Greeter")
-  inspect(agents[0].constructor_params.length(), content="2")
-  inspect(agents[0].constructor_params[0].0, content="greeting")
-  inspect(agents[0].constructor_params[0].1, content="Simple(\"String\")")
-  inspect(agents[0].constructor_params[1].0, content="count")
-  inspect(agents[0].constructor_params[1].1, content="Simple(\"UInt64\")")
-  inspect(agents[0].methods.length(), content="0")
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(agents[0].name, content=(
+    #|"Greeter"
+  ))
+  debug_inspect(agents[0].constructor_params.length(), content="2")
+  debug_inspect(agents[0].constructor_params[0].0, content=(
+    #|"greeting"
+  ))
+  debug_inspect(agents[0].constructor_params[0].1, content="Simple(\"String\")")
+  debug_inspect(agents[0].constructor_params[1].0, content=(
+    #|"count"
+  ))
+  debug_inspect(agents[0].constructor_params[1].1, content="Simple(\"UInt64\")")
+  debug_inspect(agents[0].methods.length(), content="0")
 }
 
 ///|
@@ -72,13 +86,21 @@ test "parse_agents detects public methods" {
     #|  self.value -= 1
     #|}
   let agents = parse_agents([("counter.mbt", content)])
-  inspect(agents[0].methods.length(), content="2")
-  inspect(agents[0].methods[0].name, content="increment")
-  inspect(agents[0].methods[0].description, content="Increments the counter")
-  inspect(agents[0].methods[0].params.length(), content="0")
-  inspect(agents[0].methods[0].return_type, content="None")
-  inspect(agents[0].methods[1].name, content="decrement")
-  inspect(agents[0].methods[1].description, content="Decrements the counter")
+  debug_inspect(agents[0].methods.length(), content="2")
+  debug_inspect(agents[0].methods[0].name, content=(
+    #|"increment"
+  ))
+  debug_inspect(agents[0].methods[0].description, content=(
+    #|"Increments the counter"
+  ))
+  debug_inspect(agents[0].methods[0].params.length(), content="0")
+  debug_inspect(agents[0].methods[0].return_type, content="None")
+  debug_inspect(agents[0].methods[1].name, content=(
+    #|"decrement"
+  ))
+  debug_inspect(agents[0].methods[1].description, content=(
+    #|"Decrements the counter"
+  ))
 }
 
 ///|
@@ -100,13 +122,19 @@ test "parse_agents detects method with params and return type" {
     #|  self.result
     #|}
   let agents = parse_agents([("calc.mbt", content)])
-  inspect(agents[0].methods.length(), content="1")
-  inspect(agents[0].methods[0].name, content="add")
-  inspect(agents[0].methods[0].description, content="Adds a value")
-  inspect(agents[0].methods[0].params.length(), content="1")
-  inspect(agents[0].methods[0].params[0].0, content="value")
-  inspect(agents[0].methods[0].params[0].1, content="Simple(\"Int\")")
-  inspect(agents[0].methods[0].return_type, content="Some(Simple(\"Int\"))")
+  debug_inspect(agents[0].methods.length(), content="1")
+  debug_inspect(agents[0].methods[0].name, content=(
+    #|"add"
+  ))
+  debug_inspect(agents[0].methods[0].description, content=(
+    #|"Adds a value"
+  ))
+  debug_inspect(agents[0].methods[0].params.length(), content="1")
+  debug_inspect(agents[0].methods[0].params[0].0, content=(
+    #|"value"
+  ))
+  debug_inspect(agents[0].methods[0].params[0].1, content="Simple(\"Int\")")
+  debug_inspect(agents[0].methods[0].return_type, content="Some(Simple(\"Int\"))")
 }
 
 ///|
@@ -131,8 +159,10 @@ test "parse_agents skips private methods" {
     #|  ()
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(agents[0].methods.length(), content="1")
-  inspect(agents[0].methods[0].name, content="do_thing")
+  debug_inspect(agents[0].methods.length(), content="1")
+  debug_inspect(agents[0].methods[0].name, content=(
+    #|"do_thing"
+  ))
 }
 
 ///|
@@ -158,76 +188,11 @@ test "generate_agent_registration for simple agent" {
   ]
   let impls = generate_agent_registration(agents)
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  @agents.register_agent({
-      #|    name: "Counter",
-      #|    agent_type: {
-      #|      type_name: "Counter",
-      #|      description: "A counter agent",
-      #|      source_language: "moonbit",
-      #|      constructor_: {
-      #|        name: Some("new"),
-      #|        description: "Creates a new counter",
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "name",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|      },
-      #|      methods: [],
-      #|      dependencies: [],
-      #|      mode: @common.AgentMode::DURABLE,
-      #|      http_mount: None,
-      #|      snapshotting: @common.Snapshotting::Disabled,
-      #|      config: [],
-      #|    },
-      #|    construct: fn(input, principal) {
-      #|      try {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 1 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 1 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let name :String = @schema.from_element_value_as(elements[0])
-      #|        let agent = Counter::new(name)
-      #|        let constructed = @agents.ConstructedAgent::{
-      #|          raw: agent,
-      #|          snapshottable: None,
-      #|          snapshot_format: None,
-      #|        }
-      #|        Ok(constructed)
-      #|      } catch{
-      #|        e => Err(e)
-      #|      }
-      #|    },
-      #|  })
-      #|}
-      #|
-      #|///|
-      #|impl @agents.RawAgent for Counter with invoke(
-      #|  self,
-      #|  method_name,
-      #|  input,
-      #|  principal,
-      #|) {
-      #|  try {
-      #|    match method_name {
-      #|      other => Err(@common.AgentError::InvalidMethod(other))
-      #|    }
-      #|  } catch{
-      #|    e => Err(e)
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  @agents.register_agent({\n    name: \"Counter\",\n    agent_type: {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"name\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n        ]),\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let name :String = @schema.from_element_value_as(elements[0])\n        let agent = Counter::new(name)\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
+
     ),
   )
 }
@@ -274,128 +239,11 @@ test "generate_agent_registration with methods" {
   ]
   let impls = generate_agent_registration(agents)
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  @agents.register_agent({
-      #|    name: "Counter",
-      #|    agent_type: {
-      #|      type_name: "Counter",
-      #|      description: "A counter agent",
-      #|      source_language: "moonbit",
-      #|      constructor_: {
-      #|        name: Some("new"),
-      #|        description: "Creates a new counter",
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "name",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|      },
-      #|      methods: [
-      #|        {
-      #|          name: "increment",
-      #|          description: "Increments the counter",
-      #|          http_endpoint: [],
-      #|          prompt_hint: None,
-      #|          input_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|          output_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|        },
-      #|        {
-      #|          name: "add",
-      #|          description: "Adds a value",
-      #|          http_endpoint: [],
-      #|          prompt_hint: None,
-      #|          input_schema: @rpcTypes.DataSchema::Tuple([
-      #|            (
-      #|              "value",
-      #|              @schema.schema_of_tag(
-      #|                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
-      #|              ),
-      #|            ),
-      #|          ]),
-      #|          output_schema: @rpcTypes.DataSchema::Tuple([
-      #|            (
-      #|              "result",
-      #|              @schema.schema_of_tag(
-      #|                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
-      #|              ),
-      #|            ),
-      #|          ]),
-      #|        },
-      #|      ],
-      #|      dependencies: [],
-      #|      mode: @common.AgentMode::DURABLE,
-      #|      http_mount: None,
-      #|      snapshotting: @common.Snapshotting::Disabled,
-      #|      config: [],
-      #|    },
-      #|    construct: fn(input, principal) {
-      #|      try {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 1 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 1 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let name :String = @schema.from_element_value_as(elements[0])
-      #|        let agent = Counter::new(name)
-      #|        let constructed = @agents.ConstructedAgent::{
-      #|          raw: agent,
-      #|          snapshottable: None,
-      #|          snapshot_format: None,
-      #|        }
-      #|        Ok(constructed)
-      #|      } catch{
-      #|        e => Err(e)
-      #|      }
-      #|    },
-      #|  })
-      #|}
-      #|
-      #|///|
-      #|impl @agents.RawAgent for Counter with invoke(
-      #|  self,
-      #|  method_name,
-      #|  input,
-      #|  principal,
-      #|) {
-      #|  try {
-      #|    match method_name {
-      #|      "increment" => {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 0 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 0 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        self.increment()
-      #|        Ok(@rpcTypes.DataValue::Tuple([]))
-      #|      }
-      #|      "add" => {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 1 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 1 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let value :UInt64 = @schema.from_element_value_as(elements[0])
-      #|        let result = self.add(value)
-      #|        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))
-      #|      }
-      #|      other => Err(@common.AgentError::InvalidMethod(other))
-      #|    }
-      #|  } catch{
-      #|    e => Err(e)
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  @agents.register_agent({\n    name: \"Counter\",\n    agent_type: {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"name\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n        ]),\n      },\n      methods: [\n        {\n          name: \"increment\",\n          description: \"Increments the counter\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input_schema: @rpcTypes.DataSchema::Tuple([]),\n          output_schema: @rpcTypes.DataSchema::Tuple([]),\n        },\n        {\n          name: \"add\",\n          description: \"Adds a value\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input_schema: @rpcTypes.DataSchema::Tuple([\n            (\n              \"value\",\n              @schema.schema_of_tag(\n                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n              ),\n            ),\n          ]),\n          output_schema: @rpcTypes.DataSchema::Tuple([\n            (\n              \"result\",\n              @schema.schema_of_tag(\n                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n              ),\n            ),\n          ]),\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let name :String = @schema.from_element_value_as(elements[0])\n        let agent = Counter::new(name)\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      \"increment\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        self.increment()\n        Ok(@rpcTypes.DataValue::Tuple([]))\n      }\n      \"add\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let value :UInt64 = @schema.from_element_value_as(elements[0])\n        let result = self.add(value)\n        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
+
     ),
   )
 }
@@ -427,16 +275,16 @@ test "parse_agents extracts prompt_hint from constructor and method" {
     #|  self.value -= 1
     #|}
   let agents = parse_agents([("counter.mbt", content)])
-  inspect(
+  debug_inspect(
     agents[0].constructor_prompt_hint,
     content="Some(\"Provide a unique name for the counter\")",
   )
-  inspect(agents[0].methods.length(), content="2")
-  inspect(
+  debug_inspect(agents[0].methods.length(), content="2")
+  debug_inspect(
     agents[0].methods[0].prompt_hint,
     content="Some(\"Call this to increase the value by one\")",
   )
-  inspect(agents[0].methods[1].prompt_hint, content="None")
+  debug_inspect(agents[0].methods[1].prompt_hint, content="None")
 }
 
 ///|
@@ -472,95 +320,11 @@ test "generate_agent_registration with prompt_hints" {
   ]
   let impls = generate_agent_registration(agents)
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  @agents.register_agent({
-      #|    name: "Counter",
-      #|    agent_type: {
-      #|      type_name: "Counter",
-      #|      description: "A counter agent",
-      #|      source_language: "moonbit",
-      #|      constructor_: {
-      #|        name: Some("new"),
-      #|        description: "Creates a new counter",
-      #|        prompt_hint: Some("Provide a unique name"),
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "name",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|      },
-      #|      methods: [
-      #|        {
-      #|          name: "increment",
-      #|          description: "Increments the counter",
-      #|          http_endpoint: [],
-      #|          prompt_hint: Some("Call to increase"),
-      #|          input_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|          output_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|        },
-      #|      ],
-      #|      dependencies: [],
-      #|      mode: @common.AgentMode::DURABLE,
-      #|      http_mount: None,
-      #|      snapshotting: @common.Snapshotting::Disabled,
-      #|      config: [],
-      #|    },
-      #|    construct: fn(input, principal) {
-      #|      try {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 1 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 1 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let name :String = @schema.from_element_value_as(elements[0])
-      #|        let agent = Counter::new(name)
-      #|        let constructed = @agents.ConstructedAgent::{
-      #|          raw: agent,
-      #|          snapshottable: None,
-      #|          snapshot_format: None,
-      #|        }
-      #|        Ok(constructed)
-      #|      } catch{
-      #|        e => Err(e)
-      #|      }
-      #|    },
-      #|  })
-      #|}
-      #|
-      #|///|
-      #|impl @agents.RawAgent for Counter with invoke(
-      #|  self,
-      #|  method_name,
-      #|  input,
-      #|  principal,
-      #|) {
-      #|  try {
-      #|    match method_name {
-      #|      "increment" => {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 0 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 0 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        self.increment()
-      #|        Ok(@rpcTypes.DataValue::Tuple([]))
-      #|      }
-      #|      other => Err(@common.AgentError::InvalidMethod(other))
-      #|    }
-      #|  } catch{
-      #|    e => Err(e)
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  @agents.register_agent({\n    name: \"Counter\",\n    agent_type: {\n      type_name: \"Counter\",\n      description: \"A counter agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a new counter\",\n        prompt_hint: Some(\"Provide a unique name\"),\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"name\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n        ]),\n      },\n      methods: [\n        {\n          name: \"increment\",\n          description: \"Increments the counter\",\n          http_endpoint: [],\n          prompt_hint: Some(\"Call to increase\"),\n          input_schema: @rpcTypes.DataSchema::Tuple([]),\n          output_schema: @rpcTypes.DataSchema::Tuple([]),\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let name :String = @schema.from_element_value_as(elements[0])\n        let agent = Counter::new(name)\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      \"increment\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        self.increment()\n        Ok(@rpcTypes.DataValue::Tuple([]))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
+
     ),
   )
 }
@@ -607,37 +371,11 @@ test "end-to-end: simple counter agent type" {
     #|  { name, value: 0 }
     #|}
   let output = parse_and_build_agent_type([("counter.mbt", source)])
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  {
-      #|    type_name: "Counter",
-      #|    description: "A counter agent",
-      #|    source_language: "moonbit",
-      #|    constructor_: {
-      #|      name: Some("new"),
-      #|      description: "Creates a new counter",
-      #|      prompt_hint: None,
-      #|      input_schema: @rpcTypes.DataSchema::Tuple([
-      #|        (
-      #|          "name",
-      #|          @schema.schema_of_tag(
-      #|            (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|          ),
-      #|        ),
-      #|      ]),
-      #|    },
-      #|    methods: [],
-      #|    dependencies: [],
-      #|    mode: @common.AgentMode::DURABLE,
-      #|    http_mount: None,
-      #|    snapshotting: @common.Snapshotting::Disabled,
-      #|    config: [],
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  {\n    type_name: \"Counter\",\n    description: \"A counter agent\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a new counter\",\n      prompt_hint: None,\n      input_schema: @rpcTypes.DataSchema::Tuple([\n        (\n          \"name\",\n          @schema.schema_of_tag(\n            (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n          ),\n        ),\n      ]),\n    },\n    methods: [],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
+
     ),
   )
 }
@@ -668,68 +406,11 @@ test "end-to-end: agent with methods" {
     #|  self.value
     #|}
   let output = parse_and_build_agent_type([("counter.mbt", source)])
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  {
-      #|    type_name: "Counter",
-      #|    description: "A counter agent",
-      #|    source_language: "moonbit",
-      #|    constructor_: {
-      #|      name: Some("new"),
-      #|      description: "Creates a new counter",
-      #|      prompt_hint: None,
-      #|      input_schema: @rpcTypes.DataSchema::Tuple([
-      #|        (
-      #|          "name",
-      #|          @schema.schema_of_tag(
-      #|            (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|          ),
-      #|        ),
-      #|      ]),
-      #|    },
-      #|    methods: [
-      #|      {
-      #|        name: "increment",
-      #|        description: "Increments the counter by one",
-      #|        http_endpoint: [],
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|        output_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|      },
-      #|      {
-      #|        name: "add",
-      #|        description: "Adds a value to the counter",
-      #|        http_endpoint: [],
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "value",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|        output_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "result",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|      },
-      #|    ],
-      #|    dependencies: [],
-      #|    mode: @common.AgentMode::DURABLE,
-      #|    http_mount: None,
-      #|    snapshotting: @common.Snapshotting::Disabled,
-      #|    config: [],
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  {\n    type_name: \"Counter\",\n    description: \"A counter agent\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a new counter\",\n      prompt_hint: None,\n      input_schema: @rpcTypes.DataSchema::Tuple([\n        (\n          \"name\",\n          @schema.schema_of_tag(\n            (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n          ),\n        ),\n      ]),\n    },\n    methods: [\n      {\n        name: \"increment\",\n        description: \"Increments the counter by one\",\n        http_endpoint: [],\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n        output_schema: @rpcTypes.DataSchema::Tuple([]),\n      },\n      {\n        name: \"add\",\n        description: \"Adds a value to the counter\",\n        http_endpoint: [],\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"value\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n        ]),\n        output_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"result\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n        ]),\n      },\n    ],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
+
     ),
   )
 }
@@ -755,60 +436,11 @@ test "end-to-end: agent with prompt hints" {
     #|  self.config + text
     #|}
   let output = parse_and_build_agent_type([("smart.mbt", source)])
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  {
-      #|    type_name: "SmartAgent",
-      #|    description: "A smart agent",
-      #|    source_language: "moonbit",
-      #|    constructor_: {
-      #|      name: Some("new"),
-      #|      description: "Creates a smart agent",
-      #|      prompt_hint: Some("Provide a JSON config string"),
-      #|      input_schema: @rpcTypes.DataSchema::Tuple([
-      #|        (
-      #|          "config",
-      #|          @schema.schema_of_tag(
-      #|            (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|          ),
-      #|        ),
-      #|      ]),
-      #|    },
-      #|    methods: [
-      #|      {
-      #|        name: "process",
-      #|        description: "Processes input text",
-      #|        http_endpoint: [],
-      #|        prompt_hint: Some("Pass natural language text"),
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "text",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|        output_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "result",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|      },
-      #|    ],
-      #|    dependencies: [],
-      #|    mode: @common.AgentMode::DURABLE,
-      #|    http_mount: None,
-      #|    snapshotting: @common.Snapshotting::Disabled,
-      #|    config: [],
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  {\n    type_name: \"SmartAgent\",\n    description: \"A smart agent\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a smart agent\",\n      prompt_hint: Some(\"Provide a JSON config string\"),\n      input_schema: @rpcTypes.DataSchema::Tuple([\n        (\n          \"config\",\n          @schema.schema_of_tag(\n            (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n          ),\n        ),\n      ]),\n    },\n    methods: [\n      {\n        name: \"process\",\n        description: \"Processes input text\",\n        http_endpoint: [],\n        prompt_hint: Some(\"Pass natural language text\"),\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"text\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n        ]),\n        output_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"result\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n            ),\n          ),\n        ]),\n      },\n    ],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
+
     ),
   )
 }
@@ -831,66 +463,11 @@ test "end-to-end: agent with complex param types" {
     #|  []
     #|}
   let output = parse_and_build_agent_type([("processor.mbt", source)])
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  {
-      #|    type_name: "Processor",
-      #|    description: "A data processor",
-      #|    source_language: "moonbit",
-      #|    constructor_: {
-      #|      name: Some("new"),
-      #|      description: "Creates a new Processor",
-      #|      prompt_hint: None,
-      #|      input_schema: @rpcTypes.DataSchema::Tuple([
-      #|        (
-      #|          "name",
-      #|          @schema.schema_of_tag(
-      #|            (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|          ),
-      #|        ),
-      #|      ]),
-      #|    },
-      #|    methods: [
-      #|      {
-      #|        name: "batch",
-      #|        description: "Processes a batch of items",
-      #|        http_endpoint: [],
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "items",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[Array[String]]),
-      #|            ),
-      #|          ),
-      #|          (
-      #|            "count",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64?]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|        output_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "result",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[Array[String]]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|      },
-      #|    ],
-      #|    dependencies: [],
-      #|    mode: @common.AgentMode::DURABLE,
-      #|    http_mount: None,
-      #|    snapshotting: @common.Snapshotting::Disabled,
-      #|    config: [],
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  {\n    type_name: \"Processor\",\n    description: \"A data processor\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a new Processor\",\n      prompt_hint: None,\n      input_schema: @rpcTypes.DataSchema::Tuple([\n        (\n          \"name\",\n          @schema.schema_of_tag(\n            (@schema.TypeTag::{  } : @schema.TypeTag[String]),\n          ),\n        ),\n      ]),\n    },\n    methods: [\n      {\n        name: \"batch\",\n        description: \"Processes a batch of items\",\n        http_endpoint: [],\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"items\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[Array[String]]),\n            ),\n          ),\n          (\n            \"count\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64?]),\n            ),\n          ),\n        ]),\n        output_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"result\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[Array[String]]),\n            ),\n          ),\n        ]),\n      },\n    ],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
+
     ),
   )
 }
@@ -915,46 +492,11 @@ test "end-to-end: agent with no constructor params" {
     #|  self.count
     #|}
   let output = parse_and_build_agent_type([("worker.mbt", source)])
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  {
-      #|    type_name: "Worker",
-      #|    description: "A simple worker",
-      #|    source_language: "moonbit",
-      #|    constructor_: {
-      #|      name: Some("new"),
-      #|      description: "Creates a default worker",
-      #|      prompt_hint: None,
-      #|      input_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|    },
-      #|    methods: [
-      #|      {
-      #|        name: "run",
-      #|        description: "Does work",
-      #|        http_endpoint: [],
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|        output_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "result",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[Int]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|      },
-      #|    ],
-      #|    dependencies: [],
-      #|    mode: @common.AgentMode::DURABLE,
-      #|    http_mount: None,
-      #|    snapshotting: @common.Snapshotting::Disabled,
-      #|    config: [],
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  {\n    type_name: \"Worker\",\n    description: \"A simple worker\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a default worker\",\n      prompt_hint: None,\n      input_schema: @rpcTypes.DataSchema::Tuple([]),\n    },\n    methods: [\n      {\n        name: \"run\",\n        description: \"Does work\",\n        http_endpoint: [],\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n        output_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"result\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[Int]),\n            ),\n          ),\n        ]),\n      },\n    ],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
+
     ),
   )
 }
@@ -980,53 +522,11 @@ test "end-to-end: agent split across multiple files" {
     ("multi_agent.mbt", struct_file),
     ("multi_agent_methods.mbt", methods_file),
   ])
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  {
-      #|    type_name: "MultiAgent",
-      #|    description: "A multi-file agent",
-      #|    source_language: "moonbit",
-      #|    constructor_: {
-      #|      name: Some("new"),
-      #|      description: "Creates a new MultiAgent",
-      #|      prompt_hint: None,
-      #|      input_schema: @rpcTypes.DataSchema::Tuple([
-      #|        (
-      #|          "id",
-      #|          @schema.schema_of_tag(
-      #|            (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
-      #|          ),
-      #|        ),
-      #|      ]),
-      #|    },
-      #|    methods: [
-      #|      {
-      #|        name: "get_id",
-      #|        description: "Gets the ID",
-      #|        http_endpoint: [],
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|        output_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "result",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|      },
-      #|    ],
-      #|    dependencies: [],
-      #|    mode: @common.AgentMode::DURABLE,
-      #|    http_mount: None,
-      #|    snapshotting: @common.Snapshotting::Disabled,
-      #|    config: [],
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  {\n    type_name: \"MultiAgent\",\n    description: \"A multi-file agent\",\n    source_language: \"moonbit\",\n    constructor_: {\n      name: Some(\"new\"),\n      description: \"Creates a new MultiAgent\",\n      prompt_hint: None,\n      input_schema: @rpcTypes.DataSchema::Tuple([\n        (\n          \"id\",\n          @schema.schema_of_tag(\n            (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n          ),\n        ),\n      ]),\n    },\n    methods: [\n      {\n        name: \"get_id\",\n        description: \"Gets the ID\",\n        http_endpoint: [],\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n        output_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"result\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),\n            ),\n          ),\n        ]),\n      },\n    ],\n    dependencies: [],\n    mode: @common.AgentMode::DURABLE,\n    http_mount: None,\n    snapshotting: @common.Snapshotting::Disabled,\n    config: [],\n  }\n}\n\n"
+
     ),
   )
 }
@@ -1080,68 +580,22 @@ test "build_raw_agent_impl for counter-like agent" {
   }
   let impl_ = build_raw_agent_impl(agent)
   let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|///|
-      #|impl @agents.RawAgent for Counter with invoke(
-      #|  self,
-      #|  method_name,
-      #|  input,
-      #|  principal,
-      #|) {
-      #|  try {
-      #|    match method_name {
-      #|      "increment" => {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 0 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 0 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        self.increment()
-      #|        Ok(@rpcTypes.DataValue::Tuple([]))
-      #|      }
-      #|      "get_value" => {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 0 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 0 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let result = self.get_value()
-      #|        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))
-      #|      }
-      #|      "add" => {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 1 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 1 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let value :UInt64 = @schema.from_element_value_as(elements[0])
-      #|        let result = self.add(value)
-      #|        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))
-      #|      }
-      #|      other => Err(@common.AgentError::InvalidMethod(other))
-      #|    }
-      #|  } catch{
-      #|    e => Err(e)
-      #|  }
-      #|}
-      #|
-      #|
+      #|"///|\nimpl @agents.RawAgent for Counter with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      \"increment\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        self.increment()\n        Ok(@rpcTypes.DataValue::Tuple([]))\n      }\n      \"get_value\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let result = self.get_value()\n        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))\n      }\n      \"add\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let value :UInt64 = @schema.from_element_value_as(elements[0])\n        let result = self.add(value)\n        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
+
     ),
   )
 }
 
 ///|
 test "encode_qualified creates Simple with @pkg.id format" {
-  inspect(
+  debug_inspect(
     encode_qualified("types", "Config"),
     content="Simple(\"@types.Config\")",
   )
-  inspect(
+  debug_inspect(
     encode_qualified("my_pkg", "MyType"),
     content="Simple(\"@my_pkg.MyType\")",
   )
@@ -1149,20 +603,20 @@ test "encode_qualified creates Simple with @pkg.id format" {
 
 ///|
 test "decode_qualified parses @pkg.id format" {
-  inspect(
+  debug_inspect(
     decode_qualified("@types.Config"),
     content="Some((\"types\", \"Config\"))",
   )
-  inspect(
+  debug_inspect(
     decode_qualified("@my_pkg.MyType"),
     content="Some((\"my_pkg\", \"MyType\"))",
   )
-  inspect(decode_qualified("String"), content="None")
-  inspect(decode_qualified("UserId"), content="None")
-  inspect(decode_qualified("@"), content="None")
-  inspect(decode_qualified("@."), content="None")
-  inspect(decode_qualified("@pkg."), content="None")
-  inspect(decode_qualified("@.Type"), content="None")
+  debug_inspect(decode_qualified("String"), content="None")
+  debug_inspect(decode_qualified("UserId"), content="None")
+  debug_inspect(decode_qualified("@"), content="None")
+  debug_inspect(decode_qualified("@."), content="None")
+  debug_inspect(decode_qualified("@pkg."), content="None")
+  debug_inspect(decode_qualified("@.Type"), content="None")
 }
 
 ///|
@@ -1173,7 +627,7 @@ test "encode/decode_qualified roundtrips" {
     let encoded = encode_qualified(pkg, id)
     match encoded {
       Simple(name) =>
-        inspect(decode_qualified(name), content="Some((\"\{pkg}\", \"\{id}\"))")
+        debug_inspect(decode_qualified(name), content="Some((\"\{pkg}\", \"\{id}\"))")
       _ => fail("encode_qualified should return Simple")
     }
   }
@@ -1197,15 +651,15 @@ test "parse_agents with cross-package param types" {
     #|  @types.Result::ok()
     #|}
   let agents = parse_agents([("order.mbt", content)])
-  inspect(agents.length(), content="1")
-  inspect(agents[0].constructor_params.length(), content="1")
-  inspect(
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(agents[0].constructor_params.length(), content="1")
+  debug_inspect(
     agents[0].constructor_params[0].1,
     content="Simple(\"@types.Config\")",
   )
-  inspect(agents[0].methods.length(), content="1")
-  inspect(agents[0].methods[0].params[0].1, content="Simple(\"@types.Order\")")
-  inspect(
+  debug_inspect(agents[0].methods.length(), content="1")
+  debug_inspect(agents[0].methods[0].params[0].1, content="Simple(\"@types.Order\")")
+  debug_inspect(
     agents[0].methods[0].return_type,
     content="Some(Simple(\"@types.Result\"))",
   )
@@ -1229,10 +683,10 @@ test "parse_agents with type alias in params" {
     #|  self.id
     #|}
   let agents = parse_agents([("alias.mbt", content)])
-  inspect(agents.length(), content="1")
-  inspect(agents[0].constructor_params[0].1, content="Simple(\"UserId\")")
-  inspect(agents[0].methods[0].params[0].1, content="Simple(\"UserName\")")
-  inspect(agents[0].methods[0].return_type, content="Some(Simple(\"UserId\"))")
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(agents[0].constructor_params[0].1, content="Simple(\"UserId\")")
+  debug_inspect(agents[0].methods[0].params[0].1, content="Simple(\"UserName\")")
+  debug_inspect(agents[0].methods[0].return_type, content="Some(Simple(\"UserId\"))")
 }
 
 ///|
@@ -1258,12 +712,12 @@ test "parse_agents with cross-package type in compound positions" {
     #|  Err(@types.Error::new())
     #|}
   let agents = parse_agents([("nested.mbt", content)])
-  inspect(agents.length(), content="1")
-  inspect(
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(
     agents[0].methods[0].return_type,
     content="Some(Optional(Simple(\"@types.Info\")))",
   )
-  inspect(
+  debug_inspect(
     agents[0].methods[1].return_type,
     content="Some(ResultType(Simple(\"@types.Data\"), Simple(\"@types.Error\")))",
   )
@@ -1271,20 +725,32 @@ test "parse_agents with cross-package type in compound positions" {
 
 ///|
 test "param_type_to_type_string for various types" {
-  inspect(param_type_to_type_string(Simple("String")), content="String")
-  inspect(param_type_to_type_string(Simple("UInt64")), content="UInt64")
-  inspect(
+  debug_inspect(param_type_to_type_string(Simple("String")), content=(
+    #|"String"
+  ))
+  debug_inspect(param_type_to_type_string(Simple("UInt64")), content=(
+    #|"UInt64"
+  ))
+  debug_inspect(
     param_type_to_type_string(Optional(Simple("String"))),
-    content="String?",
+    content=(
+      #|"String?"
+    ),
   )
-  inspect(param_type_to_type_string(List(Simple("Int"))), content="Array[Int]")
-  inspect(
+  debug_inspect(param_type_to_type_string(List(Simple("Int"))), content=(
+    #|"Array[Int]"
+  ))
+  debug_inspect(
     param_type_to_type_string(ResultType(Simple("String"), Simple("Int"))),
-    content="Result[String, Int]",
+    content=(
+      #|"Result[String, Int]"
+    ),
   )
-  inspect(
+  debug_inspect(
     param_type_to_type_string(Optional(List(Simple("String")))),
-    content="Array[String]?",
+    content=(
+      #|"Array[String]?"
+    ),
   )
 }
 
@@ -1321,147 +787,60 @@ test "generate_agent_registration with cross-package types" {
   ]
   let impls = generate_agent_registration(agents)
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  @agents.register_agent({
-      #|    name: "OrderAgent",
-      #|    agent_type: {
-      #|      type_name: "OrderAgent",
-      #|      description: "An order agent",
-      #|      source_language: "moonbit",
-      #|      constructor_: {
-      #|        name: Some("new"),
-      #|        description: "Creates an order agent",
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([
-      #|          (
-      #|            "config",
-      #|            @schema.schema_of_tag(
-      #|              (@schema.TypeTag::{  } : @schema.TypeTag[@types.Config]),
-      #|            ),
-      #|          ),
-      #|        ]),
-      #|      },
-      #|      methods: [
-      #|        {
-      #|          name: "process",
-      #|          description: "Processes an order",
-      #|          http_endpoint: [],
-      #|          prompt_hint: None,
-      #|          input_schema: @rpcTypes.DataSchema::Tuple([
-      #|            (
-      #|              "order",
-      #|              @schema.schema_of_tag(
-      #|                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Order]),
-      #|              ),
-      #|            ),
-      #|          ]),
-      #|          output_schema: @rpcTypes.DataSchema::Tuple([
-      #|            (
-      #|              "result",
-      #|              @schema.schema_of_tag(
-      #|                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Result]),
-      #|              ),
-      #|            ),
-      #|          ]),
-      #|        },
-      #|      ],
-      #|      dependencies: [],
-      #|      mode: @common.AgentMode::DURABLE,
-      #|      http_mount: None,
-      #|      snapshotting: @common.Snapshotting::Disabled,
-      #|      config: [],
-      #|    },
-      #|    construct: fn(input, principal) {
-      #|      try {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 1 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 1 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let config :@types.Config = @schema.from_element_value_as(elements[0])
-      #|        let agent = OrderAgent::new(config)
-      #|        let constructed = @agents.ConstructedAgent::{
-      #|          raw: agent,
-      #|          snapshottable: None,
-      #|          snapshot_format: None,
-      #|        }
-      #|        Ok(constructed)
-      #|      } catch{
-      #|        e => Err(e)
-      #|      }
-      #|    },
-      #|  })
-      #|}
-      #|
-      #|///|
-      #|impl @agents.RawAgent for OrderAgent with invoke(
-      #|  self,
-      #|  method_name,
-      #|  input,
-      #|  principal,
-      #|) {
-      #|  try {
-      #|    match method_name {
-      #|      "process" => {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 1 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 1 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let order :@types.Order = @schema.from_element_value_as(elements[0])
-      #|        let result = self.process(order)
-      #|        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))
-      #|      }
-      #|      other => Err(@common.AgentError::InvalidMethod(other))
-      #|    }
-      #|  } catch{
-      #|    e => Err(e)
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  @agents.register_agent({\n    name: \"OrderAgent\",\n    agent_type: {\n      type_name: \"OrderAgent\",\n      description: \"An order agent\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates an order agent\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([\n          (\n            \"config\",\n            @schema.schema_of_tag(\n              (@schema.TypeTag::{  } : @schema.TypeTag[@types.Config]),\n            ),\n          ),\n        ]),\n      },\n      methods: [\n        {\n          name: \"process\",\n          description: \"Processes an order\",\n          http_endpoint: [],\n          prompt_hint: None,\n          input_schema: @rpcTypes.DataSchema::Tuple([\n            (\n              \"order\",\n              @schema.schema_of_tag(\n                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Order]),\n              ),\n            ),\n          ]),\n          output_schema: @rpcTypes.DataSchema::Tuple([\n            (\n              \"result\",\n              @schema.schema_of_tag(\n                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Result]),\n              ),\n            ),\n          ]),\n        },\n      ],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let config :@types.Config = @schema.from_element_value_as(elements[0])\n        let agent = OrderAgent::new(config)\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for OrderAgent with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      \"process\" => {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 1 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 1 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let order :@types.Order = @schema.from_element_value_as(elements[0])\n        let result = self.process(order)\n        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
+
     ),
   )
 }
 
 ///|
 test "param_type_to_type_string for cross-package types" {
-  inspect(
+  debug_inspect(
     param_type_to_type_string(Simple("@types.Config")),
-    content="@types.Config",
+    content=(
+      #|"@types.Config"
+    ),
   )
-  inspect(
+  debug_inspect(
     param_type_to_type_string(Optional(Simple("@types.Info"))),
-    content="@types.Info?",
+    content=(
+      #|"@types.Info?"
+    ),
   )
-  inspect(
+  debug_inspect(
     param_type_to_type_string(List(Simple("@types.Item"))),
-    content="Array[@types.Item]",
+    content=(
+      #|"Array[@types.Item]"
+    ),
   )
-  inspect(
+  debug_inspect(
     param_type_to_type_string(
       ResultType(Simple("@types.Data"), Simple("@types.Error")),
     ),
-    content="Result[@types.Data, @types.Error]",
+    content=(
+      #|"Result[@types.Data, @types.Error]"
+    ),
   )
 }
 
 ///|
 test "param_type_to_type_string for tuples" {
-  inspect(
+  debug_inspect(
     param_type_to_type_string(Tuple([Simple("String"), Simple("Int")])),
-    content="(String, Int)",
+    content=(
+      #|"(String, Int)"
+    ),
   )
-  inspect(
+  debug_inspect(
     param_type_to_type_string(
       Tuple([Simple("String"), Simple("Int"), Simple("Bool")]),
     ),
-    content="(String, Int, Bool)",
+    content=(
+      #|"(String, Int, Bool)"
+    ),
   )
 }
 
@@ -1483,12 +862,15 @@ test "parse_agents with tuple return type" {
     #|  ("hello", self.x)
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(agents[0].methods.length(), content="1")
-  inspect(agents[0].methods[0].name, content="get_pair")
-  inspect(
+  debug_inspect(agents[0].methods.length(), content="1")
+  debug_inspect(agents[0].methods[0].name, content=(
+    #|"get_pair"
+  ))
+  debug_inspect(
     agents[0].methods[0].return_type,
     content=(
-      #|Some(Tuple([Simple("String"), Simple("Int")]))
+      #|Some(([Simple("String"), Simple("Int")]))
+
     ),
   )
 }
@@ -1506,7 +888,7 @@ test "parse_agents defaults to durable mode" {
     #|  { name }
     #|}
   let agents = parse_agents([("counter.mbt", content)])
-  inspect(agents[0].mode, content="Durable")
+  debug_inspect(agents[0].mode, content="Durable")
 }
 
 ///|
@@ -1522,7 +904,7 @@ test "parse_agents with explicit durable mode" {
     #|  { name }
     #|}
   let agents = parse_agents([("counter.mbt", content)])
-  inspect(agents[0].mode, content="Durable")
+  debug_inspect(agents[0].mode, content="Durable")
 }
 
 ///|
@@ -1538,7 +920,7 @@ test "parse_agents with ephemeral mode" {
     #|  { name }
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(agents[0].mode, content="Ephemeral")
+  debug_inspect(agents[0].mode, content="Ephemeral")
 }
 
 ///|
@@ -1564,68 +946,11 @@ test "generate_agent_registration with ephemeral mode" {
   ]
   let impls = generate_agent_registration(agents)
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  @agents.register_agent({
-      #|    name: "Worker",
-      #|    agent_type: {
-      #|      type_name: "Worker",
-      #|      description: "An ephemeral worker",
-      #|      source_language: "moonbit",
-      #|      constructor_: {
-      #|        name: Some("new"),
-      #|        description: "Creates a worker",
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|      },
-      #|      methods: [],
-      #|      dependencies: [],
-      #|      mode: @common.AgentMode::EPHEMERAL,
-      #|      http_mount: None,
-      #|      snapshotting: @common.Snapshotting::Disabled,
-      #|      config: [],
-      #|    },
-      #|    construct: fn(input, principal) {
-      #|      try {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 0 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 0 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let agent = Worker::new()
-      #|        let constructed = @agents.ConstructedAgent::{
-      #|          raw: agent,
-      #|          snapshottable: None,
-      #|          snapshot_format: None,
-      #|        }
-      #|        Ok(constructed)
-      #|      } catch{
-      #|        e => Err(e)
-      #|      }
-      #|    },
-      #|  })
-      #|}
-      #|
-      #|///|
-      #|impl @agents.RawAgent for Worker with invoke(
-      #|  self,
-      #|  method_name,
-      #|  input,
-      #|  principal,
-      #|) {
-      #|  try {
-      #|    match method_name {
-      #|      other => Err(@common.AgentError::InvalidMethod(other))
-      #|    }
-      #|  } catch{
-      #|    e => Err(e)
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  @agents.register_agent({\n    name: \"Worker\",\n    agent_type: {\n      type_name: \"Worker\",\n      description: \"An ephemeral worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::EPHEMERAL,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Disabled,\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let agent = Worker::new()\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
+
     ),
   )
 }
@@ -1649,13 +974,13 @@ test "parse_agent_with_multimodal_return" {
     #|}
   let result = parse_agents([("test.mbt", source)])
   let m = result[0].methods[0]
-  inspect(
+  debug_inspect(
     m.params,
     content=(
       #|[("input", Parameterized("Multimodal", [Simple("TextOrBinary")]))]
     ),
   )
-  inspect(
+  debug_inspect(
     m.return_type,
     content=(
       #|Some(Parameterized("Multimodal", [Simple("TextOrBinary")]))
@@ -1696,32 +1021,11 @@ test "generate_agent_registration with multimodal return uses to_data_value" {
   ]
   let impl_ = build_raw_agent_impl(agents[0])
   let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|///|
-      #|impl @agents.RawAgent for EchoAgent with invoke(
-      #|  self,
-      #|  method_name,
-      #|  input,
-      #|  principal,
-      #|) {
-      #|  try {
-      #|    match method_name {
-      #|      "echo" => {
-      #|        let input :@types.Multimodal[TextOrBinary] = 
-      #|          @types.Multimodal::from_data_value(input)
-      #|        let result = self.echo(input)
-      #|        Ok(result.to_data_value())
-      #|      }
-      #|      other => Err(@common.AgentError::InvalidMethod(other))
-      #|    }
-      #|  } catch{
-      #|    e => Err(e)
-      #|  }
-      #|}
-      #|
-      #|
+      #|"///|\nimpl @agents.RawAgent for EchoAgent with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      \"echo\" => {\n        let input :@types.Multimodal[TextOrBinary] = \n          @types.Multimodal::from_data_value(input)\n        let result = self.echo(input)\n        Ok(result.to_data_value())\n      }\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
+
     ),
   )
 }
@@ -1745,9 +1049,11 @@ test "parse_agents with text_languages annotation" {
     #|  ""
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(
+  debug_inspect(
     agents[0].methods[0].param_schema_options.get("input"),
-    content="Some({text_languages: [\"en\", \"de\"], binary_mime_types: []})",
+    content=(
+      #|Some({ text_languages: ["en", "de"], binary_mime_types: [] })
+    ),
   )
 }
 
@@ -1769,7 +1075,7 @@ test "parse_agents rejects restriction on unknown param" {
     #|  ""
     #|}
   let result : Result[_, _] = try? parse_agents([("agent.mbt", content)])
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("#derive.text_languages/#derive.mime_types references unknown parameter 'nonexistent' of method 'process'"))
@@ -1797,8 +1103,8 @@ test "parse_agents detects Snapshottable impl" {
     #|  Ok(())
     #|}
   let agents = parse_agents([("counter.mbt", content)])
-  inspect(agents.length(), content="1")
-  inspect(agents[0].has_snapshottable, content="true")
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(agents[0].has_snapshottable, content="true")
 }
 
 ///|
@@ -1813,8 +1119,8 @@ test "parse_agents detects no Snapshottable when not implemented" {
     #|  { value: 0 }
     #|}
   let agents = parse_agents([("counter.mbt", content)])
-  inspect(agents.length(), content="1")
-  inspect(agents[0].has_snapshottable, content="false")
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(agents[0].has_snapshottable, content="false")
 }
 
 ///|
@@ -1841,8 +1147,8 @@ test "parse_agents detects Snapshottable across files regardless of order" {
     ("snapshottable.mbt", impl_file),
     ("counter.mbt", agent_file),
   ])
-  inspect(agents.length(), content="1")
-  inspect(agents[0].has_snapshottable, content="true")
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(agents[0].has_snapshottable, content="true")
 }
 
 ///|
@@ -1857,7 +1163,7 @@ test "parse_agents with snapshotting disabled" {
     #|  { value: "" }
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(agents[0].snapshotting, content="Disabled")
+  debug_inspect(agents[0].snapshotting, content="Disabled")
 }
 
 ///|
@@ -1872,7 +1178,7 @@ test "parse_agents with snapshotting default" {
     #|  { value: "" }
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(agents[0].snapshotting, content="Default")
+  debug_inspect(agents[0].snapshotting, content="Default")
 }
 
 ///|
@@ -1887,7 +1193,7 @@ test "parse_agents with snapshotting periodic" {
     #|  { value: "" }
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(agents[0].snapshotting, content="Periodic(100)")
+  debug_inspect(agents[0].snapshotting, content="Periodic(100)")
 }
 
 ///|
@@ -1902,7 +1208,7 @@ test "parse_agents with snapshotting every_n" {
     #|  { value: "" }
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(agents[0].snapshotting, content="EveryNInvocation(5)")
+  debug_inspect(agents[0].snapshotting, content="EveryNInvocation(5)")
 }
 
 ///|
@@ -1917,8 +1223,8 @@ test "parse_agents with ephemeral and snapshotting" {
     #|  { value: "" }
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(agents[0].mode, content="Ephemeral")
-  inspect(agents[0].snapshotting, content="Periodic(50)")
+  debug_inspect(agents[0].mode, content="Ephemeral")
+  debug_inspect(agents[0].snapshotting, content="Periodic(50)")
 }
 
 ///|
@@ -1933,7 +1239,7 @@ test "parse_agents with snapshotting periodic human-readable" {
     #|  { value: "" }
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(agents[0].snapshotting, content="Periodic(600)")
+  debug_inspect(agents[0].snapshotting, content="Periodic(600)")
 }
 
 ///|
@@ -1948,7 +1254,7 @@ test "parse_agents with snapshotting periodic compound duration" {
     #|  { value: "" }
     #|}
   let agents = parse_agents([("agent.mbt", content)])
-  inspect(agents[0].snapshotting, content="Periodic(5400)")
+  debug_inspect(agents[0].snapshotting, content="Periodic(5400)")
 }
 
 ///|
@@ -1974,70 +1280,11 @@ test "generate_agent_registration with snapshotting periodic" {
   ]
   let impls = generate_agent_registration(agents)
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  @agents.register_agent({
-      #|    name: "Worker",
-      #|    agent_type: {
-      #|      type_name: "Worker",
-      #|      description: "A worker",
-      #|      source_language: "moonbit",
-      #|      constructor_: {
-      #|        name: Some("new"),
-      #|        description: "Creates a worker",
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|      },
-      #|      methods: [],
-      #|      dependencies: [],
-      #|      mode: @common.AgentMode::DURABLE,
-      #|      http_mount: None,
-      #|      snapshotting: @common.Snapshotting::Enabled(
-      #|        @common.SnapshottingConfig::Periodic(100UL),
-      #|      ),
-      #|      config: [],
-      #|    },
-      #|    construct: fn(input, principal) {
-      #|      try {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 0 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 0 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let agent = Worker::new()
-      #|        let constructed = @agents.ConstructedAgent::{
-      #|          raw: agent,
-      #|          snapshottable: None,
-      #|          snapshot_format: None,
-      #|        }
-      #|        Ok(constructed)
-      #|      } catch{
-      #|        e => Err(e)
-      #|      }
-      #|    },
-      #|  })
-      #|}
-      #|
-      #|///|
-      #|impl @agents.RawAgent for Worker with invoke(
-      #|  self,
-      #|  method_name,
-      #|  input,
-      #|  principal,
-      #|) {
-      #|  try {
-      #|    match method_name {
-      #|      other => Err(@common.AgentError::InvalidMethod(other))
-      #|    }
-      #|  } catch{
-      #|    e => Err(e)
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  @agents.register_agent({\n    name: \"Worker\",\n    agent_type: {\n      type_name: \"Worker\",\n      description: \"A worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Enabled(\n        @common.SnapshottingConfig::Periodic(100UL),\n      ),\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let agent = Worker::new()\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
+
     ),
   )
 }
@@ -2065,70 +1312,11 @@ test "generate_agent_registration with snapshotting default" {
   ]
   let impls = generate_agent_registration(agents)
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  @agents.register_agent({
-      #|    name: "Worker",
-      #|    agent_type: {
-      #|      type_name: "Worker",
-      #|      description: "A worker",
-      #|      source_language: "moonbit",
-      #|      constructor_: {
-      #|        name: Some("new"),
-      #|        description: "Creates a worker",
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|      },
-      #|      methods: [],
-      #|      dependencies: [],
-      #|      mode: @common.AgentMode::DURABLE,
-      #|      http_mount: None,
-      #|      snapshotting: @common.Snapshotting::Enabled(
-      #|        @common.SnapshottingConfig::Default,
-      #|      ),
-      #|      config: [],
-      #|    },
-      #|    construct: fn(input, principal) {
-      #|      try {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 0 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 0 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let agent = Worker::new()
-      #|        let constructed = @agents.ConstructedAgent::{
-      #|          raw: agent,
-      #|          snapshottable: None,
-      #|          snapshot_format: None,
-      #|        }
-      #|        Ok(constructed)
-      #|      } catch{
-      #|        e => Err(e)
-      #|      }
-      #|    },
-      #|  })
-      #|}
-      #|
-      #|///|
-      #|impl @agents.RawAgent for Worker with invoke(
-      #|  self,
-      #|  method_name,
-      #|  input,
-      #|  principal,
-      #|) {
-      #|  try {
-      #|    match method_name {
-      #|      other => Err(@common.AgentError::InvalidMethod(other))
-      #|    }
-      #|  } catch{
-      #|    e => Err(e)
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  @agents.register_agent({\n    name: \"Worker\",\n    agent_type: {\n      type_name: \"Worker\",\n      description: \"A worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Enabled(\n        @common.SnapshottingConfig::Default,\n      ),\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let agent = Worker::new()\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
+
     ),
   )
 }
@@ -2156,111 +1344,52 @@ test "generate_agent_registration with snapshotting every_n" {
   ]
   let impls = generate_agent_registration(agents)
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|fn init{
-      #|  @agents.register_agent({
-      #|    name: "Worker",
-      #|    agent_type: {
-      #|      type_name: "Worker",
-      #|      description: "A worker",
-      #|      source_language: "moonbit",
-      #|      constructor_: {
-      #|        name: Some("new"),
-      #|        description: "Creates a worker",
-      #|        prompt_hint: None,
-      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
-      #|      },
-      #|      methods: [],
-      #|      dependencies: [],
-      #|      mode: @common.AgentMode::DURABLE,
-      #|      http_mount: None,
-      #|      snapshotting: @common.Snapshotting::Enabled(
-      #|        @common.SnapshottingConfig::EveryNInvocation(5U),
-      #|      ),
-      #|      config: [],
-      #|    },
-      #|    construct: fn(input, principal) {
-      #|      try {
-      #|        let elements = @extractor.extract_tuple(input)
-      #|        guard elements.length() == 0 else {
-      #|          raise  @common.AgentError::InvalidInput(
-      #|            "Expected 0 elements, got " + elements.length().to_string(),
-      #|          )
-      #|        }
-      #|        let agent = Worker::new()
-      #|        let constructed = @agents.ConstructedAgent::{
-      #|          raw: agent,
-      #|          snapshottable: None,
-      #|          snapshot_format: None,
-      #|        }
-      #|        Ok(constructed)
-      #|      } catch{
-      #|        e => Err(e)
-      #|      }
-      #|    },
-      #|  })
-      #|}
-      #|
-      #|///|
-      #|impl @agents.RawAgent for Worker with invoke(
-      #|  self,
-      #|  method_name,
-      #|  input,
-      #|  principal,
-      #|) {
-      #|  try {
-      #|    match method_name {
-      #|      other => Err(@common.AgentError::InvalidMethod(other))
-      #|    }
-      #|  } catch{
-      #|    e => Err(e)
-      #|  }
-      #|}
-      #|
-      #|
+      #|"fn init{\n  @agents.register_agent({\n    name: \"Worker\",\n    agent_type: {\n      type_name: \"Worker\",\n      description: \"A worker\",\n      source_language: \"moonbit\",\n      constructor_: {\n        name: Some(\"new\"),\n        description: \"Creates a worker\",\n        prompt_hint: None,\n        input_schema: @rpcTypes.DataSchema::Tuple([]),\n      },\n      methods: [],\n      dependencies: [],\n      mode: @common.AgentMode::DURABLE,\n      http_mount: None,\n      snapshotting: @common.Snapshotting::Enabled(\n        @common.SnapshottingConfig::EveryNInvocation(5U),\n      ),\n      config: [],\n    },\n    construct: fn(input, principal) {\n      try {\n        let elements = @extractor.extract_tuple(input)\n        guard elements.length() == 0 else {\n          raise  @common.AgentError::InvalidInput(\n            \"Expected 0 elements, got \" + elements.length().to_string(),\n          )\n        }\n        let agent = Worker::new()\n        let constructed = @agents.ConstructedAgent::{\n          raw: agent,\n          snapshottable: None,\n          snapshot_format: None,\n        }\n        Ok(constructed)\n      } catch{\n        e => Err(e)\n      }\n    },\n  })\n}\n\n///|\nimpl @agents.RawAgent for Worker with invoke(\n  self,\n  method_name,\n  input,\n  principal,\n) {\n  try {\n    match method_name {\n      other => Err(@common.AgentError::InvalidMethod(other))\n    }\n  } catch{\n    e => Err(e)\n  }\n}\n\n"
+
     ),
   )
 }
 
 ///|
 test "parse_duration_seconds plain number" {
-  inspect(parse_duration_seconds("100"), content="100")
+  debug_inspect(parse_duration_seconds("100"), content="100")
 }
 
 ///|
 test "parse_duration_seconds seconds" {
-  inspect(parse_duration_seconds("30 seconds"), content="30")
-  inspect(parse_duration_seconds("1 second"), content="1")
-  inspect(parse_duration_seconds("5 secs"), content="5")
-  inspect(parse_duration_seconds("10 sec"), content="10")
-  inspect(parse_duration_seconds("2 s"), content="2")
+  debug_inspect(parse_duration_seconds("30 seconds"), content="30")
+  debug_inspect(parse_duration_seconds("1 second"), content="1")
+  debug_inspect(parse_duration_seconds("5 secs"), content="5")
+  debug_inspect(parse_duration_seconds("10 sec"), content="10")
+  debug_inspect(parse_duration_seconds("2 s"), content="2")
 }
 
 ///|
 test "parse_duration_seconds minutes" {
-  inspect(parse_duration_seconds("10 minutes"), content="600")
-  inspect(parse_duration_seconds("1 minute"), content="60")
-  inspect(parse_duration_seconds("5 mins"), content="300")
-  inspect(parse_duration_seconds("3 min"), content="180")
-  inspect(parse_duration_seconds("2 m"), content="120")
+  debug_inspect(parse_duration_seconds("10 minutes"), content="600")
+  debug_inspect(parse_duration_seconds("1 minute"), content="60")
+  debug_inspect(parse_duration_seconds("5 mins"), content="300")
+  debug_inspect(parse_duration_seconds("3 min"), content="180")
+  debug_inspect(parse_duration_seconds("2 m"), content="120")
 }
 
 ///|
 test "parse_duration_seconds hours" {
-  inspect(parse_duration_seconds("2 hours"), content="7200")
-  inspect(parse_duration_seconds("1 hour"), content="3600")
-  inspect(parse_duration_seconds("3 hrs"), content="10800")
-  inspect(parse_duration_seconds("1 hr"), content="3600")
-  inspect(parse_duration_seconds("1 h"), content="3600")
+  debug_inspect(parse_duration_seconds("2 hours"), content="7200")
+  debug_inspect(parse_duration_seconds("1 hour"), content="3600")
+  debug_inspect(parse_duration_seconds("3 hrs"), content="10800")
+  debug_inspect(parse_duration_seconds("1 hr"), content="3600")
+  debug_inspect(parse_duration_seconds("1 h"), content="3600")
 }
 
 ///|
 test "parse_duration_seconds days" {
-  inspect(parse_duration_seconds("1 day"), content="86400")
-  inspect(parse_duration_seconds("2 days"), content="172800")
-  inspect(parse_duration_seconds("1 d"), content="86400")
+  debug_inspect(parse_duration_seconds("1 day"), content="86400")
+  debug_inspect(parse_duration_seconds("2 days"), content="172800")
+  debug_inspect(parse_duration_seconds("1 d"), content="86400")
 }
 
 ///|
@@ -2278,9 +1407,9 @@ test "parse_agents detects derive(ToJson, FromJson)" {
     #|  { name, value: 0 }
     #|}
   let agents = parse_agents([("counter.mbt", content)])
-  inspect(agents.length(), content="1")
-  inspect(agents[0].has_json_derives, content="true")
-  inspect(agents[0].has_snapshottable, content="false")
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(agents[0].has_json_derives, content="true")
+  debug_inspect(agents[0].has_snapshottable, content="false")
 }
 
 ///|
@@ -2298,8 +1427,8 @@ test "parse_agents detects derive(ToJson, @json.FromJson)" {
     #|  { name, value: 0 }
     #|}
   let agents = parse_agents([("counter.mbt", content)])
-  inspect(agents.length(), content="1")
-  inspect(agents[0].has_json_derives, content="true")
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(agents[0].has_json_derives, content="true")
 }
 
 ///|
@@ -2317,8 +1446,8 @@ test "parse_agents no json derives without derive annotation" {
     #|  { name, value: 0 }
     #|}
   let agents = parse_agents([("counter.mbt", content)])
-  inspect(agents.length(), content="1")
-  inspect(agents[0].has_json_derives, content="false")
+  debug_inspect(agents.length(), content="1")
+  debug_inspect(agents[0].has_json_derives, content="false")
 }
 
 ///|
@@ -2345,21 +1474,21 @@ test "generate_agent_registration with json derives generates direct Snapshottab
   let impls = generate_agent_registration(agents)
   let output = @formatter.impls_to_string(impls)
   // Check that the output contains direct Snapshottable impl (not SnapshotCell)
-  inspect(output.contains("SnapshotCell"), content="false")
-  inspect(output.contains("Snapshottable for Counter"), content="true")
-  inspect(output.contains("snapshot_format"), content="true")
-  inspect(output.contains("Json"), content="true")
+  debug_inspect(output.contains("SnapshotCell"), content="false")
+  debug_inspect(output.contains("Snapshottable for Counter"), content="true")
+  debug_inspect(output.contains("snapshot_format"), content="true")
+  debug_inspect(output.contains("Json"), content="true")
   // Only mut fields are assigned in load_snapshot
-  inspect(output.contains("self.name = new_val.name"), content="false")
-  inspect(output.contains("self.value = new_val.value"), content="true")
+  debug_inspect(output.contains("self.name = new_val.name"), content="false")
+  debug_inspect(output.contains("self.value = new_val.value"), content="true")
 }
 
 ///|
 test "parse_duration_seconds compound" {
-  inspect(parse_duration_seconds("1 hour 30 minutes"), content="5400")
-  inspect(
+  debug_inspect(parse_duration_seconds("1 hour 30 minutes"), content="5400")
+  debug_inspect(
     parse_duration_seconds("1 day 2 hours 30 minutes 15 seconds"),
     content="95415",
   )
-  inspect(parse_duration_seconds("2 hours 0 seconds"), content="7200")
+  debug_inspect(parse_duration_seconds("2 hours 0 seconds"), content="7200")
 }

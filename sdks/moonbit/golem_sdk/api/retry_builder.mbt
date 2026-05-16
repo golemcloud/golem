@@ -19,7 +19,7 @@ enum DurationRepr {
   Seconds(UInt64)
   Minutes(UInt64)
   Hours(UInt64)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Ergonomic duration helper for retry-policy builders.
@@ -27,7 +27,7 @@ enum DurationRepr {
 /// named units and converts only at the raw boundary.
 pub struct Duration {
   repr : DurationRepr
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn Duration::nanos(value : UInt64) -> Duration {
@@ -78,7 +78,7 @@ pub fn Duration::to_nanos(self : Duration) -> UInt64 raise RetryBuilderError {
 ///|
 pub struct Props {
   key : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn Props::custom(name : String) -> Props {
@@ -163,14 +163,14 @@ enum ValueRepr {
   Int(Int)
   UInt(UInt)
   UInt64(UInt64)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Explicit predicate-value helper for building retry predicates without using
 /// raw WIT enums directly.
 pub struct Value {
   repr : ValueRepr
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn Value::text(value : String) -> Value {
@@ -240,13 +240,13 @@ enum PredicateRepr {
   And(left~ : Predicate, right~ : Predicate)
   Or(left~ : Predicate, right~ : Predicate)
   Not(Predicate)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Tree-shaped retry predicate builder.
 pub struct Predicate {
   repr : PredicateRepr
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn Predicate::always() -> Predicate {
@@ -354,13 +354,13 @@ enum PolicyRepr {
   AndThen(left~ : Policy, right~ : Policy)
   Union(left~ : Policy, right~ : Policy)
   Intersect(left~ : Policy, right~ : Policy)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Tree-shaped retry policy builder.
 pub struct Policy {
   repr : PolicyRepr
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn Policy::immediate() -> Policy {
@@ -454,7 +454,7 @@ pub struct NamedPolicy {
   priority : UInt
   predicate : Predicate
   policy : Policy
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn NamedPolicy::named(name : String, policy : Policy) -> NamedPolicy {

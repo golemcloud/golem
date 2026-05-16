@@ -9,13 +9,13 @@
 /// rate-limited resources).
 pub(all) struct FailedReservation {
   estimated_wait_nanos : UInt64?
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A short-lived capability that represents a pending or committed
 /// resource consumption.  Drop without committing is equivalent to
 /// committing zero usage.
-pub(all) struct Reservation(Int) derive(Show, Eq)
+pub(all) struct Reservation(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -32,13 +32,13 @@ pub(all) struct QuotaTokenRecord {
   expected_use : UInt64
   last_credit : Int64
   last_credit_at : @wallClock.Datetime
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// An unforgeable capability granting the right to consume a named
 /// resource.  Dropping the token releases the underlying lease back to
 /// the executor pool.
-pub(all) struct QuotaToken(Int) derive(Show, Eq)
+pub(all) struct QuotaToken(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.

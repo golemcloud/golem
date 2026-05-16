@@ -2,8 +2,8 @@
 test "unwrap_wit_tuple - primitive value unchanged" {
   let value : @types.WitValue = { nodes: [@types.WitNode::PrimS32(42)] }
   let result = unwrap_wit_tuple(value)
-  inspect(result.nodes.length(), content="1")
-  inspect(result.nodes[0], content="PrimS32(42)")
+  debug_inspect(result.nodes.length(), content="1")
+  debug_inspect(result.nodes[0], content="PrimS32(42)")
 }
 
 ///|
@@ -15,8 +15,8 @@ test "unwrap_wit_tuple - single element tuple" {
     ],
   }
   let result = unwrap_wit_tuple(value)
-  inspect(result.nodes.length(), content="1")
-  inspect(result.nodes[0], content="PrimString(\"hello\")")
+  debug_inspect(result.nodes.length(), content="1")
+  debug_inspect(result.nodes[0], content="PrimString(\"hello\")")
 }
 
 ///|
@@ -29,7 +29,7 @@ test "unwrap_wit_tuple - multi element tuple unchanged" {
     ],
   }
   let result = unwrap_wit_tuple(value)
-  inspect(result.nodes.length(), content="3")
+  debug_inspect(result.nodes.length(), content="3")
 }
 
 ///|
@@ -43,17 +43,17 @@ test "unwrap_wit_tuple - nested record" {
     ],
   }
   let result = unwrap_wit_tuple(value)
-  inspect(result.nodes.length(), content="3")
-  inspect(result.nodes[0], content="RecordValue([1, 2])")
-  inspect(result.nodes[1], content="PrimString(\"name\")")
-  inspect(result.nodes[2], content="PrimS32(42)")
+  debug_inspect(result.nodes.length(), content="3")
+  debug_inspect(result.nodes[0], content="RecordValue([1, 2])")
+  debug_inspect(result.nodes[1], content="PrimString(\"name\")")
+  debug_inspect(result.nodes[2], content="PrimS32(42)")
 }
 
 ///|
 test "unwrap_wit_tuple - empty value" {
   let value : @types.WitValue = { nodes: [] }
   let result = unwrap_wit_tuple(value)
-  inspect(result.nodes.length(), content="0")
+  debug_inspect(result.nodes.length(), content="0")
 }
 
 ///|
@@ -61,7 +61,7 @@ test "unstructured text roundtrip - url" {
   let text = @agentTypes.UnstructuredText::Url("https://example.com/doc.txt")
   let wv = unstructured_text_to_wit_value(text)
   let decoded = wit_value_to_unstructured_text(wv)
-  assert_eq(decoded, text)
+  @debug.assert_eq(decoded, text)
 }
 
 ///|
@@ -72,7 +72,7 @@ test "unstructured text roundtrip - inline with language" {
   )
   let wv = unstructured_text_to_wit_value(text)
   let decoded = wit_value_to_unstructured_text(wv)
-  assert_eq(decoded, text)
+  @debug.assert_eq(decoded, text)
 }
 
 ///|
@@ -83,7 +83,7 @@ test "unstructured text roundtrip - inline without language" {
   )
   let wv = unstructured_text_to_wit_value(text)
   let decoded = wit_value_to_unstructured_text(wv)
-  assert_eq(decoded, text)
+  @debug.assert_eq(decoded, text)
 }
 
 ///|
@@ -93,7 +93,7 @@ test "unstructured binary roundtrip - url" {
   )
   let wv = unstructured_binary_to_wit_value(binary)
   let decoded = wit_value_to_unstructured_binary(wv)
-  assert_eq(decoded, binary)
+  @debug.assert_eq(decoded, binary)
 }
 
 ///|
@@ -104,7 +104,7 @@ test "unstructured binary roundtrip - inline" {
   )
   let wv = unstructured_binary_to_wit_value(binary)
   let decoded = wit_value_to_unstructured_binary(wv)
-  assert_eq(decoded, binary)
+  @debug.assert_eq(decoded, binary)
 }
 
 ///|
@@ -112,8 +112,8 @@ test "unstructured text wit encoding - url structure" {
   let text = @agentTypes.UnstructuredText::Url("https://example.com")
   let wv = unstructured_text_to_wit_value(text)
   // Should be variant(0, string)
-  inspect(wv.nodes[0], content="VariantValue((0, Some(1)))")
-  inspect(wv.nodes[1], content="PrimString(\"https://example.com\")")
+  debug_inspect(wv.nodes[0], content="VariantValue((0, Some(1)))")
+  debug_inspect(wv.nodes[1], content="PrimString(\"https://example.com\")")
 }
 
 ///|
@@ -124,12 +124,12 @@ test "unstructured text wit encoding - inline structure" {
   )
   let wv = unstructured_text_to_wit_value(text)
   // variant(1, record([string, option(record([string]))]))
-  inspect(wv.nodes[0], content="VariantValue((1, Some(1)))")
-  inspect(wv.nodes[1], content="RecordValue([2, 3])")
-  inspect(wv.nodes[2], content="PrimString(\"data\")")
-  inspect(wv.nodes[3], content="OptionValue(Some(4))")
-  inspect(wv.nodes[4], content="RecordValue([5])")
-  inspect(wv.nodes[5], content="PrimString(\"en\")")
+  debug_inspect(wv.nodes[0], content="VariantValue((1, Some(1)))")
+  debug_inspect(wv.nodes[1], content="RecordValue([2, 3])")
+  debug_inspect(wv.nodes[2], content="PrimString(\"data\")")
+  debug_inspect(wv.nodes[3], content="OptionValue(Some(4))")
+  debug_inspect(wv.nodes[4], content="RecordValue([5])")
+  debug_inspect(wv.nodes[5], content="PrimString(\"en\")")
 }
 
 ///|
@@ -149,9 +149,9 @@ test "multimodal roundtrip - TextOrBinary with text and binary" {
   let decoded : @agentTypes.Multimodal[@agentTypes.TextOrBinary] = wit_value_to_multimodal(
     wv,
   )
-  assert_eq(decoded.items.length(), 2)
-  assert_eq(decoded.items[0], multimodal.items[0])
-  assert_eq(decoded.items[1], multimodal.items[1])
+  @debug.assert_eq(decoded.items.length(), 2)
+  @debug.assert_eq(decoded.items[0], multimodal.items[0])
+  @debug.assert_eq(decoded.items[1], multimodal.items[1])
 }
 
 ///|
@@ -165,8 +165,8 @@ test "multimodal roundtrip - TextOrBinary with url text" {
   let decoded : @agentTypes.Multimodal[@agentTypes.TextOrBinary] = wit_value_to_multimodal(
     wv,
   )
-  assert_eq(decoded.items.length(), 1)
-  assert_eq(decoded.items[0], multimodal.items[0])
+  @debug.assert_eq(decoded.items.length(), 1)
+  @debug.assert_eq(decoded.items[0], multimodal.items[0])
 }
 
 ///|
@@ -183,8 +183,8 @@ test "multimodal roundtrip - TextOrBinary with inline binary" {
   let decoded : @agentTypes.Multimodal[@agentTypes.TextOrBinary] = wit_value_to_multimodal(
     wv,
   )
-  assert_eq(decoded.items.length(), 1)
-  assert_eq(decoded.items[0], multimodal.items[0])
+  @debug.assert_eq(decoded.items.length(), 1)
+  @debug.assert_eq(decoded.items[0], multimodal.items[0])
 }
 
 ///|
@@ -195,7 +195,7 @@ test "multimodal roundtrip - empty" {
   let decoded : @agentTypes.Multimodal[@agentTypes.TextOrBinary] = wit_value_to_multimodal(
     wv,
   )
-  assert_eq(decoded.items.length(), 0)
+  @debug.assert_eq(decoded.items.length(), 0)
 }
 
 ///|
@@ -207,11 +207,11 @@ test "multimodal wit encoding - structure" {
   ])
   let wv = multimodal_to_wit_value(multimodal)
   // Should be list([variant(0, text-reference)])
-  inspect(wv.nodes[0], content="ListValue([1])")
-  inspect(wv.nodes[1], content="VariantValue((0, Some(2)))")
+  debug_inspect(wv.nodes[0], content="ListValue([1])")
+  debug_inspect(wv.nodes[1], content="VariantValue((0, Some(2)))")
   // The text-reference payload: variant(0, string)
-  inspect(wv.nodes[2], content="VariantValue((0, Some(3)))")
-  inspect(wv.nodes[3], content="PrimString(\"https://example.com\")")
+  debug_inspect(wv.nodes[2], content="VariantValue((0, Some(3)))")
+  debug_inspect(wv.nodes[3], content="PrimString(\"https://example.com\")")
 }
 
 ///|
@@ -234,8 +234,8 @@ test "multimodal roundtrip - multiple items mixed" {
   let decoded : @agentTypes.Multimodal[@agentTypes.TextOrBinary] = wit_value_to_multimodal(
     wv,
   )
-  assert_eq(decoded.items.length(), 3)
-  assert_eq(decoded.items[0], multimodal.items[0])
-  assert_eq(decoded.items[1], multimodal.items[1])
-  assert_eq(decoded.items[2], multimodal.items[2])
+  @debug.assert_eq(decoded.items.length(), 3)
+  @debug.assert_eq(decoded.items[0], multimodal.items[0])
+  @debug.assert_eq(decoded.items[1], multimodal.items[1])
+  @debug.assert_eq(decoded.items[2], multimodal.items[2])
 }

@@ -87,7 +87,7 @@ fn emit_http_method_expr(http_method : String) -> @syntax.Expr {
 /// Parses a path string with `parse_path_only` and returns an array expression of path segment expressions.
 fn emit_path_segments_array(path : String) -> @syntax.Expr {
   let segments = parse_path_only(path) catch {
-    e => abort("Failed to parse path '\{path}': \{e}")
+    e => abort("Failed to parse path '\{path}': \{@debug.to_string(e)}")
   }
   make_array(segments.map(emit_path_segment_expr))
 }
@@ -181,7 +181,7 @@ fn emit_http_endpoint_array(endpoint : HttpEndpointInfo?) -> @syntax.Expr {
     None => make_array([])
     Some(ep) => {
       let (segments, query_vars) = parse_path_and_query(ep.path) catch {
-        e => abort("Failed to parse endpoint path '\{ep.path}': \{e}")
+        e => abort("Failed to parse endpoint path '\{ep.path}': \{@debug.to_string(e)}")
       }
       let header_exprs = ep.headers.map(fn(h) {
         make_record([
