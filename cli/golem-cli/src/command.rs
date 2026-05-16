@@ -752,6 +752,9 @@ pub enum GolemCliSubcommand {
         /// Ask for approval for every staging step; used for testing
         #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
         approve_staging_steps: bool,
+        /// Show the full deployment and environment setup diff instead of only changed entries
+        #[arg(long)]
+        full_diff: bool,
         /// Roll the environment back to the deployment with this user-supplied
         /// version label. Versions are user-defined strings attached to
         /// deployments; if more than one deployment shares the same version,

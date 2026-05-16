@@ -10,15 +10,11 @@ test "generate_reexports produces correct output for simple function" {
   ]
   let impls = generate_reexports(fns, "gen")
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|///|
-      #|pub fn wasmExportSave() -> Int {
-      #|  @gen.wasmExportSave()
-      #|}
-      #|
-      #|
+      #|"///|\npub fn wasmExportSave() -> Int {\n  @gen.wasmExportSave()\n}\n\n"
+
     ),
   )
 }
@@ -35,15 +31,11 @@ test "generate_reexports produces correct output for function with params" {
   ]
   let impls = generate_reexports(fns, "gen")
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|///|
-      #|pub fn cabi_realloc(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {
-      #|  @gen.mbt_ffi_cabi_realloc(p0, p1, p2, p3)
-      #|}
-      #|
-      #|
+      #|"///|\npub fn cabi_realloc(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {\n  @gen.mbt_ffi_cabi_realloc(p0, p1, p2, p3)\n}\n\n"
+
     ),
   )
 }
@@ -66,20 +58,11 @@ test "generate_reexports multiple functions" {
   ]
   let impls = generate_reexports(fns, "gen")
   let output = @formatter.impls_to_string(impls)
-  inspect(
+  debug_inspect(
     output,
     content=(
-      #|///|
-      #|pub fn wasmExportSave() -> Int {
-      #|  @gen.wasmExportSave()
-      #|}
-      #|
-      #|///|
-      #|pub fn wasmExportSavePostReturn(p0 : Int) -> Unit {
-      #|  @gen.wasmExportSavePostReturn(p0)
-      #|}
-      #|
-      #|
+      #|"///|\npub fn wasmExportSave() -> Int {\n  @gen.wasmExportSave()\n}\n\n///|\npub fn wasmExportSavePostReturn(p0 : Int) -> Unit {\n  @gen.wasmExportSavePostReturn(p0)\n}\n\n"
+
     ),
   )
 }

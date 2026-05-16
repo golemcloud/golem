@@ -49,3 +49,36 @@ impl EnvironmentStateService for DisabledEnvironmentStateService {
         Ok(vec![])
     }
 }
+
+/// Test-only `EnvironmentStateService` that returns a fixed list of
+/// named retry policies regardless of environment.  Used by integration
+/// tests that exercise manifest-defined retry policies (e.g. status-code
+/// retries via `retryPolicyDefaults`).
+pub struct ConfiguredRetryPoliciesEnvironmentStateService {
+    pub policies: Vec<NamedRetryPolicy>,
+}
+
+#[async_trait]
+impl EnvironmentStateService for ConfiguredRetryPoliciesEnvironmentStateService {
+    async fn get_agent_deployment(
+        &self,
+        _environment: EnvironmentId,
+        _agent_type: &AgentTypeName,
+    ) -> Result<Option<AgentDeploymentDetails>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn get_agent_secrets(
+        &self,
+        _environment_id: EnvironmentId,
+    ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError> {
+        Ok(HashMap::new())
+    }
+
+    async fn get_retry_policies(
+        &self,
+        _environment_id: EnvironmentId,
+    ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError> {
+        Ok(self.policies.clone())
+    }
+}

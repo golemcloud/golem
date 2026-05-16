@@ -8,7 +8,7 @@ pub(all) enum ParamType {
   Tuple(Array[ParamType])
   MultimodalType(ParamType)
   Parameterized(String, Array[ParamType])
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Encodes a qualified (cross-package) type name into the `Simple` string format.
@@ -43,7 +43,7 @@ pub fn decode_qualified(name : String) -> (String, String)? {
 pub(all) struct SchemaOptions {
   text_languages : Array[String]
   binary_mime_types : Array[String]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// HTTP endpoint information parsed from `#derive.endpoint` annotations on methods.
@@ -53,7 +53,7 @@ pub(all) struct HttpEndpointInfo {
   headers : Array[(String, String)]
   auth : Bool?
   cors : Array[String]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// HTTP mount information parsed from `#derive.mount` annotations on agent structs.
@@ -63,7 +63,7 @@ pub(all) struct HttpMountInfo {
   phantom : Bool
   cors : Array[String]
   webhook_suffix : String?
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Parsed information about a public agent method.
@@ -75,14 +75,14 @@ pub(all) struct MethodInfo {
   return_type : ParamType?
   param_schema_options : Map[String, SchemaOptions]
   http_endpoint : HttpEndpointInfo?
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Agent execution mode: durable (default) or ephemeral.
 pub(all) enum AgentMode {
   Durable
   Ephemeral
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Snapshotting configuration parsed from `#derive.agent` attributes.
@@ -91,7 +91,7 @@ pub(all) enum AgentSnapshotting {
   Default
   Periodic(UInt64)
   EveryNInvocation(UInt)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Complete parsed information about an agent, including its constructor, methods, and mode.
@@ -111,13 +111,13 @@ pub(all) struct AgentInfo {
   fields : Array[(String, Bool)]
   http_mount : HttpMountInfo?
   config_type : String?
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Error raised when agent source parsing fails.
 pub suberror AgentParseError {
   AgentParseError(String)
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Converts a MoonBit syntax AST type to the SDK's `ParamType` representation.
@@ -258,7 +258,7 @@ fn extract_agent_snapshotting(
           match prop {
             Labeled("snapshotting", String(s)) => {
               let parsed = parse_snapshotting_value(s) catch {
-                e => abort(e.to_string())
+                e => abort(@debug.to_string(e))
               }
               result = parsed
             }
@@ -287,7 +287,7 @@ fn parse_snapshotting_value(
       end=s.length() - 1,
     )
     let seconds = parse_duration_seconds(inner) catch {
-      e => raise AgentParseError(e.to_string())
+      e => raise AgentParseError(@debug.to_string(e))
     }
     Periodic(seconds)
   } else if s.has_prefix("every_n(") && s.has_suffix(")") {
@@ -352,7 +352,7 @@ pub fn parse_duration_seconds(s : String) -> UInt64 raise AgentParseError {
         )
     }
     let multiplier = duration_unit_to_seconds(unit_str) catch {
-      e => raise AgentParseError(e.to_string())
+      e => raise AgentParseError(@debug.to_string(e))
     }
     total = total + num * multiplier
     i = i + 2
@@ -1323,7 +1323,7 @@ pub fn parse_agents(
         Some(Simple(_)) => ()
         Some(other) =>
           raise AgentParseError(
-            "Config parameter '\{p.0}' of agent '\{agent.name}' must use a simple type name, got \{other}",
+            "Config parameter '\{p.0}' of agent '\{agent.name}' must use a simple type name, got \{@debug.to_string(other)}",
           )
         None => ()
       }

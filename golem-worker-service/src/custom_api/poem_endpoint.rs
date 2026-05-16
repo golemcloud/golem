@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::api::common::ApiEndpointError;
+use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::request_handler::RequestHandler;
 use futures::{FutureExt, TryFutureExt};
 use golem_common::recorded_http_api_request;
@@ -39,6 +40,7 @@ impl CustomApiPoemEndpoint {
         let response = self
             .request_handler
             .handle_request(request)
+            .inspect_err(log_internal_errors)
             .instrument(record.span.clone())
             .map_err(ApiEndpointError::from)
             .await;
@@ -54,5 +56,23 @@ impl Endpoint for CustomApiPoemEndpoint {
 
     fn call(&self, req: Request) -> impl Future<Output = poem::Result<Self::Output>> + Send {
         self.execute(req).map(Ok)
+    }
+}
+
+fn log_internal_errors(error: &RequestHandlerError) {
+    match error {
+        RequestHandlerError::InvariantViolated { msg } => {
+            tracing::warn!(
+                error = msg,
+                "Internal error due to violated invariant while handling request"
+            )
+        }
+        RequestHandlerError::InternalError(inner) => {
+            tracing::warn!(
+                error = format!("{:?}", inner),
+                "Internal error while handling request"
+            )
+        }
+        _ => {}
     }
 }

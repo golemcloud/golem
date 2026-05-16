@@ -1453,6 +1453,47 @@ fn scala_round_trip_unstructured_text_inline_no_lang() {
     assert_eq!(data_value, parsed);
 }
 
+// JSON-style record literals (with quoted keys) are not accepted by any of the
+// per-language parsers — a clear, actionable error message must be produced.
+fn assert_helpful_error_for_json_style_record_keys(language: SourceLanguage) {
+    let schema = cm_schema(AnalysedType::Record(TypeRecord {
+        name: Some("my-record".to_string()),
+        owner: None,
+        fields: vec![NameTypePair {
+            name: "order-id".to_string(),
+            typ: AnalysedType::Str(TypeStr),
+        }],
+    }));
+    // JSON form (quoted key) — invalid; record fields use unquoted keys.
+    let rendered = "{\"orderId\": \"abc\"}";
+    let err = parse_agent_id_params(rendered, &schema, &language)
+        .expect_err("JSON-style record literal must fail to parse");
+    let message = err.to_string();
+    assert!(
+        message.contains("quoted string \"orderId\""),
+        "error should mention the quoted string, got: {message}"
+    );
+    assert!(
+        message.contains("unquoted keys"),
+        "error should suggest unquoted keys, got: {message}"
+    );
+}
+
+#[test]
+fn ts_helpful_error_for_json_style_record_keys() {
+    assert_helpful_error_for_json_style_record_keys(SourceLanguage::TypeScript);
+}
+
+#[test]
+fn rust_helpful_error_for_json_style_record_keys() {
+    assert_helpful_error_for_json_style_record_keys(SourceLanguage::Rust);
+}
+
+#[test]
+fn moonbit_helpful_error_for_json_style_record_keys() {
+    assert_helpful_error_for_json_style_record_keys(SourceLanguage::MoonBit);
+}
+
 // Scala property-based round-trips
 
 proptest! {

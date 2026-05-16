@@ -100,12 +100,27 @@ do_idempotent_work()
 
 ## Idempotence Mode
 
-Control whether HTTP requests are retried when the result is uncertain. Use `with_idempotence_mode` for scoped control:
+> **Default: `true`.** Every outgoing HTTP request — including `POST`, `PUT`, `PATCH`, and
+> `DELETE` — is treated as idempotent. This means status-code-keyed retry policies (see
+> `golem-retry-policies-moonbit`) **already work out of the box for `POST` requests**. You do
+> **not** need to wrap a `POST` in `@api.with_idempotence_mode(true, ...)` to make it retriable
+> on a 5xx — that is the default.
+
+Use `@api.with_idempotence_mode(false, ...)` only when you need to **opt out** for a specific
+call. The flag controls how `WriteRemote` host functions are replayed when their previous
+attempt's outcome is unknown after a crash:
+
+- `true` (default): assume the previous attempt succeeded; do **not** re-invoke on replay.
+  Combined with the host-side retry machinery, the request can be transparently re-sent when a
+  matching retry policy fires.
+- `false`: do **not** assume success; the worker traps so a higher-level retry decides what to
+  do. Use this for non-idempotent side effects whose accidental duplication would be more harmful
+  than missing the call entirely.
 
 ```moonbit
+// Opt OUT of the default — at-most-once semantics for this non-idempotent call.
 fn make_payment(amount : Double) -> String {
   @api.with_idempotence_mode(false, fn() {
-    // At-most-once semantics for this non-idempotent call
     charge_payment(amount)
   })
 }

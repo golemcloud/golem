@@ -197,25 +197,27 @@ pub const RETRY_POLICY_LONG: &str = "Retry policy as JSON or YAML.
 
 A policy is a composable strategy describing how (and how long) to retry. It
 is encoded as a single-key object whose key is the policy kind. Keys are
-camelCase. Durations use Rust's std::time::Duration JSON form:
+camelCase. Durations accept either a humantime string (preferred):
+  \"200ms\", \"5s\", \"1m\", \"500us\"
+or the Rust std::time::Duration struct form:
   { \"secs\": <u64>, \"nanos\": <u32> }
 
 Leaf strategies:
   \"immediate\"                              # retry with zero delay
   \"never\"                                  # give up on first failure
-  { \"periodic\":    { \"secs\": 1, \"nanos\": 0 } }
-  { \"exponential\": { \"baseDelay\": { \"secs\": 1, \"nanos\": 0 }, \"factor\": 2.0 } }
-  { \"fibonacci\":   { \"first\":     { \"secs\": 1, \"nanos\": 0 },
-                     \"second\":    { \"secs\": 1, \"nanos\": 0 } } }
+  { \"periodic\":    \"1s\" }
+  { \"exponential\": { \"baseDelay\": \"1s\", \"factor\": 2.0 } }
+  { \"fibonacci\":   { \"first\":     \"1s\",
+                     \"second\":    \"1s\" } }
 
 Bounding wrappers (limit how long retries continue):
   { \"countBox\": { \"maxRetries\": 5, \"inner\": <policy> } }
-  { \"timeBox\":  { \"limit\": { \"secs\": 30, \"nanos\": 0 }, \"inner\": <policy> } }
+  { \"timeBox\":  { \"limit\": \"30s\", \"inner\": <policy> } }
 
 Delay-shaping wrappers:
-  { \"clamp\":    { \"minDelay\": {..}, \"maxDelay\": {..}, \"inner\": <policy> } }
-  { \"addDelay\": { \"delay\":    {..},                     \"inner\": <policy> } }
-  { \"jitter\":   { \"factor\":   0.1,                      \"inner\": <policy> } }
+  { \"clamp\":    { \"minDelay\": <duration>, \"maxDelay\": <duration>, \"inner\": <policy> } }
+  { \"addDelay\": { \"delay\":    <duration>,                          \"inner\": <policy> } }
+  { \"jitter\":   { \"factor\":   0.1,                                 \"inner\": <policy> } }
 
 Conditional wrapper (see --predicate for the predicate grammar):
   { \"filteredOn\": { \"predicate\": <predicate>, \"inner\": <policy> } }
@@ -233,19 +235,19 @@ Examples:
         maxRetries: 10
         inner:
           clamp:
-            minDelay: { secs: 0, nanos: 0 }
-            maxDelay: { secs: 30, nanos: 0 }
+            minDelay: 0s
+            maxDelay: 30s
             inner:
               exponential:
-                baseDelay: { secs: 1, nanos: 0 }
+                baseDelay: 1s
                 factor: 2.0
     '
 
   JSON, give up after 1 minute or 5 attempts, whichever comes first:
     --policy '{
       \"intersect\": [
-        { \"timeBox\":  { \"limit\":      { \"secs\": 60, \"nanos\": 0 }, \"inner\": \"immediate\" } },
-        { \"countBox\": { \"maxRetries\": 5,                              \"inner\": \"immediate\" } }
+        { \"timeBox\":  { \"limit\":      \"60s\", \"inner\": \"immediate\" } },
+        { \"countBox\": { \"maxRetries\": 5,      \"inner\": \"immediate\" } }
       ]
     }'
 
@@ -253,7 +255,7 @@ Examples:
     --policy '{
       \"filteredOn\": {
         \"predicate\": { \"propEq\": { \"property\": \"error.kind\", \"value\": \"Timeout\" } },
-        \"inner\": { \"periodic\": { \"secs\": 1, \"nanos\": 0 } }
+        \"inner\": { \"periodic\": \"1s\" }
       }
     }'";
 

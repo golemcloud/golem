@@ -36,7 +36,7 @@ test "error: catch-all in mount" {
     let agents = @lib.parse_agents([("file.mbt", content)])
     @lib.validate_http_routes(agents)
   })
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("Mount path for agent 'FileAgent' cannot contain catch-all variable 'rest'"))
@@ -60,7 +60,7 @@ test "error: mount variable not in constructor params" {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("Mount path variable 'id' not found in constructor params of agent 'ItemAgent'"))
@@ -85,7 +85,7 @@ test "error: constructor param not bound by mount variable" {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("Constructor param 'category' of agent 'ItemAgent' is not bound by any mount path variable"))
@@ -114,7 +114,7 @@ test "error: method has endpoint but agent has no mount" {
     let agents = @lib.parse_agents([("counter.mbt", content)])
     @lib.validate_http_routes(agents)
   })
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("Method 'get_value' has #derive.endpoint but agent 'Counter' has no #derive.mount"))
@@ -143,7 +143,7 @@ test "error: endpoint variable not in method params" {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("Endpoint variable 'id' not found in params of method 'get_detail' on agent 'ItemAgent'"))
@@ -172,7 +172,7 @@ test "error: endpoint variable binds to Principal param" {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("Endpoint variable 'user' in method 'get_by_user' on agent 'ItemAgent' binds to a Principal param which is not HTTP-safe"))
@@ -203,7 +203,7 @@ test "error: duplicate header name" {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("Duplicate header name 'x-token' in endpoint of method 'get_info' on agent 'ItemAgent'"))
@@ -232,7 +232,7 @@ test "error: duplicate param binding in path and query" {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("Parameter 'query' of method 'search' on agent 'ItemAgent' is bound by multiple endpoint variables"))
@@ -256,7 +256,7 @@ test "error: UnstructuredText constructor param bound to mount path variable" {
     let agents = @lib.parse_agents([("text.mbt", content)])
     @lib.validate_http_routes(agents)
   })
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("Constructor param 'body' of agent 'TextAgent' is UnstructuredText and cannot be a mount path variable"))
@@ -285,7 +285,7 @@ test "error: endpoint variable binds to UnstructuredText param" {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
-  inspect(
+  debug_inspect(
     result,
     content=(
       #|Err(AgentParseError("Endpoint variable 'body' in method 'get_by_text' on agent 'ItemAgent' binds to a UnstructuredText param which is not HTTP-safe"))

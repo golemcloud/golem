@@ -531,10 +531,49 @@ impl<'de> Deserialize<'de> for Predicate {
     }
 }
 
+/// Deserializes a [`Duration`] from either a humantime string (e.g. `"200ms"`,
+/// `"5s"`, `"1m"`) or the canonical Rust `{ "secs": <u64>, "nanos": <u32> }`
+/// struct form. Both forms are accepted in JSON and YAML retry policy
+/// payloads. The struct form is used when serializing.
+fn deserialize_duration_humantime_or_struct<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum DurationRepr {
+        Humantime(String),
+        // Use the default `Duration` representation here: `{ secs, nanos }`.
+        Struct(Duration),
+    }
+
+    match DurationRepr::deserialize(deserializer)? {
+        DurationRepr::Humantime(s) => humantime::parse_duration(&s)
+            .map_err(|e| serde::de::Error::custom(format!("invalid duration string {s:?}: {e}"))),
+        DurationRepr::Struct(d) => Ok(d),
+    }
+}
+
+/// Same as [`deserialize_duration_humantime_or_struct`] but operates on an
+/// already-extracted [`JsonValue`] payload, used by the `RetryPolicy::Periodic`
+/// branch which deserializes the payload directly as a `Duration` rather than
+/// through a struct field.
+fn deserialize_duration_value_humantime_or_struct(value: JsonValue) -> Result<Duration, String> {
+    match value {
+        JsonValue::String(s) => {
+            humantime::parse_duration(&s).map_err(|e| format!("invalid duration string {s:?}: {e}"))
+        }
+        other => serde_json::from_value::<Duration>(other).map_err(|e| e.to_string()),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExponentialPayload {
-    #[serde(alias = "base_delay")]
+    #[serde(
+        alias = "base_delay",
+        deserialize_with = "deserialize_duration_humantime_or_struct"
+    )]
     base_delay: Duration,
     factor: f64,
 }
@@ -542,7 +581,9 @@ struct ExponentialPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FibonacciPayload {
+    #[serde(deserialize_with = "deserialize_duration_humantime_or_struct")]
     first: Duration,
+    #[serde(deserialize_with = "deserialize_duration_humantime_or_struct")]
     second: Duration,
 }
 
@@ -557,6 +598,7 @@ struct CountBoxPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TimeBoxPayload {
+    #[serde(deserialize_with = "deserialize_duration_humantime_or_struct")]
     limit: Duration,
     inner: RetryPolicy,
 }
@@ -564,9 +606,15 @@ struct TimeBoxPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClampPayload {
-    #[serde(alias = "min_delay")]
+    #[serde(
+        alias = "min_delay",
+        deserialize_with = "deserialize_duration_humantime_or_struct"
+    )]
     min_delay: Duration,
-    #[serde(alias = "max_delay")]
+    #[serde(
+        alias = "max_delay",
+        deserialize_with = "deserialize_duration_humantime_or_struct"
+    )]
     max_delay: Duration,
     inner: RetryPolicy,
 }
@@ -574,6 +622,7 @@ struct ClampPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AddDelayPayload {
+    #[serde(deserialize_with = "deserialize_duration_humantime_or_struct")]
     delay: Duration,
     inner: RetryPolicy,
 }
@@ -726,7 +775,7 @@ impl RetryPolicy {
                 let (kind, payload) = take_single_key_object(value)?;
                 match kind.as_str() {
                     "periodic" => Ok(Self::Periodic(
-                        serde_json::from_value(payload)
+                        deserialize_duration_value_humantime_or_struct(payload)
                             .map_err(|e| format!("Invalid periodic payload: {e}"))?,
                     )),
                     "exponential" => {
@@ -906,6 +955,32 @@ impl RetryPolicyState {
             }
             RetryPolicyState::Pair(left, right) => left.retry_count().max(right.retry_count()),
         }
+    }
+
+    /// Wraps this state in an exhausted marker while preserving its retry count.
+    pub fn exhausted(self) -> RetryPolicyState {
+        if self.retry_count() == 0 {
+            RetryPolicyState::Terminal
+        } else {
+            RetryPolicyState::AndThen {
+                left: Box::new(self),
+                right: Box::new(RetryPolicyState::Terminal),
+                on_right: true,
+            }
+        }
+    }
+
+    /// Returns whether this state marks a retry policy that has already given up.
+    pub fn is_exhausted(&self) -> bool {
+        matches!(self, RetryPolicyState::Terminal)
+            || matches!(
+                self,
+                RetryPolicyState::AndThen {
+                    right,
+                    on_right: true,
+                    ..
+                } if matches!(**right, RetryPolicyState::Terminal)
+            )
     }
 }
 
@@ -1226,9 +1301,177 @@ impl Predicate {
             Predicate::False => Ok(false),
         }
     }
+
+    /// Evaluates this predicate while treating missing properties as a non-match.
+    ///
+    /// Unlike wrapping [`Predicate::matches`] and mapping a top-level
+    /// [`RetryEvaluationError::PropertyNotFound`] to `false`, this is recursive so
+    /// compound predicates can still match on branches whose properties are present.
+    /// For example, `Or(missing_property, matching_property)` still matches, while
+    /// `And(missing_property, matching_property)` does not. A missing property under
+    /// `Not` remains a non-match, so `Not(status-code == 500)` does not accidentally
+    /// select a status-code policy in contexts that do not have `status-code`.
+    pub fn matches_treating_missing_properties_as_false(
+        &self,
+        props: &RetryProperties,
+    ) -> Result<bool, RetryEvaluationError> {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum LenientMatch {
+            Matched,
+            NotMatched,
+            MissingProperty,
+        }
+
+        fn evaluate(
+            predicate: &Predicate,
+            props: &RetryProperties,
+        ) -> Result<LenientMatch, RetryEvaluationError> {
+            match predicate {
+                Predicate::And(left, right) => {
+                    match (evaluate(left, props)?, evaluate(right, props)?) {
+                        (LenientMatch::Matched, LenientMatch::Matched) => Ok(LenientMatch::Matched),
+                        (LenientMatch::MissingProperty, _) | (_, LenientMatch::MissingProperty) => {
+                            Ok(LenientMatch::MissingProperty)
+                        }
+                        _ => Ok(LenientMatch::NotMatched),
+                    }
+                }
+                Predicate::Or(left, right) => {
+                    match (evaluate(left, props)?, evaluate(right, props)?) {
+                        (LenientMatch::Matched, _) | (_, LenientMatch::Matched) => {
+                            Ok(LenientMatch::Matched)
+                        }
+                        (LenientMatch::MissingProperty, _) | (_, LenientMatch::MissingProperty) => {
+                            Ok(LenientMatch::MissingProperty)
+                        }
+                        _ => Ok(LenientMatch::NotMatched),
+                    }
+                }
+                Predicate::Not(inner) => match evaluate(inner, props)? {
+                    LenientMatch::Matched => Ok(LenientMatch::NotMatched),
+                    LenientMatch::NotMatched => Ok(LenientMatch::Matched),
+                    LenientMatch::MissingProperty => Ok(LenientMatch::MissingProperty),
+                },
+                other => match other.matches(props) {
+                    Ok(true) => Ok(LenientMatch::Matched),
+                    Ok(false) => Ok(LenientMatch::NotMatched),
+                    Err(RetryEvaluationError::PropertyNotFound { .. }) => {
+                        Ok(LenientMatch::MissingProperty)
+                    }
+                    Err(other) => Err(other),
+                },
+            }
+        }
+
+        Ok(evaluate(self, props)? == LenientMatch::Matched)
+    }
+
+    /// Returns `true` if this predicate explicitly references the given property name
+    /// anywhere in its tree.
+    ///
+    /// This is used by retry decision sites whose entire behavior depends on a policy
+    /// having opted into a specific property (e.g. HTTP status-code retries should only
+    /// consider policies whose predicate explicitly references `status-code`). Catch-all
+    /// predicates such as [`Predicate::True`] return `false` because they do not
+    /// reference any property.
+    pub fn references_property(&self, name: &str) -> bool {
+        match self {
+            Predicate::PropEq { property, .. }
+            | Predicate::PropNeq { property, .. }
+            | Predicate::PropGt { property, .. }
+            | Predicate::PropGte { property, .. }
+            | Predicate::PropLt { property, .. }
+            | Predicate::PropLte { property, .. }
+            | Predicate::PropExists(property)
+            | Predicate::PropIn { property, .. }
+            | Predicate::PropMatches { property, .. }
+            | Predicate::PropStartsWith { property, .. }
+            | Predicate::PropContains { property, .. } => property == name,
+            Predicate::And(left, right) | Predicate::Or(left, right) => {
+                left.references_property(name) || right.references_property(name)
+            }
+            Predicate::Not(inner) => inner.references_property(name),
+            Predicate::True | Predicate::False => false,
+        }
+    }
 }
 
 impl RetryPolicy {
+    /// Returns `true` if any nested predicate inside this policy explicitly references
+    /// the given property name.
+    ///
+    /// Mirrors [`Predicate::references_property`] but recurses through retry-policy
+    /// combinators that carry predicates (currently [`RetryPolicy::FilteredOn`]) and
+    /// through structural wrappers that hold an `inner` policy. This lets retry-decision
+    /// sites that are gated on explicit property opt-in (e.g. HTTP status-code retries)
+    /// also recognize policies whose status-code logic is encoded inside `FilteredOn`
+    /// rather than in the [`NamedRetryPolicy`] selector predicate.
+    pub fn references_property(&self, name: &str) -> bool {
+        match self {
+            RetryPolicy::Periodic(_)
+            | RetryPolicy::Exponential { .. }
+            | RetryPolicy::Fibonacci { .. }
+            | RetryPolicy::Immediate
+            | RetryPolicy::Never => false,
+            RetryPolicy::CountBox { inner, .. }
+            | RetryPolicy::TimeBox { inner, .. }
+            | RetryPolicy::Clamp { inner, .. }
+            | RetryPolicy::AddDelay { inner, .. }
+            | RetryPolicy::Jitter { inner, .. } => inner.references_property(name),
+            RetryPolicy::FilteredOn { predicate, inner } => {
+                predicate.references_property(name) || inner.references_property(name)
+            }
+            RetryPolicy::AndThen(left, right)
+            | RetryPolicy::Union(left, right)
+            | RetryPolicy::Intersect(left, right) => {
+                left.references_property(name) || right.references_property(name)
+            }
+        }
+    }
+
+    /// Returns whether this policy body is applicable in the given retry context,
+    /// treating missing properties in [`RetryPolicy::FilteredOn`] predicates as a
+    /// non-match.
+    ///
+    /// This is intentionally separate from [`RetryPolicy::step`], which remains
+    /// strict and reports missing properties as evaluation errors. It is used by
+    /// retry-policy selection sites that need to skip policies that cannot apply
+    /// to the current context before committing to a single named policy.
+    pub fn applicable_treating_missing_properties_as_no_match(
+        &self,
+        properties: &RetryProperties,
+    ) -> Result<bool, RetryEvaluationError> {
+        match self {
+            RetryPolicy::Periodic(_)
+            | RetryPolicy::Exponential { .. }
+            | RetryPolicy::Fibonacci { .. }
+            | RetryPolicy::Immediate
+            | RetryPolicy::Never => Ok(true),
+            RetryPolicy::CountBox { inner, .. } => {
+                inner.applicable_treating_missing_properties_as_no_match(properties)
+            }
+            RetryPolicy::TimeBox { inner, .. }
+            | RetryPolicy::Clamp { inner, .. }
+            | RetryPolicy::AddDelay { inner, .. }
+            | RetryPolicy::Jitter { inner, .. } => {
+                inner.applicable_treating_missing_properties_as_no_match(properties)
+            }
+            RetryPolicy::FilteredOn { predicate, inner } => {
+                if predicate.matches_treating_missing_properties_as_false(properties)? {
+                    inner.applicable_treating_missing_properties_as_no_match(properties)
+                } else {
+                    Ok(false)
+                }
+            }
+            RetryPolicy::AndThen(left, right) | RetryPolicy::Union(left, right) => Ok(left
+                .applicable_treating_missing_properties_as_no_match(properties)?
+                || right.applicable_treating_missing_properties_as_no_match(properties)?),
+            RetryPolicy::Intersect(left, right) => Ok(left
+                .applicable_treating_missing_properties_as_no_match(properties)?
+                && right.applicable_treating_missing_properties_as_no_match(properties)?),
+        }
+    }
+
     /// Returns the initial [`RetryPolicyState`] for this policy (zero attempts, not yet started).
     pub fn initial_state(&self) -> RetryPolicyState {
         match self {
@@ -1520,6 +1763,67 @@ impl NamedRetryPolicy {
 
         for policy in ordered {
             if policy.predicate.matches(properties)? {
+                return Ok(Some(policy));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Like [`resolve`], but treats [`RetryEvaluationError::PropertyNotFound`] as a
+    /// non-match instead of a hard error.
+    ///
+    /// This is intended for retry decision sites whose context only exposes a subset of
+    /// retry properties (for example, the WASM trap path does not populate
+    /// `status-code`). A user policy keyed on a property that does not exist in the
+    /// current context should be silently skipped — it cannot apply here by definition
+    /// — rather than producing a confusing "property not found" error in logs.
+    ///
+    /// Other evaluation errors (such as type-coercion failures) are still propagated.
+    ///
+    /// [`resolve`]: NamedRetryPolicy::resolve
+    pub fn resolve_treating_missing_properties_as_no_match<'a>(
+        policies: &'a [NamedRetryPolicy],
+        properties: &RetryProperties,
+    ) -> Result<Option<&'a NamedRetryPolicy>, RetryEvaluationError> {
+        let mut ordered = policies.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|p| std::cmp::Reverse(p.priority));
+
+        for policy in ordered {
+            match policy.predicate.matches(properties) {
+                Ok(true) => return Ok(Some(policy)),
+                Ok(false) => continue,
+                Err(RetryEvaluationError::PropertyNotFound { .. }) => continue,
+                Err(other) => return Err(other),
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Like [`resolve_treating_missing_properties_as_no_match`], but also
+    /// considers [`RetryPolicy::FilteredOn`] predicates in the policy body as
+    /// applicability filters.
+    ///
+    /// This is intended for retry decision sites where a single selected named
+    /// policy is evaluated afterwards, but user policies may encode contextual
+    /// conditions either in the named selector predicate or in `FilteredOn`
+    /// wrappers inside the policy body.
+    pub fn resolve_applicable_treating_missing_properties_as_no_match<'a>(
+        policies: &'a [NamedRetryPolicy],
+        properties: &RetryProperties,
+    ) -> Result<Option<&'a NamedRetryPolicy>, RetryEvaluationError> {
+        let mut ordered = policies.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|p| std::cmp::Reverse(p.priority));
+
+        for policy in ordered {
+            if policy
+                .predicate
+                .matches_treating_missing_properties_as_false(properties)?
+                && policy
+                    .policy
+                    .applicable_treating_missing_properties_as_no_match(properties)?
+            {
                 return Ok(Some(policy));
             }
         }
@@ -2341,10 +2645,14 @@ fn scale_duration(duration: Duration, factor: f64) -> Duration {
     let value = base * factor;
 
     if !value.is_finite() {
-        Duration::MAX
-    } else {
-        Duration::from_secs_f64(value.min(Duration::MAX.as_secs_f64()))
+        return Duration::MAX;
     }
+
+    // `Duration::from_secs_f64` panics if the value overflows `Duration`'s representation,
+    // and `Duration::MAX.as_secs_f64()` rounds up to `2^64` (just past `u64::MAX`), so
+    // clamping with `value.min(Duration::MAX.as_secs_f64())` is not safe. Use the
+    // non-panicking variant and saturate to `Duration::MAX` on overflow.
+    Duration::try_from_secs_f64(value).unwrap_or(Duration::MAX)
 }
 
 fn saturating_add_duration(left: Duration, right: Duration) -> Duration {
@@ -3291,6 +3599,37 @@ mod tests {
     }
 
     #[test]
+    fn exponential_strategy_saturates_for_large_counters() {
+        // Regression test: with `Policy::exponential(1s, 2.0).clamp(500ms, 10s)` retried
+        // forever, after ~64 attempts the unclamped exponential delay overflowed
+        // `Duration::MAX.as_secs_f64()` and `Duration::from_secs_f64` panicked before
+        // the surrounding clamp could be applied.
+        let policy = RetryPolicy::Clamp {
+            min_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(10),
+            inner: Box::new(RetryPolicy::Exponential {
+                base_delay: Duration::from_secs(1),
+                factor: 2.0,
+            }),
+        };
+        let mut state = policy.initial_state();
+        let mut rng = FixedRng(0.0);
+        let props = RetryProperties::new();
+
+        for _ in 0..2_000 {
+            let (new_state, verdict) = policy.step(&state, Duration::ZERO, &props, &mut rng);
+            state = new_state;
+            match verdict {
+                RetryVerdict::Retry(delay) => {
+                    assert!(delay >= Duration::from_millis(500));
+                    assert!(delay <= Duration::from_secs(10));
+                }
+                other => panic!("expected retry verdict, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn fibonacci_strategy_scales_delay() {
         let policy = RetryPolicy::Fibonacci {
             first: Duration::from_millis(5),
@@ -3509,6 +3848,126 @@ mod tests {
     }
 
     #[test]
+    fn predicate_references_property_detects_explicit_reference() {
+        // Direct leaf reference
+        assert!(
+            Predicate::PropEq {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(500),
+            }
+            .references_property("status-code")
+        );
+        assert!(
+            Predicate::PropExists("status-code".to_string()).references_property("status-code")
+        );
+        assert!(
+            Predicate::PropIn {
+                property: "status-code".to_string(),
+                values: vec![PredicateValue::Integer(500), PredicateValue::Integer(503)],
+            }
+            .references_property("status-code")
+        );
+
+        // Different property — does not reference
+        assert!(
+            !Predicate::PropEq {
+                property: "error-type".to_string(),
+                value: PredicateValue::Text("transient".to_string()),
+            }
+            .references_property("status-code")
+        );
+
+        // Catch-all predicates do not reference any property
+        assert!(!Predicate::True.references_property("status-code"));
+        assert!(!Predicate::False.references_property("status-code"));
+    }
+
+    #[test]
+    fn predicate_references_property_traverses_composites() {
+        let status_eq = Predicate::PropEq {
+            property: "status-code".to_string(),
+            value: PredicateValue::Integer(500),
+        };
+        let error_eq = Predicate::PropEq {
+            property: "error-type".to_string(),
+            value: PredicateValue::Text("transient".to_string()),
+        };
+
+        // And/Or detect references in either side
+        assert!(
+            Predicate::And(Box::new(status_eq.clone()), Box::new(error_eq.clone()))
+                .references_property("status-code")
+        );
+        assert!(
+            Predicate::Or(Box::new(error_eq.clone()), Box::new(status_eq.clone()))
+                .references_property("status-code")
+        );
+
+        // Not detects reference inside negated predicate
+        assert!(Predicate::Not(Box::new(status_eq.clone())).references_property("status-code"));
+
+        // Composite of catch-all + unrelated property does not reference
+        assert!(
+            !Predicate::And(Box::new(Predicate::True), Box::new(error_eq.clone()))
+                .references_property("status-code")
+        );
+        assert!(
+            !Predicate::Or(Box::new(error_eq.clone()), Box::new(Predicate::True))
+                .references_property("status-code")
+        );
+    }
+
+    #[test]
+    fn retry_policy_references_property_recurses_through_policy_combinators() {
+        let status_eq = Predicate::PropEq {
+            property: "status-code".to_string(),
+            value: PredicateValue::Integer(503),
+        };
+        let inner = RetryPolicy::Periodic(Duration::from_millis(100));
+
+        // FilteredOn carries a predicate
+        let filtered = RetryPolicy::FilteredOn {
+            predicate: status_eq.clone(),
+            inner: Box::new(inner.clone()),
+        };
+        assert!(filtered.references_property("status-code"));
+        assert!(!filtered.references_property("error-type"));
+
+        // Wrapping combinators recurse into inner
+        let wrapped = RetryPolicy::CountBox {
+            max_retries: 3,
+            inner: Box::new(filtered.clone()),
+        };
+        assert!(wrapped.references_property("status-code"));
+
+        let wrapped2 = RetryPolicy::TimeBox {
+            limit: Duration::from_secs(1),
+            inner: Box::new(filtered.clone()),
+        };
+        assert!(wrapped2.references_property("status-code"));
+
+        // Binary combinators recurse into both sides
+        let union = RetryPolicy::Union(
+            Box::new(RetryPolicy::Periodic(Duration::from_millis(50))),
+            Box::new(filtered.clone()),
+        );
+        assert!(union.references_property("status-code"));
+
+        // Pure delay/timing policies have no predicate references
+        assert!(
+            !RetryPolicy::Periodic(Duration::from_millis(100)).references_property("status-code")
+        );
+        assert!(
+            !RetryPolicy::Exponential {
+                base_delay: Duration::from_millis(100),
+                factor: 2.0,
+            }
+            .references_property("status-code")
+        );
+        assert!(!RetryPolicy::Never.references_property("status-code"));
+    }
+
+    #[test]
     fn coercion_supports_text_integer_and_rejects_boolean_to_integer() {
         let mut props = RetryProperties::new();
         props.set("attempt", PredicateValue::Text("42".to_string()));
@@ -3649,6 +4108,272 @@ mod tests {
         let no_match = NamedRetryPolicy::resolve(&no_match_policies, &props)
             .expect("resolution should succeed");
         assert!(no_match.is_none());
+    }
+
+    #[test]
+    fn resolve_treating_missing_properties_as_no_match_skips_property_not_found() {
+        // A status-code-keyed policy that would normally apply to outgoing HTTP
+        // responses, plus a fallback policy keyed on the trap context.
+        let status_code_policy = NamedRetryPolicy {
+            name: "http-5xx".to_string(),
+            priority: 100,
+            predicate: Predicate::PropEq {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(500),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+        let trap_policy = NamedRetryPolicy {
+            name: "trap-fallback".to_string(),
+            priority: 10,
+            predicate: Predicate::PropEq {
+                property: "trap-type".to_string(),
+                value: PredicateValue::Text("transient-error".to_string()),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+
+        let policies = vec![status_code_policy.clone(), trap_policy.clone()];
+
+        // Trap context: only `trap-type` is populated, no `status-code`.
+        let mut trap_props = RetryProperties::new();
+        trap_props.set(
+            "trap-type",
+            PredicateValue::Text("transient-error".to_string()),
+        );
+
+        // The strict resolver errors because `status-code` is referenced but missing.
+        let strict = NamedRetryPolicy::resolve(&policies, &trap_props);
+        assert!(matches!(
+            strict,
+            Err(RetryEvaluationError::PropertyNotFound { ref property }) if property == "status-code"
+        ));
+
+        // The lenient resolver skips the status-code policy and selects the trap one.
+        let resolved = NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(
+            &policies,
+            &trap_props,
+        )
+        .expect("resolution should succeed")
+        .expect("trap-fallback policy should be selected");
+        assert_eq!(resolved.name, "trap-fallback");
+
+        // When no policy matches and missing properties are skipped, returns None
+        // instead of an error.
+        let unmatched_props = RetryProperties::new();
+        let resolved = NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(
+            &policies,
+            &unmatched_props,
+        )
+        .expect("resolution should succeed");
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_applicable_treating_missing_properties_skips_policy_body_property_references() {
+        // Status-code retry policies can encode their status predicate inside
+        // the policy body rather than in the named-policy selector. Trap
+        // recovery has no `status-code` property, so this policy cannot apply
+        // there and must be skipped in favour of the trap/default fallback.
+        let status_code_policy = NamedRetryPolicy {
+            name: "http-5xx-filtered-body".to_string(),
+            priority: 100,
+            predicate: Predicate::True,
+            policy: RetryPolicy::FilteredOn {
+                predicate: Predicate::PropEq {
+                    property: "status-code".to_string(),
+                    value: PredicateValue::Integer(500),
+                },
+                inner: Box::new(RetryPolicy::Immediate),
+            },
+        };
+        let trap_policy = NamedRetryPolicy {
+            name: "trap-fallback".to_string(),
+            priority: 10,
+            predicate: Predicate::PropEq {
+                property: "trap-type".to_string(),
+                value: PredicateValue::Text("transient-error".to_string()),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+
+        let mut trap_props = RetryProperties::new();
+        trap_props.set(
+            "trap-type",
+            PredicateValue::Text("transient-error".to_string()),
+        );
+
+        let policies = vec![status_code_policy, trap_policy];
+        let resolved =
+            NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
+                &policies,
+                &trap_props,
+            )
+            .expect("resolution should succeed")
+            .expect("trap fallback should be selected when status-code is missing");
+
+        assert_eq!(resolved.name, "trap-fallback");
+    }
+
+    #[test]
+    fn lenient_predicate_not_missing_property_does_not_match() {
+        let predicate = Predicate::Not(Box::new(Predicate::PropEq {
+            property: "status-code".to_string(),
+            value: PredicateValue::Integer(500),
+        }));
+
+        assert!(
+            !predicate
+                .matches_treating_missing_properties_as_false(&RetryProperties::new())
+                .expect("lenient predicate evaluation should succeed"),
+            "missing properties under Not must remain a no-match"
+        );
+
+        let mut props = RetryProperties::new();
+        props.set("status-code", PredicateValue::Integer(404));
+        assert!(
+            predicate
+                .matches_treating_missing_properties_as_false(&props)
+                .expect("lenient predicate evaluation should succeed"),
+            "Not should still match when the referenced property exists and does not match"
+        );
+    }
+
+    #[test]
+    fn resolve_treating_missing_properties_as_no_match_propagates_other_errors() {
+        // A predicate that would fail with a coercion error (text vs integer),
+        // not with PropertyNotFound. That kind of error must still surface.
+        let bad_policy = NamedRetryPolicy {
+            name: "type-mismatch".to_string(),
+            priority: 100,
+            predicate: Predicate::PropGt {
+                property: "verb".to_string(),
+                value: PredicateValue::Integer(0),
+            },
+            policy: RetryPolicy::Immediate,
+        };
+
+        let mut props = RetryProperties::new();
+        props.set("verb", PredicateValue::Text("trap".to_string()));
+
+        let resolved = NamedRetryPolicy::resolve_treating_missing_properties_as_no_match(
+            std::slice::from_ref(&bad_policy),
+            &props,
+        );
+        assert!(matches!(
+            resolved,
+            Err(RetryEvaluationError::CoercionFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn retry_policy_accepts_humantime_duration_strings() {
+        // Periodic — Duration is the bare payload (not inside a struct).
+        let json = r#"{ "periodic": "200ms" }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(parsed, RetryPolicy::Periodic(Duration::from_millis(200)));
+
+        // Exponential — Duration is a struct field with humantime form.
+        let json = r#"{ "exponential": { "baseDelay": "500ms", "factor": 2.0 } }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(
+            parsed,
+            RetryPolicy::Exponential {
+                base_delay: Duration::from_millis(500),
+                factor: 2.0,
+            }
+        );
+
+        // Clamp + nested exponential.
+        let json = r#"{
+            "clamp": {
+                "minDelay": "100ms",
+                "maxDelay": "5s",
+                "inner": { "exponential": { "baseDelay": "200ms", "factor": 2.0 } }
+            }
+        }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(
+            parsed,
+            RetryPolicy::Clamp {
+                min_delay: Duration::from_millis(100),
+                max_delay: Duration::from_secs(5),
+                inner: Box::new(RetryPolicy::Exponential {
+                    base_delay: Duration::from_millis(200),
+                    factor: 2.0,
+                }),
+            }
+        );
+
+        // Fibonacci.
+        let json = r#"{ "fibonacci": { "first": "1s", "second": "2s" } }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(
+            parsed,
+            RetryPolicy::Fibonacci {
+                first: Duration::from_secs(1),
+                second: Duration::from_secs(2),
+            }
+        );
+
+        // TimeBox.
+        let json = r#"{ "timeBox": { "limit": "30s", "inner": "immediate" } }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(
+            parsed,
+            RetryPolicy::TimeBox {
+                limit: Duration::from_secs(30),
+                inner: Box::new(RetryPolicy::Immediate),
+            }
+        );
+
+        // AddDelay.
+        let json = r#"{ "addDelay": { "delay": "750ms", "inner": "immediate" } }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse humantime");
+        assert_eq!(
+            parsed,
+            RetryPolicy::AddDelay {
+                delay: Duration::from_millis(750),
+                inner: Box::new(RetryPolicy::Immediate),
+            }
+        );
+    }
+
+    #[test]
+    fn retry_policy_still_accepts_struct_duration_form() {
+        // Both string and struct forms must be accepted to preserve backward
+        // compatibility with the Rust `Duration` JSON serialization.
+        let json = r#"{
+            "exponential": {
+                "baseDelay": { "secs": 1, "nanos": 500000000 },
+                "factor": 2.0
+            }
+        }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse struct form");
+        assert_eq!(
+            parsed,
+            RetryPolicy::Exponential {
+                base_delay: Duration::from_millis(1500),
+                factor: 2.0,
+            }
+        );
+
+        // Periodic struct form.
+        let json = r#"{ "periodic": { "secs": 1, "nanos": 0 } }"#;
+        let parsed: RetryPolicy = serde_json::from_str(json).expect("should parse struct form");
+        assert_eq!(parsed, RetryPolicy::Periodic(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn retry_policy_rejects_invalid_duration_string() {
+        let json = r#"{ "periodic": "definitely not a duration" }"#;
+        let result: Result<RetryPolicy, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("invalid duration string"),
+            "expected duration error, got: {err}"
+        );
     }
 
     #[test]

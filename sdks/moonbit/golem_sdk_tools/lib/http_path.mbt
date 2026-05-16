@@ -1,7 +1,7 @@
 ///|
 pub(all) struct PathSegmentInfo {
   kind : PathSegmentKind
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) enum PathSegmentKind {
@@ -9,24 +9,24 @@ pub(all) enum PathSegmentKind {
   PathVariable(String)
   RemainingPathVariable(String)
   SystemVariable(SystemVariableKind)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) enum SystemVariableKind {
   AgentType
   AgentVersion
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct QueryVarInfo {
   query_param_name : String
   variable_name : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub suberror HttpPathParseError {
   HttpPathParseError(String)
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Parses an HTTP path and query string into structured segments and query variables.

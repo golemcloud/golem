@@ -5,7 +5,7 @@
 pub(all) struct Datetime {
   seconds : UInt64
   nanoseconds : UInt
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Read the current value of the clock.
