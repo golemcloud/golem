@@ -89,7 +89,7 @@ pub fn[T] with_atomic_operation(f : () -> T raise) -> T {
       result
     }
     Err(e) => {
-      @raw.trap("atomic block failed: " + e.to_string())
+      @raw.trap("atomic block failed: " + @debug.to_string(e))
       panic() // unreachable — trap host call must not return
     }
   }

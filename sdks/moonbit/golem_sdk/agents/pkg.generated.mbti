@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk/agents"
 import {
   "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -32,7 +33,7 @@ pub fn uuid_to_standard_string(@types.Uuid) -> String
 // Errors
 pub suberror JsonCodecError {
   JsonCodecError(String)
-} derive(Show)
+} derive(@debug.Debug)
 
 // Types and methods
 pub(all) struct AgentInstance {
@@ -59,7 +60,7 @@ pub(all) struct RegisteredAgent {
 pub(all) enum SnapshotFormat {
   Json
   Binary
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

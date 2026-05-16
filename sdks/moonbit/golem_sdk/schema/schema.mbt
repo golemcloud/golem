@@ -31,7 +31,7 @@ pub(all) struct TypeTag[T] {}
 pub(all) struct SchemaOptions {
   text_languages : Array[String]
   binary_mime_types : Array[String]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Returns the `ElementSchema` for a type given its `TypeTag`, without needing a value instance.

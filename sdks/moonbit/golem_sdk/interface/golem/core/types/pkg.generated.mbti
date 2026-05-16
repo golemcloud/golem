@@ -1,6 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/golem/core/types"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
 pub fn parse_uuid(String) -> Result[Uuid, String]
 
@@ -11,106 +15,106 @@ pub fn uuid_to_string(Uuid) -> String
 // Types and methods
 pub(all) struct AccountId {
   uuid : Uuid
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct AgentId {
   component_id : ComponentId
   agent_id : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct BinaryDescriptor {
   restrictions : Array[BinaryType]?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum BinaryReference {
   Url(String)
   Inline(BinarySource)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct BinarySource {
   data : FixedArray[Byte]
   binary_type : BinaryType
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct BinaryType {
   mime_type : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct ComponentId {
   uuid : Uuid
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum DataSchema {
   Tuple(Array[(String, ElementSchema)])
   Multimodal(Array[(String, ElementSchema)])
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum DataValue {
   Tuple(Array[ElementValue])
   Multimodal(Array[(String, ElementValue)])
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum ElementSchema {
   ComponentModel(WitType)
   UnstructuredText(TextDescriptor)
   UnstructuredBinary(BinaryDescriptor)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum ElementValue {
   ComponentModel(WitValue)
   UnstructuredText(TextReference)
   UnstructuredBinary(BinaryReference)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct NamedWitTypeNode {
   name : String?
   owner : String?
   type_ : WitTypeNode
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct PromiseId {
   agent_id : AgentId
   oplog_idx : UInt64
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum ResourceMode {
   OWNED
   BORROWED
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn ResourceMode::from(Int) -> Self
 pub fn ResourceMode::ordinal(Self) -> Int
 
 pub(all) struct TextDescriptor {
   restrictions : Array[TextType]?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum TextReference {
   Url(String)
   Inline(TextSource)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct TextSource {
   data : String
   text_type : TextType?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct TextType {
   language_code : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct Uri {
   value : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct Uuid {
   high_bits : UInt64
   low_bits : UInt64
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct ValueAndType {
   value : WitValue
   typ : WitType
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum WitNode {
   RecordValue(Array[Int])
@@ -135,11 +139,11 @@ pub(all) enum WitNode {
   PrimBool(Bool)
   PrimString(String)
   Handle((Uri, UInt64))
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct WitType {
   nodes : Array[NamedWitTypeNode]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum WitTypeNode {
   RecordType(Array[(String, Int)])
@@ -164,11 +168,11 @@ pub(all) enum WitTypeNode {
   PrimBoolType
   PrimStringType
   HandleType((UInt64, ResourceMode))
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct WitValue {
   nodes : Array[WitNode]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

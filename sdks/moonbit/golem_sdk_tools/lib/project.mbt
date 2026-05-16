@@ -3,14 +3,14 @@
 pub(all) struct PackageInfo {
   rel_path : String
   dir : String
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Holds the scan results for a single package: its info and source files.
 pub(all) struct PackageScanResult {
   pkg : PackageInfo
   files : Array[(String, String)]
-} derive(Show)
+} derive(Debug)
 
 ///|
 /// Directories to skip during recursive package discovery.

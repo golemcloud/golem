@@ -5,7 +5,7 @@
 pub(all) suberror StreamError {
   LastOperationFailed(@error.Error_)
   Closed
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// An input bytestream.
@@ -16,7 +16,7 @@ pub(all) suberror StreamError {
 /// available, which could even be zero. To wait for data to be available,
 /// use the `subscribe` function to obtain a `pollable` which can be polled
 /// for using `wasi:io/poll`.
-pub(all) struct InputStream(Int) derive(Show, Eq)
+pub(all) struct InputStream(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -38,7 +38,7 @@ pub fn InputStream::drop(self : InputStream) -> Unit {
 /// Dropping an `output-stream` while there's still an active write in
 /// progress may result in the data being lost. Before dropping the stream,
 /// be sure to fully flush your writes.
-pub(all) struct OutputStream(Int) derive(Show, Eq)
+pub(all) struct OutputStream(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.

@@ -60,7 +60,7 @@ pub(open) trait Snapshottable {
 pub(all) enum SnapshotFormat {
   Json
   Binary
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Result of constructing an agent, containing the raw dispatch interface
