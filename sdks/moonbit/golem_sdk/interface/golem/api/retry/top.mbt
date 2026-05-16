@@ -7,25 +7,25 @@ pub(all) enum PredicateValue {
   Text(String)
   Integer(Int64)
   Boolean(Bool)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct PropertyComparison {
   property_name : String
   value : PredicateValue
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct PropertySetCheck {
   property_name : String
   values : Array[PredicateValue]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct PropertyPattern {
   property_name : String
   pattern : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) enum PredicateNode {
@@ -45,64 +45,64 @@ pub(all) enum PredicateNode {
   PredNot(Int)
   PredTrue
   PredFalse
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A composable predicate tree for matching retry contexts.
 /// Root is nodes[0]. Children referenced by predicate-node-index.
 pub(all) struct RetryPredicate {
   nodes : Array[PredicateNode]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct ExponentialConfig {
   base_delay : UInt64
   factor : Double
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct FibonacciConfig {
   first : UInt64
   second : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct CountBoxConfig {
   max_retries : UInt
   inner : Int
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct TimeBoxConfig {
   limit : UInt64
   inner : Int
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct ClampConfig {
   min_delay : UInt64
   max_delay : UInt64
   inner : Int
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct AddDelayConfig {
   delay : UInt64
   inner : Int
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct JitterConfig {
   factor : Double
   inner : Int
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// filtered-config embeds a full retry-predicate inline (self-contained)
 pub(all) struct FilteredConfig {
   predicate : RetryPredicate
   inner : Int
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) enum PolicyNode {
@@ -120,14 +120,14 @@ pub(all) enum PolicyNode {
   AndThen((Int, Int))
   PolicyUnion((Int, Int))
   PolicyIntersect((Int, Int))
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A composable retry policy tree.
 /// Root is nodes[0]. Children referenced by policy-node-index.
 pub(all) struct RetryPolicy {
   nodes : Array[PolicyNode]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// ── Named policy rule ────────────────────────────────────────────
@@ -139,7 +139,7 @@ pub(all) struct NamedRetryPolicy {
   priority : UInt
   predicate : RetryPredicate
   policy : RetryPolicy
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// ── Host functions ───────────────────────────────────────────────

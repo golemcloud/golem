@@ -5,7 +5,7 @@
 pub(all) suberror Error_ {
   Upstream(String)
   Io(String)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Gets a configuration value of type `string` associated with the `key`.

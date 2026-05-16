@@ -8,11 +8,11 @@ pub(all) suberror RpcError {
   NotFound(String)
   RemoteInternalError(String)
   RemoteAgentError(@common.AgentError)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// An RPC client for invoking remote agents
-pub(all) struct WasmRpc(Int) derive(Show, Eq)
+pub(all) struct WasmRpc(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -23,7 +23,7 @@ pub fn WasmRpc::drop(self : WasmRpc) -> Unit {
 
 ///|
 /// Represents a pollable invocation result
-pub(all) struct FutureInvokeResult(Int) derive(Show, Eq)
+pub(all) struct FutureInvokeResult(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -34,7 +34,7 @@ pub fn FutureInvokeResult::drop(self : FutureInvokeResult) -> Unit {
 
 ///|
 /// Cancellation token for scheduled invocations
-pub(all) struct CancellationToken(Int) derive(Show, Eq)
+pub(all) struct CancellationToken(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.

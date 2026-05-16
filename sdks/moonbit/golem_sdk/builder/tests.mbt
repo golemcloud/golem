@@ -1,7 +1,12 @@
 ///|
 test "primitive" {
   let wit_value = Builder::new().u64(11)
-  inspect(wit_value, content="{nodes: [PrimU64(11)]}")
+  debug_inspect(
+    wit_value,
+    content=(
+      #|{ nodes: [PrimU64(11)] }
+    ),
+  )
 }
 
 ///|
@@ -11,9 +16,18 @@ test "single_record" {
     builder.enum_value(2)
     builder.flags([true, false, true])
   })
-  inspect(
+  debug_inspect(
     wit_value,
-    content="{nodes: [RecordValue([1, 2, 3]), PrimU8(b'\\x01'), EnumValue(2), FlagsValue([true, false, true])]}",
+    content=(
+      #|{
+      #|  nodes: [
+      #|    RecordValue([1, 2, 3]),
+      #|    PrimU8(0x01),
+      #|    EnumValue(2),
+      #|    FlagsValue([true, false, true]),
+      #|  ],
+      #|}
+    ),
   )
 }
 
@@ -31,9 +45,22 @@ test "deep_record" {
       })
     })
   })
-  inspect(
+  debug_inspect(
     wit_value,
-    content="{nodes: [RecordValue([1]), ListValue([2, 5]), RecordValue([3, 4]), PrimS32(10), PrimS32(-11), RecordValue([6, 7]), PrimS32(100), PrimS32(200)]}",
+    content=(
+      #|{
+      #|  nodes: [
+      #|    RecordValue([1]),
+      #|    ListValue([2, 5]),
+      #|    RecordValue([3, 4]),
+      #|    PrimS32(10),
+      #|    PrimS32(-11),
+      #|    RecordValue([6, 7]),
+      #|    PrimS32(100),
+      #|    PrimS32(200),
+      #|  ],
+      #|}
+    ),
   )
 }
 
@@ -42,8 +69,10 @@ test "option" {
   let wit_value = Builder::new().option_some(builder => {
     builder.option_some(builder => builder.option_none())
   })
-  inspect(
+  debug_inspect(
     wit_value,
-    content="{nodes: [OptionValue(Some(1)), OptionValue(Some(2)), OptionValue(None)]}",
+    content=(
+      #|{ nodes: [OptionValue(Some(1)), OptionValue(Some(2)), OptionValue(None)] }
+    ),
   )
 }

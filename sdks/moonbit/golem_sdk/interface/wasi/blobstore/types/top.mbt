@@ -5,7 +5,7 @@
 pub(all) struct ContainerMetadata {
   name : String
   created_at : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// information about an object
@@ -14,21 +14,21 @@ pub(all) struct ObjectMetadata {
   container : String
   created_at : UInt64
   size : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// identifier for an object that includes its container name
 pub(all) struct ObjectId {
   container : String
   object : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A data is the data stored in a data blob. The value can be of any type
 /// that can be represented in a byte array. It provides a way to write the value
 /// to the output-stream defined in the `wasi-io` interface.
 /// Soon: switch to `resource value { ... }`
-pub(all) struct OutgoingValue(Int) derive(Show, Eq)
+pub(all) struct OutgoingValue(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
@@ -47,7 +47,7 @@ pub fn OutgoingValue::drop(self : OutgoingValue) -> Unit {
 /// 2. `incoming-value-consume-async` consumes the value asynchronously and returns the
 ///    value as an input-stream.
 /// Soon: switch to `resource incoming-value { ... }`
-pub(all) struct IncomingValue(Int) derive(Show, Eq)
+pub(all) struct IncomingValue(Int) derive(Debug, Eq)
 
 ///|
 /// Drops a resource handle.
