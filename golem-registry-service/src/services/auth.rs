@@ -15,10 +15,10 @@
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountBySecretRecord, AccountRepoError};
 use chrono::Utc;
-use golem_common::model::account::Account;
-use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::account::{Account, AccountId};
+use golem_common::model::auth::TokenSecret;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+use golem_service_base::model::auth::{AdminImpersonationAuthCtx, AuthCtx, UserAuthCtx};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tracing::warn;
@@ -51,7 +51,7 @@ impl AuthService {
         Self { account_repo }
     }
 
-    pub async fn authenticate_user(&self, token: TokenSecret) -> Result<UserAuthCtx, AuthError> {
+    pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
         let record: AccountBySecretRecord = self
             .account_repo
             .get_by_secret(token.secret())
@@ -64,19 +64,26 @@ impl AuthService {
             return Err(AuthError::CouldNotAuthenticate);
         };
 
-        let account: Account = record.value.try_into()?;
+        let target_account: Account = record.value.try_into()?;
 
-        let account_roles: BTreeSet<AccountRole> = BTreeSet::from_iter(account.roles.clone());
-
-        Ok(UserAuthCtx {
-            account_id: account.id,
-            account_roles,
-            account_plan_id: account.plan_id,
-        })
-    }
-
-    pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
-        let user = self.authenticate_user(token).await?;
-        Ok(AuthCtx::User(user))
+        match record.impersonated_by {
+            None => {
+                let account_roles = BTreeSet::from_iter(target_account.roles.clone());
+                Ok(AuthCtx::User(UserAuthCtx {
+                    account_id: target_account.id,
+                    account_roles,
+                    account_plan_id: target_account.plan_id,
+                }))
+            }
+            Some(admin_uuid) => {
+                let target_account_roles = BTreeSet::from_iter(target_account.roles.clone());
+                Ok(AuthCtx::AdminImpersonation(AdminImpersonationAuthCtx {
+                    admin_account_id: AccountId(admin_uuid),
+                    target_account_id: target_account.id,
+                    target_account_roles,
+                    target_account_plan_id: target_account.plan_id,
+                }))
+            }
+        }
     }
 }

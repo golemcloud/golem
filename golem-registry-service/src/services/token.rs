@@ -24,7 +24,7 @@ use golem_common::model::auth::TokenId;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::AccountAction;
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError, GlobalAction};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -176,7 +176,7 @@ impl TokenService {
         auth.authorize_account_action(account_id, AccountAction::CreateToken)?;
 
         let secret = TokenSecret::new();
-        self.create_known_secret(account_id, secret, expires_at)
+        self.create_known_secret(account_id, secret, expires_at, None)
             .await
     }
 
@@ -185,6 +185,7 @@ impl TokenService {
         account_id: AccountId,
         secret: TokenSecret,
         expires_at: DateTime<Utc>,
+        impersonated_by: Option<AccountId>,
     ) -> Result<TokenWithSecret, TokenError> {
         let created_at = Utc::now();
         let token_id = TokenId::new();
@@ -195,6 +196,7 @@ impl TokenService {
             account_id: account_id.0,
             created_at: created_at.into(),
             expires_at: expires_at.into(),
+            impersonated_by: impersonated_by.map(|id| id.0),
         };
 
         let record = self
@@ -215,11 +217,50 @@ impl TokenService {
                 .get_optional_by_secret(secret, &AuthCtx::System)
                 .await?;
             if existing.is_none() {
-                self.create_known_secret(*account_id, secret.clone(), DateTime::<Utc>::MAX_UTC)
-                    .await?;
+                self.create_known_secret(
+                    *account_id,
+                    secret.clone(),
+                    DateTime::<Utc>::MAX_UTC,
+                    None,
+                )
+                .await?;
             }
         }
         Ok(())
+    }
+
+    /// Create an impersonation token. Only admin users may call this.
+    /// The token's `account_id` is the target account; `impersonated_by` records the admin.
+    /// When this token is used for authentication the resulting `AuthCtx` is
+    /// `AdminImpersonation`, which uses the target account for access checks but the
+    /// admin account for audit writes.
+    pub async fn create_impersonation_token(
+        &self,
+        target_account_id: AccountId,
+        expires_at: DateTime<Utc>,
+        auth: &AuthCtx,
+    ) -> Result<TokenWithSecret, TokenError> {
+        auth.authorize_global_action(GlobalAction::ImpersonateUser)?;
+
+        // Verify the target account exists.
+        self.account_service
+            .get(target_account_id, &AuthCtx::System)
+            .await
+            .map_err(|err| match err {
+                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                    TokenError::ParentAccountNotFound(target_account_id)
+                }
+                other => other.into(),
+            })?;
+
+        let secret = TokenSecret::new();
+        self.create_known_secret(
+            target_account_id,
+            secret,
+            expires_at,
+            Some(auth.actor_account_id()),
+        )
+        .await
     }
 
     pub async fn delete(&self, token_id: TokenId, auth: &AuthCtx) -> Result<(), TokenError> {

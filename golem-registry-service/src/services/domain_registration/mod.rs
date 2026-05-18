@@ -99,7 +99,7 @@ impl DomainRegistrationService {
 
         let record = DomainRegistrationRecord::from_model(
             domain_registration,
-            ImmutableAuditFields::new(auth.account_id().0),
+            ImmutableAuditFields::new(auth.actor_account_id().0),
         );
 
         let created_record = self
@@ -136,7 +136,7 @@ impl DomainRegistrationService {
 
         let deleted_record = self
             .domain_registration_repo
-            .delete(domain_registration_id.0, auth.account_id().0)
+            .delete(domain_registration_id.0, auth.actor_account_id().0)
             .await?
             .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
                 domain_registration_id,

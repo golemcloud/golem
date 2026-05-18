@@ -402,7 +402,7 @@ impl DeploymentService {
         owner_account_email: Option<&str>,
         auth: &AuthCtx,
     ) -> Result<ResolvedAgentType, DeploymentError> {
-        let caller_account_id = auth.account_id();
+        let caller_account_id = auth.access_account_id();
 
         let record = self
             .deployment_repo

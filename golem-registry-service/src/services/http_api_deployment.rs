@@ -156,7 +156,7 @@ impl HttpApiDeploymentService {
                 data.openapi_endpoint_prefix,
             ),
             data.agents,
-            auth.account_id(),
+            auth.actor_account_id(),
         )?;
 
         let stored_http_api_deployment: HttpApiDeployment = self
@@ -235,7 +235,7 @@ impl HttpApiDeploymentService {
 
         let record = HttpApiDeploymentRevisionRecord::from_model(
             http_api_deployment,
-            DeletableRevisionAuditFields::new(auth.account_id().0),
+            DeletableRevisionAuditFields::new(auth.actor_account_id().0),
         )?;
 
         let stored_http_api_deployment: HttpApiDeployment = self
@@ -298,7 +298,7 @@ impl HttpApiDeploymentService {
 
         self.http_api_deployment_repo
             .delete(
-                auth.account_id().0,
+                auth.actor_account_id().0,
                 http_api_deployment_id.0,
                 current_revision.next()?.into(),
             )

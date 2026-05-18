@@ -26,6 +26,10 @@ pub struct TokenRecord {
     pub account_id: Uuid,
     pub created_at: SqlDateTime,
     pub expires_at: SqlDateTime,
+    /// When set, this is an admin impersonation token. The admin's account ID is stored
+    /// here and is used as the actor (created_by) in audit trails, while `account_id`
+    /// is the target account used for access checks.
+    pub impersonated_by: Option<Uuid>,
 }
 
 impl Debug for TokenRecord {
@@ -35,6 +39,7 @@ impl Debug for TokenRecord {
             .field("account_id", &self.account_id)
             .field("created_at", &self.created_at)
             .field("expires_at", &self.expires_at)
+            .field("impersonated_by", &self.impersonated_by)
             .finish()
     }
 }
