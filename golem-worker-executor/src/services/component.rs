@@ -247,11 +247,13 @@ impl ComponentService for ComponentServiceDefault {
                                     .get_component_metadata(component_id, component_revision)
                                     .await
                                     .map_err(|e| match e {
-                                        RegistryServiceError::NotFound(_) => WorkerExecutorError::ComponentNotFound { component_id },
+                                        RegistryServiceError::NotFound(_) => {
+                                            WorkerExecutorError::ComponentNotFound { component_id }
+                                        }
                                         _ => WorkerExecutorError::runtime(format!(
                                             "Failed getting component metadata: {}",
                                             e.to_safe_string()
-                                        ))
+                                        )),
                                     })?;
                                 Ok(metadata)
                             })
@@ -269,11 +271,13 @@ impl ComponentService for ComponentServiceDefault {
                                 .get_deployed_component_metadata(component_id)
                                 .await
                                 .map_err(|e| match e {
-                                    RegistryServiceError::NotFound(_) => WorkerExecutorError::ComponentNotFound { component_id },
+                                    RegistryServiceError::NotFound(_) => {
+                                        WorkerExecutorError::ComponentNotFound { component_id }
+                                    }
                                     _ => WorkerExecutorError::runtime(format!(
                                         "Failed getting component metadata: {}",
                                         e.to_safe_string()
-                                    ))
+                                    )),
                                 })
                         })
                     })

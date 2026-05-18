@@ -14,15 +14,16 @@
 
 use crate::Tracing;
 
-use axum::routing::post;
 use axum::Router;
+use axum::routing::post;
 use golem_client::api::RegistryServiceClient;
-use golem_common::agent_id;
+use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use pretty_assertions::assert_matches;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tracing::Instrument;
@@ -99,7 +100,10 @@ async fn environment_deletion_stops_self_scheduling_agent(
         }
         if tokio::time::Instant::now() > deadline {
             http_server.abort();
-            anyhow::bail!("timed out waiting for the agent loop to start (got {} pings)", ping_count.load(Ordering::SeqCst));
+            anyhow::bail!(
+                "timed out waiting for the agent loop to start (got {} pings)",
+                ping_count.load(Ordering::SeqCst)
+            );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -119,6 +123,102 @@ async fn environment_deletion_stops_self_scheduling_agent(
     assert_eq!(
         count_after_delete, count_stable,
         "agent kept pinging after environment deletion ({count_after_delete} → {count_stable})"
+    );
+
+    Ok(())
+}
+
+/// Invoking a method on an already-running agent whose environment has been
+/// deleted should return a 404 error.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn invoke_existing_agent_in_deleted_environment_fails(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let registry_client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+
+    let parsed_agent_id = agent_id!("Counter", "env-delete-existing");
+
+    user.invoke_and_await_agent(&component, &parsed_agent_id, "increment", data_value!())
+        .await?;
+
+    registry_client
+        .delete_environment(&env.id.0, env.revision.into())
+        .await?;
+
+    // Allow the invalidation event to propagate to the executor.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    let error = user
+        .invoke_and_await_agent(&component, &parsed_agent_id, "increment", data_value!())
+        .await
+        .unwrap_err();
+
+    let downcasted = error
+        .downcast_ref::<golem_client::Error<golem_client::api::AgentError>>()
+        .unwrap();
+
+    assert_matches!(
+        downcasted,
+        golem_client::Error::Item(golem_client::api::AgentError::Error404(_))
+    );
+
+    Ok(())
+}
+
+/// Invoking a method on a non-existing agent whose environment has been deleted
+/// should also return a 404.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn invoke_new_agent_in_deleted_environment_fails(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let registry_client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+
+    registry_client
+        .delete_environment(&env.id.0, env.revision.into())
+        .await?;
+
+    // Allow the invalidation event to propagate to the executor.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    let error = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id!("Counter", "env-delete-new"),
+            "increment",
+            data_value!(),
+        )
+        .await
+        .unwrap_err();
+
+    let downcasted = error
+        .downcast_ref::<golem_client::Error<golem_client::api::AgentError>>()
+        .unwrap();
+
+    assert_matches!(
+        downcasted,
+        golem_client::Error::Item(golem_client::api::AgentError::Error404(_))
     );
 
     Ok(())

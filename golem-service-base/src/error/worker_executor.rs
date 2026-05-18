@@ -50,7 +50,7 @@ pub enum WorkerExecutorError {
         reason: Box<WorkerExecutorError>,
     },
     ComponentNotFound {
-        component_id: ComponentId
+        component_id: ComponentId,
     },
     ComponentDownloadFailed {
         component_id: ComponentId,
