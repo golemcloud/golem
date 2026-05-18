@@ -118,6 +118,18 @@ type ResponseStream = WorkerEventStream;
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
 {
+    fn limit_invocation_context_stack_depth(
+        &self,
+        invocation_context: InvocationContextStack,
+    ) -> InvocationContextStack {
+        invocation_context.limit_depth(
+            self.services
+                .config()
+                .limits
+                .max_invocation_context_stack_depth,
+        )
+    }
+
     pub async fn new(
         services: Svcs,
         lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
@@ -341,7 +353,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let invocation_context = from_proto_invocation_context(&request.invocation_context);
+        let invocation_context = self.limit_invocation_context_stack_depth(
+            from_proto_invocation_context(&request.invocation_context),
+        );
 
         let worker = Worker::get_or_create_suspended(
             self,
@@ -820,6 +834,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let invocation_context = request
             .maybe_invocation_context()
             .unwrap_or_else(InvocationContextStack::fresh);
+        let invocation_context = self.limit_invocation_context_stack_depth(invocation_context);
 
         // Lookup must be able to observe the current idempotency state even while the
         // invocation is still retrying and has transient error entries in the oplog.
@@ -858,6 +873,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let invocation_context = request
             .maybe_invocation_context()
             .unwrap_or_else(InvocationContextStack::fresh);
+        let invocation_context = self.limit_invocation_context_stack_depth(invocation_context);
 
         Worker::get_or_create_suspended(
             self,
@@ -1835,7 +1851,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?
             .unwrap_or_else(Principal::anonymous);
 
-        let invocation_context = from_proto_invocation_context(&request.context);
+        let invocation_context = self
+            .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
 
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: ik.clone(),

@@ -535,6 +535,28 @@ impl InvocationContextSpan {
         }
     }
 
+    fn clone_with_parent(&self, parent: Option<Arc<Self>>) -> Arc<Self> {
+        match self {
+            Self::Local {
+                span_id,
+                start,
+                state,
+                inherited,
+            } => {
+                let state = state.read().unwrap();
+                Self::local()
+                    .with_span_id(span_id.clone())
+                    .with_start(*start)
+                    .parent(parent)
+                    .with_attributes(state.attributes.clone())
+                    .linked_context(state.linked_context.clone())
+                    .with_inherited(*inherited)
+                    .build()
+            }
+            Self::ExternalParent { span_id } => Self::external_parent(span_id.clone()),
+        }
+    }
+
     pub fn to_chain(self: &Arc<Self>) -> NEVec<Arc<InvocationContextSpan>> {
         let mut current = self.clone();
         let mut result = NEVec::new(current.clone());
@@ -812,6 +834,39 @@ impl InvocationContextStack {
 
     pub fn push(&mut self, span: Arc<InvocationContextSpan>) {
         self.spans.insert(0, span);
+    }
+
+    pub fn limit_depth(self, max_depth: usize) -> Self {
+        let max_depth = max_depth.max(1);
+        if self.spans.len().get() <= max_depth {
+            return self;
+        }
+
+        let original_spans = self.spans.into_iter().collect::<Vec<_>>();
+        let limited_spans = if max_depth == 1 {
+            vec![original_spans.first().unwrap().clone_with_parent(None)]
+        } else {
+            let external_parent = InvocationContextSpan::external_parent(
+                original_spans[max_depth - 1].span_id().clone(),
+            );
+
+            let mut next_parent = Some(external_parent.clone());
+            let mut limited_spans = Vec::new();
+            for span in original_spans.iter().take(max_depth - 1).rev() {
+                let cloned = span.clone_with_parent(next_parent.clone());
+                next_parent = Some(cloned.clone());
+                limited_spans.push(cloned);
+            }
+            limited_spans.reverse();
+            limited_spans.push(external_parent);
+            limited_spans
+        };
+
+        Self {
+            trace_id: self.trace_id,
+            spans: NEVec::try_from_vec(limited_spans).unwrap(),
+            trace_states: self.trace_states,
+        }
     }
 
     /// Returns the span IDs in this stack, partitioned by local and inherited ones
@@ -1187,6 +1242,40 @@ mod tests {
             inherited,
             HashSet::from_iter(vec![example_span_id_1(), example_span_id_2()])
         );
+    }
+
+    #[test]
+    fn limit_depth_replaces_omitted_parent_chain_with_external_parent() {
+        let stack = example_stack_1();
+        let limited = stack.limit_depth(3);
+
+        assert_eq!(limited.spans.len().get(), 3);
+        assert_eq!(limited.spans[0].span_id(), &example_span_id_6());
+        assert_eq!(limited.spans[1].span_id(), &example_span_id_5());
+        assert!(matches!(
+            &*limited.spans[2],
+            InvocationContextSpan::ExternalParent { span_id } if span_id == &example_span_id_2()
+        ));
+
+        let chain = limited.spans.first().to_chain();
+        assert_eq!(chain.len().get(), 3);
+        assert!(matches!(
+            &*chain[2],
+            InvocationContextSpan::ExternalParent { span_id } if span_id == &example_span_id_2()
+        ));
+    }
+
+    #[test]
+    fn limit_depth_of_one_keeps_current_span_without_parent() {
+        let stack = example_stack_1();
+        let limited = stack.limit_depth(1);
+
+        assert_eq!(limited.spans.len().get(), 1);
+        assert!(matches!(
+            &*limited.spans[0],
+            InvocationContextSpan::Local { span_id, .. } if span_id == &example_span_id_6()
+        ));
+        assert!(limited.spans[0].parent().is_none());
     }
 
     #[test]

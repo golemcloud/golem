@@ -200,10 +200,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let retry_properties =
                 RetryContext::rpc("invoke-and-await", &remote_agent_id, &method_name);
             let result = loop {
-                let stack = self
-                    .state
-                    .invocation_context
-                    .clone_as_inherited_stack(span.span_id());
+                let stack = self.clone_as_inherited_stack(span.span_id());
 
                 let interrupt_signal = self
                     .execution_status
@@ -334,10 +331,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             };
             let retry_properties = RetryContext::rpc("invoke", &remote_agent_id, &method_name);
             let result = loop {
-                let stack = self
-                    .state
-                    .invocation_context
-                    .clone_as_inherited_stack(span.span_id());
+                let stack = self.clone_as_inherited_stack(span.span_id());
                 let result = self
                     .rpc()
                     .invoke(
@@ -443,10 +437,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let result = if self.state.is_live() {
             let rpc = self.rpc();
-            let stack = self
-                .state
-                .invocation_context
-                .clone_as_inherited_stack(span.span_id());
+            let stack = self.clone_as_inherited_stack(span.span_id());
 
             let in_atomic_region = self.in_atomic_region();
             let allow_retry = !in_atomic_region;
@@ -579,10 +570,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_agent_parameters: None,
             };
 
-            let stack = self
-                .state
-                .invocation_context
-                .clone_as_inherited_stack(&self.state.current_span_id);
+            let stack = InvocationContextStack::new(
+                self.state.invocation_context.trace_id.clone(),
+                InvocationContextSpan::external_parent(self.state.current_span_id.clone()),
+                self.state.invocation_context.trace_states.clone(),
+            );
 
             let action = ScheduledAction::Invoke {
                 account_id: self.created_by(),
@@ -684,10 +676,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
         if self.state.is_live() || self.state.snapshotting_mode.is_some() {
             // Main state machine match
-            let stack = self
-                .state
-                .invocation_context
-                .clone_as_inherited_stack(&span_id);
+            let stack = self.clone_as_inherited_stack(&span_id);
 
             let in_atomic_region = self.in_atomic_region();
             let allow_retry = !in_atomic_region;
@@ -1140,10 +1129,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let span = create_rpc_connection_span(ctx, &remote_agent_id).await?;
 
-    let stack = ctx
-        .state
-        .invocation_context
-        .clone_as_inherited_stack(span.span_id());
+    let stack = ctx.clone_as_inherited_stack(span.span_id());
 
     let target_component = ctx
         .component_service()
