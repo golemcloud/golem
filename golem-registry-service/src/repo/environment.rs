@@ -369,11 +369,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         ON es.environment_id = e.environment_id
                         AND es.grantee_account_id = $2
                         -- only join shares if the environment itself is not deleted
-                        AND (
-                            a.deleted_at IS NULL
-                            AND ap.deleted_at IS NULL
-                            AND e.deleted_at IS NULL
-                        )
+                        AND e.deleted_at IS NULL
                         AND es.deleted_at IS NULL
                     LEFT JOIN environment_share_revisions esr
                         ON esr.environment_share_id = es.environment_share_id
@@ -390,14 +386,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                     WHERE
                         e.environment_id = $1
-                        AND (
-                            $3
-                            OR (
-                                a.deleted_at IS NULL
-                                AND ap.deleted_at IS NULL
-                                AND e.deleted_at IS NULL
-                            )
-                        )
+                        AND a.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND ($3 OR e.deleted_at IS NULL)
                         AND (
                             $4
                             OR a.account_id = $2

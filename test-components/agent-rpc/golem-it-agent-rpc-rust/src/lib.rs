@@ -606,3 +606,53 @@ impl CancelTester for CancelTesterImpl {
         counter.get_value().await
     }
 }
+
+// -- Self-scheduling HTTP poller --
+//
+// Agent that sends an HTTP POST to a test server on every tick, then
+// immediately self-schedules the next tick ~500 ms in the future.
+// Used to verify that deleting the environment stops the loop: once the
+// environment is gone the scheduler can no longer activate the agent and the
+// HTTP server stops receiving pings.
+
+fn datetime_500ms_from_now() -> Datetime {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards");
+    let at = now + Duration::from_millis(500);
+    Datetime {
+        seconds: at.as_secs(),
+        nanoseconds: at.subsec_nanos(),
+    }
+}
+
+#[agent_definition]
+pub trait HttpPollingSelfScheduler {
+    fn new(name: String) -> Self;
+
+    /// Ping the test server and schedule the next tick 500 ms later.
+    async fn tick(&self, host: String, port: u16);
+}
+
+struct HttpPollingSelfSchedulerImpl {
+    name: String,
+}
+
+#[agent_implementation]
+impl HttpPollingSelfScheduler for HttpPollingSelfSchedulerImpl {
+    fn new(name: String) -> Self {
+        Self { name }
+    }
+
+    async fn tick(&self, host: String, port: u16) {
+        use wstd::http::{Body, Client, Request};
+
+        let req = Request::post(format!("http://{host}:{port}/ping"))
+            .body(Body::empty())
+            .unwrap();
+        let _ = Client::new().send(req).await;
+
+        let mut me = HttpPollingSelfSchedulerClient::get(self.name.clone());
+        me.schedule_tick(host, port, datetime_500ms_from_now());
+    }
+}

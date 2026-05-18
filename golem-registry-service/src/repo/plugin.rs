@@ -220,10 +220,8 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         ON p.account_id = a.account_id
                     WHERE
                         p.plugin_id = $1
-                        AND (
-                            $2
-                            OR (a.deleted_at IS NULL AND p.deleted_at IS NULL)
-                        )
+                        AND a.deleted_at IS NULL
+                        AND ($2 OR p.deleted_at IS NULL)
                 "#})
                 .bind(plugin_id)
                 .bind(include_deleted),

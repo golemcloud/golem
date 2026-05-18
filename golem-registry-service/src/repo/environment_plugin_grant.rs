@@ -278,14 +278,9 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                             AND par.revision_id = pa.current_revision_id
                         WHERE
                             epg.environment_plugin_grant_id = $1
-                            AND (
-                                $2
-                                OR (
-                                    epg.deleted_at IS NULL
-                                    AND p.deleted_at IS NULL
-                                    AND pa.deleted_at IS NULL
-                                )
-                            )
+                            AND p.deleted_at IS NULL
+                            AND pa.deleted_at IS NULL
+                            AND ($2 OR epg.deleted_at IS NULL)
                 "#})
                 .bind(environment_plugin_grant_id)
                 .bind(include_deleted),
@@ -420,14 +415,9 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                 AND par.revision_id = pa.current_revision_id
             WHERE
                 epg.environment_plugin_grant_id IN ({in_clause})
-                AND (
-                    $1
-                    OR (
-                        epg.deleted_at IS NULL
-                        AND p.deleted_at IS NULL
-                        AND pa.deleted_at IS NULL
-                    )
-                )
+                AND p.deleted_at IS NULL
+                AND pa.deleted_at IS NULL
+                AND ($1 OR epg.deleted_at IS NULL)
         "# };
 
         let query_as = {
