@@ -276,10 +276,19 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                         INNER JOIN account_revisions par
                             ON par.account_id = pa.account_id
                             AND par.revision_id = pa.current_revision_id
+                        INNER JOIN environments e
+                            ON e.environment_id = epg.environment_id
+                        INNER JOIN applications ap
+                            ON ap.application_id = e.application_id
+                        INNER JOIN accounts ea
+                            ON ea.account_id = ap.account_id
                         WHERE
                             epg.environment_plugin_grant_id = $1
                             AND p.deleted_at IS NULL
                             AND pa.deleted_at IS NULL
+                            AND ea.deleted_at IS NULL
+                            AND ap.deleted_at IS NULL
+                            AND e.deleted_at IS NULL
                             AND ($2 OR epg.deleted_at IS NULL)
                 "#})
                 .bind(environment_plugin_grant_id)
@@ -413,10 +422,19 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
             INNER JOIN account_revisions par
                 ON par.account_id = pa.account_id
                 AND par.revision_id = pa.current_revision_id
+            INNER JOIN environments e
+                ON e.environment_id = epg.environment_id
+            INNER JOIN applications ap
+                ON ap.application_id = e.application_id
+            INNER JOIN accounts ea
+                ON ea.account_id = ap.account_id
             WHERE
                 epg.environment_plugin_grant_id IN ({in_clause})
                 AND p.deleted_at IS NULL
                 AND pa.deleted_at IS NULL
+                AND ea.deleted_at IS NULL
+                AND ap.deleted_at IS NULL
+                AND e.deleted_at IS NULL
                 AND ($1 OR epg.deleted_at IS NULL)
         "# };
 
