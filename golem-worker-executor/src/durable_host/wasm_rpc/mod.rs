@@ -23,7 +23,7 @@ use crate::services::HasWorker;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
-use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
+use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use anyhow::Error;
 use async_trait::async_trait;
 use futures::future::Either;
@@ -171,12 +171,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // which maps to RetryDecision::TryStop — suspending the worker.
         self.record_monthly_rpc_call()?;
 
-        let current_idempotency_key = self
-            .get_current_idempotency_key()
-            .await
-            .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.oplog.current_oplog_index().await;
-        let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+        let idempotency_key = self.derive_idempotency_key(oplog_index);
 
         let span =
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
@@ -312,12 +308,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // which maps to RetryDecision::TryStop — suspending the worker.
         self.record_monthly_rpc_call()?;
 
-        let current_idempotency_key = self
-            .get_current_idempotency_key()
-            .await
-            .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.oplog.current_oplog_index().await;
-        let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+        let idempotency_key = self.derive_idempotency_key(oplog_index);
 
         let span =
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
@@ -427,12 +419,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .begin_function(&DurableFunctionType::WriteRemote)
             .await?;
 
-        let current_idempotency_key = self
-            .get_current_idempotency_key()
-            .await
-            .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.oplog.current_oplog_index().await;
-        let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+        let idempotency_key = self.derive_idempotency_key(oplog_index);
 
         let span =
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
@@ -575,15 +563,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
             let input_untyped: UntypedDataValue = input.into();
 
-            let current_idempotency_key = self
-                .state
-                .get_current_idempotency_key()
-                .expect("Expected to get an idempotency key as we are inside an invocation");
-
             let current_oplog_index = self.state.oplog.current_oplog_index().await;
 
-            let idempotency_key =
-                IdempotencyKey::derived(&current_idempotency_key, current_oplog_index);
+            let idempotency_key = self.derive_idempotency_key(current_oplog_index);
 
             let request = HostRequestGolemRpcScheduledInvocation {
                 remote_agent_id: remote_agent_id.agent_id(),

@@ -199,6 +199,16 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) fn derive_idempotency_key(&mut self, oplog_index: OplogIndex) -> IdempotencyKey {
+        let current_idempotency_key = self
+            .state
+            .get_current_idempotency_key()
+            .unwrap_or(IdempotencyKey::fresh());
+        let idempotency_key_oplog_index =
+            self.state.current_idempotency_key_oplog_index(oplog_index);
+        IdempotencyKey::derived(&current_idempotency_key, idempotency_key_oplog_index)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
@@ -3207,6 +3217,31 @@ mod tests {
 
         assert!(!should_restart_after_shard_assignment_change(&status));
     }
+
+    #[test]
+    fn atomic_region_idempotency_key_indexes_start_after_region_begin() {
+        let original_region_begin = OplogIndex::from_u64(10);
+        let mut next_idempotency_key_oplog_index = original_region_begin.next();
+
+        let first =
+            next_atomic_region_idempotency_key_oplog_index(&mut next_idempotency_key_oplog_index);
+        let second =
+            next_atomic_region_idempotency_key_oplog_index(&mut next_idempotency_key_oplog_index);
+
+        assert_eq!(first, OplogIndex::from_u64(11));
+        assert_eq!(second, OplogIndex::from_u64(12));
+    }
+
+    #[test]
+    fn atomic_region_idempotency_key_indexes_advance_after_each_derivation() {
+        let mut next_idempotency_key_oplog_index = OplogIndex::from_u64(11);
+
+        assert_eq!(
+            next_atomic_region_idempotency_key_oplog_index(&mut next_idempotency_key_oplog_index),
+            OplogIndex::from_u64(11)
+        );
+        assert_eq!(next_idempotency_key_oplog_index, OplogIndex::from_u64(12));
+    }
 }
 
 #[async_trait]
@@ -3470,6 +3505,14 @@ async fn last_error<T: HasOplogService + HasConfig>(
     }
 }
 
+fn next_atomic_region_idempotency_key_oplog_index(
+    next_idempotency_key_oplog_index: &mut OplogIndex,
+) -> OplogIndex {
+    let result = *next_idempotency_key_oplog_index;
+    *next_idempotency_key_oplog_index = next_idempotency_key_oplog_index.next();
+    result
+}
+
 /// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum
 /// number of entries, and at most until the beginning of the last invocation.
 pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
@@ -3707,6 +3750,7 @@ pub(crate) struct HttpOutputStreamState {
 #[derive(Debug, Clone)]
 struct ActiveAtomicRegion {
     begin_index: OplogIndex,
+    next_idempotency_key_oplog_index: OplogIndex,
     has_side_effects: bool,
 }
 
@@ -4076,6 +4120,22 @@ impl PrivateDurableWorkerState {
         self.active_atomic_regions
             .first()
             .is_some_and(|region| region.has_side_effects)
+    }
+
+    pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
+        if let Some(outermost_atomic_region) = self.active_atomic_regions.first_mut() {
+            next_atomic_region_idempotency_key_oplog_index(
+                &mut outermost_atomic_region.next_idempotency_key_oplog_index,
+            )
+        } else {
+            oplog_index
+        }
+    }
+
+    pub fn current_atomic_region_idempotency_key_oplog_index(&self) -> Option<OplogIndex> {
+        self.active_atomic_regions
+            .first()
+            .map(|region| region.next_idempotency_key_oplog_index)
     }
 
     /// Enriches retry properties with worker-local context: `agent-type` and `is-idempotent`.

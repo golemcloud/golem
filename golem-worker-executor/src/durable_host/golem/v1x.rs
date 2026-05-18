@@ -32,7 +32,7 @@ use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
 use crate::services::{HasOplogService, HasWorker};
 use crate::worker::status::calculate_last_known_status;
-use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
+use crate::workerctx::{StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::agent::ParsedAgentId;
@@ -56,7 +56,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
-use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryContext};
+use golem_common::model::{OplogIndex, PromiseId, RetryContext};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::Arc;
 use std::time::Duration;
@@ -331,13 +331,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api", "mark_begin_operation");
 
         if self.state.is_live() {
+            let next_idempotency_key_oplog_index = self
+                .state
+                .current_atomic_region_idempotency_key_oplog_index();
             self.state
                 .oplog
                 .add(OplogEntry::begin_atomic_region())
                 .await;
             let begin_index = self.state.current_oplog_index().await;
+            let next_idempotency_key_oplog_index =
+                next_idempotency_key_oplog_index.unwrap_or_else(|| begin_index.next());
             self.state.active_atomic_regions.push(ActiveAtomicRegion {
                 begin_index,
+                next_idempotency_key_oplog_index,
                 has_side_effects: false,
             });
             Ok(begin_index.into())
@@ -386,6 +392,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             self.state.active_atomic_regions.push(ActiveAtomicRegion {
                 begin_index,
+                next_idempotency_key_oplog_index: begin_index.next(),
                 has_side_effects: false,
             });
             Ok(begin_index.into())
@@ -499,16 +506,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let current_idempotency_key = self
-            .get_current_idempotency_key()
-            .await
-            .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Even though IdempotencyKey::derived is used, we still need to persist this,
         //       because the derived key depends on the oplog index.
         let result = if durability.is_live() {
-            let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+            let key = self.derive_idempotency_key(oplog_index);
             let uuid = Uuid::parse_str(&key.value.to_string()).unwrap(); // this is guaranteed to be an uuid
             durability
                 .persist(

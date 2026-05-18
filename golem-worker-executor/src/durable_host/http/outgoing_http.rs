@@ -22,11 +22,11 @@ use crate::durable_host::{
     HttpRequestState, HttpRetryEligibility, PendingStatusRetryDecision,
 };
 use crate::services::HasWorker;
-use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
+use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest, PersistenceLevel};
-use golem_common::model::{IdempotencyKey, NamedRetryPolicy, RetryContext};
+use golem_common::model::{NamedRetryPolicy, RetryContext};
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
@@ -291,11 +291,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
 
         if self.state.set_outgoing_http_idempotency_key {
-            let current_idempotency_key = self
-                .get_current_idempotency_key()
-                .await
-                .unwrap_or(IdempotencyKey::fresh());
-            let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, begin_index);
+            let idempotency_key = self.derive_idempotency_key(begin_index);
+            let idempotency_key = idempotency_key.to_string();
 
             let header_name = HeaderName::from_static("idempotency-key");
 
@@ -305,9 +302,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .headers
                     .append(
                         &header_name,
-                        HeaderValue::from_str(&idempotency_key.to_string()).unwrap(),
+                        HeaderValue::from_str(&idempotency_key).unwrap(),
                     )
                     .map_err(HttpError::trap)?;
+                headers.insert("idempotency-key".to_string(), idempotency_key);
             }
         }
 
