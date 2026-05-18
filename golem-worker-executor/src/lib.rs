@@ -521,10 +521,19 @@ pub async fn create_worker_executor_impl<
             (None, None, key_value_storage)
         }
         KeyValueStorageConfig::NamespaceRouted(namespace_routed) => {
-            let (cache_redis, cache_sqlite, cache_storage) =
-                build_inner_key_value_storage(&namespace_routed.cache, "key_value_storage_cache", join_set).await?;
+            let (cache_redis, cache_sqlite, cache_storage) = build_inner_key_value_storage(
+                &namespace_routed.cache,
+                "key_value_storage_cache",
+                join_set,
+            )
+            .await?;
             let (persistent_redis, persistent_sqlite, persistent_storage) =
-                build_inner_key_value_storage(&namespace_routed.persistent, "key_value_storage_persistent", join_set).await?;
+                build_inner_key_value_storage(
+                    &namespace_routed.persistent,
+                    "key_value_storage_persistent",
+                    join_set,
+                )
+                .await?;
 
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
                 NamespaceRoutedKeyValueStorage::new(cache_storage, persistent_storage),
