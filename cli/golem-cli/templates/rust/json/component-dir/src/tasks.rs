@@ -30,7 +30,7 @@ pub trait Tasks {
     fn get_tasks(&self) -> Vec<Task>;
 
     #[description("Marks a task as completed by its ID")]
-    #[endpoint(get = "/tasks/{id}/complete")]
+    #[endpoint(post = "/tasks/{id}/complete")]
     fn complete_task(&mut self, id: usize) -> Option<Task>;
 }
 
@@ -56,7 +56,7 @@ impl Tasks for TasksImpl {
             completed: false,
             created_at: Utc::now(),
         };
-        self.tasks.insert(id, task.clone());
+        self.tasks.push(task.clone());
         task
     }
 

@@ -231,6 +231,10 @@ fn is_method_idempotent(method: &SerializableHttpMethod) -> bool {
     )
 }
 
+fn is_http_request_idempotent(assume_idempotence: bool, method: &SerializableHttpMethod) -> bool {
+    assume_idempotence || is_method_idempotent(method)
+}
+
 /// A chunk of outgoing body data reconstructed from the oplog.
 ///
 /// This avoids materializing the entire body in memory — callers can
@@ -330,31 +334,6 @@ async fn reconstruct_outgoing_body_chunks_after(
     }
 
     Ok(chunks)
-}
-
-async fn find_last_retry_error_index(
-    oplog: &Arc<dyn Oplog>,
-    begin_index: OplogIndex,
-) -> Result<Option<OplogIndex>, anyhow::Error> {
-    let current_idx = oplog.current_oplog_index().await;
-
-    if current_idx < begin_index {
-        return Ok(None);
-    }
-
-    let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index) + 1;
-    let entries = oplog.read_many(begin_index, n).await;
-
-    let mut last_retry_error_idx = None;
-    for (idx, entry) in entries {
-        if let OplogEntry::Error { retry_from, .. } = entry
-            && retry_from == begin_index
-        {
-            last_retry_error_idx = Some(idx);
-        }
-    }
-
-    Ok(last_retry_error_idx)
 }
 
 /// Counts the total number of incoming body bytes successfully delivered to
@@ -718,7 +697,13 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
             if let Some(agent_type) = agent_type {
                 properties.set("agent-type", PredicateValue::Text(agent_type));
             }
-            properties.set("is-idempotent", PredicateValue::Boolean(assume_idempotence));
+            properties.set(
+                "is-idempotent",
+                PredicateValue::Boolean(is_http_request_idempotent(
+                    assume_idempotence,
+                    &request.method,
+                )),
+            );
 
             let current_retry_policy_state = worker
                 .get_non_detached_last_known_status()
@@ -1628,6 +1613,13 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
         "http-status",
     );
     ctx.state.enrich_retry_properties(&mut properties);
+    properties.set(
+        "is-idempotent",
+        PredicateValue::Boolean(is_http_request_idempotent(
+            ctx.state.assume_idempotence,
+            &request_state.request.method,
+        )),
+    );
 
     // Only consider policies that explicitly reference the `status-code` property —
     // either in the named selector predicate or inside a `RetryPolicy::FilteredOn`
@@ -1830,18 +1822,10 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
     }
 
     let oplog = ctx.public_state.oplog();
-    let last_retry_error_idx =
-        find_last_retry_error_index(&oplog, request_state.begin_index).await?;
-
-    let mut body_chunks = reconstruct_outgoing_body_chunks_after(
-        &oplog,
-        request_state.begin_index,
-        last_retry_error_idx,
-    )
-    .await?;
-    if body_chunks.is_empty() {
-        body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
-    }
+    // Awaiting-response retry sends a fresh reconstructed request, so it must
+    // replay the full captured body. Replaying only bytes written after an
+    // earlier inline retry error would drop the already-replayed prefix.
+    let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
     let connection_pool = ctx.wasi_http.connection_pool.clone();
     send_with_interrupt_aware_retries(ctx, request_state, &body_chunks, &[], None, connection_pool)
         .await
@@ -2020,6 +2004,45 @@ mod tests {
         .expect("404 policy should match");
 
         assert_eq!(resolved.name, "http-404");
+    }
+
+    #[test]
+    fn status_retry_idempotency_property_includes_safe_http_methods() {
+        let policy = NamedRetryPolicy {
+            name: "http-500-idempotent".to_string(),
+            priority: 100,
+            predicate: Predicate::And(
+                Box::new(Predicate::PropEq {
+                    property: "status-code".to_string(),
+                    value: PredicateValue::Integer(500),
+                }),
+                Box::new(Predicate::PropEq {
+                    property: "is-idempotent".to_string(),
+                    value: PredicateValue::Boolean(true),
+                }),
+            ),
+            policy: RetryPolicy::Immediate,
+        };
+
+        let mut properties = RetryProperties::new();
+        properties.set("status-code", PredicateValue::Integer(500));
+        properties.set(
+            "is-idempotent",
+            PredicateValue::Boolean(is_http_request_idempotent(
+                false,
+                &SerializableHttpMethod::Get,
+            )),
+        );
+
+        let resolved = resolve_matching_status_retry_policy(vec![policy], &properties)
+            .expect("status retry resolution should succeed")
+            .expect("safe HTTP methods should set is-idempotent=true");
+
+        assert_eq!(resolved.name, "http-500-idempotent");
+        assert!(!is_http_request_idempotent(
+            false,
+            &SerializableHttpMethod::Post
+        ));
     }
 
     #[test]

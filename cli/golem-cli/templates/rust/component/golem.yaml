@@ -4,6 +4,3 @@ components:
   componentname:
     dir: "componentDir"
     templates: rust
-
-    # golem-app-manifest-env-doc
-    env:
