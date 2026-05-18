@@ -47,11 +47,24 @@ impl SqliteKeyValueStorage {
     /// Apply the key-value storage migrations on the given sqlite config without
     /// creating a pool. Used when the storage is reusing a pool created elsewhere
     /// (e.g. when indexed storage shares the key-value pool).
+    ///
+    /// The key-value storage migrations live in the 1..99 numeric range so they
+    /// can coexist with indexed storage migrations (100+) in a single
+    /// `_sqlx_migrations` table when the two modules share the same SQLite file
+    /// (`KVStoreSqlite`). We therefore opt into `ignore_missing` so that on a
+    /// restart against an existing DB sqlx does not treat the indexed module's
+    /// already-applied migrations as a fatal error.
     pub async fn migrate(config: &DbSqliteConfig) -> Result<(), String> {
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
-        golem_service_base::db::sqlite::migrate(config, migrations.sqlite_migrations())
-            .await
-            .map_err(|err| format!("Sqlite key-value storage migration failed: {err:?}"))
+        golem_service_base::db::sqlite::migrate_with_options(
+            config,
+            migrations.sqlite_migrations(),
+            golem_service_base::db::sqlite::MigrateOptions {
+                ignore_missing: true,
+            },
+        )
+        .await
+        .map_err(|err| format!("Sqlite key-value storage migration failed: {err:?}"))
     }
 
     pub fn new(pool: SqlitePool) -> Self {
