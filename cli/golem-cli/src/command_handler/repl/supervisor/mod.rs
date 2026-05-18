@@ -503,10 +503,8 @@ fn spawn_input_reader(event_tx: Sender<SupervisorEvent>) {
             match stdin.read(&mut buffer) {
                 Ok(0) => return,
                 Ok(n) => {
-                    if buffer[..n].contains(&3) {
-                        if event_tx.send(SupervisorEvent::CtrlC).is_err() {
-                            return;
-                        }
+                    if buffer[..n].contains(&3) && event_tx.send(SupervisorEvent::CtrlC).is_err() {
+                        return;
                     }
 
                     let filtered = buffer[..n]
