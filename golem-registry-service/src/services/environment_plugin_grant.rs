@@ -326,7 +326,7 @@ impl EnvironmentPluginGrantService {
 
         let environment = self
             .environment_service
-            .get(grant.environment_id, include_deleted, auth)
+            .get(grant.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {

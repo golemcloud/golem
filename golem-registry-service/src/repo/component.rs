@@ -647,15 +647,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
-                    JOIN environments e ON e.environment_id = c.environment_id
-                    JOIN applications ap ON ap.application_id = e.application_id
-                    JOIN accounts a ON a.account_id = ap.account_id
-                    WHERE c.component_id = $1
-                      AND cr.revision_id = $2
-                      AND a.deleted_at IS NULL
-                      AND ap.deleted_at IS NULL
-                      AND e.deleted_at IS NULL
-                      AND ($3 OR c.deleted_at IS NULL)
+                    WHERE c.component_id = $1 AND cr.revision_id = $2 AND ($3 OR c.deleted_at IS NULL)
                 "#})
                 .bind(component_id)
                 .bind(revision_id)
