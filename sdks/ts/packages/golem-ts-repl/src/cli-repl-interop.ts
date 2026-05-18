@@ -72,6 +72,9 @@ export class CliReplInterop {
     for (const command of this.commands) {
       replServer.defineCommand(command.replCommand, {
         help: command.about,
+        // The colon-command adapter in repl.ts intentionally awaits promise-returning actions.
+        // Node's REPL typings only allow void here, so keep the runtime contract explicit.
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises
         action(rawArgs: string) {
           const abortController = new AbortController();
           suppressNextSigint = true;
@@ -467,11 +470,7 @@ class GolemCli {
     this.controlClient = RustReplControlClient.fromEnv();
   }
 
-  async run(opts: {
-    args: string[];
-    mode: 'inherit' | 'collect';
-    signal?: AbortSignal;
-  }): Promise<{
+  async run(opts: { args: string[]; mode: 'inherit' | 'collect'; signal?: AbortSignal }): Promise<{
     ok: boolean;
     code: number | null;
     stdout: string;
@@ -482,21 +481,17 @@ class GolemCli {
       return this.controlClient.runCli(fullArgs);
     }
 
-    const child = childProcess.spawn(
-      this.binaryName,
-      fullArgs,
-      {
-        cwd: this.cwd,
-        stdio: ((mode) => {
-          switch (mode) {
-            case 'inherit':
-              return 'inherit';
-            case 'collect':
-              return ['ignore', 'pipe', 'pipe'];
-          }
-        })(opts.mode),
-      },
-    );
+    const child = childProcess.spawn(this.binaryName, fullArgs, {
+      cwd: this.cwd,
+      stdio: ((mode) => {
+        switch (mode) {
+          case 'inherit':
+            return 'inherit';
+          case 'collect':
+            return ['ignore', 'pipe', 'pipe'];
+        }
+      })(opts.mode),
+    });
 
     return new Promise((resolve) => {
       let stdout = '';
