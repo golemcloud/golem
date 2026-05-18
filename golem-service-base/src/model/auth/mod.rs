@@ -155,7 +155,7 @@ pub enum GlobalAction {
     CreateAccount,
     GetDefaultPlan,
     GetReports,
-    ImpersonateUser
+    ImpersonateUser,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
@@ -407,10 +407,12 @@ impl AuthCtx {
         }
     }
 
-    /// Whether storage level visibility rules (e.g. does this account have any shares for this environment / does this user own the environment)
-    /// should be disabled for this user.
+    /// Whether storage-level visibility rules (e.g. environment ownership and share checks)
+    /// should be bypassed. Only `System` (internal service calls) bypasses these rules.
+    /// Human accounts — including admins — are subject to normal ownership and share checks.
+    /// Admins who need to act on another account's resources must use an impersonation token.
     pub fn should_override_storage_visibility_rules(&self) -> bool {
-        self.has_any_account_role(&[AccountRole::Admin])
+        self.is_system()
     }
 
     pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
