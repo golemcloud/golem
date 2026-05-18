@@ -422,7 +422,7 @@ impl Supervisor {
 
     fn enter_raw_mode(&mut self) -> anyhow::Result<()> {
         if matches!(self.terminal_state, TerminalState::Cooked) {
-            enable_raw_mode().context("Failed to enable terminal raw mode")?;
+            enable_raw_terminal_mode().context("Failed to enable terminal raw mode")?;
             self.terminal_state = TerminalState::Raw;
         }
         Ok(())
@@ -592,18 +592,86 @@ enum SupervisorEvent {
     RunCli(control::RunCliSupervisorRequest),
 }
 
-struct RawTerminalGuard;
+struct RawTerminalGuard {
+    #[cfg(windows)]
+    windows_input_mode: Option<WindowsInputModeGuard>,
+}
 
 impl RawTerminalGuard {
     fn enter() -> anyhow::Result<Self> {
-        enable_raw_mode().context("Failed to enable terminal raw mode")?;
-        Ok(Self)
+        #[cfg(windows)]
+        let windows_input_mode = WindowsInputModeGuard::capture();
+        enable_raw_terminal_mode().context("Failed to enable terminal raw mode")?;
+        Ok(Self {
+            #[cfg(windows)]
+            windows_input_mode,
+        })
     }
 }
 
 impl Drop for RawTerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
+        #[cfg(windows)]
+        if let Some(guard) = &self.windows_input_mode {
+            guard.restore();
+        }
+    }
+}
+
+fn enable_raw_terminal_mode() -> anyhow::Result<()> {
+    enable_raw_mode().context("Failed to enable terminal raw mode")?;
+    #[cfg(windows)]
+    enable_windows_virtual_terminal_input();
+    Ok(())
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+struct WindowsInputModeGuard {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    original_mode: windows_sys::Win32::System::Console::CONSOLE_MODE,
+}
+
+#[cfg(windows)]
+impl WindowsInputModeGuard {
+    fn capture() -> Option<Self> {
+        use windows_sys::Win32::System::Console::{GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE};
+
+        let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        let mut original_mode = 0;
+        if unsafe { GetConsoleMode(handle, &mut original_mode) } == 0 {
+            return None;
+        }
+
+        Some(Self {
+            handle,
+            original_mode,
+        })
+    }
+
+    fn restore(&self) {
+        use windows_sys::Win32::System::Console::SetConsoleMode;
+        let _ = unsafe { SetConsoleMode(self.handle, self.original_mode) };
+    }
+}
+
+#[cfg(windows)]
+fn enable_windows_virtual_terminal_input() {
+    use windows_sys::Win32::System::Console::{
+        ENABLE_VIRTUAL_TERMINAL_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
+        SetConsoleMode,
+    };
+
+    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    let mut mode = 0;
+    if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+        return;
+    }
+
+    let updated_mode = mode | ENABLE_VIRTUAL_TERMINAL_INPUT;
+    if updated_mode != mode {
+        let _ = unsafe { SetConsoleMode(handle, updated_mode) };
     }
 }
 

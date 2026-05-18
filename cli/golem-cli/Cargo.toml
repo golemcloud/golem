@@ -125,6 +125,9 @@ wit-parser = { workspace = true }
 openssl = { workspace = true }
 openssl-sys = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 [dev-dependencies]
 axum = { workspace = true }
 expectrl = { workspace = true }

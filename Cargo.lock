@@ -3748,6 +3748,7 @@ dependencies = [
  "wasmtime-wasi",
  "wax",
  "which",
+ "windows-sys 0.61.2",
  "wit-component",
  "wit-parser 0.244.0",
 ]
