@@ -594,13 +594,13 @@ enum SupervisorEvent {
 
 struct RawTerminalGuard {
     #[cfg(windows)]
-    windows_input_mode: Option<WindowsInputModeGuard>,
+    windows_input_mode: Option<WindowsConsoleInputModeGuard>,
 }
 
 impl RawTerminalGuard {
     fn enter() -> anyhow::Result<Self> {
         #[cfg(windows)]
-        let windows_input_mode = WindowsInputModeGuard::capture();
+        let windows_input_mode = WindowsConsoleInputModeGuard::capture();
         enable_raw_terminal_mode().context("Failed to enable terminal raw mode")?;
         Ok(Self {
             #[cfg(windows)]
@@ -628,13 +628,13 @@ fn enable_raw_terminal_mode() -> anyhow::Result<()> {
 
 #[cfg(windows)]
 #[derive(Clone, Copy)]
-struct WindowsInputModeGuard {
+struct WindowsConsoleInputModeGuard {
     handle: windows_sys::Win32::Foundation::HANDLE,
     original_mode: windows_sys::Win32::System::Console::CONSOLE_MODE,
 }
 
 #[cfg(windows)]
-impl WindowsInputModeGuard {
+impl WindowsConsoleInputModeGuard {
     fn capture() -> Option<Self> {
         use windows_sys::Win32::System::Console::{GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE};
 
@@ -658,6 +658,10 @@ impl WindowsInputModeGuard {
 
 #[cfg(windows)]
 fn enable_windows_virtual_terminal_input() {
+    // crossterm raw mode disables line/echo/processed input on Windows, but it
+    // does not enable VT input. The Node REPL running inside the child PTY can
+    // emit terminal queries such as ESC[6n; the terminal's response must reach
+    // this supervisor as raw stdin bytes so it can be forwarded to the child.
     use windows_sys::Win32::System::Console::{
         ENABLE_VIRTUAL_TERMINAL_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
         SetConsoleMode,
