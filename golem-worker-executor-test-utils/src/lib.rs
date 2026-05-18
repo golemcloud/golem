@@ -99,7 +99,7 @@ use golem_worker_executor::services::golem_config::{
     HttpClientConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig,
     IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig, KeyValueStorageInnerConfig,
     KeyValueStorageNamespaceRoutedConfig, MemoryConfig, OplogConfig, ResourceLimitsConfig,
-    ResourceLimitsDisabledConfig, SnapshotPolicy,
+    ResourceLimitsDisabledConfig, SchedulerStorageConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
@@ -554,6 +554,27 @@ pub fn sqlite_storage_config(
     }
 }
 
+pub fn scheduler_sqlite_storage_config(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) -> DbSqliteConfig {
+    let database = deps
+        .data_dir
+        .path()
+        .join(format!(
+            "worker-executor-scheduler-{}.db",
+            context.redis_prefix().replace(':', "_")
+        ))
+        .to_string_lossy()
+        .into_owned();
+
+    DbSqliteConfig {
+        database,
+        max_connections: 8,
+        foreign_keys: false,
+    }
+}
+
 fn apply_sqlite_storage_config(
     config: &mut GolemConfig,
     deps: &WorkerExecutorTestDependencies,
@@ -562,6 +583,8 @@ fn apply_sqlite_storage_config(
     config.key_value_storage = KeyValueStorageConfig::Sqlite(sqlite_storage_config(deps, context));
     config.indexed_storage =
         IndexedStorageConfig::KVStoreSqlite(IndexedStorageKVStoreSqliteConfig {});
+    config.scheduler_storage =
+        SchedulerStorageConfig::Sqlite(scheduler_sqlite_storage_config(deps, context));
 }
 
 fn apply_redis_storage_config(
@@ -580,6 +603,8 @@ fn apply_redis_storage_config(
         });
     config.indexed_storage =
         IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {});
+    config.scheduler_storage =
+        SchedulerStorageConfig::Sqlite(scheduler_sqlite_storage_config(deps, context));
 }
 
 async fn start_executor_with_config(

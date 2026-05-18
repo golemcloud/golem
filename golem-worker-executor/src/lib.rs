@@ -51,7 +51,7 @@ use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
     EngineConfig, GolemConfig, HttpClientConfig, IndexedStorageConfig, KeyValueStorageConfig,
-    KeyValueStorageInnerConfig,
+    KeyValueStorageInnerConfig, SchedulerStorageConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
@@ -542,14 +542,11 @@ pub async fn create_worker_executor_impl<
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
         }
         KeyValueStorageConfig::Sqlite(sqlite) => {
-            let pool = SqlitePool::configured(sqlite)
+            let storage = SqliteKeyValueStorage::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
-            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-                SqliteKeyValueStorage::new(pool.clone())
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            );
+            let pool = storage.pool();
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(storage);
             (None, Some(pool), key_value_storage)
         }
         KeyValueStorageConfig::MultiSqlite(multi_sqlite) => {
@@ -563,8 +560,7 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let scheduler_storage =
-        build_scheduler_storage(&golem_config.key_value_storage, sqlite.clone()).await?;
+    let scheduler_storage = build_scheduler_storage(&golem_config.scheduler_storage).await?;
 
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = match &golem_config.indexed_storage
     {
@@ -583,14 +579,19 @@ pub async fn create_worker_executor_impl<
                 .map_err(|err| anyhow!(err))?,
         ),
         IndexedStorageConfig::KVStoreSqlite(_) => {
-            let sqlite = sqlite
+            let pool = sqlite
                 .clone()
                 .expect("Sqlite must be configured as key-value storage when using KVStoreSqlite");
-            Arc::new(
-                SqliteIndexedStorage::new(sqlite.clone())
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            )
+            let kv_sqlite_config = match &golem_config.key_value_storage {
+                KeyValueStorageConfig::Sqlite(sqlite_config) => sqlite_config,
+                _ => panic!(
+                    "Invalid configuration: sqlite must be used as key-value storage when using KVStoreSqlite"
+                ),
+            };
+            SqliteIndexedStorage::migrate(kv_sqlite_config)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            Arc::new(SqliteIndexedStorage::new(pool))
         }
         IndexedStorageConfig::KVStoreMultiSqlite(_) => match &golem_config.key_value_storage {
             KeyValueStorageConfig::MultiSqlite(multi_sqlite) => {
@@ -604,16 +605,11 @@ pub async fn create_worker_executor_impl<
                 "Invalid configuration: multi-sqlite must be used as key-value storage when using KVStoreMultiSqlite"
             ),
         },
-        IndexedStorageConfig::Sqlite(sqlite) => {
-            let pool = SqlitePool::configured(sqlite)
+        IndexedStorageConfig::Sqlite(sqlite) => Arc::new(
+            SqliteIndexedStorage::configured(sqlite)
                 .await
-                .map_err(|err| anyhow!(err))?;
-            Arc::new(
-                SqliteIndexedStorage::new(pool.clone())
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            )
-        }
+                .map_err(|err| anyhow!(err))?,
+        ),
         IndexedStorageConfig::MultiSqlite(multi_sqlite) => {
             Arc::new(MultiSqliteIndexedStorage::new(
                 &multi_sqlite.root_dir,
@@ -941,94 +937,20 @@ pub async fn create_worker_executor_impl<
 }
 
 async fn build_scheduler_storage(
-    config: &KeyValueStorageConfig,
-    sqlite: Option<SqlitePool>,
+    config: &SchedulerStorageConfig,
 ) -> Result<Arc<dyn SchedulerStorage + Send + Sync>, anyhow::Error> {
     match config {
-        KeyValueStorageConfig::Postgres(postgres) => Ok(Arc::new(
+        SchedulerStorageConfig::Postgres(postgres) => Ok(Arc::new(
             PostgresSchedulerStorage::configured(postgres)
                 .await
                 .map_err(|err| anyhow!(err))?,
         )),
-        KeyValueStorageConfig::Sqlite(_) => {
-            let sqlite = sqlite.expect("Sqlite pool must be configured for scheduler storage");
-            Ok(Arc::new(
-                SqliteSchedulerStorage::new(sqlite)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            ))
-        }
-        KeyValueStorageConfig::MultiSqlite(multi_sqlite) => {
-            let db_path = multi_sqlite
-                .root_dir
-                .join("scheduler.db")
-                .to_string_lossy()
-                .to_string();
-            let pool = SqlitePool::configured(&golem_common::config::DbSqliteConfig {
-                database: db_path,
-                max_connections: multi_sqlite.max_connections,
-                foreign_keys: multi_sqlite.foreign_keys,
-            })
-            .await
-            .map_err(|err| anyhow!(err))?;
-            Ok(Arc::new(
-                SqliteSchedulerStorage::new(pool)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            ))
-        }
-        KeyValueStorageConfig::NamespaceRouted(namespace_routed) => {
-            build_scheduler_storage_from_inner(&namespace_routed.persistent).await
-        }
-        KeyValueStorageConfig::InMemory(_) => Ok(Arc::new(InMemorySchedulerStorage::new())),
-        KeyValueStorageConfig::Redis(_) => Err(anyhow!(
-            "Redis key-value storage is not supported by the scheduler; use Postgres, Sqlite, MultiSqlite, NamespaceRouted with a durable persistent backend, or explicit InMemory storage"
-        )),
-    }
-}
-
-async fn build_scheduler_storage_from_inner(
-    config: &KeyValueStorageInnerConfig,
-) -> Result<Arc<dyn SchedulerStorage + Send + Sync>, anyhow::Error> {
-    match config {
-        KeyValueStorageInnerConfig::Postgres(postgres) => Ok(Arc::new(
-            PostgresSchedulerStorage::configured(postgres)
+        SchedulerStorageConfig::Sqlite(sqlite) => Ok(Arc::new(
+            SqliteSchedulerStorage::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?,
         )),
-        KeyValueStorageInnerConfig::Sqlite(sqlite) => {
-            let pool = SqlitePool::configured(sqlite)
-                .await
-                .map_err(|err| anyhow!(err))?;
-            Ok(Arc::new(
-                SqliteSchedulerStorage::new(pool)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            ))
-        }
-        KeyValueStorageInnerConfig::MultiSqlite(multi_sqlite) => {
-            let db_path = multi_sqlite
-                .root_dir
-                .join("scheduler.db")
-                .to_string_lossy()
-                .to_string();
-            let pool = SqlitePool::configured(&golem_common::config::DbSqliteConfig {
-                database: db_path,
-                max_connections: multi_sqlite.max_connections,
-                foreign_keys: multi_sqlite.foreign_keys,
-            })
-            .await
-            .map_err(|err| anyhow!(err))?;
-            Ok(Arc::new(
-                SqliteSchedulerStorage::new(pool)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            ))
-        }
-        KeyValueStorageInnerConfig::InMemory(_) => Ok(Arc::new(InMemorySchedulerStorage::new())),
-        KeyValueStorageInnerConfig::Redis(_) => Err(anyhow!(
-            "Redis key-value storage is not supported by the scheduler; use Postgres, Sqlite, MultiSqlite, or explicit InMemory storage for the persistent scheduler backend"
-        )),
+        SchedulerStorageConfig::InMemory(_) => Ok(Arc::new(InMemorySchedulerStorage::new())),
     }
 }
 
@@ -1204,14 +1126,11 @@ async fn build_inner_key_value_storage(
             Ok((None, None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Sqlite(sqlite) => {
-            let pool = SqlitePool::configured(sqlite)
+            let storage = SqliteKeyValueStorage::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
-            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-                SqliteKeyValueStorage::new(pool.clone())
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            );
+            let pool = storage.pool();
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(storage);
             Ok((None, Some(pool), key_value_storage))
         }
         KeyValueStorageInnerConfig::MultiSqlite(multi_sqlite) => {
@@ -1223,36 +1142,5 @@ async fn build_inner_key_value_storage(
                 ));
             Ok((None, None, key_value_storage))
         }
-    }
-}
-
-#[cfg(test)]
-mod scheduler_storage_tests {
-    use crate::build_scheduler_storage;
-    use crate::services::golem_config::{KeyValueStorageConfig, KeyValueStorageInnerConfig};
-    use golem_common::config::RedisConfig;
-    use test_r::test;
-
-    #[test]
-    async fn redis_key_value_config_is_not_silently_used_for_scheduler_storage() {
-        let error =
-            build_scheduler_storage(&KeyValueStorageConfig::Redis(RedisConfig::default()), None)
-                .await
-                .unwrap_err()
-                .to_string();
-
-        assert!(error.contains("Redis key-value storage is not supported by the scheduler"));
-    }
-
-    #[test]
-    async fn redis_persistent_namespace_config_is_not_silently_used_for_scheduler_storage() {
-        let error = super::build_scheduler_storage_from_inner(&KeyValueStorageInnerConfig::Redis(
-            RedisConfig::default(),
-        ))
-        .await
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("Redis key-value storage is not supported by the scheduler"));
     }
 }

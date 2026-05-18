@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{ClaimedScheduledAction, SchedulerStorage, datetime_to_millis, millis_to_datetime};
-use crate::services::golem_config::KeyValueStoragePostgresConfig;
+use crate::services::golem_config::SchedulerStoragePostgresConfig;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::SafeDisplay;
@@ -26,8 +26,7 @@ use include_dir::include_dir;
 use std::time::Duration;
 use uuid::Uuid;
 
-static DB_MIGRATIONS: include_dir::Dir =
-    include_dir!("$CARGO_MANIFEST_DIR/db/migration/postgres/scheduler");
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/scheduler");
 
 #[derive(Debug, Clone)]
 pub struct PostgresSchedulerStorage {
@@ -43,7 +42,7 @@ struct ScheduledActionRow {
 }
 
 impl PostgresSchedulerStorage {
-    pub async fn configured(config: &KeyValueStoragePostgresConfig) -> Result<Self, String> {
+    pub async fn configured(config: &SchedulerStoragePostgresConfig) -> Result<Self, String> {
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
         golem_service_base::db::postgres::migrate(
             &config.postgres,

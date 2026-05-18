@@ -18,12 +18,17 @@ use super::{
 };
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
+use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::repo::RepoError;
+use include_dir::include_dir;
 use std::time::Duration;
 
 const DB_TYPE: &str = "sqlite";
+
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/indexed");
 
 #[derive(Debug, Clone)]
 pub struct SqliteIndexedStorage {
@@ -31,35 +36,28 @@ pub struct SqliteIndexedStorage {
 }
 
 impl SqliteIndexedStorage {
-    pub async fn new(pool: SqlitePool) -> Result<Self, String> {
-        let result = Self { pool };
-        result.init().await?;
-        Ok(result)
+    pub async fn configured(config: &DbSqliteConfig) -> Result<Self, String> {
+        Self::migrate(config).await?;
+
+        let pool = SqlitePool::configured(config)
+            .await
+            .map_err(|err| format!("Sqlite indexed storage pool initialization failed: {err:?}"))?;
+
+        Ok(Self { pool })
     }
 
-    async fn init(&self) -> Result<(), String> {
-        let pool = self.pool.with_rw("indexed_storage", "init");
+    /// Apply the indexed storage migrations on the given sqlite config without
+    /// creating a pool. Used when the storage is reusing a pool created elsewhere
+    /// (e.g. when indexed storage shares the key-value pool).
+    pub async fn migrate(config: &DbSqliteConfig) -> Result<(), String> {
+        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+        golem_service_base::db::sqlite::migrate(config, migrations.sqlite_migrations())
+            .await
+            .map_err(|err| format!("Sqlite indexed storage migration failed: {err:?}"))
+    }
 
-        pool.execute(
-        sqlx::query(
-            r#"
-                        CREATE TABLE IF NOT EXISTS index_storage (
-                            namespace TEXT NOT NULL,          -- Namespace to logically group entries
-                            key TEXT NOT NULL,                -- Unique identifier for the index
-                            id INTEGER NOT NULL,              -- Unique numeric identifier for each entry
-                            value BLOB NOT NULL,              -- Arbitrary binary payload for each entry
-                            PRIMARY KEY (namespace, key, id)  -- Unique constraint on (namespace, key, id)
-                        );
-                         "#,
-        ))
-            .await.map_err(|err| err.to_safe_string())?;
-
-        pool.execute(sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_key ON index_storage (namespace, key);",
-        ))
-        .await
-        .map_err(|err| err.to_safe_string())?;
-        Ok(())
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 
     fn namespace(namespace: IndexedStorageNamespace) -> String {

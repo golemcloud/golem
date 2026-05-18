@@ -17,12 +17,17 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use golem_common::SafeDisplay;
+use golem_common::config::DbSqliteConfig;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::db::Pool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
+use include_dir::include_dir;
 use std::time::Duration;
 use uuid::Uuid;
+
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/scheduler");
 
 #[derive(Debug, Clone)]
 pub struct SqliteSchedulerStorage {
@@ -38,37 +43,21 @@ struct ScheduledActionRow {
 }
 
 impl SqliteSchedulerStorage {
-    pub async fn new(pool: SqlitePool) -> Result<Self, String> {
-        let result = Self { pool };
-        result.init().await?;
-        Ok(result)
+    pub async fn configured(config: &DbSqliteConfig) -> Result<Self, String> {
+        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+        golem_service_base::db::sqlite::migrate(config, migrations.sqlite_migrations())
+            .await
+            .map_err(|err| format!("Sqlite scheduler storage migration failed: {err:?}"))?;
+
+        let pool = SqlitePool::configured(config).await.map_err(|err| {
+            format!("Sqlite scheduler storage pool initialization failed: {err:?}")
+        })?;
+
+        Ok(Self { pool })
     }
 
-    async fn init(&self) -> Result<(), String> {
-        let api = self.pool.with_rw("scheduler_storage", "init");
-        api.execute(sqlx::query(
-            r#"
-                CREATE TABLE IF NOT EXISTS scheduled_actions (
-                    schedule_id     TEXT NOT NULL,
-                    due_at_ms       INTEGER NOT NULL,
-                    available_at_ms INTEGER NOT NULL,
-                    shard_id        INTEGER NOT NULL,
-                    action          BLOB NOT NULL,
-                    lease_owner     TEXT NULL,
-                    lease_until_ms  INTEGER NULL,
-                    attempt_count   INTEGER NOT NULL DEFAULT 0,
-                    CONSTRAINT scheduled_actions_pk PRIMARY KEY (schedule_id)
-                );
-                "#,
-        ))
-        .await
-        .map_err(|err| err.to_safe_string())?;
-        api.execute(sqlx::query(
-            "CREATE INDEX IF NOT EXISTS scheduled_actions_claim_idx ON scheduled_actions (shard_id, available_at_ms, schedule_id);",
-        ))
-        .await
-        .map_err(|err| err.to_safe_string())?;
-        Ok(())
+    pub async fn new(pool: SqlitePool) -> Result<Self, String> {
+        Ok(Self { pool })
     }
 }
 

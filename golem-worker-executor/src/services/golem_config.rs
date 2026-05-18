@@ -42,6 +42,7 @@ pub struct GolemConfig {
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
+    pub scheduler_storage: SchedulerStorageConfig,
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
     pub limits: Limits,
@@ -92,6 +93,12 @@ impl SafeDisplay for GolemConfig {
             &mut result,
             "{}",
             self.key_value_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "scheduler storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.scheduler_storage.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "indexed storage:");
         let _ = writeln!(
@@ -238,6 +245,7 @@ impl Default for GolemConfig {
             tracing: TracingConfig::local_dev("worker-executor"),
             tracing_file_name_with_port: true,
             key_value_storage: KeyValueStorageConfig::default(),
+            scheduler_storage: SchedulerStorageConfig::default(),
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             limits: Limits::default(),
@@ -740,6 +748,66 @@ impl SafeDisplay for KeyValueStorageMultiSqliteConfig {
 pub struct KeyValueStorageInMemoryConfig {}
 
 impl SafeDisplay for KeyValueStorageInMemoryConfig {
+    fn to_safe_string(&self) -> String {
+        "".to_string()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum SchedulerStorageConfig {
+    Postgres(SchedulerStoragePostgresConfig),
+    Sqlite(DbSqliteConfig),
+    InMemory(SchedulerStorageInMemoryConfig),
+}
+
+impl SafeDisplay for SchedulerStorageConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            SchedulerStorageConfig::Postgres(inner) => {
+                let _ = writeln!(&mut result, "postgres:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            SchedulerStorageConfig::Sqlite(inner) => {
+                let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            SchedulerStorageConfig::InMemory(inner) => {
+                let _ = writeln!(&mut result, "in-memory:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
+impl Default for SchedulerStorageConfig {
+    fn default() -> Self {
+        Self::Sqlite(DbSqliteConfig {
+            database: "../data/worker-executor-scheduler-storage.db".to_string(),
+            max_connections: 10,
+            foreign_keys: false,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SchedulerStoragePostgresConfig {
+    #[serde(flatten)]
+    pub postgres: DbPostgresConfig,
+}
+
+impl SafeDisplay for SchedulerStoragePostgresConfig {
+    fn to_safe_string(&self) -> String {
+        self.postgres.to_safe_string()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct SchedulerStorageInMemoryConfig {}
+
+impl SafeDisplay for SchedulerStorageInMemoryConfig {
     fn to_safe_string(&self) -> String {
         "".to_string()
     }

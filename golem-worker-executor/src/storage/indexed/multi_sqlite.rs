@@ -21,7 +21,6 @@ use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentId;
-use golem_service_base::db::sqlite::SqlitePool;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -80,10 +79,7 @@ impl MultiSqliteIndexedStorage {
             max_connections,
             foreign_keys,
         };
-        let pool = SqlitePool::configured(&config).await.map_err(|e| {
-            IndexedStorageError::Other(format!("Failed to initialize sqlite database: {:?}", e))
-        })?;
-        SqliteIndexedStorage::new(pool)
+        SqliteIndexedStorage::configured(&config)
             .await
             .map_err(IndexedStorageError::Other)
     }

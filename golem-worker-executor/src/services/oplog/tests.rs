@@ -33,11 +33,9 @@ use golem_common::model::{
 use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::tracing::{TracingConfig, init_tracing};
-use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_wasm::{FromValue, FromValueAndType, IntoValue, IntoValueAndType};
 use nonempty_collections::nev;
-use sqlx::sqlite::SqlitePoolOptions;
 use std::collections::HashSet;
 use std::sync::RwLock;
 use std::time::Instant;
@@ -2510,14 +2508,19 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
 /// INSERT attempts and a unique key violation in SQLite.
 #[test]
 async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &Tracing) {
-    let sqlx_pool = SqlitePoolOptions::new()
-        .max_connections(10)
-        .connect("sqlite::memory:")
-        .await
-        .expect("Cannot create sqlite pool");
-    let pool = SqlitePool::new(sqlx_pool.clone(), sqlx_pool);
+    let tempdir = tempfile::TempDir::new().expect("Cannot create temp dir");
+    let database = tempdir
+        .path()
+        .join("indexed.db")
+        .to_string_lossy()
+        .into_owned();
+    let config = golem_common::config::DbSqliteConfig {
+        database,
+        max_connections: 10,
+        foreign_keys: false,
+    };
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
-        Arc::new(SqliteIndexedStorage::new(pool).await.unwrap());
+        Arc::new(SqliteIndexedStorage::configured(&config).await.unwrap());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = Arc::new(
         PrimaryOplogService::new(

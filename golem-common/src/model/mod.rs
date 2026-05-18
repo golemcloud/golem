@@ -406,8 +406,7 @@ impl ScheduleId {
 
     pub fn from_idempotency_key(key: &IdempotencyKey) -> Self {
         Self {
-            id: Uuid::parse_str(&key.value)
-                .expect("derived idempotency key must be a UUID"),
+            id: Uuid::parse_str(&key.value).expect("derived idempotency key must be a UUID"),
         }
     }
 }

@@ -201,6 +201,14 @@ lease_ttl = "30s"
 max_batches_per_tick = 10
 refresh_interval = "2s"
 
+[scheduler_storage]
+type = "Sqlite"
+
+[scheduler_storage.config]
+database = "../data/worker-executor-scheduler-storage.db"
+foreign_keys = false
+max_connections = 10
+
 [suspend]
 ephemeral_max_sleep = "1m"
 suspend_after = "10s"
@@ -459,6 +467,14 @@ without_time = false
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
 # refresh_interval = "2s"
+# 
+# [scheduler_storage]
+# type = "Sqlite"
+# 
+# [scheduler_storage.config]
+# database = "../data/worker-executor-scheduler-storage.db"
+# foreign_keys = false
+# max_connections = 10
 # 
 # [suspend]
 # ephemeral_max_sleep = "1m"
