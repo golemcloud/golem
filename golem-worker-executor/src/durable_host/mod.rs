@@ -2131,6 +2131,8 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
         &mut self,
         invocation_context: InvocationContextStack,
     ) -> Result<(), WorkerExecutorError> {
+        let invocation_context = invocation_context
+            .limit_depth(self.state.config.limits.max_invocation_context_stack_depth);
         let (invocation_context, current_span_id) =
             InvocationContext::from_stack(invocation_context)
                 .map_err(WorkerExecutorError::runtime)?;
@@ -2146,6 +2148,7 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
             .invocation_context
             .get_stack(&self.state.current_span_id)
             .unwrap()
+            .limit_depth(self.state.config.limits.max_invocation_context_stack_depth)
     }
 
     fn is_live(&self) -> bool {
@@ -2705,6 +2708,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         self.state
             .invocation_context
             .clone_as_inherited_stack(current_span_id)
+            .limit_depth(self.state.config.limits.max_invocation_context_stack_depth)
     }
 }
 

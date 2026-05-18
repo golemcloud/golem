@@ -1078,8 +1078,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return Err(err.clone());
             }
 
-            let (idempotency_key, invocation_payload, invocation_context) =
-                invocation.clone().into_parts();
+            let (idempotency_key, invocation_payload, invocation_context) = invocation.into_parts();
+            let invocation_context = invocation_context
+                .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
+            let invocation = AgentInvocation::from_parts(
+                idempotency_key.clone(),
+                invocation_payload.clone(),
+                invocation_context.clone(),
+            );
             let payload = self
                 .oplog
                 .upload_payload(&invocation_payload)

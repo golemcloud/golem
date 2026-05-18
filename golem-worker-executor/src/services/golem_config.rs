@@ -293,6 +293,7 @@ pub struct Limits {
     pub epoch_interval: Duration,
     pub epoch_ticks: u64,
     pub max_oplog_query_pages_size: usize,
+    pub max_invocation_context_stack_depth: usize,
 }
 
 impl SafeDisplay for Limits {
@@ -340,6 +341,11 @@ impl SafeDisplay for Limits {
             &mut result,
             "max oplog query pages: {}",
             self.max_oplog_query_pages_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "max invocation context stack depth: {}",
+            self.max_invocation_context_stack_depth
         );
 
         result
@@ -1354,6 +1360,7 @@ impl Default for Limits {
             epoch_interval: Duration::from_millis(10),
             epoch_ticks: 1,
             max_oplog_query_pages_size: 100,
+            max_invocation_context_stack_depth: 1024,
         }
     }
 }

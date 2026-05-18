@@ -109,6 +109,7 @@ fuel_to_borrow = 10000
 invocation_result_broadcast_capacity = 100000
 max_active_workers = 1024
 max_concurrent_streams = 1024
+max_invocation_context_stack_depth = 1024
 max_oplog_query_pages_size = 100
 
 [memory]
@@ -428,6 +429,7 @@ without_time = false
 # invocation_result_broadcast_capacity = 100000
 # max_active_workers = 1024
 # max_concurrent_streams = 1024
+# max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100
 # 
 # [memory]
@@ -717,6 +719,7 @@ without_time = false
 # invocation_result_broadcast_capacity = 100000
 # max_active_workers = 1024
 # max_concurrent_streams = 1024
+# max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100
 # 
 # [memory]
