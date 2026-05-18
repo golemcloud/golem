@@ -16,7 +16,7 @@ use golem_rust::bindings::golem::api::oplog::{
     RawSuccessfulUpdateParameters, RemoteTransactionParameters, SetSpanAttributeParameters,
     SpanData, StartSpanParameters,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) struct ProcessingOutput {
     pub(crate) spans: Vec<OtlpSpan>,
@@ -525,9 +525,12 @@ fn handle_invocation_started(
     state.trace_id = params.trace_id;
     state.trace_states = params.trace_states;
 
-    // First pass: build a raw map of inherited span_id → parent_span_id.
-    // External spans are roots in the inherited chain (parent = None).
+    // First pass: build a raw map of inherited local span_id → parent_span_id,
+    // and collect external spans. External spans are remote parent boundaries:
+    // they are not exported by this worker, but child spans can still use their
+    // span id as an OTLP parent.
     let mut raw_inherited: HashMap<String, Option<String>> = HashMap::new();
+    let mut external_spans: HashSet<String> = HashSet::new();
 
     for span_data in &params.invocation_context {
         match span_data {
@@ -535,22 +538,29 @@ fn handle_invocation_started(
                 raw_inherited.insert(local.span_id.clone(), local.parent.clone());
             }
             SpanData::ExternalSpan(ext) => {
-                raw_inherited.insert(ext.span_id.clone(), None);
+                external_spans.insert(ext.span_id.clone());
             }
             _ => {}
         }
     }
 
     // Resolve each inherited entry: follow the parent chain through the
-    // inherited map until reaching a parent that is NOT in the map (i.e. it
-    // was exported by the originating worker) or None (root).
-    let resolved: HashMap<String, Option<String>> = raw_inherited
+    // inherited map until reaching a parent that is NOT inherited (i.e. it was
+    // exported by the originating worker), an external span boundary, or None
+    // (root).
+    let mut resolved: HashMap<String, Option<String>> = raw_inherited
         .keys()
         .map(|span_id| {
-            let resolved_parent = resolve_inherited_parent(span_id, &raw_inherited);
+            let resolved_parent =
+                resolve_inherited_parent(span_id, &raw_inherited, &external_spans);
             (span_id.clone(), resolved_parent)
         })
         .collect();
+    resolved.extend(
+        external_spans
+            .into_iter()
+            .map(|span_id| (span_id.clone(), Some(span_id))),
+    );
 
     state.inherited_span_parents = resolved;
 
@@ -580,18 +590,22 @@ fn handle_invocation_started(
     }
 }
 
-/// Given a span_id in the inherited map, follow the parent chain until we find
-/// a parent that is NOT itself in the map (meaning it was exported by the
-/// originating worker), or `None` if the chain ends at a root.
+/// Given an inherited local span id, follow the parent chain until we find a
+/// parent that is NOT itself inherited (meaning it was exported by the
+/// originating worker), an external span boundary, or `None` if the chain ends
+/// at a root.
 fn resolve_inherited_parent(
     span_id: &str,
     inherited: &HashMap<String, Option<String>>,
+    external_spans: &HashSet<String>,
 ) -> Option<String> {
     let mut current = span_id;
     loop {
         match inherited.get(current) {
             Some(Some(parent)) => {
-                if inherited.contains_key(parent.as_str()) {
+                if external_spans.contains(parent.as_str()) {
+                    return Some(parent.clone());
+                } else if inherited.contains_key(parent.as_str()) {
                     current = parent.as_str();
                 } else {
                     // Parent is not inherited — it's the real ancestor
@@ -599,7 +613,7 @@ fn resolve_inherited_parent(
                 }
             }
             Some(None) => {
-                // This entry is a root (external span or chain end)
+                // This entry is a root.
                 return None;
             }
             None => {
@@ -982,4 +996,51 @@ fn handle_oplog_processor_checkpoint(
             }],
         }),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_inherited_chain_to_external_boundary() {
+        let inherited = HashMap::from([
+            ("child".to_string(), Some("parent".to_string())),
+            ("parent".to_string(), Some("external".to_string())),
+        ]);
+        let external_spans = HashSet::from(["external".to_string()]);
+
+        assert_eq!(
+            resolve_inherited_parent("child", &inherited, &external_spans),
+            Some("external".to_string())
+        );
+    }
+
+    #[test]
+    fn resolves_inherited_chain_to_non_inherited_parent() {
+        let inherited = HashMap::from([
+            ("child".to_string(), Some("parent".to_string())),
+            ("parent".to_string(), Some("exported".to_string())),
+        ]);
+        let external_spans = HashSet::new();
+
+        assert_eq!(
+            resolve_inherited_parent("child", &inherited, &external_spans),
+            Some("exported".to_string())
+        );
+    }
+
+    #[test]
+    fn resolves_direct_external_parent_to_external_span_id() {
+        let inherited_span_parents =
+            HashMap::from([("external".to_string(), Some("external".to_string()))]);
+
+        assert_eq!(
+            resolve_parent_through_inherited(
+                Some("external".to_string()),
+                &inherited_span_parents,
+            ),
+            Some("external".to_string())
+        );
+    }
 }
