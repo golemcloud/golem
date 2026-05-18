@@ -796,11 +796,11 @@ impl From<DomainRegistrationError> for ApiError {
                 Self::conflict(api::error_code::DOMAIN_ALREADY_EXISTS, error)
             }
 
-            DomainRegistrationError::DomainNotValidForHttpApi(_) => {
+            DomainRegistrationError::DomainNotValidForHttpApi { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
             }
 
-            DomainRegistrationError::DomainNotValidForMcp(_) => {
+            DomainRegistrationError::DomainNotValidForMcp { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_MCP, error)
             }
 
@@ -875,7 +875,7 @@ impl From<HttpApiDeploymentError> for ApiError {
                 cause: None,
             })),
 
-            HttpApiDeploymentError::DomainNotValidForHttpApi(_) => {
+            HttpApiDeploymentError::DomainNotValidForHttpApi { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
             }
 
@@ -919,7 +919,7 @@ impl From<McpDeploymentError> for ApiError {
                 cause: None,
             })),
 
-            McpDeploymentError::DomainNotValidForMcp(_) => {
+            McpDeploymentError::DomainNotValidForMcp { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_MCP, error)
             }
 
