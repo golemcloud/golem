@@ -47,25 +47,12 @@ impl SqliteIndexedStorage {
     }
 
     /// Apply the indexed storage migrations on the given sqlite config without
-    /// creating a pool. Used when the storage is reusing a pool created elsewhere
-    /// (e.g. when indexed storage shares the key-value pool).
-    ///
-    /// The indexed storage migrations live in their own numeric range (100+) so
-    /// they can coexist with the key-value storage migrations (1..99) in a single
-    /// `_sqlx_migrations` table when the two modules share the same SQLite file
-    /// (`KVStoreSqlite`). We therefore opt into `ignore_missing` so sqlx does not
-    /// treat the other module's migration entries as a fatal error.
+    /// creating a pool.
     pub async fn migrate(config: &DbSqliteConfig) -> Result<(), String> {
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
-        golem_service_base::db::sqlite::migrate_with_options(
-            config,
-            migrations.sqlite_migrations(),
-            golem_service_base::db::sqlite::MigrateOptions {
-                ignore_missing: true,
-            },
-        )
-        .await
-        .map_err(|err| format!("Sqlite indexed storage migration failed: {err:?}"))
+        golem_service_base::db::sqlite::migrate(config, migrations.sqlite_migrations())
+            .await
+            .map_err(|err| format!("Sqlite indexed storage migration failed: {err:?}"))
     }
 
     pub fn new(pool: SqlitePool) -> Self {

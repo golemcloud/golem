@@ -421,31 +421,9 @@ pub async fn migrate(
     config: &DbSqliteConfig,
     migrations: impl MigrationSource<'_>,
 ) -> Result<(), anyhow::Error> {
-    migrate_with_options(config, migrations, MigrateOptions::default()).await
-}
-
-/// Options controlling migration behavior.
-#[derive(Default, Clone, Copy, Debug)]
-pub struct MigrateOptions {
-    /// If true, applied migrations not present in the source are ignored instead
-    /// of being treated as a fatal error. Use this only when multiple modules
-    /// intentionally share a SQLite database file with disjoint migration version
-    /// ranges (e.g. indexed storage running on top of the key-value SQLite pool
-    /// via `KVStoreSqlite`).
-    pub ignore_missing: bool,
-}
-
-pub async fn migrate_with_options(
-    config: &DbSqliteConfig,
-    migrations: impl MigrationSource<'_>,
-    options: MigrateOptions,
-) -> Result<(), anyhow::Error> {
     info!("DB migration: sqlite://{}", config.database);
     let mut conn = SqliteConnection::connect_with(&config.connect_options()).await?;
-    let mut migrator = sqlx::migrate::Migrator::new(migrations).await?;
-    if options.ignore_missing {
-        migrator.set_ignore_missing(true);
-    }
+    let migrator = sqlx::migrate::Migrator::new(migrations).await?;
     migrator.run_direct(&mut conn).await?;
 
     let _ = conn.close().await;

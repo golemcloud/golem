@@ -100,6 +100,7 @@ use async_trait::async_trait;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
+use golem_common::config::DbSqliteConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
@@ -579,19 +580,21 @@ pub async fn create_worker_executor_impl<
                 .map_err(|err| anyhow!(err))?,
         ),
         IndexedStorageConfig::KVStoreSqlite(_) => {
-            let pool = sqlite
-                .clone()
-                .expect("Sqlite must be configured as key-value storage when using KVStoreSqlite");
             let kv_sqlite_config = match &golem_config.key_value_storage {
                 KeyValueStorageConfig::Sqlite(sqlite_config) => sqlite_config,
                 _ => panic!(
                     "Invalid configuration: sqlite must be used as key-value storage when using KVStoreSqlite"
                 ),
             };
-            SqliteIndexedStorage::migrate(kv_sqlite_config)
-                .await
-                .map_err(|err| anyhow!(err))?;
-            Arc::new(SqliteIndexedStorage::new(pool))
+            // The indexed storage uses its own SQLite DB file, disjoint from the
+            // key-value storage's one, so each module has an independent
+            // `_sqlx_migrations` table.
+            let indexed_sqlite_config = derive_disjoint_sqlite_config(kv_sqlite_config, "indexed");
+            Arc::new(
+                SqliteIndexedStorage::configured(&indexed_sqlite_config)
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            )
         }
         IndexedStorageConfig::KVStoreMultiSqlite(_) => match &golem_config.key_value_storage {
             KeyValueStorageConfig::MultiSqlite(multi_sqlite) => {
@@ -934,6 +937,21 @@ pub async fn create_worker_executor_impl<
         .await;
 
     Ok((all, epoch_thread, epoch_stop, registry_service))
+}
+
+/// Derives a `DbSqliteConfig` for a module that should live in a separate
+/// SQLite DB file next to a base one (used by `KVStoreSqlite` to give the
+/// indexed storage its own DB and migration table).
+fn derive_disjoint_sqlite_config(base: &DbSqliteConfig, suffix: &str) -> DbSqliteConfig {
+    let database = match base.database.strip_suffix(".db") {
+        Some(stem) => format!("{stem}-{suffix}.db"),
+        None => format!("{}-{suffix}", base.database),
+    };
+    DbSqliteConfig {
+        database,
+        max_connections: base.max_connections,
+        foreign_keys: base.foreign_keys,
+    }
 }
 
 async fn build_scheduler_storage(
