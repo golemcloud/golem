@@ -78,6 +78,10 @@ pub trait ComponentService: Send + Sync {
         self.invalidate_current_deployed_metadata().await
     }
 
+    /// Invalidates all cached component metadata (both current-deployed and version-pinned)
+    /// for a specific environment.
+    async fn invalidate_all_metadata_for_environment(&self, environment_id: EnvironmentId);
+
     /// Invalidates all cached component metadata.
     async fn invalidate_all(&self) {
         self.invalidate_current_deployed_metadata().await
@@ -360,6 +364,25 @@ impl ComponentService for ComponentServiceDefault {
 
         for key in keys {
             self.current_component_metadata_cache.remove(&key).await;
+        }
+    }
+
+    async fn invalidate_all_metadata_for_environment(&self, environment_id: EnvironmentId) {
+        self.invalidate_current_deployed_metadata_for_environment(environment_id)
+            .await;
+
+        let keys = self
+            .component_metadata_cache
+            .iter()
+            .await
+            .into_iter()
+            .filter_map(|(key, component)| {
+                (component.environment_id == environment_id).then_some(key)
+            })
+            .collect::<Vec<_>>();
+
+        for key in keys {
+            self.component_metadata_cache.remove(&key).await;
         }
     }
 

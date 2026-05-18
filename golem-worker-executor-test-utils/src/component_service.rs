@@ -345,6 +345,8 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             .map(|local_metadata| Component::from(local_metadata.clone()))
             .collect()
     }
+
+    async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
 }
 
 struct ComponentMetadataIndex {

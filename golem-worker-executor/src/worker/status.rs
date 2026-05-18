@@ -2349,6 +2349,8 @@ mod test {
         async fn all_cached_metadata(&self) -> Vec<Component> {
             Vec::new()
         }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
     }
 
     async fn run_test_case(test_case: TestCase) {
