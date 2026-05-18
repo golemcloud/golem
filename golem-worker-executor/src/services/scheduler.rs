@@ -476,9 +476,13 @@ impl SchedulerService for SchedulerServiceDefault {
         time: DateTime<Utc>,
         action: ScheduledAction,
     ) -> ScheduleId {
+        let assignment = self.shard_service.current_assignment().unwrap_or_else(|err| {
+            panic!("failed to read current shard assignment while scheduling action {action}: {err}")
+        });
         let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
+        let shard_id = ShardId::from_routing_hash(routing_hash, assignment.number_of_shards);
         self.scheduler_storage
-            .insert(schedule_id, time, routing_hash, &action)
+            .insert(schedule_id, time, shard_id, &action)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to add schedule for action {action} in scheduler storage: {err}")
@@ -769,10 +773,9 @@ mod tests {
     async fn leases_prevent_duplicate_claims_until_expiry() {
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let action = complete_promise_action(promise(agent("inst1"), 101));
-        let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
         storage
-            .insert(ScheduleId::fresh(), due_at, routing_hash, &action)
+            .insert(ScheduleId::fresh(), due_at, ShardId::new(0), &action)
             .await
             .unwrap();
 
@@ -810,10 +813,9 @@ mod tests {
     async fn stale_ack_does_not_delete_reclaimed_entry() {
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let action = complete_promise_action(promise(agent("inst1"), 101));
-        let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
         storage
-            .insert(ScheduleId::fresh(), due_at, routing_hash, &action)
+            .insert(ScheduleId::fresh(), due_at, ShardId::new(0), &action)
             .await
             .unwrap();
 
@@ -862,10 +864,9 @@ mod tests {
     async fn lease_extension_prevents_reclaim_until_extended_deadline() {
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let action = complete_promise_action(promise(agent("inst1"), 101));
-        let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
         storage
-            .insert(ScheduleId::fresh(), due_at, routing_hash, &action)
+            .insert(ScheduleId::fresh(), due_at, ShardId::new(0), &action)
             .await
             .unwrap();
 
@@ -928,14 +929,13 @@ mod tests {
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let action = complete_promise_action(promise(agent("inst1"), 101));
         let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
-        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
-        storage
-            .insert(ScheduleId::fresh(), due_at, routing_hash, &action)
-            .await
-            .unwrap();
-
         let shard = ShardId::from_routing_hash(routing_hash, 2);
         let other_shard = ShardId::new((shard.value() + 1) % 2);
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+        storage
+            .insert(ScheduleId::fresh(), due_at, shard, &action)
+            .await
+            .unwrap();
 
         let unassigned = ShardAssignment {
             number_of_shards: 2,
@@ -965,14 +965,7 @@ mod tests {
     }
 
     #[test]
-    fn routing_hash_handles_negative_hashes() {
-        let assignment = ShardAssignment {
-            number_of_shards: 10,
-            shard_ids: HashSet::from_iter([ShardId::new(7)]),
-        };
-        assert!(crate::storage::scheduler::routing_hash_matches_assignment(
-            -i64::MAX,
-            &assignment
-        ));
+    fn shard_id_from_routing_hash_handles_negative_hashes() {
+        assert_eq!(ShardId::from_routing_hash(-i64::MAX, 10), ShardId::new(7));
     }
 }

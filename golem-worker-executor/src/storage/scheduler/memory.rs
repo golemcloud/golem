@@ -12,13 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{
-    ClaimedScheduledAction, SchedulerStorage, datetime_to_millis, millis_to_datetime,
-    routing_hash_matches_assignment,
-};
+use super::{ClaimedScheduledAction, SchedulerStorage, datetime_to_millis, millis_to_datetime};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment};
+use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -32,7 +29,7 @@ pub struct InMemorySchedulerStorage {
 #[derive(Debug, Clone)]
 struct ScheduledEntry {
     due_at_ms: i64,
-    routing_hash: i64,
+    shard_id: ShardId,
     action: ScheduledAction,
     lease_owner: Option<Uuid>,
     lease_until_ms: Option<i64>,
@@ -51,7 +48,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         &self,
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
-        routing_hash: i64,
+        shard_id: ShardId,
         action: &ScheduledAction,
     ) -> Result<(), String> {
         self.entries
@@ -60,7 +57,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
             .entry(schedule_id.id)
             .or_insert_with(|| ScheduledEntry {
                 due_at_ms: datetime_to_millis(due_at),
-                routing_hash,
+                shard_id,
                 action: action.clone(),
                 lease_owner: None,
                 lease_until_ms: None,
@@ -93,7 +90,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
                     && entry
                         .lease_until_ms
                         .is_none_or(|lease_until| lease_until <= now_ms)
-                    && routing_hash_matches_assignment(entry.routing_hash, assignment)
+                    && assignment.shard_ids.contains(&entry.shard_id)
             })
             .map(|(id, entry)| (*id, entry.due_at_ms))
             .collect();

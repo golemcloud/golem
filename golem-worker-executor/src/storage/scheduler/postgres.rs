@@ -17,7 +17,7 @@ use crate::services::golem_config::KeyValueStoragePostgresConfig;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::SafeDisplay;
-use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment};
+use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
@@ -72,18 +72,18 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         &self,
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
-        routing_hash: i64,
+        shard_id: ShardId,
         action: &ScheduledAction,
     ) -> Result<(), String> {
         let action = serialize(action)?;
 
         let due_at_ms = datetime_to_millis(due_at);
         let query = sqlx::query(
-            "INSERT INTO scheduled_actions (schedule_id, due_at_ms, available_at_ms, routing_hash, action) VALUES ($1, $2, $2, $3, $4) ON CONFLICT (schedule_id) DO NOTHING;",
+            "INSERT INTO scheduled_actions (schedule_id, due_at_ms, available_at_ms, shard_id, action) VALUES ($1, $2, $2, $3, $4) ON CONFLICT (schedule_id) DO NOTHING;",
         )
         .bind(schedule_id.id)
         .bind(due_at_ms)
-        .bind(routing_hash)
+        .bind(shard_id.value())
         .bind(action);
 
         self.pool
@@ -125,32 +125,30 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .iter()
             .map(|shard| shard.value())
             .collect();
-        let number_of_shards = assignment.number_of_shards as i64;
 
         let query = sqlx::query_as::<_, ScheduledActionRow>(
             r#"
               WITH picked AS (
                   SELECT schedule_id
                     FROM scheduled_actions
-                   WHERE available_at_ms <= $1
-                     AND (MOD(ABS(routing_hash::numeric), $2::numeric))::bigint = ANY($3)
+                   WHERE shard_id = ANY($1)
+                     AND available_at_ms <= $2
                    ORDER BY available_at_ms ASC, schedule_id ASC
-                   LIMIT $4
+                   LIMIT $3
                    FOR UPDATE SKIP LOCKED
               )
               UPDATE scheduled_actions s
-                 SET lease_owner = $5,
-                     lease_until_ms = $6,
-                     available_at_ms = $6,
+                 SET lease_owner = $4,
+                     lease_until_ms = $5,
+                     available_at_ms = $5,
                      attempt_count = attempt_count + 1
                 FROM picked
                WHERE s.schedule_id = picked.schedule_id
             RETURNING s.schedule_id, s.due_at_ms, s.action, s.attempt_count;
             "#,
         )
-        .bind(now_ms)
-        .bind(number_of_shards)
         .bind(shard_ids)
+        .bind(now_ms)
         .bind(limit as i64)
         .bind(lease_owner)
         .bind(lease_until_ms);

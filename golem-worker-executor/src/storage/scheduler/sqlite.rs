@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{
-    ClaimedScheduledAction, SchedulerStorage, datetime_to_millis, millis_to_datetime,
-    routing_hash_matches_assignment,
-};
+use super::{ClaimedScheduledAction, SchedulerStorage, datetime_to_millis, millis_to_datetime};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use golem_common::SafeDisplay;
-use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment};
+use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::db::Pool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -36,7 +33,6 @@ pub struct SqliteSchedulerStorage {
 struct ScheduledActionRow {
     schedule_id: String,
     due_at_ms: i64,
-    routing_hash: i64,
     action: Vec<u8>,
     attempt_count: i32,
 }
@@ -56,7 +52,7 @@ impl SqliteSchedulerStorage {
                     schedule_id     TEXT NOT NULL,
                     due_at_ms       INTEGER NOT NULL,
                     available_at_ms INTEGER NOT NULL,
-                    routing_hash    INTEGER NOT NULL,
+                    shard_id        INTEGER NOT NULL,
                     action          BLOB NOT NULL,
                     lease_owner     TEXT NULL,
                     lease_until_ms  INTEGER NULL,
@@ -68,7 +64,7 @@ impl SqliteSchedulerStorage {
         .await
         .map_err(|err| err.to_safe_string())?;
         api.execute(sqlx::query(
-            "CREATE INDEX IF NOT EXISTS scheduled_actions_claim_idx ON scheduled_actions (available_at_ms, schedule_id);",
+            "CREATE INDEX IF NOT EXISTS scheduled_actions_claim_idx ON scheduled_actions (shard_id, available_at_ms, schedule_id);",
         ))
         .await
         .map_err(|err| err.to_safe_string())?;
@@ -82,18 +78,18 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         &self,
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
-        routing_hash: i64,
+        shard_id: ShardId,
         action: &ScheduledAction,
     ) -> Result<(), String> {
         let action = serialize(action)?;
         let due_at_ms = datetime_to_millis(due_at);
         let query = sqlx::query(
-            "INSERT OR IGNORE INTO scheduled_actions (schedule_id, due_at_ms, available_at_ms, routing_hash, action) VALUES (?, ?, ?, ?, ?);",
+            "INSERT OR IGNORE INTO scheduled_actions (schedule_id, due_at_ms, available_at_ms, shard_id, action) VALUES (?, ?, ?, ?, ?);",
         )
         .bind(schedule_id.id.to_string())
         .bind(due_at_ms)
         .bind(due_at_ms)
-        .bind(routing_hash)
+        .bind(shard_id.value())
         .bind(action);
 
         self.pool
@@ -130,31 +126,40 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         let now_ms = datetime_to_millis(now);
         let lease_owner = Uuid::now_v7();
         let lease_until_ms = datetime_to_millis(now + lease_ttl);
-        let assignment = assignment.clone();
+        let shard_ids: Vec<i64> = assignment
+            .shard_ids
+            .iter()
+            .map(|shard| shard.value())
+            .collect();
+
+        let mut shard_placeholders = String::with_capacity(shard_ids.len() * 2);
+        for i in 0..shard_ids.len() {
+            if i > 0 {
+                shard_placeholders.push(',');
+            }
+            shard_placeholders.push('?');
+        }
+        let select_sql = format!(
+            r#"
+            SELECT schedule_id, due_at_ms, action, attempt_count
+              FROM scheduled_actions
+             WHERE shard_id IN ({shard_placeholders})
+               AND available_at_ms <= ?
+             ORDER BY available_at_ms ASC, schedule_id ASC
+             LIMIT ?;
+            "#
+        );
 
         let rows = self
             .pool
             .with_tx("scheduler_storage", "claim_due", |tx| {
                 async move {
-                    let candidates = tx
-                        .fetch_all_as::<ScheduledActionRow, _>(
-                            sqlx::query_as(
-                                r#"
-                                SELECT schedule_id, due_at_ms, routing_hash, action, attempt_count
-                                  FROM scheduled_actions
-                                 WHERE available_at_ms <= ?
-                                 ORDER BY available_at_ms ASC, schedule_id ASC;
-                                "#,
-                            )
-                            .bind(now_ms),
-                        )
-                        .await?;
-
-                    let selected: Vec<ScheduledActionRow> = candidates
-                        .into_iter()
-                        .filter(|row| routing_hash_matches_assignment(row.routing_hash, &assignment))
-                        .take(limit as usize)
-                        .collect();
+                    let mut select_query = sqlx::query_as::<_, ScheduledActionRow>(&select_sql);
+                    for shard_id in &shard_ids {
+                        select_query = select_query.bind(*shard_id);
+                    }
+                    select_query = select_query.bind(now_ms).bind(limit as i64);
+                    let selected = tx.fetch_all_as::<ScheduledActionRow, _>(select_query).await?;
 
                     for row in &selected {
                         tx.execute(

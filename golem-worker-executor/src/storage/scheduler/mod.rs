@@ -38,7 +38,7 @@ pub trait SchedulerStorage: Debug {
         &self,
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
-        routing_hash: i64,
+        shard_id: ShardId,
         action: &ScheduledAction,
     ) -> Result<(), String>;
 
@@ -69,9 +69,4 @@ pub fn datetime_to_millis(time: DateTime<Utc>) -> i64 {
 pub fn millis_to_datetime(millis: i64) -> Result<DateTime<Utc>, String> {
     DateTime::<Utc>::from_timestamp_millis(millis)
         .ok_or_else(|| format!("Invalid timestamp milliseconds: {millis}"))
-}
-
-pub fn routing_hash_matches_assignment(routing_hash: i64, assignment: &ShardAssignment) -> bool {
-    let shard_id = ShardId::from_routing_hash(routing_hash, assignment.number_of_shards);
-    assignment.shard_ids.contains(&shard_id)
 }
