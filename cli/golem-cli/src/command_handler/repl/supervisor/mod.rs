@@ -17,12 +17,14 @@ mod pty;
 
 use anyhow::{Context, anyhow};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use portable_pty::PtySize;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::Duration;
 use tokio::sync::mpsc as tokio_mpsc;
 use uuid::Uuid;
 
@@ -146,6 +148,7 @@ impl Supervisor {
     fn run(&mut self, node_spec: ReplCommandSpec) -> anyhow::Result<ReplSessionResult> {
         let (event_tx, event_rx) = mpsc::channel::<SupervisorEvent>();
         spawn_input_reader(event_tx.clone());
+        spawn_resize_watcher(event_tx.clone());
         self.control
             .take()
             .expect("missing REPL control server")
@@ -188,7 +191,16 @@ impl Supervisor {
                 self.handle_output(session, bytes);
                 Ok(None)
             }
-            SupervisorEvent::Exited { session, exit } => self.handle_exit(session, exit, event_tx),
+            SupervisorEvent::OutputClosed { session, error } => {
+                self.handle_output_closed(session, error, event_tx)
+            }
+            SupervisorEvent::Resize(size) => {
+                self.handle_resize(size);
+                Ok(None)
+            }
+            SupervisorEvent::Exited { session, exit } => {
+                self.handle_process_exit(session, exit, event_tx)
+            }
             SupervisorEvent::RunCli(request) => {
                 self.handle_run_cli(request, event_tx)?;
                 Ok(None)
@@ -203,7 +215,9 @@ impl Supervisor {
             | SupervisorState::CliActive
             | SupervisorState::CliCancelling
             | SupervisorState::CliExiting => self.cli.as_mut(),
-            SupervisorState::Reloading | SupervisorState::ShuttingDown => None,
+            SupervisorState::NodeExiting
+            | SupervisorState::Reloading
+            | SupervisorState::ShuttingDown => None,
         };
 
         if let Some(target) = target {
@@ -219,6 +233,7 @@ impl Supervisor {
             (self.state, session),
             (SupervisorState::ReplActive, SessionId::Node)
                 | (SupervisorState::NodeStarting, SessionId::Node)
+                | (SupervisorState::NodeExiting, SessionId::Node)
                 | (SupervisorState::CliStarting, SessionId::Cli)
                 | (SupervisorState::CliActive, SessionId::Cli)
                 | (SupervisorState::CliCancelling, SessionId::Cli)
@@ -276,6 +291,21 @@ impl Supervisor {
         Ok(())
     }
 
+    fn handle_resize(&mut self, size: PtySize) {
+        if let Some(node) = self.node.as_mut()
+            && let Err(err) = node.resize(size)
+        {
+            self.debug_log
+                .log(format!("failed to resize Node PTY: {err:#}"));
+        }
+        if let Some(cli) = self.cli.as_mut()
+            && let Err(err) = cli.resize(size)
+        {
+            self.debug_log
+                .log(format!("failed to resize CLI PTY: {err:#}"));
+        }
+    }
+
     fn handle_ctrl_c(&mut self) -> anyhow::Result<()> {
         self.debug_log
             .log(format!("ctrl-c in state {:?}", self.state));
@@ -303,7 +333,9 @@ impl Supervisor {
             SupervisorState::CliExiting => {
                 self.ctrl_c_debounced = true;
             }
-            SupervisorState::Reloading | SupervisorState::ShuttingDown => {
+            SupervisorState::NodeExiting
+            | SupervisorState::Reloading
+            | SupervisorState::ShuttingDown => {
                 self.ctrl_c_debounced = true;
             }
         }
@@ -322,7 +354,7 @@ impl Supervisor {
         Ok(())
     }
 
-    fn handle_exit(
+    fn handle_process_exit(
         &mut self,
         session: SessionId,
         exit: CommandExit,
@@ -336,38 +368,104 @@ impl Supervisor {
 
         match session {
             SessionId::Node => {
-                self.node = None;
-                if exit.code == Some(75)
-                    && let Some(node) = self.reload_node(event_tx)?
-                {
-                    self.node = Some(node);
-                    self.set_state(SupervisorState::NodeStarting);
-                    return Ok(None);
+                if let Some(node) = self.node.as_mut() {
+                    node.exit = Some(exit);
                 }
-
-                self.set_state(SupervisorState::ShuttingDown);
-                Ok(Some(ReplSessionResult { exit }))
+                self.set_state(SupervisorState::NodeExiting);
+                self.try_finish_node(event_tx)
             }
             SessionId::Cli => {
-                self.cli = None;
-                self.ctrl_c_debounced = false;
-                self.set_state(SupervisorState::CliExiting);
-
-                self.refresh_terminal_mode()?;
-                self.set_state(SupervisorState::ReplActive);
-
-                if let Some(response) = self.pending_cli_response.take() {
-                    let _ = response.send(control::RunCliResponse {
-                        ok: exit.success,
-                        code: exit.code,
-                        stdout: None,
-                        stderr: None,
-                    });
+                if let Some(cli) = self.cli.as_mut() {
+                    cli.exit = Some(exit);
                 }
-
-                Ok(None)
+                self.set_state(SupervisorState::CliExiting);
+                self.try_finish_cli()
             }
         }
+    }
+
+    fn handle_output_closed(
+        &mut self,
+        session: SessionId,
+        error: Option<String>,
+        event_tx: &Sender<SupervisorEvent>,
+    ) -> anyhow::Result<Option<ReplSessionResult>> {
+        if let Some(error) = error {
+            self.debug_log.log(format!(
+                "PTY output reader for {session:?} stopped: {error}"
+            ));
+        } else {
+            self.debug_log
+                .log(format!("PTY output reader for {session:?} reached EOF"));
+        }
+
+        match session {
+            SessionId::Node => {
+                if let Some(node) = self.node.as_mut() {
+                    node.output_closed = true;
+                }
+                self.try_finish_node(event_tx)
+            }
+            SessionId::Cli => {
+                if let Some(cli) = self.cli.as_mut() {
+                    cli.output_closed = true;
+                }
+                self.try_finish_cli()
+            }
+        }
+    }
+
+    fn try_finish_node(
+        &mut self,
+        event_tx: &Sender<SupervisorEvent>,
+    ) -> anyhow::Result<Option<ReplSessionResult>> {
+        let Some(node) = self.node.as_ref() else {
+            return Ok(None);
+        };
+        if !node.output_closed || node.exit.is_none() {
+            return Ok(None);
+        }
+
+        let exit = node.exit.expect("checked above");
+        self.node = None;
+
+        if exit.code == Some(75)
+            && let Some(node) = self.reload_node(event_tx)?
+        {
+            self.node = Some(node);
+            self.set_state(SupervisorState::NodeStarting);
+            return Ok(None);
+        }
+
+        self.set_state(SupervisorState::ShuttingDown);
+        Ok(Some(ReplSessionResult { exit }))
+    }
+
+    fn try_finish_cli(&mut self) -> anyhow::Result<Option<ReplSessionResult>> {
+        let Some(cli) = self.cli.as_ref() else {
+            return Ok(None);
+        };
+        if !cli.output_closed || cli.exit.is_none() {
+            return Ok(None);
+        }
+
+        let exit = cli.exit.expect("checked above");
+        self.cli = None;
+        self.ctrl_c_debounced = false;
+
+        self.refresh_terminal_mode()?;
+        self.set_state(SupervisorState::ReplActive);
+
+        if let Some(response) = self.pending_cli_response.take() {
+            let _ = response.send(control::RunCliResponse {
+                ok: exit.success,
+                code: exit.code,
+                stdout: None,
+                stderr: None,
+            });
+        }
+
+        Ok(None)
     }
 
     fn reload_node(
@@ -416,7 +514,9 @@ impl Supervisor {
         Ok(SessionRuntime {
             writer: child.writer,
             killer: child.killer,
-            _pty_pair: child.pair,
+            pty_pair: child.pair,
+            exit: None,
+            output_closed: false,
         })
     }
 
@@ -469,6 +569,7 @@ impl Supervisor {
 enum SupervisorState {
     NodeStarting,
     ReplActive,
+    NodeExiting,
     CliStarting,
     CliActive,
     CliCancelling,
@@ -486,12 +587,18 @@ enum TerminalState {
 struct SessionRuntime {
     writer: Box<dyn Write + Send>,
     killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
-    _pty_pair: portable_pty::PtyPair,
+    pty_pair: portable_pty::PtyPair,
+    exit: Option<CommandExit>,
+    output_closed: bool,
 }
 
 impl SessionRuntime {
     fn kill(&mut self) -> anyhow::Result<()> {
         self.killer.kill().context("Failed to kill PTY child")
+    }
+
+    fn resize(&mut self, size: PtySize) -> anyhow::Result<()> {
+        self.pty_pair.master.resize(size)
     }
 }
 
@@ -531,6 +638,32 @@ fn normalize_terminal_line() {
     let _ = stdout.flush();
 }
 
+fn current_pty_size() -> PtySize {
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+
+fn spawn_resize_watcher(event_tx: Sender<SupervisorEvent>) {
+    thread::spawn(move || {
+        let mut last_size = current_pty_size();
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            let size = current_pty_size();
+            if size != last_size {
+                last_size = size;
+                if event_tx.send(SupervisorEvent::Resize(size)).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+}
+
 fn spawn_pty_output_reader(
     session: SessionId,
     mut reader: Box<dyn Read + Send>,
@@ -540,7 +673,13 @@ fn spawn_pty_output_reader(
         let mut buffer = [0_u8; 4096];
         loop {
             match reader.read(&mut buffer) {
-                Ok(0) => return,
+                Ok(0) => {
+                    let _ = event_tx.send(SupervisorEvent::OutputClosed {
+                        session,
+                        error: None,
+                    });
+                    return;
+                }
                 Ok(n) => {
                     if event_tx
                         .send(SupervisorEvent::Output {
@@ -552,7 +691,13 @@ fn spawn_pty_output_reader(
                         return;
                     }
                 }
-                Err(_) => return,
+                Err(err) => {
+                    let _ = event_tx.send(SupervisorEvent::OutputClosed {
+                        session,
+                        error: Some(err.to_string()),
+                    });
+                    return;
+                }
             }
         }
     });
@@ -583,6 +728,11 @@ enum SupervisorEvent {
         session: SessionId,
         bytes: Vec<u8>,
     },
+    OutputClosed {
+        session: SessionId,
+        error: Option<String>,
+    },
+    Resize(PtySize),
     Exited {
         session: SessionId,
         exit: CommandExit,
