@@ -1068,6 +1068,9 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         WorkerExecutorError::FailedToResumeAgent { agent_id, .. } => {
             format!("Failed to resume worker: {:?}", agent_id)
         }
+        WorkerExecutorError::ComponentNotFound {
+            component_id,
+        } => format!("Component for id {} not found", component_id),
         WorkerExecutorError::ComponentDownloadFailed {
             component_id,
             component_revision,

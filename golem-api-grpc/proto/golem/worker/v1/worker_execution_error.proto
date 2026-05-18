@@ -14,28 +14,29 @@ message WorkerExecutionError {
     AgentAlreadyExists agent_already_exists = 2;
     AgentCreationFailed agent_creation_failed = 3;
     FailedToResumeAgent failed_to_resume_agent = 4;
-    ComponentDownloadFailed component_download_failed = 5;
-    ComponentParseFailed component_parse_failed = 6;
-    GetCurrentVersionOfComponentFailed get_current_version_of_component_failed = 7;
-    PromiseNotFound promise_not_found = 8;
-    PromiseDropped promise_dropped = 9;
-    PromiseAlreadyCompleted promise_already_completed = 10;
-    Interrupted interrupted = 11;
-    ParamTypeMismatch param_type_mismatch = 12;
-    NoValueInMessage no_value_in_message = 13;
-    ValueMismatch value_mismatch = 14;
-    UnexpectedOplogEntry unexpected_oplog_entry = 15;
-    RuntimeError runtime_error = 16;
-    InvalidShardId invalid_shard_id = 17;
-    PreviousInvocationFailed previous_invocation_failed = 18;
-    UnknownError unknown = 19;
-    PreviousInvocationExited previous_invocation_exited = 20;
-    InvalidAccount invalid_account = 21;
-    AgentNotFound agent_not_found = 22;
-    ShardingNotReady sharding_not_ready = 23;
-    InitialAgentFileDownloadFailed initial_agent_file_download_failed = 24;
-    FileSystemError file_system_error = 25;
-    InvocationFailed invocation_failed = 26;
+    ComponentNotFound component_not_found = 5;
+    ComponentDownloadFailed component_download_failed = 6;
+    ComponentParseFailed component_parse_failed = 7;
+    GetCurrentVersionOfComponentFailed get_current_version_of_component_failed = 8;
+    PromiseNotFound promise_not_found = 9;
+    PromiseDropped promise_dropped = 10;
+    PromiseAlreadyCompleted promise_already_completed = 11;
+    Interrupted interrupted = 12;
+    ParamTypeMismatch param_type_mismatch = 13;
+    NoValueInMessage no_value_in_message = 14;
+    ValueMismatch value_mismatch = 15;
+    UnexpectedOplogEntry unexpected_oplog_entry = 16;
+    RuntimeError runtime_error = 17;
+    InvalidShardId invalid_shard_id = 18;
+    PreviousInvocationFailed previous_invocation_failed = 19;
+    UnknownError unknown = 20;
+    PreviousInvocationExited previous_invocation_exited = 21;
+    InvalidAccount invalid_account = 22;
+    AgentNotFound agent_not_found = 23;
+    ShardingNotReady sharding_not_ready = 24;
+    InitialAgentFileDownloadFailed initial_agent_file_download_failed = 25;
+    FileSystemError file_system_error = 26;
+    InvocationFailed invocation_failed = 27;
   }
 }
 
@@ -55,6 +56,10 @@ message AgentCreationFailed {
 message FailedToResumeAgent {
   AgentId agent_id = 1;
   WorkerExecutionError reason = 2;
+}
+
+message ComponentNotFound {
+  golem.component.ComponentId component_id = 1;
 }
 
 message ComponentDownloadFailed {
