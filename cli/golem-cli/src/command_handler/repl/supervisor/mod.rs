@@ -215,15 +215,15 @@ impl Supervisor {
     }
 
     fn handle_output(&mut self, session: SessionId, bytes: Vec<u8>) {
-        let should_write = match (self.state, session) {
+        let should_write = matches!(
+            (self.state, session),
             (SupervisorState::ReplActive, SessionId::Node)
-            | (SupervisorState::NodeStarting, SessionId::Node)
-            | (SupervisorState::CliStarting, SessionId::Cli)
-            | (SupervisorState::CliActive, SessionId::Cli)
-            | (SupervisorState::CliCancelling, SessionId::Cli)
-            | (SupervisorState::CliExiting, SessionId::Cli) => true,
-            _ => false,
-        };
+                | (SupervisorState::NodeStarting, SessionId::Node)
+                | (SupervisorState::CliStarting, SessionId::Cli)
+                | (SupervisorState::CliActive, SessionId::Cli)
+                | (SupervisorState::CliCancelling, SessionId::Cli)
+                | (SupervisorState::CliExiting, SessionId::Cli)
+        );
 
         if should_write {
             let mut stdout = std::io::stdout();
