@@ -52,9 +52,12 @@ type = "KVStoreRedis"
 [indexed_storage.config]
 
 [key_value_storage]
+type = "NamespaceRouted"
+
+[key_value_storage.config.cache]
 type = "Redis"
 
-[key_value_storage.config]
+[key_value_storage.config.cache.config]
 database = 0
 host = "localhost"
 key_prefix = ""
@@ -63,12 +66,20 @@ port = 6380
 tls = false
 tracing = false
 
-[key_value_storage.config.retries]
+[key_value_storage.config.cache.config.retries]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
+
+[key_value_storage.config.persistent]
+type = "Sqlite"
+
+[key_value_storage.config.persistent.config]
+database = "../data/worker-executor-key-value-storage.db"
+foreign_keys = false
+max_connections = 10
 
 [limits]
 ephemeral_fuel_overdraft_multiplier = 100
@@ -185,6 +196,9 @@ min_delay = "100ms"
 multiplier = 3.0
 
 [scheduler]
+claim_batch_size = 100
+lease_ttl = "30s"
+max_batches_per_tick = 10
 refresh_interval = "2s"
 
 [suspend]
@@ -297,9 +311,12 @@ without_time = false
 # [indexed_storage.config]
 # 
 # [key_value_storage]
+# type = "NamespaceRouted"
+# 
+# [key_value_storage.config.cache]
 # type = "Redis"
 # 
-# [key_value_storage.config]
+# [key_value_storage.config.cache.config]
 # database = 0
 # host = "localhost"
 # key_prefix = ""
@@ -308,12 +325,20 @@ without_time = false
 # tls = false
 # tracing = false
 # 
-# [key_value_storage.config.retries]
+# [key_value_storage.config.cache.config.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [key_value_storage.config.persistent]
+# type = "Sqlite"
+# 
+# [key_value_storage.config.persistent.config]
+# database = "../data/worker-executor-key-value-storage.db"
+# foreign_keys = false
+# max_connections = 10
 # 
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
@@ -430,6 +455,9 @@ without_time = false
 # multiplier = 3.0
 # 
 # [scheduler]
+# claim_batch_size = 100
+# lease_ttl = "30s"
+# max_batches_per_tick = 10
 # refresh_interval = "2s"
 # 
 # [suspend]

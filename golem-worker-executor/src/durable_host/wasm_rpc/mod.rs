@@ -49,7 +49,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
-    OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduledAction,
+    OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduleId, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
 
@@ -566,6 +566,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let current_oplog_index = self.state.oplog.current_oplog_index().await;
 
             let idempotency_key = self.derive_idempotency_key(current_oplog_index);
+            let schedule_id = ScheduleId::from_idempotency_key(&idempotency_key);
 
             let request = HostRequestGolemRpcScheduledInvocation {
                 remote_agent_id: remote_agent_id.agent_id(),
@@ -598,7 +599,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .scheduler_service
-                .schedule(
+                .schedule_with_id(
+                    schedule_id,
                     chrono::DateTime::from_timestamp(datetime.seconds as i64, datetime.nanoseconds)
                         .expect("Received invalid datetime from wasi"),
                     action,

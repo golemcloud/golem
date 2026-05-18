@@ -1420,13 +1420,24 @@ impl Default for SchedulerConfig {
 
 impl Default for KeyValueStorageConfig {
     fn default() -> Self {
-        Self::default_redis()
+        Self::default_namespace_routed()
     }
 }
 
 impl KeyValueStorageConfig {
     pub fn default_redis() -> Self {
         Self::Redis(RedisConfig::default())
+    }
+
+    pub fn default_namespace_routed() -> Self {
+        Self::NamespaceRouted(KeyValueStorageNamespaceRoutedConfig {
+            cache: KeyValueStorageInnerConfig::Redis(RedisConfig::default()),
+            persistent: KeyValueStorageInnerConfig::Sqlite(DbSqliteConfig {
+                database: "../data/worker-executor-key-value-storage.db".to_string(),
+                max_connections: 10,
+                foreign_keys: false,
+            }),
+        })
     }
 }
 

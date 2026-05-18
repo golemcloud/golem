@@ -36,10 +36,11 @@ pub struct ClaimedScheduledAction {
 pub trait SchedulerStorage: Debug {
     async fn insert(
         &self,
+        schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         routing_hash: i64,
         action: &ScheduledAction,
-    ) -> Result<ScheduleId, String>;
+    ) -> Result<(), String>;
 
     async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), String>;
 

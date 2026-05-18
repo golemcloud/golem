@@ -84,16 +84,16 @@ impl SqliteSchedulerStorage {
 impl SchedulerStorage for SqliteSchedulerStorage {
     async fn insert(
         &self,
+        schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         routing_hash: i64,
         action: &ScheduledAction,
-    ) -> Result<ScheduleId, String> {
-        let id = Uuid::now_v7();
+    ) -> Result<(), String> {
         let action = serialize(action)?;
         let query = sqlx::query(
-            "INSERT INTO scheduled_actions (schedule_id, due_at_ms, routing_hash, action) VALUES (?, ?, ?, ?);",
+            "INSERT OR IGNORE INTO scheduled_actions (schedule_id, due_at_ms, routing_hash, action) VALUES (?, ?, ?, ?);",
         )
-        .bind(id.to_string())
+        .bind(schedule_id.id.to_string())
         .bind(datetime_to_millis(due_at))
         .bind(routing_hash)
         .bind(action);
@@ -102,7 +102,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
             .with_rw("scheduler_storage", "insert")
             .execute(query)
             .await
-            .map(|_| ScheduleId { id })
+            .map(|_| ())
             .map_err(|err| err.to_safe_string())
     }
 

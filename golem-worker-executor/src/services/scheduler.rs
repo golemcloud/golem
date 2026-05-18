@@ -42,6 +42,13 @@ use tracing::{Instrument, Level, error, info, span, warn};
 pub trait SchedulerService: Send + Sync {
     async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId;
 
+    async fn schedule_with_id(
+        &self,
+        schedule_id: ScheduleId,
+        time: DateTime<Utc>,
+        action: ScheduledAction,
+    ) -> ScheduleId;
+
     async fn cancel(&self, id: ScheduleId);
 }
 
@@ -459,13 +466,24 @@ impl Drop for SchedulerServiceDefault {
 #[async_trait]
 impl SchedulerService for SchedulerServiceDefault {
     async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId {
+        self.schedule_with_id(ScheduleId::fresh(), time, action)
+            .await
+    }
+
+    async fn schedule_with_id(
+        &self,
+        schedule_id: ScheduleId,
+        time: DateTime<Utc>,
+        action: ScheduledAction,
+    ) -> ScheduleId {
         let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
         self.scheduler_storage
-            .insert(time, routing_hash, &action)
+            .insert(schedule_id, time, routing_hash, &action)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to add schedule for action {action} in scheduler storage: {err}")
-            })
+            });
+        schedule_id
     }
 
     async fn cancel(&self, id: ScheduleId) {
@@ -499,8 +517,8 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AgentId, AgentInvocation, OwnedAgentId, PromiseId, ScheduledAction, ShardAssignment,
-        ShardId,
+        AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId, ScheduleId,
+        ScheduledAction, ShardAssignment, ShardId,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -666,6 +684,67 @@ mod tests {
     }
 
     #[test]
+    fn schedule_id_uses_same_deterministic_derivation_as_rpc_idempotency_keys() {
+        let base = IdempotencyKey::new("caller-provided-idempotency-key".to_string());
+        let oplog_index = OplogIndex::from_u64(42);
+
+        let rpc_idempotency_key = IdempotencyKey::derived(&base, oplog_index);
+        let schedule_id = ScheduleId::from_idempotency_key(&rpc_idempotency_key);
+        let same_rpc_idempotency_key = IdempotencyKey::derived(&base, oplog_index);
+        let different_rpc_idempotency_key =
+            IdempotencyKey::derived(&base, OplogIndex::from_u64(43));
+
+        assert_eq!(schedule_id.id.to_string(), rpc_idempotency_key.value);
+        assert_eq!(
+            schedule_id,
+            ScheduleId::from_idempotency_key(&same_rpc_idempotency_key)
+        );
+        assert_ne!(
+            schedule_id,
+            ScheduleId::from_idempotency_key(&different_rpc_idempotency_key)
+        );
+    }
+
+    #[test]
+    async fn schedule_with_id_is_idempotent() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let promise_service = create_promise_service_mock();
+        let svc = create_scheduler(storage.clone(), promise_service).await;
+
+        let action = complete_promise_action(promise(agent("inst1"), 101));
+        let schedule_id = ScheduleId::fresh();
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+
+        assert_eq!(
+            svc.schedule_with_id(schedule_id, due_at, action.clone())
+                .await,
+            schedule_id
+        );
+        assert_eq!(
+            svc.schedule_with_id(schedule_id, due_at, action.clone())
+                .await,
+            schedule_id
+        );
+
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([ShardId::new(0)]),
+        };
+        let claimed = storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].schedule_id, schedule_id);
+    }
+
+    #[test]
     async fn process_completes_entries_older_than_previous_hour() {
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let promise_service = create_promise_service_mock();
@@ -692,7 +771,10 @@ mod tests {
         let action = complete_promise_action(promise(agent("inst1"), 101));
         let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
-        storage.insert(due_at, routing_hash, &action).await.unwrap();
+        storage
+            .insert(ScheduleId::fresh(), due_at, routing_hash, &action)
+            .await
+            .unwrap();
 
         let assignment = ShardAssignment {
             number_of_shards: 1,
@@ -730,7 +812,10 @@ mod tests {
         let action = complete_promise_action(promise(agent("inst1"), 101));
         let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
-        storage.insert(due_at, routing_hash, &action).await.unwrap();
+        storage
+            .insert(ScheduleId::fresh(), due_at, routing_hash, &action)
+            .await
+            .unwrap();
 
         let assignment = ShardAssignment {
             number_of_shards: 1,
@@ -779,7 +864,10 @@ mod tests {
         let action = complete_promise_action(promise(agent("inst1"), 101));
         let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
-        storage.insert(due_at, routing_hash, &action).await.unwrap();
+        storage
+            .insert(ScheduleId::fresh(), due_at, routing_hash, &action)
+            .await
+            .unwrap();
 
         let assignment = ShardAssignment {
             number_of_shards: 1,
@@ -841,7 +929,10 @@ mod tests {
         let action = complete_promise_action(promise(agent("inst1"), 101));
         let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
-        storage.insert(due_at, routing_hash, &action).await.unwrap();
+        storage
+            .insert(ScheduleId::fresh(), due_at, routing_hash, &action)
+            .await
+            .unwrap();
 
         let shard = ShardId::from_routing_hash(routing_hash, 2);
         let other_shard = ShardId::new((shard.value() + 1) % 2);

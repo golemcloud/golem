@@ -70,17 +70,17 @@ impl PostgresSchedulerStorage {
 impl SchedulerStorage for PostgresSchedulerStorage {
     async fn insert(
         &self,
+        schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         routing_hash: i64,
         action: &ScheduledAction,
-    ) -> Result<ScheduleId, String> {
-        let id = Uuid::now_v7();
+    ) -> Result<(), String> {
         let action = serialize(action)?;
 
         let query = sqlx::query(
-            "INSERT INTO scheduled_actions (schedule_id, due_at_ms, routing_hash, action) VALUES ($1, $2, $3, $4);",
+            "INSERT INTO scheduled_actions (schedule_id, due_at_ms, routing_hash, action) VALUES ($1, $2, $3, $4) ON CONFLICT (schedule_id) DO NOTHING;",
         )
-        .bind(id)
+        .bind(schedule_id.id)
         .bind(datetime_to_millis(due_at))
         .bind(routing_hash)
         .bind(action);
@@ -89,7 +89,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .with_rw("scheduler_storage", "insert")
             .execute(query)
             .await
-            .map(|_| ScheduleId { id })
+            .map(|_| ())
             .map_err(|err| err.to_safe_string())
     }
 

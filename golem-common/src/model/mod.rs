@@ -399,6 +399,19 @@ pub struct ScheduleId {
     pub id: Uuid,
 }
 
+impl ScheduleId {
+    pub fn fresh() -> Self {
+        Self { id: Uuid::now_v7() }
+    }
+
+    pub fn from_idempotency_key(key: &IdempotencyKey) -> Self {
+        Self {
+            id: Uuid::parse_str(&key.value)
+                .expect("derived idempotency key must be a UUID"),
+        }
+    }
+}
+
 impl Display for ScheduleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.id)

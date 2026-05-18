@@ -49,23 +49,24 @@ impl InMemorySchedulerStorage {
 impl SchedulerStorage for InMemorySchedulerStorage {
     async fn insert(
         &self,
+        schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         routing_hash: i64,
         action: &ScheduledAction,
-    ) -> Result<ScheduleId, String> {
-        let id = Uuid::now_v7();
-        self.entries.lock().unwrap().insert(
-            id,
-            ScheduledEntry {
+    ) -> Result<(), String> {
+        self.entries
+            .lock()
+            .unwrap()
+            .entry(schedule_id.id)
+            .or_insert_with(|| ScheduledEntry {
                 due_at_ms: datetime_to_millis(due_at),
                 routing_hash,
                 action: action.clone(),
                 lease_owner: None,
                 lease_until_ms: None,
                 attempt_count: 0,
-            },
-        );
-        Ok(ScheduleId { id })
+            });
+        Ok(())
     }
 
     async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), String> {

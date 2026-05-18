@@ -231,10 +231,10 @@ min_delay = "100ms"
 multiplier = 3.0
 
 [scheduler]
-refresh_interval = "2s"
 claim_batch_size = 100
 lease_ttl = "30s"
 max_batches_per_tick = 10
+refresh_interval = "2s"
 
 [shard_manager]
 connect_timeout = "10s"
@@ -553,10 +553,10 @@ without_time = false
 # multiplier = 3.0
 # 
 # [scheduler]
-# refresh_interval = "2s"
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
+# refresh_interval = "2s"
 # 
 # [shard_manager]
 # connect_timeout = "10s"
@@ -845,10 +845,10 @@ without_time = false
 # multiplier = 3.0
 # 
 # [scheduler]
-# refresh_interval = "2s"
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
+# refresh_interval = "2s"
 # 
 # [shard_manager]
 # connect_timeout = "10s"
