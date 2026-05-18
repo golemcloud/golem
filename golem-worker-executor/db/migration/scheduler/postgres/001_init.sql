@@ -12,3 +12,11 @@ CREATE TABLE scheduled_actions (
 
 CREATE INDEX scheduled_actions_claim_idx
     ON scheduled_actions (shard_id, available_at_ms, schedule_id);
+
+ALTER TABLE scheduled_actions SET (
+    autovacuum_vacuum_scale_factor = 0.01,
+    autovacuum_vacuum_threshold = 1024,
+    autovacuum_analyze_scale_factor = 0.02,
+    autovacuum_analyze_threshold = 1024,
+    autovacuum_vacuum_cost_limit = 2000
+);
