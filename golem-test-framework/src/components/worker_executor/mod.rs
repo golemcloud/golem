@@ -181,9 +181,19 @@ async fn env_vars(
             if let Some(config_rest) = rest.strip_prefix("CONFIG__")
                 && matches!(rdb.info(), DbInfo::Sqlite(_))
             {
+                // Use a dedicated SQLite file for the scheduler storage. Keyvalue,
+                // indexed and scheduler each ship their own sqlx migrations under
+                // separate migration tables; if they shared one DB file their
+                // `_sqlx_migrations` entries would collide (both have a migration
+                // with version 1 but different SQL).
+                let scheduler_value = if config_rest == "DATABASE" {
+                    value.replacen(".db", "-scheduler.db", 1)
+                } else {
+                    value.clone()
+                };
                 env.insert(
                     format!("GOLEM__SCHEDULER_STORAGE__CONFIG__{config_rest}"),
-                    value,
+                    scheduler_value,
                 );
             }
         }
