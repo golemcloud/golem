@@ -19,9 +19,8 @@ use anyhow::{Context, anyhow};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use portable_pty::PtySize;
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -30,8 +29,6 @@ use uuid::Uuid;
 
 pub const REPL_CONTROL_ADDR_ENV: &str = "GOLEM_REPL_CONTROL_ADDR";
 pub const REPL_CONTROL_TOKEN_ENV: &str = "GOLEM_REPL_CONTROL_TOKEN";
-const GOLEM_REPL_PTY_DEBUG_ENV: &str = "GOLEM_REPL_PTY_DEBUG";
-const GOLEM_REPL_PTY_DEBUG_LOG_ENV: &str = "GOLEM_REPL_PTY_DEBUG_LOG";
 
 #[derive(Clone, Debug)]
 pub struct ReplCommandSpec {
@@ -86,24 +83,18 @@ fn add_control_env(spec: &mut ReplCommandSpec, addr: &str, token: &str) {
 }
 
 pub fn run_repl_session(
-    mut node_spec: ReplCommandSpec,
+    mut repl_spec: ReplCommandSpec,
     reload: Option<ReloadCoordinator>,
 ) -> anyhow::Result<ReplSessionResult> {
     let token = Uuid::new_v4().to_string();
     let control = control::ControlServer::start(token.clone())?;
     let control_addr = control.addr().to_string();
 
-    add_control_env(&mut node_spec, &control_addr, &token);
-
-    let debug_log = DebugLog::from_env();
-    debug_log.log(format!(
-        "starting REPL supervisor for {:?}",
-        node_spec.program
-    ));
+    add_control_env(&mut repl_spec, &control_addr, &token);
 
     let terminal_guard = RawTerminalGuard::enter()?;
-    let mut supervisor = Supervisor::new(control, control_addr, token, debug_log, reload);
-    let result = supervisor.run(node_spec);
+    let mut supervisor = Supervisor::new(control, control_addr, token, reload);
+    let result = supervisor.run(repl_spec);
     drop(terminal_guard);
     result
 }
@@ -112,10 +103,9 @@ struct Supervisor {
     control: Option<control::ControlServer>,
     control_addr: String,
     control_token: String,
-    debug_log: DebugLog,
     state: SupervisorState,
     terminal_state: TerminalState,
-    node: Option<SessionRuntime>,
+    repl: Option<SessionRuntime>,
     cli: Option<SessionRuntime>,
     pending_cli_response: Option<Sender<control::RunCliResponse>>,
     reload: Option<ReloadCoordinator>,
@@ -127,17 +117,15 @@ impl Supervisor {
         control: control::ControlServer,
         control_addr: String,
         control_token: String,
-        debug_log: DebugLog,
         reload: Option<ReloadCoordinator>,
     ) -> Self {
         Self {
             control: Some(control),
             control_addr,
             control_token,
-            debug_log,
-            state: SupervisorState::NodeStarting,
+            state: SupervisorState::ReplStarting,
             terminal_state: TerminalState::Raw,
-            node: None,
+            repl: None,
             cli: None,
             pending_cli_response: None,
             reload,
@@ -145,7 +133,7 @@ impl Supervisor {
         }
     }
 
-    fn run(&mut self, node_spec: ReplCommandSpec) -> anyhow::Result<ReplSessionResult> {
+    fn run(&mut self, repl_spec: ReplCommandSpec) -> anyhow::Result<ReplSessionResult> {
         let (event_tx, event_rx) = mpsc::channel::<SupervisorEvent>();
         spawn_input_reader(event_tx.clone());
         spawn_resize_watcher(event_tx.clone());
@@ -154,8 +142,8 @@ impl Supervisor {
             .expect("missing REPL control server")
             .spawn_request_reader(event_tx.clone());
 
-        self.node = Some(self.spawn_session(SessionId::Node, node_spec, &event_tx)?);
-        self.set_state(SupervisorState::NodeStarting);
+        self.repl = Some(self.spawn_session(SessionId::Repl, repl_spec, &event_tx)?);
+        self.set_state(SupervisorState::ReplStarting);
 
         loop {
             match event_rx.recv() {
@@ -210,12 +198,12 @@ impl Supervisor {
 
     fn handle_input(&mut self, bytes: Vec<u8>) -> anyhow::Result<()> {
         let target = match self.state {
-            SupervisorState::ReplActive | SupervisorState::NodeStarting => self.node.as_mut(),
+            SupervisorState::ReplActive | SupervisorState::ReplStarting => self.repl.as_mut(),
             SupervisorState::CliStarting
             | SupervisorState::CliActive
             | SupervisorState::CliCancelling
             | SupervisorState::CliExiting => self.cli.as_mut(),
-            SupervisorState::NodeExiting
+            SupervisorState::ReplExiting
             | SupervisorState::Reloading
             | SupervisorState::ShuttingDown => None,
         };
@@ -231,9 +219,9 @@ impl Supervisor {
     fn handle_output(&mut self, session: SessionId, bytes: Vec<u8>) {
         let should_write = matches!(
             (self.state, session),
-            (SupervisorState::ReplActive, SessionId::Node)
-                | (SupervisorState::NodeStarting, SessionId::Node)
-                | (SupervisorState::NodeExiting, SessionId::Node)
+            (SupervisorState::ReplActive, SessionId::Repl)
+                | (SupervisorState::ReplStarting, SessionId::Repl)
+                | (SupervisorState::ReplExiting, SessionId::Repl)
                 | (SupervisorState::CliStarting, SessionId::Cli)
                 | (SupervisorState::CliActive, SessionId::Cli)
                 | (SupervisorState::CliCancelling, SessionId::Cli)
@@ -246,7 +234,7 @@ impl Supervisor {
             let _ = stdout.flush();
         }
 
-        if matches!(self.state, SupervisorState::NodeStarting) && session == SessionId::Node {
+        if matches!(self.state, SupervisorState::ReplStarting) && session == SessionId::Repl {
             self.set_state(SupervisorState::ReplActive);
         }
 
@@ -271,8 +259,6 @@ impl Supervisor {
             return Ok(());
         }
 
-        self.debug_log
-            .log(format!("runCli request: {:?}", request.args));
         let cli = self.spawn_session(
             SessionId::Cli,
             ReplCommandSpec {
@@ -292,29 +278,20 @@ impl Supervisor {
     }
 
     fn handle_resize(&mut self, size: PtySize) {
-        if let Some(node) = self.node.as_mut()
-            && let Err(err) = node.resize(size)
-        {
-            self.debug_log
-                .log(format!("failed to resize Node PTY: {err:#}"));
+        if let Some(repl) = self.repl.as_mut() {
+            let _ = repl.resize(size);
         }
-        if let Some(cli) = self.cli.as_mut()
-            && let Err(err) = cli.resize(size)
-        {
-            self.debug_log
-                .log(format!("failed to resize CLI PTY: {err:#}"));
+        if let Some(cli) = self.cli.as_mut() {
+            let _ = cli.resize(size);
         }
     }
 
     fn handle_ctrl_c(&mut self) -> anyhow::Result<()> {
-        self.debug_log
-            .log(format!("ctrl-c in state {:?}", self.state));
-
         match self.state {
-            SupervisorState::ReplActive | SupervisorState::NodeStarting => {
-                if let Some(node) = self.node.as_mut() {
-                    node.writer.write_all(&[3])?;
-                    node.writer.flush()?;
+            SupervisorState::ReplActive | SupervisorState::ReplStarting => {
+                if let Some(repl) = self.repl.as_mut() {
+                    repl.writer.write_all(&[3])?;
+                    repl.writer.flush()?;
                 }
             }
             SupervisorState::CliStarting | SupervisorState::CliActive => {
@@ -324,8 +301,6 @@ impl Supervisor {
             }
             SupervisorState::CliCancelling => {
                 if let Some(cli) = self.cli.as_mut() {
-                    self.debug_log
-                        .log("force-killing CLI after repeated ctrl-c");
                     let _ = cli.kill();
                 }
                 self.ctrl_c_debounced = true;
@@ -333,7 +308,7 @@ impl Supervisor {
             SupervisorState::CliExiting => {
                 self.ctrl_c_debounced = true;
             }
-            SupervisorState::NodeExiting
+            SupervisorState::ReplExiting
             | SupervisorState::Reloading
             | SupervisorState::ShuttingDown => {
                 self.ctrl_c_debounced = true;
@@ -347,7 +322,6 @@ impl Supervisor {
         self.ctrl_c_debounced = true;
         self.set_state(SupervisorState::CliCancelling);
         if let Some(cli) = self.cli.as_mut() {
-            self.debug_log.log("forwarding ctrl-c to CLI PTY");
             cli.writer.write_all(&[3])?;
             cli.writer.flush()?;
         }
@@ -360,19 +334,13 @@ impl Supervisor {
         exit: CommandExit,
         event_tx: &Sender<SupervisorEvent>,
     ) -> anyhow::Result<Option<ReplSessionResult>> {
-        self.debug_log.log(format!(
-            "session {:?} exited with {:?}",
-            session,
-            format_exit_code(exit.code)
-        ));
-
         match session {
-            SessionId::Node => {
-                if let Some(node) = self.node.as_mut() {
-                    node.exit = Some(exit);
+            SessionId::Repl => {
+                if let Some(repl) = self.repl.as_mut() {
+                    repl.exit = Some(exit);
                 }
-                self.set_state(SupervisorState::NodeExiting);
-                self.try_finish_node(event_tx)
+                self.set_state(SupervisorState::ReplExiting);
+                self.try_finish_repl(event_tx)
             }
             SessionId::Cli => {
                 if let Some(cli) = self.cli.as_mut() {
@@ -390,21 +358,14 @@ impl Supervisor {
         error: Option<String>,
         event_tx: &Sender<SupervisorEvent>,
     ) -> anyhow::Result<Option<ReplSessionResult>> {
-        if let Some(error) = error {
-            self.debug_log.log(format!(
-                "PTY output reader for {session:?} stopped: {error}"
-            ));
-        } else {
-            self.debug_log
-                .log(format!("PTY output reader for {session:?} reached EOF"));
-        }
+        let _ = error;
 
         match session {
-            SessionId::Node => {
-                if let Some(node) = self.node.as_mut() {
-                    node.output_closed = true;
+            SessionId::Repl => {
+                if let Some(repl) = self.repl.as_mut() {
+                    repl.output_closed = true;
                 }
-                self.try_finish_node(event_tx)
+                self.try_finish_repl(event_tx)
             }
             SessionId::Cli => {
                 if let Some(cli) = self.cli.as_mut() {
@@ -415,25 +376,25 @@ impl Supervisor {
         }
     }
 
-    fn try_finish_node(
+    fn try_finish_repl(
         &mut self,
         event_tx: &Sender<SupervisorEvent>,
     ) -> anyhow::Result<Option<ReplSessionResult>> {
-        let Some(node) = self.node.as_ref() else {
+        let Some(repl) = self.repl.as_ref() else {
             return Ok(None);
         };
-        if !node.output_closed || node.exit.is_none() {
+        if !repl.output_closed || repl.exit.is_none() {
             return Ok(None);
         }
 
-        let exit = node.exit.expect("checked above");
-        self.node = None;
+        let exit = repl.exit.expect("checked above");
+        self.repl = None;
 
         if exit.code == Some(75)
-            && let Some(node) = self.reload_node(event_tx)?
+            && let Some(repl) = self.reload_repl(event_tx)?
         {
-            self.node = Some(node);
-            self.set_state(SupervisorState::NodeStarting);
+            self.repl = Some(repl);
+            self.set_state(SupervisorState::ReplStarting);
             return Ok(None);
         }
 
@@ -468,7 +429,7 @@ impl Supervisor {
         Ok(None)
     }
 
-    fn reload_node(
+    fn reload_repl(
         &mut self,
         event_tx: &Sender<SupervisorEvent>,
     ) -> anyhow::Result<Option<SessionRuntime>> {
@@ -478,23 +439,20 @@ impl Supervisor {
 
         self.set_state(SupervisorState::Reloading);
         self.leave_raw_mode()?;
-        self.debug_log
-            .log("requesting REPL reload from async runner");
 
         let (response_tx, response_rx) = mpsc::channel();
         request_tx
             .send(ReloadRequest { response_tx })
             .map_err(|_| anyhow!("Failed to request REPL reload"))?;
 
-        let mut node_spec = response_rx
+        let mut repl_spec = response_rx
             .recv()
             .map_err(|_| anyhow!("Failed to receive REPL reload result"))?
             .map_err(|err| anyhow!(err))?;
-        add_control_env(&mut node_spec, &self.control_addr, &self.control_token);
+        add_control_env(&mut repl_spec, &self.control_addr, &self.control_token);
 
-        self.debug_log.log("starting reloaded Node PTY backend");
         self.enter_raw_mode()?;
-        self.spawn_session(SessionId::Node, node_spec, event_tx)
+        self.spawn_session(SessionId::Repl, repl_spec, event_tx)
             .map(Some)
     }
 
@@ -504,10 +462,6 @@ impl Supervisor {
         spec: ReplCommandSpec,
         event_tx: &Sender<SupervisorEvent>,
     ) -> anyhow::Result<SessionRuntime> {
-        self.debug_log.log(format!(
-            "spawning {:?}: program={:?} args={:?}",
-            session, spec.program, spec.args
-        ));
         let child = pty::spawn_pty_command(spec)?;
         spawn_pty_output_reader(session, child.reader, event_tx.clone());
         spawn_waiter(session, child.exit_receiver, event_tx.clone());
@@ -546,20 +500,17 @@ impl Supervisor {
     }
 
     fn cleanup_all(&mut self) {
-        self.debug_log.log("cleaning up PTY sessions");
         self.set_state(SupervisorState::ShuttingDown);
         if let Some(cli) = self.cli.as_mut() {
             let _ = cli.kill();
         }
-        if let Some(node) = self.node.as_mut() {
-            let _ = node.kill();
+        if let Some(repl) = self.repl.as_mut() {
+            let _ = repl.kill();
         }
     }
 
     fn set_state(&mut self, state: SupervisorState) {
         if self.state != state {
-            self.debug_log
-                .log(format!("state {:?} -> {:?}", self.state, state));
             self.state = state;
         }
     }
@@ -567,9 +518,9 @@ impl Supervisor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SupervisorState {
-    NodeStarting,
+    ReplStarting,
     ReplActive,
-    NodeExiting,
+    ReplExiting,
     CliStarting,
     CliActive,
     CliCancelling,
@@ -717,7 +668,7 @@ fn spawn_waiter(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionId {
-    Node,
+    Repl,
     Cli,
 }
 
@@ -807,7 +758,7 @@ impl WindowsConsoleInputModeGuard {
 #[cfg(windows)]
 fn enable_windows_virtual_terminal_input() {
     // crossterm raw mode disables line/echo/processed input on Windows, but it
-    // does not enable VT input. The Node REPL running inside the child PTY can
+    // does not enable VT input. The REPL running inside the child PTY can
     // emit terminal queries such as ESC[6n; the terminal's response must reach
     // this supervisor as raw stdin bytes so it can be forwarded to the child.
     use windows_sys::Win32::System::Console::{
@@ -824,53 +775,5 @@ fn enable_windows_virtual_terminal_input() {
     let updated_mode = mode | ENABLE_VIRTUAL_TERMINAL_INPUT;
     if updated_mode != mode {
         let _ = unsafe { SetConsoleMode(handle, updated_mode) };
-    }
-}
-
-#[derive(Clone, Default)]
-struct DebugLog {
-    enabled: bool,
-    path: Option<PathBuf>,
-}
-
-impl DebugLog {
-    fn from_env() -> Self {
-        let enabled = std::env::var_os(GOLEM_REPL_PTY_DEBUG_ENV).is_some()
-            || std::env::var_os(GOLEM_REPL_PTY_DEBUG_LOG_ENV).is_some();
-        let path = std::env::var_os(GOLEM_REPL_PTY_DEBUG_LOG_ENV).map(PathBuf::from);
-        Self { enabled, path }
-    }
-
-    fn log(&self, message: impl AsRef<str>) {
-        if !self.enabled {
-            return;
-        }
-
-        let line = format!("[golem-repl-pty] {}\n", message.as_ref());
-        if let Some(path) = &self.path {
-            let _ = append_log_line(path, &line);
-        } else {
-            let _ = std::io::stderr().write_all(line.as_bytes());
-        }
-    }
-}
-
-fn append_log_line(path: &Path, line: &str) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(line.as_bytes())?;
-    file.flush()?;
-    Ok(())
-}
-
-fn format_exit_code(code: Option<i32>) -> String {
-    match code {
-        Some(code) if code < 0 => format!("{code} ({:#010X})", code as u32),
-        Some(code) => code.to_string(),
-        None => "<unknown>".to_string(),
     }
 }
