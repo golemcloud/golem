@@ -381,26 +381,30 @@ impl TextView for TryUpdateAllWorkersResult {
 
 impl TextView for InvokeResultView {
     fn log(&self) {
-        fn log_results_format(format: &str) {
-            logln(format!(
-                "Invocation results in {}:",
-                format_message_highlight(format),
-            ))
+        fn log_result_format(format: Option<&str>, multiple: bool) {
+            let result_label = if multiple { "results" } else { "result" };
+            match format {
+                Some(format) => logln(format!(
+                    "Invocation {result_label} in {}:",
+                    format_message_highlight(format),
+                )),
+                None => logln(format!("Invocation {result_label}:")),
+            }
         }
 
-        if self.result_wave.is_none() && self.result_json.is_none() {
+        if self.is_void_result {
+            log_result_format(None, false);
+            logln("void");
             return;
         }
 
-        if let Some(wave_values) = &self.result_wave {
-            if wave_values.is_empty() {
-                logln("Empty result.")
-            } else {
-                log_results_format(&self.result_format);
-                for wave in wave_values {
-                    logln(format!("  - {wave}"));
-                }
-            }
+        if self.result.is_none() && self.result_json.is_none() && self.results_json.is_none() {
+            return;
+        }
+
+        if let Some(result) = &self.result {
+            log_result_format(self.result_format.as_deref(), self.results_json.is_some());
+            logln(result);
         } else if let Some(json) = &self.result_json {
             logln(format_warn(indoc!(
                 "
@@ -408,7 +412,16 @@ impl TextView for InvokeResultView {
                 At the moment it does not support Handle (aka Resource) data type.
                 "
             )));
-            log_results_format("JSON");
+            log_result_format(Some("JSON"), false);
+            logln(serde_json::to_string_pretty(json).unwrap());
+        } else if let Some(json) = &self.results_json {
+            logln(format_warn(indoc!(
+                "
+                Failed to convert invocation results to the requested format.
+                At the moment it does not support Handle (aka Resource) data type.
+                "
+            )));
+            log_result_format(Some("JSON"), true);
             logln(serde_json::to_string_pretty(json).unwrap());
         }
     }

@@ -15,6 +15,12 @@ golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
 
 This invokes a method on a deployed agent and **waits for the result**. The agent is automatically created on first invocation if it does not exist yet. Standard output, error, and log streams from the agent are streamed live to the terminal by default.
 
+## Output
+
+Text output renders return values using MoonBit syntax. Multiple return values are rendered as a MoonBit tuple, for example `(1, "ok")`. Methods returning `Unit` or no value print `void` in text mode.
+
+For machine-readable output, use `--format json` or `--format yaml`. A single return value includes `result` plus `result_json`; multiple return values include `result` plus `results_json`; methods returning `Unit` or no value omit result fields.
+
 ## Agent ID Format
 
 The agent ID identifies the agent type and its constructor parameters:

@@ -52,7 +52,7 @@ async fn test_rust_counter() {
         assert!(outputs.success_or_dump());
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
-        assert!(outputs.stdout_contains("- 1"));
+        assert!(outputs.stdout_contains_ordered(["Invocation result in Rust syntax:", "1"]));
     }
 
     // Test with TS REPL
@@ -483,7 +483,7 @@ async fn test_ts_counter() {
         assert!(outputs.success_or_dump());
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
-        assert!(outputs.stdout_contains("- 1"));
+        assert!(outputs.stdout_contains_ordered(["Invocation result in TypeScript syntax:", "1"]));
     }
 
     // Test with TS REPL

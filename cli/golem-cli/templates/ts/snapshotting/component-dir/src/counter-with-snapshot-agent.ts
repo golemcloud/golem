@@ -14,7 +14,7 @@ class CounterWithSnapshotAgent extends BaseAgent {
     private value: number = 0;
 
     constructor(name: string) {
-        super()
+        super();
         this.name = name;
     }
 
@@ -35,7 +35,7 @@ class CounterWithSnapshotAgent extends BaseAgent {
     }
 
     override async loadSnapshot(bytes: Uint8Array): Promise<void> {
-        let view = new DataView(bytes.buffer);
+        const view = new DataView(bytes.buffer);
         this.value = view.getUint32(0);
         console.info(`Loaded snapshot!: ${this.value}`);
     }

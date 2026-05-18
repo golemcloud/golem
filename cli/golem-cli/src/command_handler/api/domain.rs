@@ -175,7 +175,7 @@ impl ApiDomainCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let _ = self.register(environment_id, domain).await;
+        self.register(environment_id, domain).await?;
 
         Ok(())
     }
