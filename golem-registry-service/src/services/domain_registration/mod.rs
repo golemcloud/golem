@@ -184,29 +184,6 @@ impl DomainRegistrationService {
         Ok(domain_registration)
     }
 
-    pub fn validate_domain_for_http_api(
-        &self,
-        domain: &Domain,
-    ) -> Result<(), DomainRegistrationError> {
-        if self.domain_matcher.domain_valid_for_http_api(domain) {
-            Ok(())
-        } else {
-            Err(DomainRegistrationError::DomainNotValidForHttpApi(
-                domain.clone(),
-            ))
-        }
-    }
-
-    pub fn validate_domain_for_mcp(&self, domain: &Domain) -> Result<(), DomainRegistrationError> {
-        if self.domain_matcher.domain_valid_for_mcp(domain) {
-            Ok(())
-        } else {
-            Err(DomainRegistrationError::DomainNotValidForMcp(
-                domain.clone(),
-            ))
-        }
-    }
-
     pub async fn list_in_environment(
         &self,
         environment_id: EnvironmentId,
@@ -276,13 +253,27 @@ impl DomainRegistrationService {
 
         Ok((domain_registration, environment))
     }
+
+    pub fn validate_domain_for_http_api(
+        &self,
+        domain: &Domain,
+    ) -> Result<(), DomainRegistrationError> {
+        self.domain_matcher.validate_domain_for_http_api(domain)
+    }
+
+    pub fn validate_domain_for_mcp(&self, domain: &Domain) -> Result<(), DomainRegistrationError> {
+        self.domain_matcher.validate_domain_for_mcp(domain)
+    }
 }
 
 enum DomainMatcher {
     Unrestricted,
     Restricted {
-        golem_apps_domain_regex: Regex,
-        golem_mcps_domain_regex: Regex,
+        golem_apps_domain: String,
+        golem_mcps_domain: String,
+        valid_http_domain_regex: Regex,
+        valid_mcp_domain_regex: Regex,
+        allow_arbitrary_subdomains: bool,
     },
 }
 
@@ -302,30 +293,57 @@ impl DomainMatcher {
                 };
 
                 Ok(Self::Restricted {
-                    golem_apps_domain_regex: make_regex(&restricted.golem_apps_domain)?,
-                    golem_mcps_domain_regex: make_regex(&restricted.golem_mcps_domain)?,
+                    golem_apps_domain: restricted.golem_apps_domain.clone(),
+                    golem_mcps_domain: restricted.golem_mcps_domain.clone(),
+                    valid_http_domain_regex: make_regex(&restricted.golem_apps_domain)?,
+                    valid_mcp_domain_regex: make_regex(&restricted.golem_mcps_domain)?,
+                    allow_arbitrary_subdomains: restricted.allow_arbitrary_subdomains,
                 })
             }
         }
     }
 
-    fn domain_valid_for_http_api(&self, domain: &Domain) -> bool {
+    fn validate_domain_for_http_api(&self, domain: &Domain) -> Result<(), DomainRegistrationError> {
         match self {
-            Self::Unrestricted => true,
+            Self::Unrestricted => Ok(()),
             Self::Restricted {
-                golem_apps_domain_regex,
+                valid_http_domain_regex,
+                golem_apps_domain,
+                allow_arbitrary_subdomains,
                 ..
-            } => golem_apps_domain_regex.is_match(&domain.0),
+            } => {
+                if valid_http_domain_regex.is_match(&domain.0) {
+                    Ok(())
+                } else {
+                    Err(DomainRegistrationError::DomainNotValidForHttpApi {
+                        domain: domain.clone(),
+                        available_domain: golem_apps_domain.clone(),
+                        allow_arbitrary_subdomains: *allow_arbitrary_subdomains,
+                    })
+                }
+            }
         }
     }
 
-    fn domain_valid_for_mcp(&self, domain: &Domain) -> bool {
+    fn validate_domain_for_mcp(&self, domain: &Domain) -> Result<(), DomainRegistrationError> {
         match self {
-            Self::Unrestricted => true,
+            Self::Unrestricted => Ok(()),
             Self::Restricted {
-                golem_mcps_domain_regex,
+                valid_mcp_domain_regex,
+                golem_mcps_domain,
+                allow_arbitrary_subdomains,
                 ..
-            } => golem_mcps_domain_regex.is_match(&domain.0),
+            } => {
+                if valid_mcp_domain_regex.is_match(&domain.0) {
+                    Ok(())
+                } else {
+                    Err(DomainRegistrationError::DomainNotValidForMcp {
+                        domain: domain.clone(),
+                        available_domain: golem_mcps_domain.clone(),
+                        allow_arbitrary_subdomains: *allow_arbitrary_subdomains,
+                    })
+                }
+            }
         }
     }
 
@@ -333,8 +351,9 @@ impl DomainMatcher {
         match self {
             Self::Unrestricted => true,
             Self::Restricted {
-                golem_apps_domain_regex,
-                golem_mcps_domain_regex,
+                valid_http_domain_regex: golem_apps_domain_regex,
+                valid_mcp_domain_regex: golem_mcps_domain_regex,
+                ..
             } => {
                 golem_apps_domain_regex.is_match(&domain.0)
                     || golem_mcps_domain_regex.is_match(&domain.0)
@@ -474,76 +493,140 @@ mod tests {
     #[test]
     fn http_api_valid_unrestricted() {
         let domain_matcher = unrestricted();
-        assert!(domain_matcher.domain_valid_for_http_api(&domain("myapp.apps.golem.cloud")));
-        assert!(domain_matcher.domain_valid_for_http_api(&domain("mymcp.mcps.golem.cloud")));
-        assert!(domain_matcher.domain_valid_for_http_api(&domain("anything.example.com")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_http_api(&domain("myapp.apps.golem.cloud"))
+                .is_ok()
+        );
+        assert!(
+            domain_matcher
+                .validate_domain_for_http_api(&domain("mymcp.mcps.golem.cloud"))
+                .is_ok()
+        );
+        assert!(
+            domain_matcher
+                .validate_domain_for_http_api(&domain("anything.example.com"))
+                .is_ok()
+        );
     }
 
     #[test]
     fn http_api_valid_apps_domain() {
         let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(domain_matcher.domain_valid_for_http_api(&domain("myapp.apps.golem.cloud")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_http_api(&domain("myapp.apps.golem.cloud"))
+                .is_ok()
+        );
     }
 
     #[test]
     fn http_api_invalid_mcps_domain() {
         let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_matcher.domain_valid_for_http_api(&domain("mymcp.mcps.golem.cloud")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_http_api(&domain("mymcp.mcps.golem.cloud"))
+                .is_err()
+        );
     }
 
     #[test]
     fn http_api_invalid_unrelated_domain() {
         let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_matcher.domain_valid_for_http_api(&domain("myapp.other.com")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_http_api(&domain("myapp.other.com"))
+                .is_err()
+        );
     }
 
     #[test]
     fn http_api_valid_apps_deep_subdomain() {
         let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
-        assert!(domain_matcher.domain_valid_for_http_api(&domain("a.b.apps.golem.cloud")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_http_api(&domain("a.b.apps.golem.cloud"))
+                .is_ok()
+        );
     }
 
     #[test]
     fn http_api_invalid_apps_deep_subdomain_when_arbitrary_disallowed() {
         let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_matcher.domain_valid_for_http_api(&domain("a.b.apps.golem.cloud")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_http_api(&domain("a.b.apps.golem.cloud"))
+                .is_err()
+        );
     }
 
     #[test]
     fn mcp_valid_unrestricted() {
         let domain_matcher = unrestricted();
-        assert!(domain_matcher.domain_valid_for_mcp(&domain("mymcp.mcps.golem.cloud")));
-        assert!(domain_matcher.domain_valid_for_mcp(&domain("myapp.apps.golem.cloud")));
-        assert!(domain_matcher.domain_valid_for_mcp(&domain("anything.example.com")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_mcp(&domain("mymcp.mcps.golem.cloud"))
+                .is_ok()
+        );
+        assert!(
+            domain_matcher
+                .validate_domain_for_mcp(&domain("myapp.apps.golem.cloud"))
+                .is_ok()
+        );
+        assert!(
+            domain_matcher
+                .validate_domain_for_mcp(&domain("anything.example.com"))
+                .is_ok()
+        );
     }
 
     #[test]
     fn mcp_valid_mcps_domain() {
         let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(domain_matcher.domain_valid_for_mcp(&domain("mymcp.mcps.golem.cloud")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_mcp(&domain("mymcp.mcps.golem.cloud"))
+                .is_ok()
+        );
     }
 
     #[test]
     fn mcp_invalid_apps_domain() {
         let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_matcher.domain_valid_for_mcp(&domain("myapp.apps.golem.cloud")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_mcp(&domain("myapp.apps.golem.cloud"))
+                .is_err()
+        );
     }
 
     #[test]
     fn mcp_invalid_unrelated_domain() {
         let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_matcher.domain_valid_for_mcp(&domain("myapp.other.com")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_mcp(&domain("myapp.other.com"))
+                .is_err()
+        );
     }
 
     #[test]
     fn mcp_valid_mcps_deep_subdomain() {
         let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
-        assert!(domain_matcher.domain_valid_for_mcp(&domain("a.b.mcps.golem.cloud")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_mcp(&domain("a.b.mcps.golem.cloud"))
+                .is_ok()
+        );
     }
 
     #[test]
     fn mcp_invalid_mcps_deep_subdomain_when_arbitrary_disallowed() {
         let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_matcher.domain_valid_for_mcp(&domain("a.b.mcps.golem.cloud")));
+        assert!(
+            domain_matcher
+                .validate_domain_for_mcp(&domain("a.b.mcps.golem.cloud"))
+                .is_err()
+        );
     }
 }
