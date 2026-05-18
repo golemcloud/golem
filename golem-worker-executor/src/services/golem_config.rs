@@ -490,12 +490,23 @@ impl SafeDisplay for ActiveWorkersConfig {
 pub struct SchedulerConfig {
     #[serde(with = "humantime_serde")]
     pub refresh_interval: Duration,
+    pub claim_batch_size: u32,
+    #[serde(with = "humantime_serde")]
+    pub lease_ttl: Duration,
+    pub max_batches_per_tick: u32,
 }
 
 impl SafeDisplay for SchedulerConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "refresh interval: {:?}", self.refresh_interval);
+        let _ = writeln!(&mut result, "claim batch size: {}", self.claim_batch_size);
+        let _ = writeln!(&mut result, "lease ttl: {:?}", self.lease_ttl);
+        let _ = writeln!(
+            &mut result,
+            "max batches per tick: {}",
+            self.max_batches_per_tick
+        );
         result
     }
 }
@@ -1400,6 +1411,9 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             refresh_interval: Duration::from_secs(2),
+            claim_batch_size: 100,
+            lease_ttl: Duration::from_secs(30),
+            max_batches_per_tick: 10,
         }
     }
 }

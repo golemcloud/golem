@@ -39,9 +39,7 @@ use golem_common::model::oplog::host_functions::{
     GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
     GolemRpcWasmRpcScheduleInvocation,
 };
-use golem_common::model::oplog::types::{
-    SerializableInvokeResult, SerializableScheduledInvocation,
-};
+use golem_common::model::oplog::types::{SerializableInvokeResult, SerializableScheduleId};
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
     HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
@@ -625,21 +623,20 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await;
 
-            let invocation = SerializableScheduledInvocation::from_domain(result)
-                .map_err(|err| anyhow::anyhow!(err))?;
+            let schedule_id = SerializableScheduleId::from_domain(result);
 
             durability
                 .persist(
                     self,
                     request,
-                    HostResponseGolemRpcScheduledInvocation { invocation },
+                    HostResponseGolemRpcScheduledInvocation { schedule_id },
                 )
                 .await
         } else {
             durability.replay(self).await
         }?;
 
-        let serialized_result = serialize(&result.invocation).expect("Failed to serialize result");
+        let serialized_result = serialize(&result.schedule_id).expect("Failed to serialize result");
         let cancellation_token = CancellationTokenEntry {
             schedule_id: serialized_result,
         };
@@ -1097,7 +1094,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
         let entry = self.table().get(&this)?;
-        let serialized_scheduled_invocation: SerializableScheduledInvocation =
+        let serialized_schedule_id: SerializableScheduleId =
             deserialize(&entry.schedule_id).expect("Failed to deserialize cancellation token");
 
         let durability = Durability::<GolemRpcCancellationTokenCancel>::new(
@@ -1108,14 +1105,14 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
 
         if durability.is_live() {
             self.scheduler_service()
-                .cancel(serialized_scheduled_invocation.clone().into_domain())
+                .cancel(serialized_schedule_id.clone().into_domain())
                 .await;
 
             durability
                 .persist(
                     self,
                     HostRequestGolemRpcScheduledInvocationCancellation {
-                        invocation: serialized_scheduled_invocation,
+                        schedule_id: serialized_schedule_id,
                     },
                     HostResponseGolemRpcUnit {},
                 )

@@ -393,16 +393,15 @@ impl Display for ScheduledAction {
     }
 }
 
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
 #[desert(evolution())]
 pub struct ScheduleId {
-    pub timestamp: i64,
-    pub action: ScheduledAction,
+    pub id: Uuid,
 }
 
 impl Display for ScheduleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}@{}", self.action, self.timestamp)
+        write!(f, "{}", self.id)
     }
 }
 

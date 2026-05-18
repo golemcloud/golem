@@ -14,3 +14,4 @@
 
 pub mod indexed;
 pub mod keyvalue;
+pub mod scheduler;

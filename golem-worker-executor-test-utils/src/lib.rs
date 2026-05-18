@@ -97,8 +97,9 @@ use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
     EnvironmentStateServiceConfig, FilesystemStorageConfig, GolemConfig, GrpcApiConfig,
     HttpClientConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig,
-    IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig, MemoryConfig, OplogConfig,
-    ResourceLimitsConfig, ResourceLimitsDisabledConfig, SnapshotPolicy,
+    IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig, KeyValueStorageInnerConfig,
+    KeyValueStorageNamespaceRoutedConfig, MemoryConfig, OplogConfig, ResourceLimitsConfig,
+    ResourceLimitsDisabledConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
@@ -568,11 +569,15 @@ fn apply_redis_storage_config(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) {
-    config.key_value_storage = KeyValueStorageConfig::Redis(RedisConfig {
-        port: deps.redis.public_port(),
-        key_prefix: context.redis_prefix(),
-        ..Default::default()
-    });
+    config.key_value_storage =
+        KeyValueStorageConfig::NamespaceRouted(KeyValueStorageNamespaceRoutedConfig {
+            cache: KeyValueStorageInnerConfig::Redis(RedisConfig {
+                port: deps.redis.public_port(),
+                key_prefix: context.redis_prefix(),
+                ..Default::default()
+            }),
+            persistent: KeyValueStorageInnerConfig::Sqlite(sqlite_storage_config(deps, context)),
+        });
     config.indexed_storage =
         IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {});
 }
