@@ -77,11 +77,12 @@ impl SchedulerStorage for PostgresSchedulerStorage {
     ) -> Result<(), String> {
         let action = serialize(action)?;
 
+        let due_at_ms = datetime_to_millis(due_at);
         let query = sqlx::query(
-            "INSERT INTO scheduled_actions (schedule_id, due_at_ms, routing_hash, action) VALUES ($1, $2, $3, $4) ON CONFLICT (schedule_id) DO NOTHING;",
+            "INSERT INTO scheduled_actions (schedule_id, due_at_ms, available_at_ms, routing_hash, action) VALUES ($1, $2, $2, $3, $4) ON CONFLICT (schedule_id) DO NOTHING;",
         )
         .bind(schedule_id.id)
-        .bind(datetime_to_millis(due_at))
+        .bind(due_at_ms)
         .bind(routing_hash)
         .bind(action);
 
@@ -131,16 +132,16 @@ impl SchedulerStorage for PostgresSchedulerStorage {
               WITH picked AS (
                   SELECT schedule_id
                     FROM scheduled_actions
-                   WHERE due_at_ms <= $1
-                     AND (lease_until_ms IS NULL OR lease_until_ms <= $1)
+                   WHERE available_at_ms <= $1
                      AND (MOD(ABS(routing_hash::numeric), $2::numeric))::bigint = ANY($3)
-                   ORDER BY due_at_ms ASC, schedule_id ASC
+                   ORDER BY available_at_ms ASC, schedule_id ASC
                    LIMIT $4
                    FOR UPDATE SKIP LOCKED
               )
               UPDATE scheduled_actions s
                  SET lease_owner = $5,
                      lease_until_ms = $6,
+                     available_at_ms = $6,
                      attempt_count = attempt_count + 1
                 FROM picked
                WHERE s.schedule_id = picked.schedule_id
@@ -183,7 +184,7 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         lease_until: DateTime<Utc>,
     ) -> Result<bool, String> {
         let query = sqlx::query(
-            "UPDATE scheduled_actions SET lease_until_ms = $3 WHERE schedule_id = $1 AND lease_owner = $2;",
+            "UPDATE scheduled_actions SET lease_until_ms = $3, available_at_ms = $3 WHERE schedule_id = $1 AND lease_owner = $2;",
         )
         .bind(schedule_id.id)
         .bind(lease_owner)

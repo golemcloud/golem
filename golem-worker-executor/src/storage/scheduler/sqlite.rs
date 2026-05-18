@@ -53,13 +53,14 @@ impl SqliteSchedulerStorage {
         api.execute(sqlx::query(
             r#"
                 CREATE TABLE IF NOT EXISTS scheduled_actions (
-                    schedule_id    TEXT NOT NULL,
-                    due_at_ms      INTEGER NOT NULL,
-                    routing_hash   INTEGER NOT NULL,
-                    action         BLOB NOT NULL,
-                    lease_owner    TEXT NULL,
-                    lease_until_ms INTEGER NULL,
-                    attempt_count  INTEGER NOT NULL DEFAULT 0,
+                    schedule_id     TEXT NOT NULL,
+                    due_at_ms       INTEGER NOT NULL,
+                    available_at_ms INTEGER NOT NULL,
+                    routing_hash    INTEGER NOT NULL,
+                    action          BLOB NOT NULL,
+                    lease_owner     TEXT NULL,
+                    lease_until_ms  INTEGER NULL,
+                    attempt_count   INTEGER NOT NULL DEFAULT 0,
                     CONSTRAINT scheduled_actions_pk PRIMARY KEY (schedule_id)
                 );
                 "#,
@@ -67,12 +68,7 @@ impl SqliteSchedulerStorage {
         .await
         .map_err(|err| err.to_safe_string())?;
         api.execute(sqlx::query(
-            "CREATE INDEX IF NOT EXISTS scheduled_actions_due_idx ON scheduled_actions (due_at_ms, schedule_id);",
-        ))
-        .await
-        .map_err(|err| err.to_safe_string())?;
-        api.execute(sqlx::query(
-            "CREATE INDEX IF NOT EXISTS scheduled_actions_due_lease_idx ON scheduled_actions (due_at_ms, lease_until_ms, schedule_id);",
+            "CREATE INDEX IF NOT EXISTS scheduled_actions_claim_idx ON scheduled_actions (available_at_ms, schedule_id);",
         ))
         .await
         .map_err(|err| err.to_safe_string())?;
@@ -90,11 +86,13 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         action: &ScheduledAction,
     ) -> Result<(), String> {
         let action = serialize(action)?;
+        let due_at_ms = datetime_to_millis(due_at);
         let query = sqlx::query(
-            "INSERT OR IGNORE INTO scheduled_actions (schedule_id, due_at_ms, routing_hash, action) VALUES (?, ?, ?, ?);",
+            "INSERT OR IGNORE INTO scheduled_actions (schedule_id, due_at_ms, available_at_ms, routing_hash, action) VALUES (?, ?, ?, ?, ?);",
         )
         .bind(schedule_id.id.to_string())
-        .bind(datetime_to_millis(due_at))
+        .bind(due_at_ms)
+        .bind(due_at_ms)
         .bind(routing_hash)
         .bind(action);
 
@@ -144,12 +142,10 @@ impl SchedulerStorage for SqliteSchedulerStorage {
                                 r#"
                                 SELECT schedule_id, due_at_ms, routing_hash, action, attempt_count
                                   FROM scheduled_actions
-                                 WHERE due_at_ms <= ?
-                                   AND (lease_until_ms IS NULL OR lease_until_ms <= ?)
-                                 ORDER BY due_at_ms ASC, schedule_id ASC;
+                                 WHERE available_at_ms <= ?
+                                 ORDER BY available_at_ms ASC, schedule_id ASC;
                                 "#,
                             )
-                            .bind(now_ms)
                             .bind(now_ms),
                         )
                         .await?;
@@ -163,9 +159,10 @@ impl SchedulerStorage for SqliteSchedulerStorage {
                     for row in &selected {
                         tx.execute(
                             sqlx::query(
-                                "UPDATE scheduled_actions SET lease_owner = ?, lease_until_ms = ?, attempt_count = attempt_count + 1 WHERE schedule_id = ?;",
+                                "UPDATE scheduled_actions SET lease_owner = ?, lease_until_ms = ?, available_at_ms = ?, attempt_count = attempt_count + 1 WHERE schedule_id = ?;",
                             )
                             .bind(lease_owner.to_string())
+                            .bind(lease_until_ms)
                             .bind(lease_until_ms)
                             .bind(&row.schedule_id),
                         )
@@ -200,10 +197,12 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         lease_owner: Uuid,
         lease_until: DateTime<Utc>,
     ) -> Result<bool, String> {
+        let lease_until_ms = datetime_to_millis(lease_until);
         let query = sqlx::query(
-            "UPDATE scheduled_actions SET lease_until_ms = ? WHERE schedule_id = ? AND lease_owner = ?;",
+            "UPDATE scheduled_actions SET lease_until_ms = ?, available_at_ms = ? WHERE schedule_id = ? AND lease_owner = ?;",
         )
-        .bind(datetime_to_millis(lease_until))
+        .bind(lease_until_ms)
+        .bind(lease_until_ms)
         .bind(schedule_id.id.to_string())
         .bind(lease_owner.to_string());
 
