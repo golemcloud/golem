@@ -157,6 +157,7 @@ impl SqliteLabelledTransaction {
             api_name = self.api_name,
             "DB transaction rollback",
         );
+        golem_common::metrics::db::record_db_rollback("sqlite", self.svc_name, self.api_name);
         SqliteLabelledApi::record(
             self.svc_name,
             self.api_name,
@@ -240,6 +241,7 @@ impl super::LabelledPoolTransaction for SqliteLabelledTransaction {
             api_name = self.api_name,
             "DB transaction rollback",
         );
+        golem_common::metrics::db::record_db_rollback("sqlite", self.svc_name, self.api_name);
         SqliteLabelledApi::record(
             self.svc_name,
             self.api_name,

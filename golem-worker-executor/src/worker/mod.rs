@@ -245,6 +245,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Self, WorkerExecutorError> {
+        let start = std::time::Instant::now();
         let GetOrCreateWorkerResult {
             initial_worker_metadata,
             current_status,
@@ -252,7 +253,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             agent_id,
             snapshot_policy,
             oplog,
-        } = Self::get_or_create_worker_metadata(
+        } = match Self::get_or_create_worker_metadata(
             deps,
             &owned_agent_id,
             component_revision,
@@ -260,7 +261,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_agent_config,
             parent,
         )
-        .await?;
+        .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                crate::metrics::wasm::record_create_worker_failure(&err);
+                return Err(err);
+            }
+        };
 
         let current_status_guard = current_status.read().await;
         let initial_pending_invocations = current_status_guard.pending_invocations.clone();
@@ -363,6 +371,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await
                 .expect("Failed enqueuing initial agent invocations to worker");
         };
+        crate::metrics::wasm::record_create_worker(start.elapsed());
         Ok(worker)
     }
 
@@ -511,6 +520,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status: updated_status,
             ..result
         }
+    }
+
+    pub async fn get_last_known_status(&self) -> AgentStatusRecord {
+        self.last_known_status.read().await.clone()
     }
 
     // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.

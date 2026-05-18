@@ -488,6 +488,7 @@ pub async fn create_worker_executor_impl<
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
     shutdown_token: tokio_util::sync::CancellationToken,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
         All<Ctx>,
@@ -511,18 +512,19 @@ pub async fn create_worker_executor_impl<
             (Some(pool), None, key_value_storage)
         }
         KeyValueStorageConfig::Postgres(postgres) => {
-            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-                PostgresKeyValueStorage::configured(postgres)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            );
+            let kv = PostgresKeyValueStorage::configured(postgres)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            let kv_metrics = kv.clone();
+            join_set.spawn(async move { kv_metrics.run_metrics_loop().await });
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(kv);
             (None, None, key_value_storage)
         }
         KeyValueStorageConfig::NamespaceRouted(namespace_routed) => {
             let (cache_redis, cache_sqlite, cache_storage) =
-                build_inner_key_value_storage(&namespace_routed.cache).await?;
+                build_inner_key_value_storage(&namespace_routed.cache, join_set).await?;
             let (persistent_redis, persistent_sqlite, persistent_storage) =
-                build_inner_key_value_storage(&namespace_routed.persistent).await?;
+                build_inner_key_value_storage(&namespace_routed.persistent, join_set).await?;
 
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
                 NamespaceRoutedKeyValueStorage::new(cache_storage, persistent_storage),
@@ -570,11 +572,14 @@ pub async fn create_worker_executor_impl<
             let pool = RedisPool::configured(redis).await?;
             Arc::new(RedisIndexedStorage::new(pool.clone()))
         }
-        IndexedStorageConfig::Postgres(postgres) => Arc::new(
-            PostgresIndexedStorage::configured(postgres)
+        IndexedStorageConfig::Postgres(postgres) => {
+            let is = PostgresIndexedStorage::configured(postgres)
                 .await
-                .map_err(|err| anyhow!(err))?,
-        ),
+                .map_err(|err| anyhow!(err))?;
+            let is_metrics = is.clone();
+            join_set.spawn(async move { is_metrics.run_metrics_loop().await });
+            Arc::new(is)
+        }
         IndexedStorageConfig::KVStoreSqlite(_) => {
             let sqlite = sqlite
                 .clone()
@@ -964,6 +969,7 @@ pub async fn bootstrap_and_run_worker_executor<
             runtime.clone(),
             &lazy_worker_activator,
             shutdown.token(),
+            join_set,
         )
         .await?;
 
@@ -987,6 +993,10 @@ pub async fn bootstrap_and_run_worker_executor<
     };
 
     let leak_detector = worker_executor_impl.leak_detector();
+
+    worker_executor_impl
+        .active_workers()
+        .spawn_metrics_poller(join_set);
 
     let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
@@ -1071,6 +1081,7 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
 
 async fn build_inner_key_value_storage(
     config: &KeyValueStorageInnerConfig,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
         Option<RedisPool>,
@@ -1089,11 +1100,12 @@ async fn build_inner_key_value_storage(
             Ok((Some(pool), None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Postgres(postgres) => {
-            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-                PostgresKeyValueStorage::configured(postgres)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            );
+            let kv = PostgresKeyValueStorage::configured(postgres)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            let kv_metrics = kv.clone();
+            join_set.spawn(async move { kv_metrics.run_metrics_loop().await });
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(kv);
             Ok((None, None, key_value_storage))
         }
         KeyValueStorageInnerConfig::InMemory(_) => {

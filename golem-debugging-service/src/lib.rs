@@ -395,6 +395,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Sen
             runtime.clone(),
             &lazy_worker_activator,
             shutdown.token(),
+            join_set,
         )
         .await?;
 

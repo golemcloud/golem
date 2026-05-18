@@ -64,6 +64,31 @@ impl PostgresPool {
             pool: self.pool.clone(),
         }
     }
+
+    pub fn size(&self) -> u32 {
+        self.pool.size()
+    }
+
+    pub fn num_idle(&self) -> u32 {
+        self.pool.num_idle() as u32
+    }
+
+    /// Runs the periodic pool-metrics reporting loop.
+    /// Records `db_pool_size` and `db_pool_idle` for the given service name every 15 seconds.
+    /// Never returns — intended to be run as a background task.
+    pub async fn run_metrics_loop(&self, svc_name: &'static str) -> anyhow::Result<()> {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            golem_common::metrics::db::set_db_pool_stats(
+                "postgres",
+                svc_name,
+                self.pool.size(),
+                self.pool.num_idle() as u32,
+            );
+        }
+    }
 }
 
 #[async_trait]

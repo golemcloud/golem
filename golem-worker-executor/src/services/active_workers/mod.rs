@@ -272,6 +272,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                     .await
                 {
                     debug!("Stopped idle {agent_id} to free up {mem} memory");
+                    crate::metrics::workers::record_worker_eviction("LoadedIdle");
                     freed += mem;
                 }
             }
@@ -285,6 +286,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                     .await
                 {
                     debug!("Stopped warm-runnable {agent_id} to free up {mem} memory");
+                    crate::metrics::workers::record_worker_eviction("WarmRunnable");
                     freed += mem;
                 }
             }
@@ -386,6 +388,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 .await
             {
                 debug!("Stopped idle {agent_id}, freed {storage} bytes of storage");
+                crate::metrics::workers::record_worker_eviction("LoadedIdle");
                 freed += storage;
             }
         }
@@ -399,6 +402,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 .await
             {
                 debug!("Stopped warm-runnable {agent_id}, freed {storage} bytes of storage");
+                crate::metrics::workers::record_worker_eviction("WarmRunnable");
                 freed += storage;
             }
         }
@@ -407,5 +411,60 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             debug!("Freed {freed} bytes by evicting worker(s); re-checking availability");
         }
         freed >= storage_bytes
+    }
+
+    /// Registers a background task in `join_set` that periodically records worker-status
+    /// distribution and memory semaphore availability as Prometheus gauges.
+    pub fn spawn_metrics_poller(
+        &self,
+        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+    ) {
+        let workers = self.workers.clone();
+        let semaphore = self.worker_memory.clone();
+        join_set.spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+
+                // Memory semaphore headroom
+                crate::metrics::workers::set_memory_semaphore_available(
+                    semaphore.available_permits(),
+                );
+
+                // Per-status worker counts
+                let mut running = 0usize;
+                let mut idle = 0usize;
+                let mut suspended = 0usize;
+                let mut interrupted = 0usize;
+                let mut retrying = 0usize;
+                let mut failed = 0usize;
+                let mut exited = 0usize;
+
+                for (_, worker) in workers.iter().await {
+                    let last_known_status = worker.get_last_known_status().await;
+                    match last_known_status.status {
+                        golem_common::model::AgentStatus::Running => running += 1,
+                        golem_common::model::AgentStatus::Idle => idle += 1,
+                        golem_common::model::AgentStatus::Suspended => suspended += 1,
+                        golem_common::model::AgentStatus::Interrupted => interrupted += 1,
+                        golem_common::model::AgentStatus::Retrying => retrying += 1,
+                        golem_common::model::AgentStatus::Failed => failed += 1,
+                        golem_common::model::AgentStatus::Exited => exited += 1,
+                    }
+                }
+
+                crate::metrics::workers::set_worker_count_by_status("Running", running as f64);
+                crate::metrics::workers::set_worker_count_by_status("Idle", idle as f64);
+                crate::metrics::workers::set_worker_count_by_status("Suspended", suspended as f64);
+                crate::metrics::workers::set_worker_count_by_status(
+                    "Interrupted",
+                    interrupted as f64,
+                );
+                crate::metrics::workers::set_worker_count_by_status("Retrying", retrying as f64);
+                crate::metrics::workers::set_worker_count_by_status("Failed", failed as f64);
+                crate::metrics::workers::set_worker_count_by_status("Exited", exited as f64);
+            }
+        });
     }
 }

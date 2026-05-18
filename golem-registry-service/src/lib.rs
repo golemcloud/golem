@@ -32,7 +32,6 @@ use poem::listener::Listener;
 use poem::middleware::Cors;
 use poem::middleware::{CookieJarManager, OpenTelemetryTracing};
 use poem::{EndpointExt, Route};
-use poem_openapi::OpenApiService;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
@@ -53,23 +52,14 @@ pub struct SingleExecutableRunDetails {
 pub struct RegistryService {
     config: RegistryServiceConfig,
     prometheus_registry: prometheus::Registry,
-    services: Services,
 }
 
 impl RegistryService {
-    pub async fn new(
-        config: RegistryServiceConfig,
-        prometheus_registry: prometheus::Registry,
-    ) -> Result<Self, anyhow::Error> {
-        info!("Initializing component service");
-
-        let services = Services::new(&config).await?;
-
-        Ok(Self {
+    pub fn new(config: RegistryServiceConfig, prometheus_registry: prometheus::Registry) -> Self {
+        Self {
             config,
             prometheus_registry,
-            services,
-        })
+        }
     }
 
     pub async fn start(
@@ -77,13 +67,11 @@ impl RegistryService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
         tracer: Option<SdkTracer>,
     ) -> Result<RunDetails, anyhow::Error> {
-        let http_port = self.start_http_server(join_set, tracer).await?;
-        let grpc_port = self.start_grpc_server(join_set).await?;
-        self.start_cleanup_task(join_set);
-        self.services
-            .registry_change_notifier
-            .start_background_tasks(join_set);
-        self.services.provision_builtin_plugins().await;
+        info!("Initializing registry service");
+        let services = Services::new(&self.config, join_set).await?;
+
+        let http_port = self.start_http_server(join_set, tracer, &services).await?;
+        let grpc_port = self.start_grpc_server(join_set, &services).await?;
 
         Ok(RunDetails {
             http_port,
@@ -96,13 +84,11 @@ impl RegistryService {
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<SingleExecutableRunDetails, anyhow::Error> {
-        let grpc_port = self.start_grpc_server(join_set).await?;
-        self.start_cleanup_task(join_set);
-        self.services
-            .registry_change_notifier
-            .start_background_tasks(join_set);
-        self.services.provision_builtin_plugins().await;
-        let endpoint = api::make_open_api_service(&self.services).boxed();
+        info!("Initializing registry service");
+        let services = Services::new(&self.config, join_set).await?;
+
+        let grpc_port = self.start_grpc_server(join_set, &services).await?;
+        let endpoint = api::make_open_api_service(&services).boxed();
 
         Ok(SingleExecutableRunDetails {
             grpc_port,
@@ -110,37 +96,12 @@ impl RegistryService {
         })
     }
 
-    pub fn http_service(&self) -> OpenApiService<api::Apis, ()> {
-        api::make_open_api_service(&self.services)
-    }
-
-    fn start_cleanup_task(&self, join_set: &mut JoinSet<Result<(), anyhow::Error>>) {
-        let repo = self.services.registry_change_repo.clone();
-        let retention = self.config.deployment_events.retention;
-        let interval = self.config.deployment_events.cleanup_interval;
-
-        join_set.spawn(async move {
-            loop {
-                tokio::time::sleep(interval).await;
-                match repo.cleanup_old_events(retention.as_secs() as i64).await {
-                    Ok(count) => {
-                        if count > 0 {
-                            tracing::info!("Cleaned up {count} old deployment change events");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to clean up old deployment change events: {e}");
-                    }
-                }
-            }
-        });
-    }
-
     async fn start_grpc_server(
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+        services: &Services,
     ) -> Result<u16, anyhow::Error> {
-        let port = crate::grpc::start_grpc_server(&self.config.grpc, &self.services, join_set)
+        let port = crate::grpc::start_grpc_server(&self.config.grpc, services, join_set)
             .await
             .context("starting gRPC server failed")?;
 
@@ -152,10 +113,11 @@ impl RegistryService {
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
         tracer: Option<SdkTracer>,
+        services: &Services,
     ) -> Result<u16, anyhow::Error> {
         let prometheus_registry = self.prometheus_registry.clone();
 
-        let api_service = api::make_open_api_service(&self.services);
+        let api_service = api::make_open_api_service(services);
 
         let ui = api_service.swagger_ui();
         let spec = api_service.spec_endpoint_yaml();

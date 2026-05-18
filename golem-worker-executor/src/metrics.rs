@@ -117,12 +117,43 @@ pub mod workers {
             &["api"]
         )
         .unwrap();
+        static ref WORKER_COUNT_BY_STATUS: GaugeVec = register_gauge_vec!(
+            "worker_count_by_status",
+            "Number of in-memory workers per status",
+            &["status"]
+        )
+        .unwrap();
+        static ref WORKER_EVICTION_TOTAL: CounterVec = register_counter_vec!(
+            "worker_eviction_total",
+            "Number of workers evicted from memory",
+            &["class"]
+        )
+        .unwrap();
+        static ref WORKER_MEMORY_SEMAPHORE_AVAILABLE: Gauge = register_gauge!(
+            "worker_memory_semaphore_available",
+            "Available memory semaphore permits (bytes)"
+        )
+        .unwrap();
     }
 
     pub fn record_worker_call(api_name: &'static str) {
         WORKER_EXECUTOR_CALL_TOTAL
             .with_label_values(&[api_name])
             .inc();
+    }
+
+    pub fn set_worker_count_by_status(status: &'static str, count: f64) {
+        WORKER_COUNT_BY_STATUS
+            .with_label_values(&[status])
+            .set(count);
+    }
+
+    pub fn record_worker_eviction(class: &'static str) {
+        WORKER_EVICTION_TOTAL.with_label_values(&[class]).inc();
+    }
+
+    pub fn set_memory_semaphore_available(permits: usize) {
+        WORKER_MEMORY_SEMAPHORE_AVAILABLE.set(permits as f64);
     }
 }
 
