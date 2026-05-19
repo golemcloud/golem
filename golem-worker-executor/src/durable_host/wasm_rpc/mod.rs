@@ -588,15 +588,19 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 target_worker_fingerprint,
             };
 
+            let scheduled_at =
+                chrono::DateTime::from_timestamp(datetime.seconds as i64, datetime.nanoseconds)
+                    .ok_or_else(|| {
+                        anyhow::Error::from(WorkerExecutorError::runtime(format!(
+                            "Received invalid datetime from wasi: seconds={}, nanoseconds={}",
+                            datetime.seconds, datetime.nanoseconds
+                        )))
+                    })?;
+
             let result = self
                 .state
                 .scheduler_service
-                .schedule_with_id(
-                    schedule_id,
-                    chrono::DateTime::from_timestamp(datetime.seconds as i64, datetime.nanoseconds)
-                        .expect("Received invalid datetime from wasi"),
-                    action,
-                )
+                .schedule_with_id(schedule_id, scheduled_at, action)
                 .await;
 
             let schedule_id = SerializableScheduleId::from_domain(result);
@@ -612,7 +616,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         }?;
 
-        let serialized_result = serialize(&result.schedule_id).expect("Failed to serialize result");
+        let serialized_result = serialize(&result.schedule_id).map_err(|err| {
+            anyhow::Error::from(WorkerExecutorError::runtime(format!(
+                "Failed to serialize schedule id: {err}"
+            )))
+        })?;
         let cancellation_token = CancellationTokenEntry {
             schedule_id: serialized_result,
         };
@@ -737,7 +745,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     )
                 }
                 FutureInvokeResultState::Completed { .. } => {
-                    handle_completed_rpc_result(entry, &span_id)
+                    handle_completed_rpc_result(entry, &span_id)?
                 }
                 FutureInvokeResultState::Cancelled {
                     request,
@@ -860,12 +868,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             )
             .into())
         } else {
-            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)
-                .map_err(|golem_err| {
-                    anyhow::anyhow!(
-                    "failed to get golem::rpc::future-invoke-result::get oplog entry: {golem_err}"
-                )
-                })?;
+            // Propagate WorkerExecutorError via `?` (From) so the downcast
+            // survives the anyhow::Error chain — TrapType::from_error
+            // classifies UnexpectedOplogEntry as non-retriable.
+            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)?;
 
             let serialized_invoke_result = match oplog_entry {
                 OplogEntry::HostCall { response, .. } => {
@@ -875,17 +881,36 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             .download_payload(response)
                             .await
                             .map_err(|err| {
-                                anyhow::anyhow!("Failed to download oplog payload: {err}")
+                                WorkerExecutorError::runtime(format!(
+                                    "Failed to download golem::rpc::future-invoke-result oplog payload: {err}"
+                                ))
                             })?;
 
                     match response {
                         HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
                             result,
                         }) => result,
-                        _ => panic!("unexpected oplog payload type"),
+                        other => {
+                            return Err(anyhow::Error::from(
+                                WorkerExecutorError::unexpected_oplog_entry(
+                                    "HostResponse::GolemRpcInvokeGet",
+                                    format!("{other:?}"),
+                                ),
+                            ));
+                        }
                     }
                 }
-                _ => panic!("unexpected oplog entry type"),
+                // The macro above already guarantees `OplogEntry::HostCall`, so
+                // this arm is structurally unreachable. We still return an
+                // error rather than panicking to keep the function panic-free.
+                other => {
+                    return Err(anyhow::Error::from(
+                        WorkerExecutorError::unexpected_oplog_entry(
+                            "OplogEntry::HostCall",
+                            format!("{other:?}"),
+                        ),
+                    ));
+                }
             };
 
             let entry = self.table().get_mut(&this)?;
@@ -1067,8 +1092,12 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
         let entry = self.table().get(&this)?;
-        let serialized_schedule_id: SerializableScheduleId =
-            deserialize(&entry.schedule_id).expect("Failed to deserialize cancellation token");
+        let serialized_schedule_id: SerializableScheduleId = deserialize(&entry.schedule_id)
+            .map_err(|err| {
+                anyhow::Error::from(WorkerExecutorError::runtime(format!(
+                    "Failed to deserialize cancellation token: {err}"
+                )))
+            })?;
 
         let durability = Durability::<GolemRpcCancellationTokenCancel>::new(
             self,
@@ -1256,15 +1285,32 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
 fn handle_completed_rpc_result(
     entry: &mut FutureInvokeResultState,
     span_id: &SpanId,
-) -> (
-    Result<Option<Result<UntypedDataValue, RpcError>>, anyhow::Error>,
-    HostRequestGolemRpcInvoke,
-    SerializableInvokeResult,
-    OplogIndex,
-) {
+) -> Result<
+    (
+        Result<Option<Result<UntypedDataValue, RpcError>>, anyhow::Error>,
+        HostRequestGolemRpcInvoke,
+        SerializableInvokeResult,
+        OplogIndex,
+    ),
+    WorkerExecutorError,
+> {
+    // Validate the state *before* any mutation so a corrupt/unexpected state
+    // does not leave a torn entry behind.
+    if !matches!(entry, FutureInvokeResultState::Completed { .. }) {
+        return Err(WorkerExecutorError::runtime(
+            "handle_completed_rpc_result called with state != FutureInvokeResultState::Completed",
+        ));
+    }
     let request = match entry {
         FutureInvokeResultState::Completed { request, .. } => request.clone(),
-        _ => panic!("unexpected state: not FutureInvokeResultState::Completed"),
+        // Structurally excluded by the `matches!` check above, but we surface a runtime
+        // error instead of panicking to keep the worker-executor process alive on any
+        // unforeseen state-machine corruption.
+        _ => {
+            return Err(WorkerExecutorError::runtime(
+                "handle_completed_rpc_result: unexpected non-completed state after precheck",
+            ));
+        }
     };
     let begin_index = entry.begin_index();
     let span_id = span_id.clone();
@@ -1280,7 +1326,7 @@ fn handle_completed_rpc_result(
         request, result, ..
     } = result
     {
-        match result {
+        Ok(match result {
             Ok(Ok(untyped)) => (
                 Ok(Some(Ok(untyped.clone()))),
                 request,
@@ -1302,9 +1348,13 @@ fn handle_completed_rpc_result(
                     begin_index,
                 )
             }
-        }
+        })
     } else {
-        panic!("unexpected state: not FutureInvokeResultState::Completed")
+        // Unreachable in practice (we validated `entry` above and only swapped
+        // a different value out of the *same slot*), but kept for safety.
+        Err(WorkerExecutorError::runtime(
+            "handle_completed_rpc_result: extracted state was not FutureInvokeResultState::Completed",
+        ))
     }
 }
 

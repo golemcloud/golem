@@ -253,7 +253,10 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     }
                 }
                 WebSocketConnectionEntry::Replay => {
-                    unreachable!("live send path must not use Replay connection entry")
+                    return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "websocket connection entry kind mismatch during replay (live send path saw Replay entry)",
+                    )
+                    .into());
                 }
                 WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
             };
@@ -340,7 +343,10 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     }
                 }
                 WebSocketConnectionEntry::Replay => {
-                    unreachable!("live receive path must not use Replay connection entry")
+                    return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "websocket connection entry kind mismatch during replay (live receive path saw Replay entry)",
+                    )
+                    .into());
                 }
                 WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
             };
@@ -457,9 +463,10 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     }
                 }
                 WebSocketConnectionEntry::Replay => {
-                    unreachable!(
-                        "live receive_with_timeout path must not use Replay connection entry"
+                    return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "websocket connection entry kind mismatch during replay (live receive_with_timeout path saw Replay entry)",
                     )
+                    .into());
                 }
                 WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
             };
@@ -565,7 +572,10 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     }
                 }
                 WebSocketConnectionEntry::Replay => {
-                    unreachable!("live close path must not use Replay connection entry")
+                    return Err(golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "websocket connection entry kind mismatch during replay (live close path saw Replay entry)",
+                    )
+                    .into());
                 }
                 WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
             };
@@ -655,12 +665,11 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
     let request = match build_request(&info.url, info.headers.as_deref()) {
         Ok(request) => request,
         Err(err) => {
-            let error = Error::ConnectionFailure(err);
+            let error = Error::ConnectionFailure(err.clone());
             mark_websocket_terminal(
                 ctx,
                 resource,
-                terminal_websocket_error(&error)
-                    .expect("connection failures must be terminal websocket errors"),
+                TerminalWebSocketError::ConnectionFailure(err),
             )?;
             return Ok(Err(error));
         }
@@ -686,12 +695,12 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
     let (ws_stream, _) = match connect_result {
         Ok(result) => result,
         Err(err) => {
-            let error = Error::ConnectionFailure(err.to_string());
+            let reason = err.to_string();
+            let error = Error::ConnectionFailure(reason.clone());
             mark_websocket_terminal(
                 ctx,
                 resource,
-                terminal_websocket_error(&error)
-                    .expect("connection failures must be terminal websocket errors"),
+                TerminalWebSocketError::ConnectionFailure(reason),
             )?;
             return Ok(Err(error));
         }
