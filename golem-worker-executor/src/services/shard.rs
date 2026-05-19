@@ -29,6 +29,11 @@ pub trait ShardService: Send + Sync {
     fn check_worker(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError>;
     fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>);
     fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError>;
+    fn set_shard_assignment(
+        &self,
+        number_of_shards: usize,
+        shard_ids: &HashSet<ShardId>,
+    ) -> Result<(), WorkerExecutorError>;
     fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError>;
     fn try_get_current_assignment(&self) -> Option<ShardAssignment>;
 }
@@ -136,6 +141,28 @@ impl ShardService for ShardServiceDefault {
                     "ShardService.revoke_shards"
                 );
                 shard_assignment.revoke_shards(shard_ids);
+                let assigned_shard_count = shard_assignment.shard_ids.len();
+                record_assigned_shard_count(assigned_shard_count);
+                Ok(())
+            }
+            None => Err(sharding_not_ready_error()),
+        })
+    }
+
+    fn set_shard_assignment(
+        &self,
+        number_of_shards: usize,
+        shard_ids: &HashSet<ShardId>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
+            Some(shard_assignment) => {
+                debug!(
+                    number_of_shards,
+                    shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
+                    shard_ids_to_set = shard_ids.iter().join(", "),
+                    "ShardService.set_shard_assignment"
+                );
+                shard_assignment.set_shards(number_of_shards, shard_ids);
                 let assigned_shard_count = shard_assignment.shard_ids.len();
                 record_assigned_shard_count(assigned_shard_count);
                 Ok(())

@@ -14,10 +14,12 @@
 
 use super::error::ShardManagerError;
 use super::healthcheck::{HealthCheck, get_unhealthy_pods};
-use super::model::RoutingTable;
+use super::model::{Assignments, RoutingTable};
 use super::persistence::RoutingTablePersistence;
 use super::rebalancing::Rebalance;
-use super::worker_executor::{WorkerExecutorService, assign_shards, revoke_shards};
+use super::worker_executor::{
+    WorkerExecutorService, assign_shards, revoke_shards, set_shard_assignments,
+};
 use async_rwlock::RwLock;
 use golem_common::model::{Pod, ShardId};
 use itertools::Itertools;
@@ -161,21 +163,16 @@ impl ShardManagement {
                         info!(pod= %pod, "Pod added");
                     }
                 }
-                let mut rebalance =
-                    Rebalance::from_routing_table(&current_routing_table, threshold);
+                let rebalance = Rebalance::from_routing_table(&current_routing_table, threshold);
 
                 let mut full_assignment_pods: HashSet<Pod> = HashSet::new();
 
                 for pod in send_full_assignment {
-                    let assignments = current_routing_table.get_shards(pod).unwrap_or_default();
-                    rebalance.add_assignments(&pod, assignments);
                     full_assignment_pods.insert(pod);
                 }
 
                 for pod in retry_full_assignment_pods {
                     if current_routing_table.has_pod(pod) {
-                        let assignments = current_routing_table.get_shards(pod).unwrap_or_default();
-                        rebalance.add_assignments(&pod, assignments);
                         full_assignment_pods.insert(pod);
                     }
                 }
@@ -217,10 +214,52 @@ impl ShardManagement {
             }
 
             routing_table.write().await.rebalance(rebalance);
+
+            let routing_table_snapshot = routing_table.read().await.clone();
             persistence_service
-                .write(&routing_table.read().await.clone())
+                .write(&routing_table_snapshot)
                 .await
                 .expect("Failed to persist routing table after rebalance");
+
+            let mut full_assignments = Assignments::new();
+            for pod in &full_assignment_pods {
+                if let Some(mut shard_ids) = routing_table_snapshot.get_shards(*pod) {
+                    full_assignments
+                        .assignments
+                        .entry(*pod)
+                        .or_default()
+                        .append(&mut shard_ids);
+                }
+            }
+
+            let failed_full_assignments = if full_assignments.is_empty() {
+                Vec::new()
+            } else {
+                set_shard_assignments(
+                    worker_executors.clone(),
+                    routing_table_snapshot.number_of_shards,
+                    &full_assignments,
+                )
+                .await
+            };
+
+            if !failed_full_assignments.is_empty() {
+                warn!(
+                    failed_pods = failed_full_assignments
+                        .iter()
+                        .map(|(pod, _)| pod)
+                        .join(", "),
+                    "Some pods could not receive authoritative shard assignment and will be retried"
+                );
+
+                {
+                    let mut updates_guard = updates.lock().await;
+                    for (pod, _) in &failed_full_assignments {
+                        updates_guard.retry_full_assignment(*pod);
+                    }
+                }
+                needs_retry = true;
+            }
 
             if needs_retry {
                 change.notify_one();
