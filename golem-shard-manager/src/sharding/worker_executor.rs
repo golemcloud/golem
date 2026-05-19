@@ -110,7 +110,7 @@ pub async fn assign_shards(
         .collect()
 }
 
-/// Sends authoritative shard assignment requests to worker executors.
+/// Reconciles executors to the routing-table shard assignments.
 pub async fn set_shard_assignments(
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     number_of_shards: usize,
