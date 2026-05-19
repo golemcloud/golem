@@ -16,7 +16,7 @@ use crate::repo::RepoError;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::config::DbPostgresConfig;
-use golem_common::metrics::db::{record_db_failure, record_db_success};
+use golem_common::metrics::db::{record_db_failure, record_db_success, record_db_transaction};
 use sqlx::migrate::MigrationSource;
 use sqlx::postgres::{PgArguments, PgPoolOptions, PgQueryResult, PgRow};
 use sqlx::query::{Query, QueryAs};
@@ -74,7 +74,7 @@ impl PostgresPool {
     }
 
     /// Runs the periodic pool-metrics reporting loop.
-    /// Records `db_pool_size` and `db_pool_idle` for the given service name every 15 seconds.
+    /// Records `db_pool_size`, `db_pool_idle`, and `db_pool_max` for the given service name every 15 seconds.
     /// Never returns — intended to be run as a background task.
     pub async fn run_metrics_loop(&self, svc_name: &'static str) -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
@@ -86,6 +86,7 @@ impl PostgresPool {
                 svc_name,
                 self.pool.size(),
                 self.pool.num_idle() as u32,
+                self.pool.options().get_max_connections(),
             );
         }
     }
@@ -114,57 +115,6 @@ pub struct PostgresLabelledTransaction {
     start: Instant,
 }
 
-impl PostgresLabelledTransaction {
-    pub async fn execute(
-        &mut self,
-        query: Query<'_, Postgres, PgArguments>,
-    ) -> Result<PgQueryResult, RepoError> {
-        Ok(query.execute(&mut *self.tx).await?)
-    }
-
-    pub async fn fetch_optional<'a, A>(
-        &mut self,
-        query: Query<'a, Postgres, A>,
-    ) -> Result<Option<PgRow>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Postgres>,
-    {
-        Ok(query.fetch_optional(&mut *self.tx).await?)
-    }
-
-    pub async fn fetch_optional_as<'a, O, A>(
-        &mut self,
-        query_as: QueryAs<'a, Postgres, O, A>,
-    ) -> Result<Option<O>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Postgres>,
-        O: 'a + Send + Unpin + for<'r> FromRow<'r, PgRow>,
-    {
-        Ok(query_as.fetch_optional(&mut *self.tx).await?)
-    }
-
-    pub async fn fetch_all<'a, A>(
-        &mut self,
-        query: Query<'a, Postgres, A>,
-    ) -> Result<Vec<PgRow>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Postgres>,
-    {
-        Ok(query.fetch_all(&mut *self.tx).await?)
-    }
-
-    pub async fn fetch_all_as<'a, O, A>(
-        &mut self,
-        query_as: QueryAs<'a, Postgres, O, A>,
-    ) -> Result<Vec<O>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Postgres>,
-        O: 'a + Send + Unpin + for<'r> FromRow<'r, PgRow>,
-    {
-        Ok(query_as.fetch_all(&mut *self.tx).await?)
-    }
-}
-
 #[async_trait]
 impl super::PoolApi for PostgresLabelledTransaction {
     type QueryResult = PgQueryResult;
@@ -176,7 +126,7 @@ impl super::PoolApi for PostgresLabelledTransaction {
         &mut self,
         query: Query<'a, Self::Db, PgArguments>,
     ) -> Result<PgQueryResult, RepoError> {
-        PostgresLabelledTransaction::execute(self, query).await
+        Ok(query.execute(&mut *self.tx).await?)
     }
 
     async fn fetch_optional<'a, A>(
@@ -186,7 +136,7 @@ impl super::PoolApi for PostgresLabelledTransaction {
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {
-        PostgresLabelledTransaction::fetch_optional(self, query).await
+        Ok(query.fetch_optional(&mut *self.tx).await?)
     }
 
     async fn fetch_optional_as<'a, O, A>(
@@ -197,17 +147,17 @@ impl super::PoolApi for PostgresLabelledTransaction {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        PostgresLabelledTransaction::fetch_optional_as(self, query_as).await
+        Ok(query_as.fetch_optional(&mut *self.tx).await?)
     }
 
     async fn fetch_all<'a, A>(
         &mut self,
-        query_as: Query<'a, Self::Db, A>,
+        query: Query<'a, Self::Db, A>,
     ) -> Result<Vec<Self::Row>, RepoError>
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {
-        PostgresLabelledTransaction::fetch_all(self, query_as).await
+        Ok(query.fetch_all(&mut *self.tx).await?)
     }
 
     async fn fetch_all_as<'a, O, A>(
@@ -218,34 +168,34 @@ impl super::PoolApi for PostgresLabelledTransaction {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        PostgresLabelledTransaction::fetch_all_as(self, query_as).await
+        Ok(query_as.fetch_all(&mut *self.tx).await?)
     }
 }
 
 #[async_trait]
 impl super::LabelledPoolTransaction for PostgresLabelledTransaction {
     async fn commit(self) -> Result<(), RepoError> {
-        PostgresLabelledApi::record(
-            self.svc_name,
-            self.api_name,
-            self.start,
-            self.tx.commit().await,
-        )
+        let svc_name = self.svc_name;
+        let api_name = self.api_name;
+        let start = self.start;
+        let result = self.tx.commit().await;
+        record_db_transaction("postgres", svc_name, api_name, start.elapsed());
+        PostgresLabelledApi::record(svc_name, api_name, start, result)
     }
 
     async fn rollback(self) -> Result<(), RepoError> {
+        let svc_name = self.svc_name;
+        let api_name = self.api_name;
+        let start = self.start;
         warn!(
-            svc_name = self.svc_name,
-            api_name = self.api_name,
+            svc_name = svc_name,
+            api_name = api_name,
             "DB transaction rollback",
         );
-        golem_common::metrics::db::record_db_rollback("postgres", self.svc_name, self.api_name);
-        PostgresLabelledApi::record(
-            self.svc_name,
-            self.api_name,
-            self.start,
-            self.tx.rollback().await,
-        )
+        golem_common::metrics::db::record_db_rollback("postgres", svc_name, api_name);
+        let result = self.tx.rollback().await;
+        record_db_transaction("postgres", svc_name, api_name, start.elapsed());
+        PostgresLabelledApi::record(svc_name, api_name, start, result)
     }
 }
 
@@ -256,70 +206,6 @@ pub struct PostgresLabelledApi {
 }
 
 impl PostgresLabelledApi {
-    pub async fn execute(
-        &self,
-        query: Query<'_, Postgres, PgArguments>,
-    ) -> Result<PgQueryResult, RepoError> {
-        let start = Instant::now();
-        self.record_self(start, query.execute(&self.pool).await)
-    }
-
-    pub async fn fetch_optional<'a, A>(
-        &self,
-        query: Query<'a, Postgres, A>,
-    ) -> Result<Option<PgRow>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Postgres>,
-    {
-        let start = Instant::now();
-        self.record_self(start, query.fetch_optional(&self.pool).await)
-    }
-
-    pub async fn fetch_optional_as<'a, O, A>(
-        &self,
-        query_as: QueryAs<'a, Postgres, O, A>,
-    ) -> Result<Option<O>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Postgres>,
-        O: 'a + Send + Unpin + for<'r> FromRow<'r, PgRow>,
-    {
-        let start = Instant::now();
-        self.record_self(start, query_as.fetch_optional(&self.pool).await)
-    }
-
-    pub async fn fetch_all<'a, A>(
-        &self,
-        query: Query<'a, Postgres, A>,
-    ) -> Result<Vec<PgRow>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Postgres>,
-    {
-        let start = Instant::now();
-        self.record_self(start, query.fetch_all(&self.pool).await)
-    }
-
-    pub async fn fetch_all_as<'a, O, A>(
-        &self,
-        query_as: QueryAs<'a, Postgres, O, A>,
-    ) -> Result<Vec<O>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Postgres>,
-        O: 'a + Send + Unpin + for<'r> FromRow<'r, PgRow>,
-    {
-        let start = Instant::now();
-        self.record_self(start, query_as.fetch_all(&self.pool).await)
-    }
-
-    pub async fn begin(&self) -> Result<PostgresLabelledTransaction, RepoError> {
-        let tx = self.pool.begin().await?;
-        Ok(PostgresLabelledTransaction {
-            svc_name: self.svc_name,
-            api_name: self.api_name,
-            tx,
-            start: Instant::now(),
-        })
-    }
-
     fn record<R>(
         svc_name: &'static str,
         api_name: &'static str,
@@ -368,7 +254,8 @@ impl super::PoolApi for PostgresLabelledApi {
         &mut self,
         query: Query<'a, Self::Db, Self::Args<'a>>,
     ) -> Result<Self::QueryResult, RepoError> {
-        PostgresLabelledApi::execute(self, query).await
+        let start = Instant::now();
+        self.record_self(start, query.execute(&self.pool).await)
     }
 
     async fn fetch_optional<'a, A>(
@@ -378,7 +265,8 @@ impl super::PoolApi for PostgresLabelledApi {
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {
-        PostgresLabelledApi::fetch_optional(self, query).await
+        let start = Instant::now();
+        self.record_self(start, query.fetch_optional(&self.pool).await)
     }
 
     async fn fetch_optional_as<'a, O, A>(
@@ -389,7 +277,8 @@ impl super::PoolApi for PostgresLabelledApi {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        PostgresLabelledApi::fetch_optional_as(self, query_as).await
+        let start = Instant::now();
+        self.record_self(start, query_as.fetch_optional(&self.pool).await)
     }
 
     async fn fetch_all<'a, A>(
@@ -399,7 +288,8 @@ impl super::PoolApi for PostgresLabelledApi {
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {
-        PostgresLabelledApi::fetch_all(self, query).await
+        let start = Instant::now();
+        self.record_self(start, query.fetch_all(&self.pool).await)
     }
 
     async fn fetch_all_as<'a, O, A>(
@@ -410,7 +300,8 @@ impl super::PoolApi for PostgresLabelledApi {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        PostgresLabelledApi::fetch_all_as(self, query_as).await
+        let start = Instant::now();
+        self.record_self(start, query_as.fetch_all(&self.pool).await)
     }
 }
 
@@ -419,7 +310,13 @@ impl super::LabelledPoolApi for PostgresLabelledApi {
     type LabelledTransaction = PostgresLabelledTransaction;
 
     async fn begin(&self) -> Result<Self::LabelledTransaction, RepoError> {
-        PostgresLabelledApi::begin(self).await
+        let tx = self.pool.begin().await?;
+        Ok(PostgresLabelledTransaction {
+            svc_name: self.svc_name,
+            api_name: self.api_name,
+            tx,
+            start: Instant::now(),
+        })
     }
 }
 

@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
-use golem_service_base::db::DBValue;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::db::{DBValue, LabelledPoolApi, LabelledPoolTransaction, PoolApi};
 use std::collections::HashMap;
 
 const DB_TYPE: &str = "sqlite";
@@ -36,7 +36,7 @@ impl SqliteKeyValueStorage {
     }
 
     async fn init(&self) -> Result<(), String> {
-        let pool = self.pool.with_rw("kv_storage", "init");
+        let mut pool = self.pool.with_rw("kv_storage", "init");
 
         pool.execute(sqlx::query(
             r#"
@@ -173,7 +173,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<bool, String> {
-        let api = self.pool.with_rw(svc_name, api_name);
+        let mut api = self.pool.with_rw(svc_name, api_name);
         let existing: Option<(i32,)> = api
             .fetch_optional_as(
                 sqlx::query_as::<_, (i32,)>(

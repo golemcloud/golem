@@ -19,6 +19,7 @@ use super::{
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
+use golem_service_base::db::PoolApi;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::repo::RepoError;
 use std::time::Duration;
@@ -38,7 +39,7 @@ impl SqliteIndexedStorage {
     }
 
     async fn init(&self) -> Result<(), String> {
-        let pool = self.pool.with_rw("indexed_storage", "init");
+        let mut pool = self.pool.with_rw("indexed_storage", "init");
 
         pool.execute(
         sqlx::query(

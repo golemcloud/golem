@@ -448,6 +448,13 @@ pub mod db {
             &["db_type", "svc", "api"]
         )
         .unwrap();
+        static ref DB_TRANSACTION_SECONDS: HistogramVec = register_histogram_vec!(
+            "db_transaction_seconds",
+            "Duration of db transactions",
+            &["db_type", "svc", "api"],
+            crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
         static ref DB_SERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
             "db_serialized_size_bytes",
             "Size of serialized db entities",
@@ -471,6 +478,12 @@ pub mod db {
         static ref DB_POOL_IDLE: GaugeVec = register_gauge_vec!(
             "db_pool_idle",
             "Number of idle connections in the db connection pool",
+            &["db_type", "svc"]
+        )
+        .unwrap();
+        static ref DB_POOL_MAX: GaugeVec = register_gauge_vec!(
+            "db_pool_max",
+            "Maximum number of connections in the db connection pool",
             &["db_type", "svc"]
         )
         .unwrap();
@@ -507,13 +520,33 @@ pub mod db {
             .inc();
     }
 
-    pub fn set_db_pool_stats(db_type: &'static str, svc_name: &'static str, size: u32, idle: u32) {
+    pub fn record_db_transaction(
+        db_type: &'static str,
+        svc_name: &'static str,
+        api_name: &'static str,
+        duration: Duration,
+    ) {
+        DB_TRANSACTION_SECONDS
+            .with_label_values(&[db_type, svc_name, api_name])
+            .observe(duration.as_secs_f64());
+    }
+
+    pub fn set_db_pool_stats(
+        db_type: &'static str,
+        svc_name: &'static str,
+        size: u32,
+        idle: u32,
+        max: u32,
+    ) {
         DB_POOL_SIZE
             .with_label_values(&[db_type, svc_name])
             .set(size as f64);
         DB_POOL_IDLE
             .with_label_values(&[db_type, svc_name])
             .set(idle as f64);
+        DB_POOL_MAX
+            .with_label_values(&[db_type, svc_name])
+            .set(max as f64);
     }
 
     pub fn record_db_serialized_size(
