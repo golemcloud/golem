@@ -91,7 +91,8 @@ fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind 
         | WorkerExecutorError::UnexpectedOplogEntry { .. }
         | WorkerExecutorError::InvalidAccount
         | WorkerExecutorError::PreviousInvocationFailed { .. }
-        | WorkerExecutorError::PreviousInvocationExited => HostFailureKind::Permanent,
+        | WorkerExecutorError::PreviousInvocationExited
+        | WorkerExecutorError::ComponentNotFound { .. } => HostFailureKind::Permanent,
         _ => HostFailureKind::Transient,
     }
 }

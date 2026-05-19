@@ -242,10 +242,20 @@ impl ShardId {
         Self { value }
     }
 
+    pub fn value(&self) -> i64 {
+        self.value
+    }
+
     pub fn from_agent_id(agent_id: &AgentId, number_of_shards: usize) -> Self {
         let hash = Self::hash_agent_id(agent_id);
-        let value = hash.abs() % number_of_shards as i64;
-        Self { value }
+        Self::from_routing_hash(hash, number_of_shards)
+    }
+
+    pub fn from_routing_hash(hash: i64, number_of_shards: usize) -> Self {
+        let value = hash.unsigned_abs() % number_of_shards as u64;
+        Self {
+            value: value as i64,
+        }
     }
 
     pub fn hash_agent_id(agent_id: &AgentId) -> i64 {

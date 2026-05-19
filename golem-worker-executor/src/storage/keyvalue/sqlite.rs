@@ -16,12 +16,17 @@ use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::SafeDisplay;
+use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{DBValue, LabelledPoolApi, LabelledPoolTransaction, PoolApi};
+use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
+use include_dir::include_dir;
 use std::collections::HashMap;
 
 const DB_TYPE: &str = "sqlite";
+
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/keyvalue");
 
 #[derive(Debug, Clone)]
 pub struct SqliteKeyValueStorage {
@@ -29,69 +34,31 @@ pub struct SqliteKeyValueStorage {
 }
 
 impl SqliteKeyValueStorage {
-    pub async fn new(pool: SqlitePool) -> Result<Self, String> {
-        let result = Self { pool };
-        result.init().await?;
-        Ok(result)
+    pub async fn configured(config: &DbSqliteConfig) -> Result<Self, String> {
+        Self::migrate(config).await?;
+
+        let pool = SqlitePool::configured(config).await.map_err(|err| {
+            format!("Sqlite key-value storage pool initialization failed: {err:?}")
+        })?;
+
+        Ok(Self { pool })
     }
 
-    async fn init(&self) -> Result<(), String> {
-        let mut pool = self.pool.with_rw("kv_storage", "init");
+    /// Apply the key-value storage migrations on the given sqlite config without
+    /// creating a pool.
+    pub async fn migrate(config: &DbSqliteConfig) -> Result<(), String> {
+        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+        golem_service_base::db::sqlite::migrate(config, migrations.sqlite_migrations())
+            .await
+            .map_err(|err| format!("Sqlite key-value storage migration failed: {err:?}"))
+    }
 
-        pool.execute(sqlx::query(
-            r#"
-                CREATE TABLE IF NOT EXISTS kv_storage (
-                    key TEXT NOT NULL,         -- The key to store
-                    value BLOB NOT NULL,       -- The value to store
-                    namespace TEXT NOT NULL,   -- The namespace of  the key value
-                    PRIMARY KEY(key, namespace)     -- Avoid duplicate key values in a namespace
-                );
-                "#,
-        ))
-        .await
-        .map_err(|err| err.to_safe_string())?;
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
 
-        pool.execute(sqlx::query(
-            r#"
-                  CREATE TABLE IF NOT EXISTS set_storage (
-                    key TEXT NOT NULL,             -- The set's key
-                    value BLOB NOT NULL,           -- The value (element)
-                    namespace TEXT NOT NULL,       -- The namespace of  the key value
-                    PRIMARY KEY (key, value, namespace)   -- Composite primary key ensure uniqueness of values per (set, namespace)
-                  );
-                "#,
-        ))
-            .await.map_err(|err| err.to_safe_string())?;
-        pool.execute(sqlx::query(
-            r#"
-                    CREATE INDEX IF NOT EXISTS idx_set_storage_key_namespace ON set_storage (key, namespace);
-                "#))
-            .await.map_err(|err| err.to_safe_string())?;
-
-        pool.execute(sqlx::query(
-            r#"
-                  CREATE TABLE IF NOT EXISTS sorted_set_storage (
-                    key TEXT NOT NULL,             -- The sorted set's key
-                    value BLOB NOT NULL,           -- The value (element)
-                    namespace TEXT NOT NULL,       -- The namespace of  the key value
-                    score REAL NOT NULL,           -- The score associated with the value
-                    PRIMARY KEY(key, value, namespace)  -- Composite primary key ensure uniqueness of values per (set, namespace)
-                  );
-                "#,
-        ))
-            .await.map_err(|err| err.to_safe_string())?;
-        pool.execute(sqlx::query(
-            r#"
-                        CREATE INDEX IF NOT EXISTS idx_sorted_set_storage_key_namespace ON sorted_set_storage (key, namespace);
-                    "#))
-            .await.map_err(|err| err.to_safe_string())?;
-        pool.execute(sqlx::query(
-            r#"
-                        CREATE INDEX IF NOT EXISTS idx_sorted_set_storage_score  ON sorted_set_storage (score);
-                    "#))
-            .await.map_err(|err| err.to_safe_string())?;
-
-        Ok(())
+    pub fn pool(&self) -> SqlitePool {
+        self.pool.clone()
     }
 
     fn namespace(ns: KeyValueStorageNamespace) -> String {

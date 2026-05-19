@@ -114,7 +114,8 @@ impl EnvironmentShareService {
         )?;
 
         let id = EnvironmentShareId::new();
-        let record = EnvironmentShareRevisionRecord::creation(id, data.roles, auth.account_id());
+        let record =
+            EnvironmentShareRevisionRecord::creation(id, data.roles, auth.actor_account_id());
 
         let result = self
             .environment_share_repo
@@ -158,7 +159,7 @@ impl EnvironmentShareService {
         environment_share.revision = environment_share.revision.next()?;
         environment_share.roles = update.roles;
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
+        let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
 
         let result = self
             .environment_share_repo
@@ -204,7 +205,7 @@ impl EnvironmentShareService {
 
         environment_share.revision = current_revision.next()?;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
+        let audit = DeletableRevisionAuditFields::deletion(auth.actor_account_id().0);
 
         let result = self
             .environment_share_repo

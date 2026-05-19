@@ -338,6 +338,9 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::UnexpectedOplogEntry { .. } => {
                 Self::internal(api::error_code::INTERNAL_INVARIANT_VIOLATION, error)
             }
+            WorkerExecutorError::ComponentNotFound { .. } => {
+                Self::not_found(api::error_code::COMPONENT_NOT_FOUND, error)
+            }
             _ => Self::internal(api::error_code::INTERNAL_UNKNOWN, error),
         }
     }

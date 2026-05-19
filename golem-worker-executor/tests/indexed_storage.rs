@@ -18,7 +18,6 @@ use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::redis::RedisPool;
-use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::components::redis::Redis;
 use golem_worker_executor::services::golem_config::IndexedStoragePostgresConfig;
@@ -32,7 +31,6 @@ use golem_worker_executor::storage::indexed::{
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
-use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
@@ -112,7 +110,17 @@ async fn redis_storage(
     Arc::new(RedisIndexedStorageWrapper { redis })
 }
 
-struct SqliteIndexedStorageWrapper;
+struct SqliteIndexedStorageWrapper {
+    tempdirs: Arc<Mutex<Vec<TempDir>>>,
+}
+
+impl SqliteIndexedStorageWrapper {
+    fn new() -> Self {
+        Self {
+            tempdirs: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
 
 impl Debug for SqliteIndexedStorageWrapper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -123,14 +131,19 @@ impl Debug for SqliteIndexedStorageWrapper {
 #[async_trait]
 impl GetIndexedStorage for SqliteIndexedStorageWrapper {
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
-        let sqlx_pool_sqlite = SqlitePoolOptions::new()
-            .max_connections(10)
-            .connect("sqlite::memory:")
-            .await
-            .expect("Cannot create db options");
-
-        let pool = SqlitePool::new(sqlx_pool_sqlite.clone(), sqlx_pool_sqlite);
-        let sis = SqliteIndexedStorage::new(pool).await.unwrap();
+        let tempdir = tempfile::tempdir().unwrap();
+        let database = tempdir
+            .path()
+            .join("indexed.db")
+            .to_string_lossy()
+            .into_owned();
+        self.tempdirs.lock().unwrap().push(tempdir);
+        let config = golem_common::config::DbSqliteConfig {
+            database,
+            max_connections: 10,
+            foreign_keys: false,
+        };
+        let sis = SqliteIndexedStorage::configured(&config).await.unwrap();
         Arc::new(sis)
     }
 }
@@ -139,7 +152,7 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
 async fn sqlite_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
-    Arc::new(SqliteIndexedStorageWrapper)
+    Arc::new(SqliteIndexedStorageWrapper::new())
 }
 
 struct MultiSqliteIndexedStorageWrapper {

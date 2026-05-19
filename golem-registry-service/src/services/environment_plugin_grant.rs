@@ -129,7 +129,7 @@ impl EnvironmentPluginGrantService {
         let record = EnvironmentPluginGrantRecord::creation(
             environment_id,
             data.plugin_registration_id,
-            auth.account_id(),
+            auth.actor_account_id(),
         );
 
         let created: EnvironmentPluginGrant = self
@@ -169,7 +169,7 @@ impl EnvironmentPluginGrantService {
         }
 
         self.environment_plugin_grant_repo
-            .delete(environment_plugin_grant_id.0, auth.account_id().0)
+            .delete(environment_plugin_grant_id.0, auth.actor_account_id().0)
             .await?;
 
         Ok(())
@@ -326,7 +326,7 @@ impl EnvironmentPluginGrantService {
 
         let environment = self
             .environment_service
-            .get(grant.environment_id, include_deleted, auth)
+            .get(grant.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
