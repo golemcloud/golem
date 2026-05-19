@@ -175,7 +175,31 @@ impl EnvBasedTestDependencies {
                 Arc::new(SqliteRdb::new(sqlite_db_dir))
             }
             DbType::Postgres => {
-                Arc::new(DockerPostgresRdb::new(&config.unique_network_id, false).await)
+                // Prefer a provided Postgres at the default host:port
+                // if one is already accepting connections (mirrors the
+                // Redis Provided-vs-Spawned discovery in `make_redis`).
+                // Tests that need Postgres can run in environments
+                // without Docker — e.g. a Nix sandbox with a sidecar
+                // `postgres` spawned from `nixpkgs.postgresql_16`.
+                // Falls back to Docker when no Postgres is reachable.
+                let default_info = crate::components::rdb::PostgresInfo {
+                    public_host: "localhost".to_string(),
+                    public_port: 5432,
+                    private_host: "localhost".to_string(),
+                    private_port: 5432,
+                    database_name: "postgres".to_string(),
+                    username: "postgres".to_string(),
+                    password: "postgres".to_string(),
+                };
+                if crate::components::rdb::check_if_postgres_running(&default_info).await {
+                    Arc::new(
+                        crate::components::rdb::provided_postgres::ProvidedPostgresRdb::new(
+                            default_info,
+                        ),
+                    )
+                } else {
+                    Arc::new(DockerPostgresRdb::new(&config.unique_network_id, false).await)
+                }
             }
         }
     }

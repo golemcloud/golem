@@ -21,6 +21,7 @@ use sqlx::postgres::PgConnectOptions;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{error, info};
 
@@ -34,6 +35,58 @@ pub mod sqlite;
 pub trait Rdb: Send + Sync {
     fn info(&self) -> DbInfo;
     async fn kill(&self);
+}
+
+/// Probe whether a Postgres instance is reachable at the supplied
+/// connection coordinates. Used by `EnvBasedTestDependencies` to pick
+/// `ProvidedPostgresRdb` over the Docker-spawned variant when a
+/// caller-managed Postgres is already running. Mirrors the
+/// `redis::check_if_running` predicate.
+pub async fn check_if_postgres_running(info: &PostgresInfo) -> bool {
+    let opts = PgConnectOptions::new()
+        .host(&info.public_host)
+        .port(info.public_port)
+        .username(&info.username)
+        .password(&info.password)
+        .database(&info.database_name);
+    tokio::time::timeout(Duration::from_secs(2), opts.connect())
+        .await
+        .is_ok_and(|r| r.is_ok())
+}
+
+/// Construct a Postgres-backed `Rdb` using the same Provided-vs-Docker
+/// discovery `EnvBasedTestDependencies::make_rdb` performs, so test
+/// binaries that previously hardcoded `DockerPostgresRdb::new` can run
+/// against an externally-supplied Postgres (e.g. a `nixpkgs.postgresql_16`
+/// sidecar inside a sandboxed CI build) when one is reachable on
+/// localhost:5432.
+pub async fn create_postgres_rdb() -> Arc<dyn Rdb> {
+    let default_info = PostgresInfo {
+        public_host: "localhost".to_string(),
+        public_port: 5432,
+        private_host: "localhost".to_string(),
+        private_port: 5432,
+        database_name: "postgres".to_string(),
+        username: "postgres".to_string(),
+        password: "postgres".to_string(),
+    };
+    if check_if_postgres_running(&default_info).await {
+        Arc::new(provided_postgres::ProvidedPostgresRdb::new(default_info))
+    } else {
+        let unique_network_id = uuid::Uuid::new_v4().to_string();
+        Arc::new(docker_postgres::DockerPostgresRdb::new(&unique_network_id, false).await)
+    }
+}
+
+/// Extract a `PostgresInfo` out of any `Rdb` implementation that
+/// represents a Postgres database. Panics if the underlying handle is
+/// not Postgres-flavoured — call sites that expect Postgres can fail
+/// fast here rather than silently degrading.
+pub fn postgres_info_from(rdb: &Arc<dyn Rdb>) -> PostgresInfo {
+    match rdb.info() {
+        DbInfo::Postgres(info) => info,
+        other => panic!("Expected Postgres Rdb, got {other:?}"),
+    }
 }
 
 #[derive(Debug)]

@@ -38,3 +38,11 @@ golem-skills/**/dist/
 .cqs/
 .ck
 .ckignore
+
+#agents
+.claude/
+
+# Nix
+result
+result-*
+.direnv/

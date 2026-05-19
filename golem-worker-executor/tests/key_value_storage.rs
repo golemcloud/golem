@@ -21,7 +21,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
+use golem_test_framework::components::rdb::{Rdb, create_postgres_rdb, postgres_info_from};
 use golem_test_framework::components::redis::Redis;
 use golem_worker_executor::services::golem_config::KeyValueStoragePostgresConfig;
 use golem_worker_executor::storage::keyvalue::memory::InMemoryKeyValueStorage;
@@ -37,7 +37,6 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
-use url::Url;
 use uuid::{Uuid, uuid};
 
 #[async_trait]
@@ -179,7 +178,7 @@ async fn multi_sqlite_storage(
 }
 
 struct PostgresKeyValueStorageWrapper {
-    postgres: DockerPostgresRdb,
+    postgres: Arc<dyn Rdb>,
 }
 
 impl Debug for PostgresKeyValueStorageWrapper {
@@ -192,10 +191,12 @@ impl Debug for PostgresKeyValueStorageWrapper {
 impl GetKeyValueStorage for PostgresKeyValueStorageWrapper {
     async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
         let db_name = format!("kv_{}", Uuid::new_v4().simple());
+        let pg_info = postgres_info_from(&self.postgres);
+        let admin_url = pg_info.public_connection_string();
 
         let admin_pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
-            .connect(&self.postgres.public_connection_string())
+            .connect(&admin_url)
             .await
             .expect("Cannot create postgres admin pool");
 
@@ -205,14 +206,11 @@ impl GetKeyValueStorage for PostgresKeyValueStorageWrapper {
             .expect("Cannot create postgres test database");
 
         let postgres = DbPostgresConfig {
-            host: "localhost".to_string(),
+            host: pg_info.public_host.clone(),
             database: db_name,
-            username: "postgres".to_string(),
-            password: "postgres".to_string(),
-            port: Url::parse(&self.postgres.public_connection_string())
-                .expect("Invalid postgres connection string")
-                .port()
-                .expect("Postgres connection string missing port"),
+            username: pg_info.username.clone(),
+            password: pg_info.password.clone(),
+            port: pg_info.public_port,
             max_connections: 10,
             schema: None,
         };
@@ -230,14 +228,13 @@ impl GetKeyValueStorage for PostgresKeyValueStorageWrapper {
 async fn postgres_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
-    let unique_network_id = Uuid::new_v4().to_string();
-    let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
+    let postgres = create_postgres_rdb().await;
     Arc::new(PostgresKeyValueStorageWrapper { postgres })
 }
 
 struct NamespaceRoutedKeyValueStorageWrapper {
     redis: Arc<dyn Redis + Send + Sync>,
-    postgres: DockerPostgresRdb,
+    postgres: Arc<dyn Rdb>,
 }
 
 impl Debug for NamespaceRoutedKeyValueStorageWrapper {
@@ -268,9 +265,11 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
             Arc::new(RedisKeyValueStorage::new(redis_pool));
 
         let db_name = format!("kv_routed_{}", Uuid::new_v4().simple());
+        let pg_info = postgres_info_from(&self.postgres);
+        let admin_url = pg_info.public_connection_string();
         let admin_pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
-            .connect(&self.postgres.public_connection_string())
+            .connect(&admin_url)
             .await
             .expect("Cannot create postgres admin pool");
 
@@ -280,14 +279,11 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
             .expect("Cannot create postgres test database for routed kvs");
 
         let postgres = DbPostgresConfig {
-            host: "localhost".to_string(),
+            host: pg_info.public_host.clone(),
             database: db_name,
-            username: "postgres".to_string(),
-            password: "postgres".to_string(),
-            port: Url::parse(&self.postgres.public_connection_string())
-                .expect("Invalid postgres connection string")
-                .port()
-                .expect("Postgres connection string missing port"),
+            username: pg_info.username.clone(),
+            password: pg_info.password.clone(),
+            port: pg_info.public_port,
             max_connections: 10,
             schema: None,
         };
@@ -314,8 +310,7 @@ async fn namespace_routed_storage(
     redis.assert_valid();
     redis_monitor.assert_valid();
 
-    let unique_network_id = Uuid::new_v4().to_string();
-    let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
+    let postgres = create_postgres_rdb().await;
 
     Arc::new(NamespaceRoutedKeyValueStorageWrapper { redis, postgres })
 }
