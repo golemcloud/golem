@@ -21,7 +21,7 @@ mod tests;
 pub use concurrent_agents_scheduler::{ConcurrentAgentPermit, ConcurrentAgentsScheduler};
 pub use concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 pub use fs_semaphore::{
-    FILESYSTEM_STORAGE_PERMIT_SIZE_KB, FilesystemStorageSemaphore,
+    FILESYSTEM_STORAGE_PERMIT_SIZE_KB, FilesystemStoragePermit, FilesystemStorageSemaphore,
     bytes_to_filesystem_storage_permits, filesystem_storage_bytes_rounded_up,
     filesystem_storage_permits_to_bytes, filesystem_storage_pool_bytes_to_permits,
 };
@@ -70,10 +70,45 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     acquire_retry_delay: Duration,
 }
 
+#[derive(Debug)]
+pub struct WorkerMemoryPermit {
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl WorkerMemoryPermit {
+    fn new(permit: OwnedSemaphorePermit) -> Self {
+        crate::metrics::workers::dec_memory_semaphore_available(permit.num_permits());
+        Self {
+            permit: Some(permit),
+        }
+    }
+
+    pub fn num_permits(&self) -> usize {
+        self.permit
+            .as_ref()
+            .map_or(0, |permit| permit.num_permits())
+    }
+
+    pub fn merge(&mut self, mut other: Self) {
+        if let Some(other_permit) = other.permit.take() {
+            match &mut self.permit {
+                Some(permit) => permit.merge(other_permit),
+                None => self.permit = Some(other_permit),
+            }
+        }
+    }
+}
+
+impl Drop for WorkerMemoryPermit {
+    fn drop(&mut self) {
+        crate::metrics::workers::inc_memory_semaphore_available(self.num_permits());
+    }
+}
+
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub fn new(memory_config: &MemoryConfig, storage_config: &FilesystemStorageConfig) -> Self {
         let worker_memory_size = memory_config.worker_memory();
-        Self {
+        let active_workers = Self {
             workers: Cache::new(
                 None,
                 FullCacheEvictionMode::None,
@@ -88,7 +123,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             concurrent_agents: Arc::new(ConcurrentAgentsScheduler::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
             priority_allocation_lock: Arc::new(Mutex::new(())),
-        }
+        };
+        active_workers.initialize_metrics();
+        active_workers
     }
 
     pub async fn get_or_add<T>(
@@ -113,7 +150,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.workers
             .get_or_insert_simple(&agent_id, || {
                 Box::pin(async move {
-                    Ok(Arc::new(
+                    let worker = Arc::new(
                         Worker::new(
                             &deps,
                             owned_agent_id,
@@ -126,7 +163,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                         )
                         .in_current_span()
                         .await?,
-                    ))
+                    );
+                    crate::metrics::workers::inc_worker_count_by_status(
+                        worker.get_last_known_status().await.status,
+                    );
+                    Ok(worker)
                 })
             })
             .await
@@ -138,14 +179,19 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     pub async fn remove(&self, agent_id: &AgentId) {
-        self.workers.remove(agent_id).await;
+        if let Some(worker) = self.workers.get(agent_id).await {
+            self.workers.remove(agent_id).await;
+            crate::metrics::workers::dec_worker_count_by_status(
+                worker.get_last_known_status().await.status,
+            );
+        }
     }
 
     pub async fn snapshot(&self) -> Vec<(AgentId, Arc<Worker<Ctx>>)> {
         self.workers.iter().await
     }
 
-    pub async fn acquire(&self, memory: u64) -> OwnedSemaphorePermit {
+    pub async fn acquire(&self, memory: u64) -> WorkerMemoryPermit {
         let mem32: u32 = memory
             .try_into()
             .expect("requested memory size is too large");
@@ -164,7 +210,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                         self.worker_memory.available_permits(),
                         permit.num_permits()
                     );
-                    break permit;
+                    break WorkerMemoryPermit::new(permit);
                 }
                 Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
                 Err(TryAcquireError::NoPermits) => {
@@ -192,7 +238,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         }
     }
 
-    pub async fn try_acquire(&self, memory: u64) -> Option<OwnedSemaphorePermit> {
+    pub async fn try_acquire(&self, memory: u64) -> Option<WorkerMemoryPermit> {
         let mem32: u32 = memory
             .try_into()
             .expect("requested memory size is too large");
@@ -205,7 +251,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                         mem32,
                         self.worker_memory.available_permits()
                     );
-                    break Some(permit);
+                    break Some(WorkerMemoryPermit::new(permit));
                 }
                 Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
                 Err(TryAcquireError::NoPermits) => {
@@ -303,7 +349,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     /// Blocking acquire of storage semaphore permits. Loops until the requested
     /// number of bytes is available, evicting idle workers as needed.
-    pub async fn acquire_filesystem_storage(&self, storage_bytes: u64) -> OwnedSemaphorePermit {
+    pub async fn acquire_filesystem_storage(&self, storage_bytes: u64) -> FilesystemStoragePermit {
         let workers = self.workers.clone();
         self.worker_filesystem_storage
             .acquire(storage_bytes, || {
@@ -321,7 +367,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub async fn try_acquire_filesystem_storage(
         &self,
         storage_bytes: u64,
-    ) -> Option<OwnedSemaphorePermit> {
+    ) -> Option<FilesystemStoragePermit> {
         self.worker_filesystem_storage
             .try_acquire(storage_bytes)
             .await
@@ -413,73 +459,14 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         freed >= storage_bytes
     }
 
-    /// Registers a background task in `join_set` that periodically records worker-status
-    /// distribution and memory semaphore availability as Prometheus gauges.
-    pub fn spawn_metrics_poller(
-        &self,
-        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
-    ) {
-        let workers = self.workers.clone();
-        let memory_semaphore = self.worker_memory.clone();
-        let filesystem_semaphore = self.worker_filesystem_storage.clone();
-
-        join_set.spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                interval.tick().await;
-
-                // Memory semaphore headroom
-                crate::metrics::workers::set_memory_semaphore_available(
-                    memory_semaphore.available_permits(),
-                );
-
-                // filesystem semaphore headroom
-                crate::metrics::workers::set_filesystem_semaphore_available(
-                    filesystem_semaphore.available_bytes(),
-                );
-
-                // Per-status worker counts
-                {
-                    let mut running = 0usize;
-                    let mut idle = 0usize;
-                    let mut suspended = 0usize;
-                    let mut interrupted = 0usize;
-                    let mut retrying = 0usize;
-                    let mut failed = 0usize;
-                    let mut exited = 0usize;
-
-                    for (_, worker) in workers.iter().await {
-                        let last_known_status = worker.get_last_known_status().await;
-                        match last_known_status.status {
-                            golem_common::model::AgentStatus::Running => running += 1,
-                            golem_common::model::AgentStatus::Idle => idle += 1,
-                            golem_common::model::AgentStatus::Suspended => suspended += 1,
-                            golem_common::model::AgentStatus::Interrupted => interrupted += 1,
-                            golem_common::model::AgentStatus::Retrying => retrying += 1,
-                            golem_common::model::AgentStatus::Failed => failed += 1,
-                            golem_common::model::AgentStatus::Exited => exited += 1,
-                        }
-                    }
-
-                    crate::metrics::workers::set_worker_count_by_status("Running", running as f64);
-                    crate::metrics::workers::set_worker_count_by_status("Idle", idle as f64);
-                    crate::metrics::workers::set_worker_count_by_status(
-                        "Suspended",
-                        suspended as f64,
-                    );
-                    crate::metrics::workers::set_worker_count_by_status(
-                        "Interrupted",
-                        interrupted as f64,
-                    );
-                    crate::metrics::workers::set_worker_count_by_status(
-                        "Retrying",
-                        retrying as f64,
-                    );
-                    crate::metrics::workers::set_worker_count_by_status("Failed", failed as f64);
-                    crate::metrics::workers::set_worker_count_by_status("Exited", exited as f64);
-                }
-            }
-        });
+    /// Initializes worker gauges. Subsequent changes are recorded inline at the mutation sites.
+    fn initialize_metrics(&self) {
+        crate::metrics::workers::initialize_worker_count_by_status();
+        crate::metrics::workers::set_memory_semaphore_available(
+            self.worker_memory.available_permits(),
+        );
+        crate::metrics::workers::set_filesystem_semaphore_available(
+            self.worker_filesystem_storage.available_bytes(),
+        );
     }
 }

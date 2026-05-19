@@ -1003,10 +1003,6 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
 
-    worker_executor_impl
-        .active_workers()
-        .spawn_metrics_poller(join_set);
-
     let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
     let http_port = golem_service_base::observability::start_health_and_metrics_server(

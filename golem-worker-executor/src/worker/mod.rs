@@ -26,7 +26,9 @@ use self::status::{
 use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
-use crate::services::active_workers::RegisteredConcurrentAccount;
+use crate::services::active_workers::{
+    FilesystemStoragePermit, RegisteredConcurrentAccount, WorkerMemoryPermit,
+};
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -79,7 +81,7 @@ use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, RwLock};
+use tokio::sync::{Mutex, MutexGuard, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, Span, debug, info, span, warn};
 use uuid::Uuid;
@@ -989,8 +991,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && let Some(ref mut permit) = running.filesystem_storage_permit
         {
             // Split off `permits_to_release` permits and drop them.
-            // Dropping an OwnedSemaphorePermit returns its permits to the
-            // semaphore automatically — no separate add_permits needed.
+            // Dropping the split permit returns its permits to the semaphore
+            // automatically — no separate add_permits needed.
             let n = permits_to_release as usize;
             let actual_n = n.min(permit.num_permits());
             let to_drop = permit.split(actual_n);
@@ -2075,7 +2077,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await;
 
+            let old_status = self.last_known_status.read().await.status.clone();
             *self.last_known_status.write().await = worker_status.clone();
+            crate::metrics::workers::record_worker_status_transition(
+                old_status,
+                worker_status.status.clone(),
+            );
             self.worker_service()
                 .update_cached_status(&self.owned_agent_id, &worker_status)
                 .await;
@@ -2109,6 +2116,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if let Some(updated_status) = updated_status {
                 if updated_status != old_status {
                     *self.last_known_status.write().await = updated_status.clone();
+                    crate::metrics::workers::record_worker_status_transition(
+                        old_status.status.clone(),
+                        updated_status.status.clone(),
+                    );
                     // TODO: We should do this in the background on a timer instead of on every commit.
                     self.worker_service()
                         .update_cached_status(&self.owned_agent_id, &updated_status)
@@ -2172,8 +2183,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
-        permit: OwnedSemaphorePermit,
-        filesystem_storage_permit: Option<OwnedSemaphorePermit>,
+        permit: WorkerMemoryPermit,
+        filesystem_storage_permit: Option<FilesystemStoragePermit>,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
@@ -2380,12 +2391,12 @@ struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
-    permit: OwnedSemaphorePermit,
+    permit: WorkerMemoryPermit,
     /// Storage semaphore permits held by this worker. `None` until storage
     /// space is first acquired (at startup or on first write). Dropped
     /// automatically when `RunningWorker` is dropped, returning storage
     /// permits to the pool.
-    filesystem_storage_permit: Option<OwnedSemaphorePermit>,
+    filesystem_storage_permit: Option<FilesystemStoragePermit>,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
     /// `ResumeReplay` is signalled directly through the command channel rather
@@ -2411,7 +2422,7 @@ impl RunningWorker {
         owned_agent_id: OwnedAgentId,
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
-        permit: OwnedSemaphorePermit,
+        permit: WorkerMemoryPermit,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
     ) -> Self {
@@ -2469,14 +2480,17 @@ impl RunningWorker {
         }
     }
 
-    pub fn merge_extra_permits(&mut self, extra_permit: OwnedSemaphorePermit) {
+    pub fn merge_extra_permits(&mut self, extra_permit: WorkerMemoryPermit) {
         self.permit.merge(extra_permit);
     }
 
     /// Merge additional storage permits into this worker's storage permit. If
     /// the worker does not yet hold a storage permit, the given permit becomes
     /// the initial one. Additional calls merge into that initial permit.
-    pub fn merge_extra_filesystem_storage_permits(&mut self, extra_permit: OwnedSemaphorePermit) {
+    pub fn merge_extra_filesystem_storage_permits(
+        &mut self,
+        extra_permit: FilesystemStoragePermit,
+    ) {
         match &mut self.filesystem_storage_permit {
             Some(existing) => existing.merge(extra_permit),
             None => self.filesystem_storage_permit = Some(extra_permit),
