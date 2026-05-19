@@ -691,6 +691,11 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
         "nested seed\n",
     )
     .unwrap();
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("scratch").join("workspace").join("removed.txt")),
+        "removed seed\n",
+    )
+    .unwrap();
 
     fs::write_str(
         ctx.cwd_path_join(Path::new("src").join("ifs-probe-agent.ts")),
@@ -712,6 +717,8 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
                     return JSON.stringify({
                         keep: fs.readFileSync('/workspace/.keep', 'utf8'),
                         nested: fs.readFileSync('/workspace/nested.txt', 'utf8'),
+                        added: fs.existsSync('/workspace/added.txt') ? fs.readFileSync('/workspace/added.txt', 'utf8') : null,
+                        removedExists: fs.existsSync('/workspace/removed.txt'),
                         generated: fs.readFileSync('/workspace/generated/output.txt', 'utf8'),
                     });
                 }
@@ -730,6 +737,8 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
                     return JSON.stringify({
                         keep: fs.readFileSync('/workspace/.keep', 'utf8'),
                         nested: fs.readFileSync('/workspace/nested.txt', 'utf8'),
+                        added: fs.existsSync('/workspace/added.txt') ? fs.readFileSync('/workspace/added.txt', 'utf8') : null,
+                        removedExists: fs.existsSync('/workspace/removed.txt'),
                         generated: fs.readFileSync('/workspace/generated/second-output.txt', 'utf8'),
                     });
                 }
@@ -907,6 +916,145 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
     assert!(outputs.stdout_contains_row_with_cells(&[".keep", "file", "rw"]));
     assert!(outputs.stdout_contains_row_with_cells(&["nested.txt", "file", "rw"]));
     assert!(outputs.stdout_contains_row_with_cells(&["generated", "directory"]));
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("scratch").join("workspace").join("nested.txt")),
+        "updated nested seed\n",
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    for agent in ["IfsProbeAgent", "SecondIfsProbeAgent"] {
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::AGENT,
+                cmd::INVOKE,
+                &format!("{agent}(\"updated-content\")"),
+                "probe",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains("updated nested seed"));
+        assert!(outputs.stdout_contains("removedExists"));
+        assert!(outputs.stdout_contains("true"));
+    }
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("scratch").join("workspace").join("added.txt")),
+        "added seed\n",
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "IfsProbeAgent(\"added-file\")",
+            "probe",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("added seed"));
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            "files",
+            "IfsProbeAgent(\"added-file\")",
+            "/workspace",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_row_with_cells(&["added.txt", "file", "rw"]));
+
+    std::fs::remove_file(
+        ctx.cwd_path_join(Path::new("scratch").join("workspace").join("removed.txt")),
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "IfsProbeAgent(\"removed-file\")",
+            "probe",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("removedExists"));
+    assert!(outputs.stdout_contains("false"));
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            "files",
+            "IfsProbeAgent(\"removed-file\")",
+            "/workspace",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stdout_contains("removed.txt"));
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+            manifestVersion: 1.5.0
+
+            app: test-app-directory-source-ifs
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-directory-source-ifs:ts-main:
+                templates: ts
+
+            agents:
+              IfsProbeAgent:
+                files:
+                - sourcePath: ./scratch/workspace
+                  targetPath: /workspace
+                  permissions: read-only
+              SecondIfsProbeAgent:
+                files:
+                - sourcePath: ./scratch/workspace
+                  targetPath: /workspace
+                  permissions: read-write
+        "},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            "files",
+            "IfsProbeAgent(\"readonly-directory\")",
+            "/workspace",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_row_with_cells(&[".keep", "file", "ro"]));
+    assert!(outputs.stdout_contains_row_with_cells(&["nested.txt", "file", "ro"]));
+    assert!(outputs.stdout_contains_row_with_cells(&["added.txt", "file", "ro"]));
 }
 
 #[test]
