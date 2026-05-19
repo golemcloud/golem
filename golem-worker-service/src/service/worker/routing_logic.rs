@@ -301,7 +301,8 @@ impl From<WorkerExecutorError> for ResponseMapResult {
             },
             WorkerExecutorError::ShardingNotReady => ResponseMapResult::ShardingNotReady,
             WorkerExecutorError::AgentNotFound { .. }
-            | WorkerExecutorError::AgentAlreadyExists { .. } => {
+            | WorkerExecutorError::AgentAlreadyExists { .. }
+            | WorkerExecutorError::ComponentNotFound { .. } => {
                 ResponseMapResult::Expected(error.into())
             }
             other => ResponseMapResult::Other(other.into()),

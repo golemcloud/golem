@@ -152,7 +152,7 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                 // rather than flushing all caches.
                 for env_id in environment_ids {
                     self.component_service
-                        .invalidate_current_deployed_metadata_for_environment(*env_id)
+                        .invalidate_all_metadata_for_environment(*env_id)
                         .await;
                     self.environment_state_service
                         .invalidate_environment(*env_id)
@@ -175,7 +175,7 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                     "Received environment deleted event, invalidating environment caches"
                 );
                 self.component_service
-                    .invalidate_current_deployed_metadata_for_environment(*environment_id)
+                    .invalidate_all_metadata_for_environment(*environment_id)
                     .await;
                 self.environment_state_service
                     .invalidate_environment(*environment_id)
