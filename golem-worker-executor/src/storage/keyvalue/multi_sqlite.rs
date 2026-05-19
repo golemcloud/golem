@@ -19,7 +19,6 @@ use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentId;
-use golem_service_base::db::sqlite::SqlitePool;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -78,10 +77,7 @@ impl MultiSqliteKeyValueStorage {
             max_connections,
             foreign_keys,
         };
-        let pool = SqlitePool::configured(&config)
-            .await
-            .map_err(|e| format!("Failed to initialize sqlite database: {:?}", e))?;
-        SqliteKeyValueStorage::new(pool).await
+        SqliteKeyValueStorage::configured(&config).await
     }
 
     async fn storage_by_namespace(
