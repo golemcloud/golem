@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::db::DBValue;
 use crate::db::sqlite::SqlitePool;
+use crate::db::{DBValue, PoolApi};
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::repo::RepoError;
 use crate::storage::blob::{

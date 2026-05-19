@@ -125,6 +125,16 @@ pub mod service {
     }
 
     impl ServiceError {
+        pub fn is_auth_unauthorized(&self) -> bool {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(err) => {
+                    err.is_status_code(401)
+                        && err.code.as_deref() == Some(api::error_code::AUTH_UNAUTHORIZED)
+                }
+                _ => false,
+            }
+        }
+
         pub fn is_domain_is_not_registered(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {

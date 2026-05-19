@@ -94,7 +94,11 @@ impl<T: Clone> GrpcClient<T> {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
                             });
-                            record_internal_grpc_failure(&self.target_name, description.as_ref());
+                            record_internal_grpc_failure(
+                                &self.target_name,
+                                description.as_ref(),
+                                &e,
+                            );
                             break Err(e);
                         } else {
                             span.in_scope(|| {
@@ -107,7 +111,7 @@ impl<T: Clone> GrpcClient<T> {
                         span.in_scope(|| {
                             warn!("gRPC call failed: {:?}, not retriable", e);
                         });
-                        record_internal_grpc_failure(&self.target_name, description.as_ref());
+                        record_internal_grpc_failure(&self.target_name, description.as_ref(), &e);
                         break Err(e);
                     }
                 }
@@ -205,7 +209,11 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
                             });
-                            record_internal_grpc_failure(&self.target_name, description.as_ref());
+                            record_internal_grpc_failure(
+                                &self.target_name,
+                                description.as_ref(),
+                                &e,
+                            );
                             break Err(e);
                         } else {
                             span.in_scope(|| {
@@ -218,7 +226,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                         span.in_scope(|| {
                             warn!("gRPC call failed: {:?}, not retriable", e);
                         });
-                        record_internal_grpc_failure(&self.target_name, description.as_ref());
+                        record_internal_grpc_failure(&self.target_name, description.as_ref(), &e);
                         break Err(e);
                     }
                 }

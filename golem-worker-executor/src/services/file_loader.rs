@@ -26,11 +26,10 @@ use std::sync::atomic::AtomicU64;
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::OwnedSemaphorePermit;
 use tracing::debug;
 
 use crate::metrics::storage::record_filesystem_pool_released;
-use crate::services::active_workers::FilesystemStorageSemaphore;
+use crate::services::active_workers::{FilesystemStoragePermit, FilesystemStorageSemaphore};
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
@@ -368,7 +367,7 @@ struct InitializedCacheEntry {
     /// Acquired on cache miss (first download); `None` when no semaphore is
     /// configured. Only returned to the executor pool if the file is
     /// successfully deleted
-    filesystem_storage_permit: Option<OwnedSemaphorePermit>,
+    filesystem_storage_permit: Option<FilesystemStoragePermit>,
     /// Byte count corresponding to `filesystem_storage_permit`, for metrics.
     filesystem_storage_permit_bytes: u64,
 }
@@ -377,7 +376,7 @@ impl InitializedCacheEntry {
     #[cfg(test)]
     fn new_for_test(
         path: PathBuf,
-        permit: Option<OwnedSemaphorePermit>,
+        permit: Option<FilesystemStoragePermit>,
         permit_bytes: u64,
     ) -> Self {
         Self {

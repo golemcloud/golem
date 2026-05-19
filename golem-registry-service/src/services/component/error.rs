@@ -77,6 +77,8 @@ pub enum ComponentError {
     ConflictingEnvironmentPluginGrantId(EnvironmentPluginGrantId),
     #[error("agent type for name {0} not found in environment")]
     AgentTypeForNameNotFound(String),
+    #[error("Multiple agent types with the same name: {0}")]
+    DuplicateAgentTypeName(AgentTypeName),
     #[error(
         "Agent type '{0}' is referenced in provision config but not declared in the component's agent types"
     )]
@@ -150,6 +152,7 @@ impl SafeDisplay for ComponentError {
             Self::ComponentNotFound(_) => self.to_string(),
             Self::ComponentByNameNotFound(_) => self.to_string(),
             Self::AgentTypeForNameNotFound(_) => self.to_string(),
+            Self::DuplicateAgentTypeName(_) => self.to_string(),
             Self::UndeclaredAgentTypeInProvisionConfig(_) => self.to_string(),
             Self::AgentConfigNotDeclared { .. } => self.to_string(),
             Self::AgentConfigTypeMismatch { .. } => self.to_string(),

@@ -102,6 +102,10 @@ pub async fn run(
                 let pool =
                     golem_service_base::db::postgres::PostgresPool::configured(postgres).await?;
 
+                let pool_for_metrics = pool.clone();
+                join_set
+                    .spawn(async move { pool_for_metrics.run_metrics_loop("shard_manager").await });
+
                 let persistence = Arc::new(
                     crate::sharding::persistence::DbRoutingTablePersistence::new(
                         pool.clone(),

@@ -22,7 +22,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool};
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoResult;
 use golem_service_base::repo::SqlDateTime;

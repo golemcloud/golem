@@ -19,7 +19,7 @@ use golem_common::error_forwarding;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, Pool};
+use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::{Blob, NumericU64, RepoError, SqlDateTime};
 use indoc::indoc;

@@ -73,7 +73,8 @@ fn main() -> anyhow::Result<()> {
 
 async fn dump_openapi_yaml() -> anyhow::Result<()> {
     let config = RegistryServiceConfig::default();
-    let services = Services::new(&config).await?;
+    let mut join_set = JoinSet::<anyhow::Result<()>>::new();
+    let services = Services::new(&config, &mut join_set).await?;
 
     let open_api_service = make_open_api_service(&services);
     println!("{}", open_api_service.spec_yaml());
@@ -85,7 +86,7 @@ async fn async_main(
     prometheus_registry: Registry,
     tracer: Option<SdkTracer>,
 ) -> anyhow::Result<()> {
-    let bootstrap = RegistryService::new(config, prometheus_registry).await?;
+    let bootstrap = RegistryService::new(config, prometheus_registry);
 
     let mut join_set = JoinSet::<anyhow::Result<()>>::new();
 

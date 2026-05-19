@@ -26,7 +26,9 @@ use self::status::{
 use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
-use crate::services::active_workers::RegisteredConcurrentAccount;
+use crate::services::active_workers::{
+    FilesystemStoragePermit, RegisteredConcurrentAccount, WorkerMemoryPermit,
+};
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -73,13 +75,13 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, RwLock};
+use tokio::sync::{Mutex, MutexGuard, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, Span, debug, info, span, warn};
 use uuid::Uuid;
@@ -114,6 +116,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     initial_worker_metadata: AgentMetadata,
     registered_concurrent_account: RegisteredConcurrentAccount,
     last_known_status: Arc<RwLock<AgentStatusRecord>>,
+    metrics_status: WorkerStatusMetric,
     last_known_status_detached: AtomicBool,
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
@@ -245,6 +248,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Self, WorkerExecutorError> {
+        let start = std::time::Instant::now();
         let GetOrCreateWorkerResult {
             initial_worker_metadata,
             current_status,
@@ -252,7 +256,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             agent_id,
             snapshot_policy,
             oplog,
-        } = Self::get_or_create_worker_metadata(
+        } = match Self::get_or_create_worker_metadata(
             deps,
             &owned_agent_id,
             component_revision,
@@ -260,9 +264,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_agent_config,
             parent,
         )
-        .await?;
+        .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                crate::metrics::wasm::record_create_worker_failure(&err);
+                return Err(err);
+            }
+        };
 
         let current_status_guard = current_status.read().await;
+        let metrics_status = WorkerStatusMetric::new(current_status_guard.status);
         let initial_pending_invocations = current_status_guard.pending_invocations.clone();
         let initial_invocation_results = current_status_guard.invocation_results.clone();
         let last_oplog_idx = current_status_guard.oplog_idx;
@@ -326,6 +338,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             initial_worker_metadata,
             registered_concurrent_account,
             last_known_status: current_status,
+            metrics_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
@@ -363,6 +376,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await
                 .expect("Failed enqueuing initial agent invocations to worker");
         };
+        crate::metrics::wasm::record_create_worker(start.elapsed());
+
         Ok(worker)
     }
 
@@ -511,6 +526,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status: updated_status,
             ..result
         }
+    }
+
+    pub async fn get_last_known_status(&self) -> AgentStatusRecord {
+        self.last_known_status.read().await.clone()
     }
 
     // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.
@@ -976,8 +995,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && let Some(ref mut permit) = running.filesystem_storage_permit
         {
             // Split off `permits_to_release` permits and drop them.
-            // Dropping an OwnedSemaphorePermit returns its permits to the
-            // semaphore automatically — no separate add_permits needed.
+            // Dropping the split permit returns its permits to the semaphore
+            // automatically — no separate add_permits needed.
             let n = permits_to_release as usize;
             let actual_n = n.min(permit.num_permits());
             let to_drop = permit.split(actual_n);
@@ -2062,10 +2081,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await;
 
-            *self.last_known_status.write().await = worker_status.clone();
-            self.worker_service()
-                .update_cached_status(&self.owned_agent_id, &worker_status)
-                .await;
+            self.update_last_known_status(worker_status.clone()).await;
 
             // ensure we hold mutex for the full duration
             drop(update_state_lock_guard);
@@ -2095,11 +2111,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             if let Some(updated_status) = updated_status {
                 if updated_status != old_status {
-                    *self.last_known_status.write().await = updated_status.clone();
-                    // TODO: We should do this in the background on a timer instead of on every commit.
-                    self.worker_service()
-                        .update_cached_status(&self.owned_agent_id, &updated_status)
-                        .await;
+                    self.update_last_known_status(updated_status.clone()).await;
 
                     self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
                         .await;
@@ -2159,8 +2171,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
-        permit: OwnedSemaphorePermit,
-        filesystem_storage_permit: Option<OwnedSemaphorePermit>,
+        permit: WorkerMemoryPermit,
+        filesystem_storage_permit: Option<FilesystemStoragePermit>,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
@@ -2188,6 +2200,48 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 debug!("worker was not waiting for permit anymore, not starting");
             }
         }
+    }
+
+    async fn update_last_known_status(&self, new_status: AgentStatusRecord) {
+        let previous_status = self.metrics_status.status();
+        *self.last_known_status.write().await = new_status.clone();
+        self.metrics_status
+            .update(previous_status, new_status.status);
+        // TODO: We should do this in the background on a timer instead of on every commit.
+        self.worker_service()
+            .update_cached_status(&self.owned_agent_id, &new_status)
+            .await;
+    }
+}
+
+#[derive(Debug)]
+struct WorkerStatusMetric {
+    status: StdMutex<AgentStatus>,
+}
+
+impl WorkerStatusMetric {
+    fn new(status: AgentStatus) -> Self {
+        crate::metrics::workers::inc_worker_count_by_status(status);
+        Self {
+            status: StdMutex::new(status),
+        }
+    }
+
+    fn status(&self) -> AgentStatus {
+        *self.status.lock().expect("metrics status lock poisoned")
+    }
+
+    fn update(&self, previous_status: AgentStatus, current_status: AgentStatus) {
+        let mut status = self.status.lock().expect("metrics status lock poisoned");
+        debug_assert_eq!(*status, previous_status);
+        crate::metrics::workers::record_worker_status_transition(previous_status, current_status);
+        *status = current_status;
+    }
+}
+
+impl Drop for WorkerStatusMetric {
+    fn drop(&mut self) {
+        crate::metrics::workers::dec_worker_count_by_status(self.status());
     }
 }
 
@@ -2367,12 +2421,12 @@ struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
-    permit: OwnedSemaphorePermit,
+    permit: WorkerMemoryPermit,
     /// Storage semaphore permits held by this worker. `None` until storage
     /// space is first acquired (at startup or on first write). Dropped
     /// automatically when `RunningWorker` is dropped, returning storage
     /// permits to the pool.
-    filesystem_storage_permit: Option<OwnedSemaphorePermit>,
+    filesystem_storage_permit: Option<FilesystemStoragePermit>,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
     /// `ResumeReplay` is signalled directly through the command channel rather
@@ -2398,7 +2452,7 @@ impl RunningWorker {
         owned_agent_id: OwnedAgentId,
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
-        permit: OwnedSemaphorePermit,
+        permit: WorkerMemoryPermit,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
     ) -> Self {
@@ -2456,14 +2510,17 @@ impl RunningWorker {
         }
     }
 
-    pub fn merge_extra_permits(&mut self, extra_permit: OwnedSemaphorePermit) {
+    pub fn merge_extra_permits(&mut self, extra_permit: WorkerMemoryPermit) {
         self.permit.merge(extra_permit);
     }
 
     /// Merge additional storage permits into this worker's storage permit. If
     /// the worker does not yet hold a storage permit, the given permit becomes
     /// the initial one. Additional calls merge into that initial permit.
-    pub fn merge_extra_filesystem_storage_permits(&mut self, extra_permit: OwnedSemaphorePermit) {
+    pub fn merge_extra_filesystem_storage_permits(
+        &mut self,
+        extra_permit: FilesystemStoragePermit,
+    ) {
         match &mut self.filesystem_storage_permit {
             Some(existing) => existing.merge(extra_permit),
             None => self.filesystem_storage_permit = Some(extra_permit),

@@ -18,8 +18,8 @@ use bytes::Bytes;
 use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
-use golem_service_base::db::DBValue;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::db::{DBValue, LabelledPoolApi, LabelledPoolTransaction, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::include_dir;
 use std::collections::HashMap;
@@ -140,7 +140,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<bool, String> {
-        let api = self.pool.with_rw(svc_name, api_name);
+        let mut api = self.pool.with_rw(svc_name, api_name);
         let existing: Option<(i32,)> = api
             .fetch_optional_as(
                 sqlx::query_as::<_, (i32,)>(
