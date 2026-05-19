@@ -1117,7 +1117,14 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
                 ));
             }
 
-            let result = entry.get_handle().await.get().await;
+            let result = match entry.get_handle().await {
+                Ok(handle) => handle.get().await,
+                Err(err) => {
+                    return Err(anyhow::Error::from(WorkerExecutorError::runtime(
+                        err.clone(),
+                    )));
+                }
+            };
             durability
                 .persist(
                     self,
@@ -1667,7 +1674,7 @@ impl GetAgentsEntry {
 pub struct GetPromiseResultEntry {
     promise_id: PromiseId,
     promise_service: Arc<dyn PromiseService>,
-    handle: Arc<OnceCell<PromiseHandle>>,
+    handle: Arc<OnceCell<Result<PromiseHandle, String>>>,
 }
 
 impl GetPromiseResultEntry {
@@ -1679,21 +1686,41 @@ impl GetPromiseResultEntry {
         }
     }
 
-    pub async fn get_handle(&self) -> &PromiseHandle {
+    pub async fn get_handle(&self) -> Result<&PromiseHandle, &String> {
         self.handle
             .get_or_init(|| async {
                 self.promise_service
                     .poll(self.promise_id.clone())
                     .await
-                    .expect("Failed constructing backing promise handle")
+                    .map_err(|err| {
+                        format!(
+                            "Failed constructing backing promise handle for {}: {err}",
+                            self.promise_id
+                        )
+                    })
             })
             .await
+            .as_ref()
+    }
+
+    /// Returns true if the underlying promise handle is ready, OR if constructing the
+    /// handle failed (so that the pollable resolves immediately and the cached error
+    /// is surfaced on the next `get` call).
+    pub async fn is_ready(&self) -> bool {
+        match self.get_handle().await {
+            Ok(handle) => handle.is_ready().await,
+            Err(_) => true,
+        }
     }
 }
 
 #[async_trait]
 impl wasmtime_wasi::p2::Pollable for GetPromiseResultEntry {
     async fn ready(&mut self) {
-        self.get_handle().await.await_ready().await
+        // A cached error is treated as immediately ready so that the pollable
+        // resolves and the subsequent `get` surfaces the error to the agent.
+        if let Ok(handle) = self.get_handle().await {
+            handle.await_ready().await;
+        }
     }
 }
