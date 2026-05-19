@@ -14,6 +14,7 @@ export default defineConfig([
     external: [
       'node:child_process',
       'node:fs',
+      'node:net',
       'node:process',
       'node:repl',
       'node:stream',

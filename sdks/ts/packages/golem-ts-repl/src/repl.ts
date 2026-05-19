@@ -406,6 +406,9 @@ export class Repl {
       await flushStdIO();
       replServer.close();
     } else {
+      replServer.once('close', () => {
+        void CliReplInterop.exitWithCode(0);
+      });
       this.showAgentTypeInfo(replServer, false);
       writeTestSyncEvent('repl_ready');
     }
