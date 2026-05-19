@@ -155,7 +155,12 @@ pub async fn expand_component_files(
 async fn expand_local_component_file(
     component_file: &InitialComponentFile,
 ) -> anyhow::Result<Vec<InitialComponentFile>> {
-    let source_path = PathBuf::from(component_file.source.as_url().path());
+    let source_path = component_file.source.as_url().to_file_path().map_err(|_| {
+        anyhow!(
+            "Failed to convert local IFS file URL to path: {}",
+            component_file.source.as_url()
+        )
+    })?;
     if !source_path.is_dir() {
         return Ok(vec![component_file.clone()]);
     }
@@ -198,11 +203,10 @@ async fn expand_local_component_file(
                     path.display()
                 )
             })?;
+            let source = InitialComponentFileSource::new(source.as_str(), Path::new("/golem.yaml"))
+                .map_err(|err| anyhow!("Invalid expanded local IFS file URL: {err}"))?;
 
-            result.push(InitialComponentFile {
-                source: InitialComponentFileSource::from_url(source),
-                target,
-            });
+            result.push(InitialComponentFile { source, target });
         }
     }
 
@@ -589,6 +593,7 @@ mod tests {
     };
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
     use std::collections::BTreeMap;
+    use std::path::Path;
     use test_r::test;
     use url::Url;
 
@@ -647,7 +652,8 @@ mod tests {
 
         let source = Url::from_file_path(&source_dir).unwrap();
         let files = vec![InitialComponentFile {
-            source: InitialComponentFileSource::from_url(source),
+            source: InitialComponentFileSource::new(source.as_str(), Path::new("/golem.yaml"))
+                .unwrap(),
             target: CanonicalFilePathWithPermissions {
                 path: CanonicalFilePath::from_abs_str("/workspace").unwrap(),
                 permissions: AgentFilePermissions::ReadWrite,

@@ -2042,10 +2042,6 @@ impl InitialComponentFileSource {
         &self.0
     }
 
-    pub(crate) fn from_url(url: Url) -> Self {
-        Self(url)
-    }
-
     pub fn into_url(self) -> Url {
         self.0
     }
