@@ -202,10 +202,8 @@ async fn new_shard_management(
 }
 
 #[test]
-// Shard-manager startup reconciliation must be authoritative. If a live
-// executor has stale extra local shards, restarting only the shard-manager
-// should clear them without requiring the executor process to restart.
-async fn startup_reconciliation_clears_stale_extra_shards() {
+// On shard-manager restart, live executors are reset to the routing table.
+async fn shard_manager_restart_clears_stale_executor_shards() {
     let authoritative_pod = pod(1, 9000);
     let stale_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -236,12 +234,9 @@ async fn startup_reconciliation_clears_stale_extra_shards() {
 }
 
 #[test]
-// Models a shard-manager crash after rebalance RPC side effects reached
-// executors but before the final routing-table write. On restart, persisted
-// state says pod A owns shard 0 and pod B owns none, while pod B still has the
-// stale local assignment from the interrupted rebalance. Startup reconciliation
-// must restore pod A and clear pod B.
-async fn startup_reconciliation_clears_stale_assignment_after_unpersisted_rebalance() {
+// If executor updates happened but were not persisted, restart rolls executors
+// back to the persisted routing table.
+async fn shard_manager_restart_recovers_from_partially_applied_rebalance() {
     let persisted_owner = pod(1, 9000);
     let stale_new_owner = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -291,10 +286,8 @@ async fn startup_reconciliation_clears_stale_assignment_after_unpersisted_rebala
 }
 
 #[test]
-// The "returned pod" path must replace the executor's local assignment. When
-// the authoritative assignment is empty, stale local ownership should be
-// cleared on re-registration.
-async fn returned_pod_with_empty_authoritative_assignment_clears_stale_local_shards() {
+// When a known pod reconnects, stale local shards are cleared.
+async fn reconnecting_pod_clears_stale_local_shards() {
     let existing_pod = pod(1, 9000);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     worker_executors
@@ -337,9 +330,8 @@ async fn returned_pod_with_empty_authoritative_assignment_clears_stale_local_sha
 }
 
 #[test]
-// If the routing table assigns a shard to one pod, reconciliation should ensure
-// no other live pod still locally owns it.
-async fn routing_table_owner_assignment_clears_stale_local_owner() {
+// If a shard is assigned to one pod, reconciliation removes it from other pods.
+async fn reconciliation_clears_duplicate_local_shard_owner() {
     let authoritative_pod = pod(1, 9000);
     let stale_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
