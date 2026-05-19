@@ -112,7 +112,7 @@ impl DefaultDirectInvocationAuthService {
         caller_account_id: AccountId,
     ) -> Result<Option<AuthDetailsForEnvironment>, RpcError> {
         let registry_service = self.registry_service.clone();
-        let auth_ctx = AuthCtx::impersonated_user(caller_account_id);
+        let auth_ctx = AuthCtx::agent(caller_account_id);
 
         self.auth_details_cache
             .get_or_insert_simple(&(environment_id, caller_account_id), move || {
@@ -198,17 +198,12 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
                 details: format!("The environment action {action} is not allowed"),
             })?;
 
-        let env_owner = auth_details.account_id_owning_environment;
-        if caller_account_id == env_owner {
-            return Ok(EnvironmentOwnerAccountId(env_owner));
-        }
-
         // Non-owner slow path: check environment shares. Auth details already
         // in hand from the fetch above — no second cache lookup needed.
-        let auth_ctx = AuthCtx::impersonated_user(caller_account_id);
+        let auth_ctx = AuthCtx::agent(caller_account_id);
         auth_ctx
             .authorize_environment_action(
-                env_owner,
+                auth_details.account_id_owning_environment,
                 &auth_details.environment_roles_from_shares,
                 action,
             )

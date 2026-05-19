@@ -90,7 +90,7 @@ impl CallAgentHandler {
                 None,
                 Some(IdempotencyKey::fresh()),
                 invocation_context,
-                AuthCtx::impersonated_user(resolved_route.route.account_id),
+                AuthCtx::agent(resolved_route.route.account_id),
                 proto_principal,
                 Some(resolved_route.route.environment_id),
             )

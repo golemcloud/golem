@@ -355,6 +355,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                     SELECT
                         t.token_id,
                         t.expires_at as token_expires_at,
+                        t.impersonated_by,
                         a.created_at AS entity_created_at,
                         ar.account_id, ar.revision_id, ar.name, ar.email,
                         ar.plan_id, ar.roles, ar.created_at, ar.created_by, ar.deleted

@@ -140,7 +140,7 @@ impl SecuritySchemeService {
             data.client_secret,
             &redirect_url,
             &scopes,
-            auth.account_id(),
+            auth.actor_account_id(),
         );
 
         let result = self
@@ -205,7 +205,7 @@ impl SecuritySchemeService {
             security_scheme.scopes = scopes;
         };
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
+        let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
 
         let environment_id = security_scheme.environment_id;
 
@@ -251,7 +251,7 @@ impl SecuritySchemeService {
 
         let environment_id = security_scheme.environment_id;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
+        let audit = DeletableRevisionAuditFields::deletion(auth.actor_account_id().0);
 
         let result = self
             .security_scheme_repo

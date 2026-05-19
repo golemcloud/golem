@@ -139,7 +139,7 @@ impl EnvironmentService {
             .ensure_environment_within_limits(application.account_id)
             .await?;
 
-        let record = EnvironmentRevisionRecord::creation(data, auth.account_id());
+        let record = EnvironmentRevisionRecord::creation(data, auth.actor_account_id());
 
         let builtin_plugins = self
             .plugin_repo
@@ -152,7 +152,7 @@ impl EnvironmentService {
                 EnvironmentPluginGrantRecord::creation(
                     EnvironmentId(record.environment_id),
                     PluginRegistrationId(p.plugin_id),
-                    auth.account_id(),
+                    auth.actor_account_id(),
                 )
             })
             .collect();
@@ -204,7 +204,7 @@ impl EnvironmentService {
             environment.security_overrides = security_overrides;
         }
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
+        let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
         let result = self
@@ -245,7 +245,7 @@ impl EnvironmentService {
 
         environment.revision = current_revision.next()?;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
+        let audit = DeletableRevisionAuditFields::deletion(auth.actor_account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
         self.environment_repo
@@ -272,7 +272,7 @@ impl EnvironmentService {
             .environment_repo
             .get_by_id(
                 environment_id.0,
-                auth.account_id().0,
+                auth.access_account_id().0,
                 include_deleted,
                 auth.should_override_storage_visibility_rules(),
             )
@@ -301,7 +301,7 @@ impl EnvironmentService {
             .get_by_name(
                 application_id.0,
                 &name.0,
-                auth.account_id().0,
+                auth.access_account_id().0,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
@@ -330,7 +330,7 @@ impl EnvironmentService {
             .environment_repo
             .list_by_app(
                 application_id.0,
-                auth.account_id().0,
+                auth.access_account_id().0,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
@@ -389,7 +389,7 @@ impl EnvironmentService {
         // When we go for an admin ui / view, this should be extended with an optional, admin-only parameter that allows listing for a different account.
         self.environment_repo
             .list_visible_to_account(
-                auth.account_id().0,
+                auth.access_account_id().0,
                 account_email.map(|ae| ae.as_str()),
                 app_name.map(|an| an.0.as_str()),
                 env_name.map(|en| en.0.as_str()),

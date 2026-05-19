@@ -155,7 +155,7 @@ impl ComponentWriteService {
             .upload_and_hash_component_wasm(environment_id, wasm.clone())
             .await?;
         record_component_uploaded(
-            &auth.account_id().to_string(),
+            &auth.actor_account_id().to_string(),
             &environment_id.to_string(),
             wasm_bytes,
         );
@@ -219,7 +219,7 @@ impl ComponentWriteService {
             component_metadata,
             wasm_hash,
             wasm_object_store_key,
-            auth.account_id(),
+            auth.actor_account_id(),
         );
 
         let stored_component: Component = self
@@ -329,7 +329,7 @@ impl ComponentWriteService {
                 .upload_and_hash_component_wasm(environment_id, new_wasm.clone())
                 .await?;
             record_component_uploaded(
-                &auth.account_id().to_string(),
+                &auth.actor_account_id().to_string(),
                 &environment_id.to_string(),
                 new_wasm_bytes,
             );
@@ -439,7 +439,7 @@ impl ComponentWriteService {
             }
         }
 
-        let record = ComponentRevisionRecord::from_model(component, auth.account_id());
+        let record = ComponentRevisionRecord::from_model(component, auth.actor_account_id());
 
         let stored_component: Component = self
             .component_repo
@@ -506,7 +506,7 @@ impl ComponentWriteService {
 
         self.component_repo
             .delete(
-                auth.account_id().0,
+                auth.actor_account_id().0,
                 component_id.0,
                 current_revision.next()?.into(),
             )

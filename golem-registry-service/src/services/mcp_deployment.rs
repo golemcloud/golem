@@ -158,7 +158,8 @@ impl McpDeploymentService {
             })?;
 
         let id = McpDeploymentId::new();
-        let record = McpDeploymentRevisionRecord::creation(id, auth.account_id(), data.agents)?;
+        let record =
+            McpDeploymentRevisionRecord::creation(id, auth.actor_account_id(), data.agents)?;
 
         let stored_mcp_deployment: McpDeployment = self
             .mcp_deployment_repo
@@ -226,7 +227,7 @@ impl McpDeploymentService {
 
         let record = McpDeploymentRevisionRecord::from_model(
             mcp_deployment,
-            DeletableRevisionAuditFields::new(auth.account_id().0),
+            DeletableRevisionAuditFields::new(auth.actor_account_id().0),
         )?;
 
         let stored_mcp_deployment: McpDeployment = self
@@ -287,7 +288,7 @@ impl McpDeploymentService {
 
         self.mcp_deployment_repo
             .delete(
-                auth.account_id().0,
+                auth.actor_account_id().0,
                 mcp_deployment_id.0,
                 current_revision.next()?.into(),
             )

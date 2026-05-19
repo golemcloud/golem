@@ -121,7 +121,7 @@ impl PluginRegistrationService {
             spec,
         };
 
-        let audit = ImmutableAuditFields::new(auth.account_id().0);
+        let audit = ImmutableAuditFields::new(auth.actor_account_id().0);
 
         let record = PluginRecord::from_model(registration, audit);
 
@@ -146,7 +146,7 @@ impl PluginRegistrationService {
 
         let plugin = self
             .plugin_repo
-            .delete(plugin_id.0, auth.account_id().0)
+            .delete(plugin_id.0, auth.actor_account_id().0)
             .await?
             .ok_or(PluginRegistrationError::PluginRegistrationNotFound(
                 plugin_id,

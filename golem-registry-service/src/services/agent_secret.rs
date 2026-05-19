@@ -127,7 +127,7 @@ impl AgentSecretService {
                 agent_secret_path.clone(),
                 data.secret_type,
                 secret_value,
-                auth.account_id(),
+                auth.actor_account_id(),
             ))
             .await
             .map_err(|err| match err {
@@ -181,7 +181,7 @@ impl AgentSecretService {
             }
         }
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
+        let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
 
         let stored_agent_secret = self
             .agent_secret_repo
@@ -220,7 +220,7 @@ impl AgentSecretService {
 
         agent_secret.revision = current_revision.next()?;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
+        let audit = DeletableRevisionAuditFields::deletion(auth.actor_account_id().0);
 
         let stored_agent_secret = self
             .agent_secret_repo

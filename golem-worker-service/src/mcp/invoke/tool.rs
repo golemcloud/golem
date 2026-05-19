@@ -78,7 +78,7 @@ pub async fn invoke_tool(
         agent_id: parsed_agent_id.to_string(),
     };
 
-    let auth_ctx = golem_service_base::model::auth::AuthCtx::impersonated_user(mcp_tool.account_id);
+    let auth_ctx = golem_service_base::model::auth::AuthCtx::agent(mcp_tool.account_id);
 
     let agent_output = worker_service
         .invoke_agent(
