@@ -275,10 +275,10 @@ pub struct UserAuthCtx {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// AuthCtx for systems that do requests on behalf of users.
+/// AuthCtx for systems or agents that do requests on behalf of users.
 /// A bit more limited in what they can execute, but can be constructed
 /// without any data lookups
-pub struct ImpersonatedUserAuthCtx {
+pub struct AgentAuthCtx {
     pub account_id: AccountId,
 }
 
@@ -297,7 +297,7 @@ pub struct AdminImpersonationAuthCtx {
 pub enum AuthCtx {
     System,
     User(UserAuthCtx),
-    ImpersonatedUser(ImpersonatedUserAuthCtx),
+    Agent(AgentAuthCtx),
     AdminImpersonation(AdminImpersonationAuthCtx),
 }
 
@@ -315,8 +315,8 @@ impl AuthCtx {
         AuthCtx::System
     }
 
-    pub fn impersonated_user(account_id: AccountId) -> AuthCtx {
-        AuthCtx::ImpersonatedUser(ImpersonatedUserAuthCtx { account_id })
+    pub fn agent(account_id: AccountId) -> AuthCtx {
+        AuthCtx::Agent(AgentAuthCtx { account_id })
     }
 
     pub fn admin_impersonation(
@@ -333,18 +333,20 @@ impl AuthCtx {
         })
     }
 
-    pub fn impersonated(&self) -> Self {
+    // Downgrade user auth context to agent auth context. This has weaker permissions
+    // than user auth contexts (due to missing account roles and plan information), but can lead to better
+    // cache hit rates if both user and agent auth is stored in the cache.
+    pub fn downgrade_to_agent(&self) -> Self {
         match self {
-            Self::User(inner) => Self::ImpersonatedUser(ImpersonatedUserAuthCtx {
+            Self::User(inner) => Self::Agent(AgentAuthCtx {
                 account_id: inner.account_id,
             }),
-            Self::ImpersonatedUser(inner) => Self::ImpersonatedUser(ImpersonatedUserAuthCtx {
+            Self::Agent(inner) => Self::Agent(AgentAuthCtx {
                 account_id: inner.account_id,
             }),
             Self::System => Self::System,
-            Self::AdminImpersonation(inner) => Self::ImpersonatedUser(ImpersonatedUserAuthCtx {
-                account_id: inner.target_account_id,
-            }),
+            // Down't downgrade impersonation auth contexts for better logging
+            Self::AdminImpersonation(inner) => Self::AdminImpersonation(inner.clone()),
         }
     }
 
@@ -358,7 +360,7 @@ impl AuthCtx {
         match self {
             Self::System => AccountId::SYSTEM,
             Self::User(user) => user.account_id,
-            Self::ImpersonatedUser(user) => user.account_id,
+            Self::Agent(user) => user.account_id,
             Self::AdminImpersonation(ctx) => ctx.admin_account_id,
         }
     }
@@ -370,7 +372,7 @@ impl AuthCtx {
         match self {
             Self::System => AccountId::SYSTEM,
             Self::User(user) => user.account_id,
-            Self::ImpersonatedUser(user) => user.account_id,
+            Self::Agent(user) => user.account_id,
             Self::AdminImpersonation(ctx) => ctx.target_account_id,
         }
     }
@@ -388,7 +390,7 @@ impl AuthCtx {
         match self {
             Self::System => &SYSTEM_ACCOUNT_ROLES,
             Self::User(user) => &user.account_roles,
-            Self::ImpersonatedUser(_) => &IMPERSONATED_USER_ACCOUNT_ROLES,
+            Self::Agent(_) => &IMPERSONATED_USER_ACCOUNT_ROLES,
             Self::AdminImpersonation(ctx) => &ctx.target_account_roles,
         }
     }
@@ -402,7 +404,7 @@ impl AuthCtx {
         match self {
             Self::System => None,
             Self::User(user) => Some(&user.account_plan_id),
-            Self::ImpersonatedUser(_) => None,
+            Self::Agent(_) => None,
             Self::AdminImpersonation(ctx) => Some(&ctx.target_account_plan_id),
         }
     }
@@ -992,8 +994,7 @@ mod test {
 mod protobuf {
     use super::AuthDetailsForEnvironment;
     use super::{
-        AdminImpersonationAuthCtx, AuthCtx, AuthorizationError, ImpersonatedUserAuthCtx,
-        UserAuthCtx,
+        AdminImpersonationAuthCtx, AgentAuthCtx, AuthCtx, AuthorizationError, UserAuthCtx,
     };
     use golem_common::model::auth::{AccountRole, EnvironmentRole};
 
@@ -1066,12 +1067,10 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::auth::ImpersonatedUserAuthCtx>
-        for ImpersonatedUserAuthCtx
-    {
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AgentAuthCtx> for AgentAuthCtx {
         type Error = String;
         fn try_from(
-            value: golem_api_grpc::proto::golem::auth::ImpersonatedUserAuthCtx,
+            value: golem_api_grpc::proto::golem::auth::AgentAuthCtx,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
@@ -1079,8 +1078,8 @@ mod protobuf {
         }
     }
 
-    impl From<ImpersonatedUserAuthCtx> for golem_api_grpc::proto::golem::auth::ImpersonatedUserAuthCtx {
-        fn from(value: ImpersonatedUserAuthCtx) -> Self {
+    impl From<AgentAuthCtx> for golem_api_grpc::proto::golem::auth::AgentAuthCtx {
+        fn from(value: AgentAuthCtx) -> Self {
             Self {
                 account_id: Some(value.account_id.into()),
             }
@@ -1150,9 +1149,9 @@ mod protobuf {
                 Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(user)) => {
                     Ok(AuthCtx::User(user.try_into()?))
                 }
-                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::ImpersonatedUser(
-                    impersonated_user,
-                )) => Ok(AuthCtx::ImpersonatedUser(impersonated_user.try_into()?)),
+                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::Agent(agent)) => {
+                    Ok(AuthCtx::Agent(agent.try_into()?))
+                }
                 Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::AdminImpersonation(
                     ctx,
                 )) => Ok(AuthCtx::AdminImpersonation(ctx.try_into()?)),
@@ -1174,12 +1173,10 @@ mod protobuf {
                         user.into(),
                     )),
                 },
-                AuthCtx::ImpersonatedUser(impersonated_user) => Self {
-                    value: Some(
-                        golem_api_grpc::proto::golem::auth::auth_ctx::Value::ImpersonatedUser(
-                            impersonated_user.into(),
-                        ),
-                    ),
+                AuthCtx::Agent(impersonated_user) => Self {
+                    value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::Agent(
+                        impersonated_user.into(),
+                    )),
                 },
                 AuthCtx::AdminImpersonation(ctx) => Self {
                     value: Some(
