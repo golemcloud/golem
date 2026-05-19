@@ -121,6 +121,7 @@ impl TryFrom<AccountExtRevisionRecord> for Account {
 pub struct AccountBySecretRecord {
     pub token_id: Uuid,
     pub token_expires_at: SqlDateTime,
+    pub impersonated_by: Option<Uuid>,
 
     #[sqlx(flatten)]
     pub value: AccountExtRevisionRecord,

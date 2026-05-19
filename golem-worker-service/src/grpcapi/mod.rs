@@ -178,6 +178,9 @@ pub fn error_to_status(error: AgentError) -> Status {
                 worker_execution_error::Error::FailedToResumeAgent(err) => {
                     format!("Failed To Resume Worker: Worker ID = {:?}", err.agent_id)
                 }
+                worker_execution_error::Error::ComponentNotFound(err) => {
+                    format!("Component for id {:?} not found", err.component_id)
+                }
                 worker_execution_error::Error::ComponentDownloadFailed(err) => format!(
                     "Component Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
                     err.component_id, err.component_revision, err.reason

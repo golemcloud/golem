@@ -13,18 +13,15 @@
 // limitations under the License.
 
 use crate::base_model::TransactionId;
-use crate::model::agent::{Principal, UntypedDataValue};
+use crate::model::agent::UntypedDataValue;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
-use crate::model::invocation_context::{AttributeValue, InvocationContextStack, TraceId};
+use crate::model::invocation_context::AttributeValue;
 use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
 use crate::model::worker::TypedAgentConfigEntry;
-use crate::model::{
-    AccountId, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata, AgentStatus,
-    IdempotencyKey, OwnedAgentId, RdbmsPoolKey, ScheduleId, ScheduledAction,
-};
+use crate::model::{AgentId, AgentMetadata, AgentStatus, RdbmsPoolKey, ScheduleId};
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -1345,83 +1342,17 @@ pub enum SerializableWebsocketError {
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 #[wit_transparent]
-pub struct SerializableScheduledInvocation {
-    pub timestamp: i64,
-    pub account_id: AccountId,
-    pub environment_id: EnvironmentId,
-    pub agent_id: AgentId,
-    pub idempotency_key: IdempotencyKey,
-    pub method_name: String,
-    pub input: UntypedDataValue,
-    pub principal: Principal,
-    pub trace_id: TraceId,
-    pub trace_states: Vec<String>,
-    pub spans: Vec<Vec<PublicSpanData>>,
-    pub target_worker_fingerprint: AgentFingerprint,
+pub struct SerializableScheduleId {
+    pub id: Uuid,
 }
 
-impl SerializableScheduledInvocation {
-    pub fn from_domain(schedule_id: ScheduleId) -> Result<Self, String> {
-        match schedule_id.action {
-            ScheduledAction::Invoke {
-                account_id,
-                owned_agent_id,
-                invocation,
-                target_worker_fingerprint,
-            } => match *invocation {
-                AgentInvocation::AgentMethod {
-                    idempotency_key,
-                    method_name,
-                    input,
-                    invocation_context,
-                    principal,
-                } => Ok(Self {
-                    timestamp: schedule_id.timestamp,
-                    account_id,
-                    environment_id: owned_agent_id.environment_id,
-                    agent_id: owned_agent_id.agent_id,
-                    idempotency_key,
-                    method_name,
-                    input,
-                    principal,
-                    spans: encode_span_data(&invocation_context.to_oplog_data()),
-                    trace_id: invocation_context.trace_id,
-                    trace_states: invocation_context.trace_states,
-                    target_worker_fingerprint,
-                }),
-                other => Err(format!(
-                    "ScheduleId contains a non-method invocation: {:?}",
-                    other.kind()
-                )),
-            },
-            _ => Err("ScheduleId does not describe an invocation".to_string()),
-        }
+impl SerializableScheduleId {
+    pub fn from_domain(schedule_id: ScheduleId) -> Self {
+        Self { id: schedule_id.id }
     }
 
     pub fn into_domain(self) -> ScheduleId {
-        let invocation_context = InvocationContextStack::from_oplog_data(
-            self.trace_id,
-            self.trace_states,
-            decode_span_data(self.spans),
-        );
-        ScheduleId {
-            timestamp: self.timestamp,
-            action: ScheduledAction::Invoke {
-                account_id: self.account_id,
-                owned_agent_id: OwnedAgentId {
-                    environment_id: self.environment_id,
-                    agent_id: self.agent_id,
-                },
-                invocation: Box::new(AgentInvocation::AgentMethod {
-                    idempotency_key: self.idempotency_key,
-                    method_name: self.method_name,
-                    input: self.input,
-                    invocation_context,
-                    principal: self.principal,
-                }),
-                target_worker_fingerprint: self.target_worker_fingerprint,
-            },
-        }
+        ScheduleId { id: self.id }
     }
 }
 

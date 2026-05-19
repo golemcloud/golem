@@ -1979,6 +1979,8 @@ mod tests {
         async fn all_cached_metadata(&self) -> Vec<Component> {
             Vec::new()
         }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
     }
 
     /// A minimal in-memory oplog for testing ForwardingOplog behavior

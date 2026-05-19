@@ -155,6 +155,7 @@ pub enum GlobalAction {
     CreateAccount,
     GetDefaultPlan,
     GetReports,
+    ImpersonateUser,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
@@ -274,18 +275,30 @@ pub struct UserAuthCtx {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// AuthCtx for systems that do requests on behalf of users.
+/// AuthCtx for systems or agents that do requests on behalf of users.
 /// A bit more limited in what they can execute, but can be constructed
 /// without any data lookups
-pub struct ImpersonatedUserAuthCtx {
+pub struct AgentAuthCtx {
     pub account_id: AccountId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// AuthCtx for admin users impersonating another account via the /v1/admin/impersonate API.
+/// Access checks (ownership, visibility) run as the target account, including its roles.
+/// Audit writes (created_by) record the admin's account ID.
+pub struct AdminImpersonationAuthCtx {
+    pub admin_account_id: AccountId,
+    pub target_account_id: AccountId,
+    pub target_account_roles: BTreeSet<AccountRole>,
+    pub target_account_plan_id: PlanId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AuthCtx {
     System,
     User(UserAuthCtx),
-    ImpersonatedUser(ImpersonatedUserAuthCtx),
+    Agent(AgentAuthCtx),
+    AdminImpersonation(AdminImpersonationAuthCtx),
 }
 
 // Note: Basic visibility of resources is enforced in the repo. Use this to check permissions to modify resource / access restricted resources.
@@ -302,19 +315,38 @@ impl AuthCtx {
         AuthCtx::System
     }
 
-    pub fn impersonated_user(account_id: AccountId) -> AuthCtx {
-        AuthCtx::ImpersonatedUser(ImpersonatedUserAuthCtx { account_id })
+    pub fn agent(account_id: AccountId) -> AuthCtx {
+        AuthCtx::Agent(AgentAuthCtx { account_id })
     }
 
-    pub fn impersonated(&self) -> Self {
+    pub fn admin_impersonation(
+        admin_account_id: AccountId,
+        target_account_id: AccountId,
+        target_account_roles: BTreeSet<AccountRole>,
+        target_account_plan_id: PlanId,
+    ) -> AuthCtx {
+        AuthCtx::AdminImpersonation(AdminImpersonationAuthCtx {
+            admin_account_id,
+            target_account_id,
+            target_account_roles,
+            target_account_plan_id,
+        })
+    }
+
+    // Downgrade user auth context to agent auth context. This has weaker permissions
+    // than user auth contexts (due to missing account roles and plan information), but can lead to better
+    // cache hit rates if both user and agent auth is stored in the cache.
+    pub fn downgrade_to_agent(&self) -> Self {
         match self {
-            Self::User(inner) => Self::ImpersonatedUser(ImpersonatedUserAuthCtx {
+            Self::User(inner) => Self::Agent(AgentAuthCtx {
                 account_id: inner.account_id,
             }),
-            Self::ImpersonatedUser(inner) => Self::ImpersonatedUser(ImpersonatedUserAuthCtx {
+            Self::Agent(inner) => Self::Agent(AgentAuthCtx {
                 account_id: inner.account_id,
             }),
             Self::System => Self::System,
+            // Down't downgrade impersonation auth contexts for better logging
+            Self::AdminImpersonation(inner) => Self::AdminImpersonation(inner.clone()),
         }
     }
 
@@ -322,19 +354,44 @@ impl AuthCtx {
         matches!(self, AuthCtx::System)
     }
 
-    pub fn account_id(&self) -> AccountId {
+    /// The account ID recorded in audit fields (created_by).
+    /// For admin impersonation this is the admin's account, not the target.
+    pub fn actor_account_id(&self) -> AccountId {
         match self {
             Self::System => AccountId::SYSTEM,
             Self::User(user) => user.account_id,
-            Self::ImpersonatedUser(user) => user.account_id,
+            Self::Agent(user) => user.account_id,
+            Self::AdminImpersonation(ctx) => ctx.admin_account_id,
         }
+    }
+
+    /// The account ID used for access and visibility checks.
+    /// For admin impersonation this is the target account, giving the admin
+    /// the same view as the impersonated user.
+    pub fn access_account_id(&self) -> AccountId {
+        match self {
+            Self::System => AccountId::SYSTEM,
+            Self::User(user) => user.account_id,
+            Self::Agent(user) => user.account_id,
+            Self::AdminImpersonation(ctx) => ctx.target_account_id,
+        }
+    }
+
+    /// Returns the access account ID.
+    ///
+    /// Prefer calling `actor_account_id()` for audit writes or `access_account_id()` for
+    /// visibility/ownership checks explicitly. This method exists for call sites that have
+    /// not yet been migrated.
+    pub fn account_id(&self) -> AccountId {
+        self.access_account_id()
     }
 
     pub fn account_roles(&self) -> &BTreeSet<AccountRole> {
         match self {
             Self::System => &SYSTEM_ACCOUNT_ROLES,
             Self::User(user) => &user.account_roles,
-            Self::ImpersonatedUser(_) => &IMPERSONATED_USER_ACCOUNT_ROLES,
+            Self::Agent(_) => &IMPERSONATED_USER_ACCOUNT_ROLES,
+            Self::AdminImpersonation(ctx) => &ctx.target_account_roles,
         }
     }
 
@@ -347,14 +404,17 @@ impl AuthCtx {
         match self {
             Self::System => None,
             Self::User(user) => Some(&user.account_plan_id),
-            Self::ImpersonatedUser(_) => None,
+            Self::Agent(_) => None,
+            Self::AdminImpersonation(ctx) => Some(&ctx.target_account_plan_id),
         }
     }
 
-    /// Whether storage level visibility rules (e.g. does this account have any shares for this environment / does this user own the environment)
-    /// should be disabled for this user.
+    /// Whether storage-level visibility rules (e.g. environment ownership and share checks)
+    /// should be bypassed. Only `System` (internal service calls) bypasses these rules.
+    /// Human accounts — including admins — are subject to normal ownership and share checks.
+    /// Admins who need to act on another account's resources must use an impersonation token.
     pub fn should_override_storage_visibility_rules(&self) -> bool {
-        self.has_any_account_role(&[AccountRole::Admin])
+        self.is_system()
     }
 
     pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
@@ -364,6 +424,7 @@ impl AuthCtx {
             GlobalAction::GetReports => {
                 self.has_any_account_role(&[AccountRole::Admin, AccountRole::MarketingAdmin])
             }
+            GlobalAction::ImpersonateUser => self.has_any_account_role(&[AccountRole::Admin]),
         };
 
         if !is_allowed {
@@ -415,7 +476,7 @@ impl AuthCtx {
                 self.has_any_account_role(&[AccountRole::Admin])
             }
             _ => {
-                (self.account_id() == target_account_id)
+                (self.access_account_id() == target_account_id)
                     || self.has_any_account_role(&[AccountRole::Admin])
             }
         };
@@ -434,7 +495,7 @@ impl AuthCtx {
         action: EnvironmentAction,
     ) -> Result<(), AuthorizationError> {
         // Environment owners, admins and system users are allowed to do everything with their environments
-        if self.account_id() == account_owning_enviroment
+        if self.access_account_id() == account_owning_enviroment
             || self.has_any_account_role(&[AccountRole::Admin])
         {
             return Ok(());
@@ -932,7 +993,9 @@ mod test {
 
 mod protobuf {
     use super::AuthDetailsForEnvironment;
-    use super::{AuthCtx, AuthorizationError, ImpersonatedUserAuthCtx, UserAuthCtx};
+    use super::{
+        AdminImpersonationAuthCtx, AgentAuthCtx, AuthCtx, AuthorizationError, UserAuthCtx,
+    };
     use golem_common::model::auth::{AccountRole, EnvironmentRole};
 
     impl TryFrom<golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment>
@@ -998,18 +1061,16 @@ mod protobuf {
                 account_roles: value
                     .account_roles
                     .into_iter()
-                    .map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::from(ar) as i32)
+                    .map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::from(ar).into())
                     .collect(),
             }
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::auth::ImpersonatedUserAuthCtx>
-        for ImpersonatedUserAuthCtx
-    {
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AgentAuthCtx> for AgentAuthCtx {
         type Error = String;
         fn try_from(
-            value: golem_api_grpc::proto::golem::auth::ImpersonatedUserAuthCtx,
+            value: golem_api_grpc::proto::golem::auth::AgentAuthCtx,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
@@ -1017,10 +1078,61 @@ mod protobuf {
         }
     }
 
-    impl From<ImpersonatedUserAuthCtx> for golem_api_grpc::proto::golem::auth::ImpersonatedUserAuthCtx {
-        fn from(value: ImpersonatedUserAuthCtx) -> Self {
+    impl From<AgentAuthCtx> for golem_api_grpc::proto::golem::auth::AgentAuthCtx {
+        fn from(value: AgentAuthCtx) -> Self {
             Self {
                 account_id: Some(value.account_id.into()),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AdminImpersonationAuthCtx>
+        for AdminImpersonationAuthCtx
+    {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::auth::AdminImpersonationAuthCtx,
+        ) -> Result<Self, Self::Error> {
+            let target_account_roles = value
+                .target_account_roles
+                .into_iter()
+                .map(|r| {
+                    golem_api_grpc::proto::golem::auth::AccountRole::try_from(r)
+                        .map_err(|_| "invalid account role".to_string())
+                        .and_then(AccountRole::try_from)
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(Self {
+                admin_account_id: value
+                    .admin_account_id
+                    .ok_or("missing admin_account_id")?
+                    .try_into()?,
+                target_account_id: value
+                    .target_account_id
+                    .ok_or("missing target_account_id")?
+                    .try_into()?,
+                target_account_roles,
+                target_account_plan_id: value
+                    .target_account_plan_id
+                    .ok_or("missing target_account_plan_id")?
+                    .try_into()?,
+            })
+        }
+    }
+
+    impl From<AdminImpersonationAuthCtx>
+        for golem_api_grpc::proto::golem::auth::AdminImpersonationAuthCtx
+    {
+        fn from(value: AdminImpersonationAuthCtx) -> Self {
+            Self {
+                admin_account_id: Some(value.admin_account_id.into()),
+                target_account_id: Some(value.target_account_id.into()),
+                target_account_roles: value
+                    .target_account_roles
+                    .into_iter()
+                    .map(|r| golem_api_grpc::proto::golem::auth::AccountRole::from(r).into())
+                    .collect(),
+                target_account_plan_id: Some(value.target_account_plan_id.into()),
             }
         }
     }
@@ -1037,9 +1149,12 @@ mod protobuf {
                 Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(user)) => {
                     Ok(AuthCtx::User(user.try_into()?))
                 }
-                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::ImpersonatedUser(
-                    impersonated_user,
-                )) => Ok(AuthCtx::ImpersonatedUser(impersonated_user.try_into()?)),
+                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::Agent(agent)) => {
+                    Ok(AuthCtx::Agent(agent.try_into()?))
+                }
+                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::AdminImpersonation(
+                    ctx,
+                )) => Ok(AuthCtx::AdminImpersonation(ctx.try_into()?)),
                 None => Err("No auth_ctx value present".to_string()),
             }
         }
@@ -1058,10 +1173,15 @@ mod protobuf {
                         user.into(),
                     )),
                 },
-                AuthCtx::ImpersonatedUser(impersonated_user) => Self {
+                AuthCtx::Agent(impersonated_user) => Self {
+                    value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::Agent(
+                        impersonated_user.into(),
+                    )),
+                },
+                AuthCtx::AdminImpersonation(ctx) => Self {
                     value: Some(
-                        golem_api_grpc::proto::golem::auth::auth_ctx::Value::ImpersonatedUser(
-                            impersonated_user.into(),
+                        golem_api_grpc::proto::golem::auth::auth_ctx::Value::AdminImpersonation(
+                            ctx.into(),
                         ),
                     ),
                 },

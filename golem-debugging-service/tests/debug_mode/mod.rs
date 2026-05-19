@@ -12,9 +12,11 @@ use golem_service_base::service::compiled_component::{
 };
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig,
+    IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig, SchedulerStorageConfig,
 };
-use golem_worker_executor_test_utils::{TestWorkerExecutor, sqlite_storage_config};
+use golem_worker_executor_test_utils::{
+    TestWorkerExecutor, scheduler_sqlite_storage_config, sqlite_storage_config,
+};
 use prometheus::Registry;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -30,6 +32,10 @@ pub async fn start_debug_worker_executor(
             &test_worker_executor.context,
         )),
         indexed_storage: IndexedStorageConfig::KVStoreSqlite(IndexedStorageKVStoreSqliteConfig {}),
+        scheduler_storage: SchedulerStorageConfig::Sqlite(scheduler_sqlite_storage_config(
+            &test_worker_executor.deps,
+            &test_worker_executor.context,
+        )),
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: test_worker_executor.deps.blob_storage_root(),
         }),

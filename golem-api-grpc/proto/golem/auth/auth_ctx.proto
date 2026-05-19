@@ -13,14 +13,22 @@ message UserAuthCtx {
   repeated AccountRole account_roles = 3;
 }
 
-message ImpersonatedUserAuthCtx {
+message AgentAuthCtx {
   golem.common.AccountId account_id = 1;
+}
+
+message AdminImpersonationAuthCtx {
+  golem.common.AccountId admin_account_id = 1;
+  golem.common.AccountId target_account_id = 2;
+  repeated AccountRole target_account_roles = 3;
+  golem.account.PlanId target_account_plan_id = 4;
 }
 
 message AuthCtx {
   oneof value {
     golem.common.Empty system = 1;
     UserAuthCtx user = 2;
-    ImpersonatedUserAuthCtx impersonated_user = 3;
+    AgentAuthCtx agent = 3;
+    AdminImpersonationAuthCtx admin_impersonation = 4;
   }
 }

@@ -27,8 +27,7 @@ use sqlx::{Postgres, QueryBuilder};
 
 const DB_TYPE: &str = "postgres";
 
-static DB_MIGRATIONS: include_dir::Dir =
-    include_dir!("$CARGO_MANIFEST_DIR/db/migration/postgres/keyvalue");
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/keyvalue");
 
 #[derive(Debug, Clone)]
 pub struct PostgresKeyValueStorage {
