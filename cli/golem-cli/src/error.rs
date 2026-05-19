@@ -129,8 +129,7 @@ pub mod service {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
                     err.is_status_code(401)
-                        && err.code.as_deref()
-                            == Some(api::error_code::AUTH_UNAUTHORIZED)
+                        && err.code.as_deref() == Some(api::error_code::AUTH_UNAUTHORIZED)
                 }
                 _ => false,
             }
