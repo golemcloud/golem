@@ -42,7 +42,7 @@ use golem_worker_executor::services::golem_config::{
     FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
     IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
-    WorkerServiceGrpcConfig,
+    SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
@@ -367,6 +367,15 @@ fn worker_executor_config(
         indexed_storage: IndexedStorageConfig::KVStoreMultiSqlite(
             IndexedStorageKVStoreMultiSqliteConfig {},
         ),
+        scheduler_storage: SchedulerStorageConfig::Sqlite(DbSqliteConfig {
+            database: args
+                .data_dir
+                .join("scheduler.db")
+                .to_string_lossy()
+                .into_owned(),
+            max_connections: 4,
+            foreign_keys: false,
+        }),
         blob_storage: blob_storage_config(args),
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},

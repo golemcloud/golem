@@ -39,9 +39,7 @@ use golem_common::model::oplog::host_functions::{
     GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
     GolemRpcWasmRpcScheduleInvocation,
 };
-use golem_common::model::oplog::types::{
-    SerializableInvokeResult, SerializableScheduledInvocation,
-};
+use golem_common::model::oplog::types::{SerializableInvokeResult, SerializableScheduleId};
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
     HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
@@ -51,7 +49,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
-    OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduledAction,
+    OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduleId, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
 
@@ -559,6 +557,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let current_oplog_index = self.state.oplog.current_oplog_index().await;
 
             let idempotency_key = self.derive_idempotency_key(current_oplog_index);
+            let schedule_id = ScheduleId::from_idempotency_key(&idempotency_key);
 
             let request = HostRequestGolemRpcScheduledInvocation {
                 remote_agent_id: remote_agent_id.agent_id(),
@@ -601,26 +600,25 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .scheduler_service
-                .schedule(scheduled_at, action)
+                .schedule_with_id(schedule_id, scheduled_at, action)
                 .await;
 
-            let invocation = SerializableScheduledInvocation::from_domain(result)
-                .map_err(|err| anyhow::anyhow!(err))?;
+            let schedule_id = SerializableScheduleId::from_domain(result);
 
             durability
                 .persist(
                     self,
                     request,
-                    HostResponseGolemRpcScheduledInvocation { invocation },
+                    HostResponseGolemRpcScheduledInvocation { schedule_id },
                 )
                 .await
         } else {
             durability.replay(self).await
         }?;
 
-        let serialized_result = serialize(&result.invocation).map_err(|err| {
+        let serialized_result = serialize(&result.schedule_id).map_err(|err| {
             anyhow::Error::from(WorkerExecutorError::runtime(format!(
-                "Failed to serialize scheduled invocation result: {err}"
+                "Failed to serialize schedule id: {err}"
             )))
         })?;
         let cancellation_token = CancellationTokenEntry {
@@ -1094,8 +1092,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
         let entry = self.table().get(&this)?;
-        let serialized_scheduled_invocation: SerializableScheduledInvocation =
-            deserialize(&entry.schedule_id).map_err(|err| {
+        let serialized_schedule_id: SerializableScheduleId = deserialize(&entry.schedule_id)
+            .map_err(|err| {
                 anyhow::Error::from(WorkerExecutorError::runtime(format!(
                     "Failed to deserialize cancellation token: {err}"
                 )))
@@ -1109,14 +1107,14 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
 
         if durability.is_live() {
             self.scheduler_service()
-                .cancel(serialized_scheduled_invocation.clone().into_domain())
+                .cancel(serialized_schedule_id.clone().into_domain())
                 .await;
 
             durability
                 .persist(
                     self,
                     HostRequestGolemRpcScheduledInvocationCancellation {
-                        invocation: serialized_scheduled_invocation,
+                        schedule_id: serialized_schedule_id,
                     },
                     HostResponseGolemRpcUnit {},
                 )

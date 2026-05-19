@@ -28,7 +28,7 @@ use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
     SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
     SerializableInvokeResult, SerializableIpAddresses, SerializableRdbmsError,
-    SerializableRdbmsRequest, SerializableRpcError, SerializableScheduledInvocation,
+    SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
     SerializableStreamError,
 };
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
@@ -149,7 +149,7 @@ oplog_payload! {
             remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
         },
         GolemRpcScheduledInvocationCancellation {
-            invocation: SerializableScheduledInvocation
+            schedule_id: SerializableScheduleId
         },
         HttpRequest {
              uri: String,
@@ -318,7 +318,7 @@ oplog_payload! {
             result: SerializableInvokeResult
         },
         GolemRpcScheduledInvocation {
-            invocation: SerializableScheduledInvocation
+            schedule_id: SerializableScheduleId
         },
         GolemRpcUnitOrFailure { result: Result<(), SerializableRpcError> },
         GolemRpcUnit {},

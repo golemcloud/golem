@@ -20,17 +20,16 @@ use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_activator::WorkerActivator;
-use crate::storage::keyvalue::{
-    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
-};
+use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction};
+use golem_common::model::{AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction, ShardId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::future::Future;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -42,6 +41,13 @@ use tracing::{Instrument, Level, error, info, span, warn};
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
     async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId;
+
+    async fn schedule_with_id(
+        &self,
+        schedule_id: ScheduleId,
+        time: DateTime<Utc>,
+        action: ScheduledAction,
+    ) -> ScheduleId;
 
     async fn cancel(&self, id: ScheduleId);
 }
@@ -115,34 +121,43 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
 
 #[derive(Clone)]
 pub struct SchedulerServiceDefault {
-    key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
     background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     shard_service: Arc<dyn ShardService>,
     promise_service: Arc<dyn PromiseService>,
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     oplog_service: Arc<dyn OplogService>,
     worker_service: Arc<dyn WorkerService>,
+    claim_batch_size: u32,
+    lease_ttl: Duration,
+    max_batches_per_tick: u32,
 }
 
 impl SchedulerServiceDefault {
     pub fn new(
-        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+        scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
         shard_service: Arc<dyn ShardService>,
         promise_service: Arc<dyn PromiseService>,
         worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
         oplog_service: Arc<dyn OplogService>,
         worker_service: Arc<dyn WorkerService>,
         process_interval: Duration,
+        claim_batch_size: u32,
+        lease_ttl: Duration,
+        max_batches_per_tick: u32,
         shutdown_token: CancellationToken,
     ) -> Arc<Self> {
         let svc = Self {
-            key_value_storage,
+            scheduler_storage,
             background_handle: Arc::new(Mutex::new(None)),
             shard_service,
             promise_service,
             oplog_service,
             worker_service,
             worker_access,
+            claim_batch_size,
+            lease_ttl,
+            max_batches_per_tick,
         };
         let svc = Arc::new(svc);
         let background_handle = {
@@ -183,227 +198,260 @@ impl SchedulerServiceDefault {
     }
 
     async fn process(&self, now: DateTime<Utc>) -> Result<(), String> {
-        let (hours_since_epoch, remainder) = Self::split_time(now);
-        let previous_hours_since_epoch = hours_since_epoch - 1;
+        let assignment = self
+            .shard_service
+            .current_assignment()
+            .map_err(|err| err.to_string())?;
 
-        let previous_hour_key = Self::schedule_key_from_timestamp(previous_hours_since_epoch);
-        let current_hour_key = Self::schedule_key_from_timestamp(hours_since_epoch);
+        for _ in 0..self.max_batches_per_tick {
+            let claimed = self
+                .scheduler_storage
+                .claim_due(now, &assignment, self.claim_batch_size, self.lease_ttl)
+                .await?;
 
-        // TODO: couple of issues with this implementation
-        // 1: We only query scheduled actions for the current hour - 1. If we are unavailable for longer than that actions will not be run.
-        // 2: We use the timestamp of the scheduled action as a unique key. If we have 2 actions scheduled for the same point in time one will be silently discarded.
+            let claimed_count = claimed.len();
+            if claimed.is_empty() {
+                break;
+            }
 
-        let all_from_prev_hour: Vec<(f64, ScheduledAction)> = self
-            .key_value_storage
-            .with_entity("scheduler", "process", "scheduled_action")
-            .get_sorted_set(KeyValueStorageNamespace::Schedule, &previous_hour_key)
-            .await?;
-
-        let mut all: Vec<(&str, ScheduledAction)> = all_from_prev_hour
-            .into_iter()
-            .map(|(_score, action)| (previous_hour_key.as_str(), action))
-            .collect();
-
-        let all_from_this_hour: Vec<(f64, ScheduledAction)> = self
-            .key_value_storage
-            .with_entity("scheduler", "process", "scheduled_action")
-            .query_sorted_set(
-                KeyValueStorageNamespace::Schedule,
-                &current_hour_key,
-                0.0,
-                remainder,
-            )
-            .await?;
-
-        all.extend(
-            all_from_this_hour
-                .into_iter()
-                .map(|(_score, action)| (current_hour_key.as_str(), action)),
-        );
-
-        let matching: Vec<(&str, ScheduledAction)> = all
-            .into_iter()
-            .filter(|(_, action)| {
-                self.shard_service
-                    .check_worker(&action.owned_agent_id().agent_id)
-                    .is_ok()
-            })
-            .collect::<Vec<_>>();
-
-        // ! Do not exist early from this loop because of failed actions, as it will cause all other actions to be skipped.
-        // ! Errors will only be logged anyway, so just log them inline here and ignore.
-        for (key, action) in matching {
-            match action.clone() {
-                ScheduledAction::CompletePromise {
-                    account_id: _,
-                    promise_id,
-                    environment_id,
-                } => {
-                    let owned_agent_id = OwnedAgentId::new(environment_id, &promise_id.agent_id);
-
-                    let result = self
-                        .promise_service
-                        .complete(promise_id.clone(), vec![])
-                        .await;
-
-                    // TODO: We probably need more error handling here as not completing a promise that is expected to complete can lead to deadlocks.
-                    match result {
-                        Ok(_) => {
-                            // activate worker so it starts processing the newly completed promises
-                            // TODO: this is probably redundant with the wakeup in PromiseService. check and fix
-                            {
-                                let span = span!(
-                                    Level::INFO,
-                                    "scheduler",
-                                    agent_id = owned_agent_id.agent_id.to_string()
-                                );
-
-                                self.worker_access
-                                    .activate_worker(&owned_agent_id)
-                                    .instrument(span)
-                                    .await;
-                            }
-
-                            record_scheduled_promise_completed();
-                        }
-                        Err(e) => {
-                            error!(
-                                agent_id = owned_agent_id.to_string(),
-                                promise_id = promise_id.to_string(),
-                                "Failed to complete promise: {e}"
-                            );
-                        }
-                    }
-                }
-                ScheduledAction::ArchiveOplog {
-                    account_id,
-                    owned_agent_id,
-                    agent_mode,
-                    last_oplog_index,
-                    next_after,
-                } => {
-                    if self.oplog_service.exists(&owned_agent_id, agent_mode).await {
-                        let current_last_index = self
-                            .oplog_service
-                            .get_last_index(&owned_agent_id, agent_mode)
-                            .await;
-                        if current_last_index == last_oplog_index {
-                            // Need to create the `Worker` instance to avoid race conditions
-                            match self.worker_access.open_oplog(&owned_agent_id).await {
-                                Ok(oplog) => {
-                                    let start = Instant::now();
-                                    let archive_result =
-                                        match MultiLayerOplog::try_archive(&oplog).await {
-                                            Some(r) => Some(r),
-                                            None => EphemeralOplog::try_archive(&oplog).await,
-                                        };
-                                    if let Some(more) = archive_result {
-                                        record_scheduled_archive(start.elapsed(), more);
-                                        if more {
-                                            self.schedule(
-                                                now.add(next_after),
-                                                ScheduledAction::ArchiveOplog {
-                                                    account_id,
-                                                    owned_agent_id,
-                                                    agent_mode,
-                                                    last_oplog_index,
-                                                    next_after,
-                                                },
-                                            )
-                                            .await;
-                                        } else {
-                                            info!(
-                                                agent_id = owned_agent_id.to_string(),
-                                                "Deleting cached status of fully archived worker"
-                                            );
-                                            // The oplog is fully archived, so we can also delete the cached worker status
-                                            self.worker_service
-                                                .remove_cached_status(&owned_agent_id)
-                                                .await;
-                                        }
-                                    }
-                                }
-                                Err(error) => {
-                                    error!(
-                                        agent_id = owned_agent_id.to_string(),
-                                        "Failed to activate worker for archiving: {error}"
-                                    );
-                                }
-                            }
-                        }
-
-                        // TODO: metrics
-                    }
-                }
-                ScheduledAction::Invoke {
-                    account_id: _,
-                    owned_agent_id,
-                    invocation,
-                    target_worker_fingerprint,
-                } => {
-                    // A mismatch means the original worker was deleted and recreated — drop the stale
-                    // invocation silently.
-                    let stale = match self.worker_service.get(&owned_agent_id).await {
-                        Some(meta) => {
-                            meta.initial_worker_metadata.fingerprint != target_worker_fingerprint
-                        }
-                        None => true,
-                    };
-
-                    if stale {
-                        info!(
-                            agent_id = owned_agent_id.to_string(),
-                            "Dropping stale scheduled invocation: target worker was deleted and recreated"
+            // ! Do not exit early from this loop because of failed actions, as it will cause all other actions to be skipped.
+            // ! Retryable failures are left unacknowledged and retried after lease expiry.
+            for claimed_action in claimed {
+                if self
+                    .process_claimed_action(claimed_action.clone(), now)
+                    .await
+                {
+                    let acked = self
+                        .scheduler_storage
+                        .ack(&claimed_action.schedule_id, claimed_action.lease_owner)
+                        .await?;
+                    if !acked {
+                        warn!(
+                            schedule_id = %claimed_action.schedule_id,
+                            lease_owner = %claimed_action.lease_owner,
+                            "Failed to acknowledge scheduled action because the lease was lost"
                         );
-                    } else {
-                        // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
-                        // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
-                        let result = self
-                            .worker_access
-                            .enqueue_invocation(&owned_agent_id, *invocation)
-                            .await;
-
-                        if let Err(e) = result {
-                            error!(
-                                agent_id = owned_agent_id.to_string(),
-                                "Failed to invoke worker with scheduled invocation: {e}"
-                            );
-                        }
                     }
-                }
-                ScheduledAction::Resume {
-                    agent_created_by: _,
-                    owned_agent_id,
-                } => {
-                    self.worker_access.activate_worker(&owned_agent_id).await;
                 }
             }
 
-            // We are completely done with the action, purge it from the queue
-            self.key_value_storage
-                .with_entity("scheduler", "process", "scheduled_action")
-                .remove_from_sorted_set(KeyValueStorageNamespace::Schedule, key, &action)
-                .await?;
+            if claimed_count < self.claim_batch_size as usize {
+                break;
+            }
         }
 
         Ok(())
     }
 
-    const HOUR_IN_MILLIS: i64 = 1000 * 60 * 60;
+    async fn with_lease_renewal<T, F>(
+        &self,
+        claimed_action: &ClaimedScheduledAction,
+        operation: F,
+    ) -> Result<T, String>
+    where
+        F: Future<Output = T>,
+    {
+        let renewal_interval = (self.lease_ttl / 3).max(Duration::from_millis(1));
+        tokio::pin!(operation);
 
-    fn split_time<Tz: TimeZone>(time: DateTime<Tz>) -> (i64, f64) {
-        let millis = time.timestamp_millis();
-        let hours_since_epoch = millis / Self::HOUR_IN_MILLIS;
-        let remainder = (millis % Self::HOUR_IN_MILLIS) as f64;
-        (hours_since_epoch, remainder)
+        loop {
+            tokio::select! {
+                result = &mut operation => {
+                    return Ok(result);
+                }
+                _ = tokio::time::sleep(renewal_interval) => {
+                    let lease_until = Utc::now().add(self.lease_ttl);
+                    let renewed = self.scheduler_storage
+                        .extend_lease(
+                            &claimed_action.schedule_id,
+                            claimed_action.lease_owner,
+                            lease_until,
+                        )
+                        .await?;
+
+                    if !renewed {
+                        return Err(format!(
+                            "lease for scheduled action {} was lost before processing completed",
+                            claimed_action.schedule_id
+                        ));
+                    }
+                }
+            }
+        }
     }
 
-    fn schedule_key(id: &ScheduleId) -> String {
-        Self::schedule_key_from_timestamp(id.timestamp)
-    }
+    async fn process_claimed_action(
+        &self,
+        claimed_action: ClaimedScheduledAction,
+        now: DateTime<Utc>,
+    ) -> bool {
+        match claimed_action.action.clone() {
+            ScheduledAction::CompletePromise {
+                account_id: _,
+                promise_id,
+                environment_id,
+            } => {
+                let owned_agent_id = OwnedAgentId::new(environment_id, &promise_id.agent_id);
 
-    fn schedule_key_from_timestamp(timestamp: i64) -> String {
-        format!("worker:schedule:{timestamp}")
+                let result = self
+                    .promise_service
+                    .complete(promise_id.clone(), vec![])
+                    .await;
+
+                // TODO: We probably need more error handling here as not completing a promise that is expected to complete can lead to deadlocks.
+                match result {
+                    Ok(_) => {
+                        // activate worker so it starts processing the newly completed promises
+                        // TODO: this is probably redundant with the wakeup in PromiseService. check and fix
+                        {
+                            let span = span!(
+                                Level::INFO,
+                                "scheduler",
+                                agent_id = owned_agent_id.agent_id.to_string()
+                            );
+
+                            self.worker_access
+                                .activate_worker(&owned_agent_id)
+                                .instrument(span)
+                                .await;
+                        }
+
+                        record_scheduled_promise_completed();
+                        true
+                    }
+                    Err(e) => {
+                        error!(
+                            agent_id = owned_agent_id.to_string(),
+                            promise_id = promise_id.to_string(),
+                            "Failed to complete promise: {e}"
+                        );
+                        false
+                    }
+                }
+            }
+            ScheduledAction::ArchiveOplog {
+                account_id,
+                owned_agent_id,
+                agent_mode,
+                last_oplog_index,
+                next_after,
+            } => {
+                if self.oplog_service.exists(&owned_agent_id, agent_mode).await {
+                    let current_last_index = self
+                        .oplog_service
+                        .get_last_index(&owned_agent_id, agent_mode)
+                        .await;
+                    if current_last_index == last_oplog_index {
+                        // Need to create the `Worker` instance to avoid race conditions
+                        match self.worker_access.open_oplog(&owned_agent_id).await {
+                            Ok(oplog) => {
+                                let start = Instant::now();
+                                let archive_result = self
+                                    .with_lease_renewal(&claimed_action, async {
+                                        match MultiLayerOplog::try_archive(&oplog).await {
+                                            Some(r) => Some(r),
+                                            None => EphemeralOplog::try_archive(&oplog).await,
+                                        }
+                                    })
+                                    .await;
+                                let archive_result = match archive_result {
+                                    Ok(result) => result,
+                                    Err(error) => {
+                                        warn!(
+                                            schedule_id = %claimed_action.schedule_id,
+                                            agent_id = owned_agent_id.to_string(),
+                                            "Stopped scheduled oplog archival because lease renewal failed: {error}"
+                                        );
+                                        return false;
+                                    }
+                                };
+                                if let Some(more) = archive_result {
+                                    record_scheduled_archive(start.elapsed(), more);
+                                    if more {
+                                        self.schedule(
+                                            now.add(next_after),
+                                            ScheduledAction::ArchiveOplog {
+                                                account_id,
+                                                owned_agent_id,
+                                                agent_mode,
+                                                last_oplog_index,
+                                                next_after,
+                                            },
+                                        )
+                                        .await;
+                                    } else {
+                                        info!(
+                                            agent_id = owned_agent_id.to_string(),
+                                            "Deleting cached status of fully archived worker"
+                                        );
+                                        // The oplog is fully archived, so we can also delete the cached worker status
+                                        self.worker_service
+                                            .remove_cached_status(&owned_agent_id)
+                                            .await;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                error!(
+                                    agent_id = owned_agent_id.to_string(),
+                                    "Failed to activate worker for archiving: {error}"
+                                );
+                                return false;
+                            }
+                        }
+                    }
+
+                    // TODO: metrics
+                }
+                true
+            }
+            ScheduledAction::Invoke {
+                account_id: _,
+                owned_agent_id,
+                invocation,
+                target_worker_fingerprint,
+            } => {
+                // A mismatch means the original worker was deleted and recreated — drop the stale
+                // invocation silently.
+                let stale = match self.worker_service.get(&owned_agent_id).await {
+                    Some(meta) => {
+                        meta.initial_worker_metadata.fingerprint != target_worker_fingerprint
+                    }
+                    None => true,
+                };
+
+                if stale {
+                    info!(
+                        agent_id = owned_agent_id.to_string(),
+                        "Dropping stale scheduled invocation: target worker was deleted and recreated"
+                    );
+                    true
+                } else {
+                    // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
+                    let result = self
+                        .worker_access
+                        .enqueue_invocation(&owned_agent_id, *invocation)
+                        .await;
+
+                    if let Err(e) = result {
+                        error!(
+                            agent_id = owned_agent_id.to_string(),
+                            "Failed to invoke worker with scheduled invocation: {e}"
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                }
+            }
+            ScheduledAction::Resume {
+                agent_created_by: _,
+                owned_agent_id,
+            } => {
+                self.worker_access.activate_worker(&owned_agent_id).await;
+                true
+            }
+        }
     }
 }
 
@@ -418,43 +466,36 @@ impl Drop for SchedulerServiceDefault {
 #[async_trait]
 impl SchedulerService for SchedulerServiceDefault {
     async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId {
-        let (hours_since_epoch, remainder) = Self::split_time(time);
+        self.schedule_with_id(ScheduleId::fresh(), time, action)
+            .await
+    }
 
-        let id = ScheduleId {
-            timestamp: hours_since_epoch,
-            action: action.clone(),
-        };
-
-        self.key_value_storage
-            .with_entity("scheduler", "schedule", "scheduled_action")
-            .add_to_sorted_set(
-                KeyValueStorageNamespace::Schedule,
-                &Self::schedule_key(&id),
-                remainder,
-                &action,
-            )
+    async fn schedule_with_id(
+        &self,
+        schedule_id: ScheduleId,
+        time: DateTime<Utc>,
+        action: ScheduledAction,
+    ) -> ScheduleId {
+        let assignment = self.shard_service.current_assignment().unwrap_or_else(|err| {
+            panic!("failed to read current shard assignment while scheduling action {action}: {err}")
+        });
+        let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
+        let shard_id = ShardId::from_routing_hash(routing_hash, assignment.number_of_shards);
+        self.scheduler_storage
+            .insert(schedule_id, time, shard_id, &action)
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to add schedule for action {action} in KV storage: {err}")
+                panic!("failed to add schedule for action {action} in scheduler storage: {err}")
             });
-
-        id
+        schedule_id
     }
 
     async fn cancel(&self, id: ScheduleId) {
-        self.key_value_storage
-            .with_entity("scheduler", "cancel", "scheduled_action")
-            .remove_from_sorted_set(
-                KeyValueStorageNamespace::Schedule,
-                &Self::schedule_key(&id),
-                &id.action,
-            )
+        self.scheduler_storage
+            .cancel(&id)
             .await
             .unwrap_or_else(|err| {
-                panic!(
-                    "failed to remove schedule for action {} from KV storage: {err}",
-                    id.action
-                )
+                panic!("failed to remove schedule {id} from scheduler storage: {err}")
             });
     }
 }
@@ -469,10 +510,10 @@ mod tests {
     use crate::services::shard::{ShardService, ShardServiceDefault};
     use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
-    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use crate::storage::scheduler::SchedulerStorage;
+    use crate::storage::scheduler::memory::InMemorySchedulerStorage;
     use async_trait::async_trait;
     use chrono::DateTime;
-    use desert_rust::BinarySerializer;
     use golem_common::model::AgentStatusRecord;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::AgentMode;
@@ -480,11 +521,12 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AgentId, AgentInvocation, OwnedAgentId, PromiseId, ScheduledAction, ShardId,
+        AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId, ScheduleId,
+        ScheduledAction, ShardAssignment, ShardId,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
@@ -497,12 +539,14 @@ mod tests {
     #[async_trait]
     impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
         async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
+
         async fn open_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
         ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
             unimplemented!()
         }
+
         async fn enqueue_invocation(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -540,12 +584,6 @@ mod tests {
         }
     }
 
-    fn serialized_bytes<T: BinarySerializer>(entry: &T) -> Vec<u8> {
-        golem_common::serialization::serialize(entry)
-            .expect("failed to serialize entry")
-            .to_vec()
-    }
-
     fn create_shard_service_mock() -> Arc<dyn ShardService> {
         let result = Arc::new(ShardServiceDefault::new());
         result.register(1, &HashSet::from_iter(vec![ShardId::new(0)]));
@@ -578,685 +616,356 @@ mod tests {
         Arc::new(WorkerServiceMock)
     }
 
-    #[test]
-    pub async fn promises_added_to_expected_buckets() {
-        let uuid = Uuid::new_v4();
-        let c1: ComponentId = ComponentId(uuid);
-        let i1: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst1".to_string(),
-        };
-        let i2: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst2".to_string(),
-        };
-
-        let environment_id = EnvironmentId::new();
-
-        let p1: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(101),
-        };
-        let p2: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(123),
-        };
-        let p3: PromiseId = PromiseId {
-            agent_id: i2.clone(),
-            oplog_idx: OplogIndex::from_u64(1000),
-        };
-
-        let kvs = Arc::new(InMemoryKeyValueStorage::new());
-
-        let shard_service = create_shard_service_mock();
-        let promise_service = create_promise_service_mock();
-        let worker_access = create_worker_access_mock();
-        let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock();
-
-        let svc = SchedulerServiceDefault::new(
-            kvs.clone(),
-            shard_service,
+    async fn create_scheduler(
+        scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+        promise_service: Arc<PromiseServiceMock>,
+    ) -> Arc<SchedulerServiceDefault> {
+        SchedulerServiceDefault::new(
+            scheduler_storage,
+            create_shard_service_mock(),
             promise_service,
-            worker_access,
-            oplog_service,
-            worker_service,
-            Duration::from_secs(1000), // not testing process() here
+            create_worker_access_mock(),
+            create_oplog_service_mock().await,
+            create_worker_service_mock(),
+            Duration::from_secs(1000),
+            100,
+            Duration::from_secs(30),
+            10,
             CancellationToken::new(),
+        )
+    }
+
+    fn promise(agent_id: AgentId, idx: u64) -> PromiseId {
+        PromiseId {
+            agent_id,
+            oplog_idx: OplogIndex::from_u64(idx),
+        }
+    }
+
+    fn agent(name: &str) -> AgentId {
+        AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: name.to_string(),
+        }
+    }
+
+    fn complete_promise_action(promise_id: PromiseId) -> ScheduledAction {
+        ScheduledAction::CompletePromise {
+            account_id: AccountId::new(),
+            environment_id: EnvironmentId::new(),
+            promise_id,
+        }
+    }
+
+    #[test]
+    async fn schedule_returns_uuid_backed_id_and_cancel_removes_entry() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let promise_service = create_promise_service_mock();
+        let svc = create_scheduler(storage.clone(), promise_service).await;
+
+        let action = complete_promise_action(promise(agent("inst1"), 101));
+        let schedule_id = svc
+            .schedule(DateTime::from_str("2023-07-17T10:05:00Z").unwrap(), action)
+            .await;
+
+        svc.cancel(schedule_id).await;
+
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([ShardId::new(0)]),
+        };
+        let claimed = storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        assert!(claimed.is_empty());
+    }
+
+    #[test]
+    fn schedule_id_uses_same_deterministic_derivation_as_rpc_idempotency_keys() {
+        let base = IdempotencyKey::new("caller-provided-idempotency-key".to_string());
+        let oplog_index = OplogIndex::from_u64(42);
+
+        let rpc_idempotency_key = IdempotencyKey::derived(&base, oplog_index);
+        let schedule_id = ScheduleId::from_idempotency_key(&rpc_idempotency_key);
+        let same_rpc_idempotency_key = IdempotencyKey::derived(&base, oplog_index);
+        let different_rpc_idempotency_key =
+            IdempotencyKey::derived(&base, OplogIndex::from_u64(43));
+
+        assert_eq!(schedule_id.id.to_string(), rpc_idempotency_key.value);
+        assert_eq!(
+            schedule_id,
+            ScheduleId::from_idempotency_key(&same_rpc_idempotency_key)
+        );
+        assert_ne!(
+            schedule_id,
+            ScheduleId::from_idempotency_key(&different_rpc_idempotency_key)
+        );
+    }
+
+    #[test]
+    async fn schedule_with_id_is_idempotent() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let promise_service = create_promise_service_mock();
+        let svc = create_scheduler(storage.clone(), promise_service).await;
+
+        let action = complete_promise_action(promise(agent("inst1"), 101));
+        let schedule_id = ScheduleId::fresh();
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+
+        assert_eq!(
+            svc.schedule_with_id(schedule_id, due_at, action.clone())
+                .await,
+            schedule_id
+        );
+        assert_eq!(
+            svc.schedule_with_id(schedule_id, due_at, action.clone())
+                .await,
+            schedule_id
         );
 
-        let account_id = AccountId::new();
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([ShardId::new(0)]),
+        };
+        let claimed = storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
 
-        let _s1 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    environment_id,
-                    promise_id: p1.clone(),
-                },
-            )
-            .await;
-        let _s2 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p2.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let _s3 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p3.clone(),
-                    environment_id,
-                },
-            )
-            .await;
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].schedule_id, schedule_id);
+    }
 
-        let mut result = HashMap::new();
-        kvs.sorted_sets()
-            .iter_async(|key, entry| {
-                result.insert(key.clone(), entry.clone());
-                true
-            })
-            .await;
-        assert_eq!(
-            result,
-            HashMap::from_iter(vec![
-                (
-                    "Schedule/worker:schedule:469329".to_string(),
-                    vec![(
-                        3540000.0,
-                        serialized_bytes(&ScheduledAction::CompletePromise {
-                            account_id,
-                            promise_id: p2,
-                            environment_id
-                        })
-                    )]
-                ),
-                (
-                    "Schedule/worker:schedule:469330".to_string(),
-                    vec![
-                        (
-                            300000.0,
-                            serialized_bytes(&ScheduledAction::CompletePromise {
-                                account_id,
-                                promise_id: p1,
-                                environment_id
-                            })
-                        ),
-                        (
-                            301000.0,
-                            serialized_bytes(&ScheduledAction::CompletePromise {
-                                account_id,
-                                promise_id: p3,
-                                environment_id
-                            })
-                        )
-                    ]
+    #[test]
+    async fn process_completes_entries_older_than_previous_hour() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let promise_service = create_promise_service_mock();
+        let svc = create_scheduler(storage, promise_service.clone()).await;
+
+        let promise_id = promise(agent("inst1"), 101);
+        svc.schedule(
+            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            complete_promise_action(promise_id.clone()),
+        )
+        .await;
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
+
+        let completed_promises = promise_service.all_completed().await;
+        assert!(completed_promises.contains(&promise_id));
+    }
+
+    #[test]
+    async fn leases_prevent_duplicate_claims_until_expiry() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let action = complete_promise_action(promise(agent("inst1"), 101));
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+        storage
+            .insert(ScheduleId::fresh(), due_at, ShardId::new(0), &action)
+            .await
+            .unwrap();
+
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([ShardId::new(0)]),
+        };
+        let now = DateTime::from_str("2023-07-17T10:06:00Z").unwrap();
+
+        let first = storage
+            .claim_due(now, &assignment, 10, Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 1);
+
+        let second = storage
+            .claim_due(now, &assignment, 10, Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert!(second.is_empty());
+
+        let after_expiry = storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:31Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+        assert_eq!(after_expiry.len(), 1);
+    }
+
+    #[test]
+    async fn stale_ack_does_not_delete_reclaimed_entry() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let action = complete_promise_action(promise(agent("inst1"), 101));
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+        storage
+            .insert(ScheduleId::fresh(), due_at, ShardId::new(0), &action)
+            .await
+            .unwrap();
+
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([ShardId::new(0)]),
+        };
+        let first = storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        let second = storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:31Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+
+        assert!(
+            !storage
+                .ack(&first.schedule_id, first.lease_owner)
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .ack(&second.schedule_id, second.lease_owner)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[test]
+    async fn lease_extension_prevents_reclaim_until_extended_deadline() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let action = complete_promise_action(promise(agent("inst1"), 101));
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+        storage
+            .insert(ScheduleId::fresh(), due_at, ShardId::new(0), &action)
+            .await
+            .unwrap();
+
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([ShardId::new(0)]),
+        };
+        let claimed = storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+
+        assert!(
+            storage
+                .extend_lease(
+                    &claimed.schedule_id,
+                    claimed.lease_owner,
+                    DateTime::from_str("2023-07-17T10:07:00Z").unwrap(),
                 )
-            ])
-        );
-    }
-
-    #[test]
-    pub async fn cancel_removes_entry() {
-        let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst1".to_string(),
-        };
-        let i2: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst2".to_string(),
-        };
-
-        let environment_id = EnvironmentId::new();
-
-        let p1: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(101),
-        };
-        let p2: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(123),
-        };
-        let p3: PromiseId = PromiseId {
-            agent_id: i2.clone(),
-            oplog_idx: OplogIndex::from_u64(1000),
-        };
-
-        let kvs = Arc::new(InMemoryKeyValueStorage::new());
-
-        let shard_service = create_shard_service_mock();
-        let promise_service = create_promise_service_mock();
-        let worker_access = create_worker_access_mock();
-        let oplog_service = create_oplog_service_mock().await;
-
-        let worker_service = create_worker_service_mock();
-
-        let svc = SchedulerServiceDefault::new(
-            kvs.clone(),
-            shard_service,
-            promise_service,
-            worker_access,
-            oplog_service,
-            worker_service,
-            Duration::from_secs(1000), // not testing process() here
-            CancellationToken::new(),
+                .await
+                .unwrap()
         );
 
-        let account_id = AccountId::new();
-
-        let _s1 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p1.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let s2 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p2.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let s3 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p3.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-
-        svc.cancel(s2).await;
-        svc.cancel(s3).await;
-
-        let mut result = HashMap::new();
-        kvs.sorted_sets()
-            .iter_async(|key, entry| {
-                result.insert(key.clone(), entry.clone());
-                true
-            })
-            .await;
-
-        assert_eq!(
-            result,
-            HashMap::from([
-                ("Schedule/worker:schedule:469329".to_string(), vec![]),
-                (
-                    "Schedule/worker:schedule:469330".to_string(),
-                    vec![(
-                        300000.0,
-                        serialized_bytes(&ScheduledAction::CompletePromise {
-                            account_id,
-                            promise_id: p1,
-                            environment_id
-                        })
-                    )]
+        assert!(
+            storage
+                .claim_due(
+                    DateTime::from_str("2023-07-17T10:06:31Z").unwrap(),
+                    &assignment,
+                    10,
+                    Duration::from_secs(30),
                 )
-            ])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            storage
+                .claim_due(
+                    DateTime::from_str("2023-07-17T10:07:01Z").unwrap(),
+                    &assignment,
+                    10,
+                    Duration::from_secs(30),
+                )
+                .await
+                .unwrap()
+                .len(),
+            1
         );
     }
 
     #[test]
-    pub async fn process_current_hours_past_schedules() {
-        let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst1".to_string(),
-        };
-        let i2: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst2".to_string(),
-        };
-
-        let environment_id = EnvironmentId::new();
-
-        let p1: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(101),
-        };
-        let p2: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(123),
-        };
-        let p3: PromiseId = PromiseId {
-            agent_id: i2.clone(),
-            oplog_idx: OplogIndex::from_u64(1000),
-        };
-
-        let kvs = Arc::new(InMemoryKeyValueStorage::new());
-
-        let shard_service = create_shard_service_mock();
-        let promise_service = create_promise_service_mock();
-        let worker_access = create_worker_access_mock();
-        let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock();
-
-        let svc = SchedulerServiceDefault::new(
-            kvs.clone(),
-            shard_service,
-            promise_service.clone(),
-            worker_access,
-            oplog_service,
-            worker_service,
-            Duration::from_secs(1000), // explicitly calling process for testing
-            CancellationToken::new(),
-        );
-
-        let account_id = AccountId::new();
-
-        let _s1 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p1.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let _s2 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:59:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p2.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let _s3 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p3.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-
-        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+    async fn shard_filtering_uses_current_assignment() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let action = complete_promise_action(promise(agent("inst1"), 101));
+        let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
+        let shard = ShardId::from_routing_hash(routing_hash, 2);
+        let other_shard = ShardId::new((shard.value() + 1) % 2);
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+        storage
+            .insert(ScheduleId::fresh(), due_at, shard, &action)
             .await
             .unwrap();
 
-        let mut result = HashMap::new();
-        kvs.sorted_sets()
-            .iter_async(|key, entry| {
-                result.insert(key.clone(), entry.clone());
-                true
-            })
-            .await;
-        // The only item remaining is the one in the future
-        assert_eq!(
-            result,
-            HashMap::from([(
-                "Schedule/worker:schedule:469330".to_string(),
-                vec![(
-                    3540000.0,
-                    serialized_bytes(&ScheduledAction::CompletePromise {
-                        account_id,
-                        promise_id: p2.clone(),
-                        environment_id
-                    })
-                )]
-            )])
+        let unassigned = ShardAssignment {
+            number_of_shards: 2,
+            shard_ids: HashSet::from_iter([other_shard]),
+        };
+        let assigned = ShardAssignment {
+            number_of_shards: 2,
+            shard_ids: HashSet::from_iter([shard]),
+        };
+        let now = DateTime::from_str("2023-07-17T10:06:00Z").unwrap();
+
+        assert!(
+            storage
+                .claim_due(now, &unassigned, 10, Duration::from_secs(30))
+                .await
+                .unwrap()
+                .is_empty()
         );
-
-        let completed_promises = promise_service.all_completed().await;
-
-        assert!(completed_promises.contains(&p1));
-        assert!(completed_promises.contains(&p3));
-        assert!(!completed_promises.contains(&p2));
+        assert_eq!(
+            storage
+                .claim_due(now, &assigned, 10, Duration::from_secs(30))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
-    pub async fn process_past_and_current_hours_past_schedules() {
-        let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst1".to_string(),
-        };
-        let i2: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst2".to_string(),
-        };
-
-        let environment_id = EnvironmentId::new();
-
-        let p1: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(101),
-        };
-        let p2: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(123),
-        };
-        let p3: PromiseId = PromiseId {
-            agent_id: i2.clone(),
-            oplog_idx: OplogIndex::from_u64(1000),
-        };
-
-        let kvs = Arc::new(InMemoryKeyValueStorage::new());
-
-        let shard_service = create_shard_service_mock();
-        let promise_service = create_promise_service_mock();
-        let worker_access = create_worker_access_mock();
-        let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock();
-
-        let svc = SchedulerServiceDefault::new(
-            kvs.clone(),
-            shard_service,
-            promise_service.clone(),
-            worker_access,
-            oplog_service,
-            worker_service,
-            Duration::from_secs(1000), // explicitly calling process for testing
-            CancellationToken::new(),
-        );
-
-        let account_id = AccountId::new();
-
-        let _s1 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p1.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let _s2 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p2.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let _s3 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p3.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-
-        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-            .await
-            .unwrap();
-
-        let mut result = HashMap::new();
-        kvs.sorted_sets()
-            .iter_async(|key, entry| {
-                result.insert(key.clone(), entry.clone());
-                true
-            })
-            .await;
-        // The only item remaining is the one in the future
-        assert_eq!(
-            result,
-            HashMap::from([
-                ("Schedule/worker:schedule:469329".to_string(), vec![]),
-                ("Schedule/worker:schedule:469330".to_string(), vec![])
-            ])
-        );
-
-        let completed_promises = promise_service.all_completed().await;
-
-        assert!(completed_promises.contains(&p1));
-        assert!(completed_promises.contains(&p3));
-        assert!(completed_promises.contains(&p2));
-    }
-
-    #[test]
-    pub async fn process_past_and_current_hours_past_schedules_2() {
-        let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst1".to_string(),
-        };
-        let i2: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst2".to_string(),
-        };
-
-        let environment_id = EnvironmentId::new();
-
-        let p1: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(101),
-        };
-        let p2: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(123),
-        };
-        let p3: PromiseId = PromiseId {
-            agent_id: i2.clone(),
-            oplog_idx: OplogIndex::from_u64(1000),
-        };
-        let p4: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(111),
-        };
-
-        let kvs = Arc::new(InMemoryKeyValueStorage::new());
-
-        let shard_service = create_shard_service_mock();
-        let promise_service = create_promise_service_mock();
-        let worker_access = create_worker_access_mock();
-        let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock();
-
-        let svc = SchedulerServiceDefault::new(
-            kvs.clone(),
-            shard_service,
-            promise_service.clone(),
-            worker_access,
-            oplog_service,
-            worker_service,
-            Duration::from_secs(1000), // explicitly calling process for testing
-            CancellationToken::new(),
-        );
-
-        let account_id = AccountId::new();
-
-        let _s1 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p1.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let _s2 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p2.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let _s3 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p3.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let _s4 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p4.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-
-        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-            .await
-            .unwrap();
-
-        let mut result = HashMap::new();
-        kvs.sorted_sets()
-            .iter_async(|key, entry| {
-                result.insert(key.clone(), entry.clone());
-                true
-            })
-            .await;
-        // The only item remaining is the one in the future
-        assert_eq!(
-            result,
-            HashMap::from([
-                ("Schedule/worker:schedule:469329".to_string(), vec![]),
-                ("Schedule/worker:schedule:469330".to_string(), vec![])
-            ])
-        );
-
-        let completed_promises = promise_service.all_completed().await;
-
-        assert!(completed_promises.contains(&p1));
-        assert!(completed_promises.contains(&p3));
-        assert!(completed_promises.contains(&p2));
-        assert!(completed_promises.contains(&p4));
-    }
-
-    #[test]
-    pub async fn process_past_and_current_hours_past_schedules_3() {
-        let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst1".to_string(),
-        };
-        let i2: AgentId = AgentId {
-            component_id: c1,
-            agent_id: "inst2".to_string(),
-        };
-
-        let environment_id = EnvironmentId::new();
-
-        let p1: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(101),
-        };
-        let p2: PromiseId = PromiseId {
-            agent_id: i1.clone(),
-            oplog_idx: OplogIndex::from_u64(123),
-        };
-        let p3: PromiseId = PromiseId {
-            agent_id: i2.clone(),
-            oplog_idx: OplogIndex::from_u64(1000),
-        };
-
-        let kvs = Arc::new(InMemoryKeyValueStorage::new());
-
-        let shard_service = create_shard_service_mock();
-        let promise_service = create_promise_service_mock();
-        let worker_access = create_worker_access_mock();
-        let oplog_service = create_oplog_service_mock().await;
-        let worker_service = create_worker_service_mock();
-
-        let svc = SchedulerServiceDefault::new(
-            kvs.clone(),
-            shard_service,
-            promise_service.clone(),
-            worker_access,
-            oplog_service,
-            worker_service,
-            Duration::from_secs(1000), // explicitly calling process for testing
-            CancellationToken::new(),
-        );
-
-        let account_id = AccountId::new();
-
-        let _s1 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p1.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let _s2 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p2.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-        let _s3 = svc
-            .schedule(
-                DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
-                ScheduledAction::CompletePromise {
-                    account_id,
-                    promise_id: p3.clone(),
-                    environment_id,
-                },
-            )
-            .await;
-
-        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-            .await
-            .unwrap();
-
-        let mut result = HashMap::new();
-        kvs.sorted_sets()
-            .iter_async(|key, entry| {
-                result.insert(key.clone(), entry.clone());
-                true
-            })
-            .await;
-        // The only item remaining is the one in the future
-        assert_eq!(
-            result,
-            HashMap::from([
-                ("Schedule/worker:schedule:469329".to_string(), vec![]),
-                ("Schedule/worker:schedule:469330".to_string(), vec![])
-            ])
-        );
-
-        let completed_promises = promise_service.all_completed().await;
-
-        assert!(completed_promises.contains(&p1));
-        assert!(completed_promises.contains(&p3));
-        assert!(completed_promises.contains(&p2));
+    fn shard_id_from_routing_hash_handles_negative_hashes() {
+        assert_eq!(ShardId::from_routing_hash(-i64::MAX, 10), ShardId::new(7));
     }
 }

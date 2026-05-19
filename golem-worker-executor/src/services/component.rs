@@ -78,6 +78,10 @@ pub trait ComponentService: Send + Sync {
         self.invalidate_current_deployed_metadata().await
     }
 
+    /// Invalidates all cached component metadata (both current-deployed and version-pinned)
+    /// for a specific environment.
+    async fn invalidate_all_metadata_for_environment(&self, environment_id: EnvironmentId);
+
     /// Invalidates all cached component metadata.
     async fn invalidate_all(&self) {
         self.invalidate_current_deployed_metadata().await
@@ -246,11 +250,14 @@ impl ComponentService for ComponentServiceDefault {
                                 let metadata = client
                                     .get_component_metadata(component_id, component_revision)
                                     .await
-                                    .map_err(|e| {
-                                        WorkerExecutorError::runtime(format!(
+                                    .map_err(|e| match e {
+                                        RegistryServiceError::NotFound(_) => {
+                                            WorkerExecutorError::ComponentNotFound { component_id }
+                                        }
+                                        _ => WorkerExecutorError::runtime(format!(
                                             "Failed getting component metadata: {}",
                                             e.to_safe_string()
-                                        ))
+                                        )),
                                     })?;
                                 Ok(metadata)
                             })
@@ -267,11 +274,14 @@ impl ComponentService for ComponentServiceDefault {
                             client
                                 .get_deployed_component_metadata(component_id)
                                 .await
-                                .map_err(|e| {
-                                    WorkerExecutorError::runtime(format!(
+                                .map_err(|e| match e {
+                                    RegistryServiceError::NotFound(_) => {
+                                        WorkerExecutorError::ComponentNotFound { component_id }
+                                    }
+                                    _ => WorkerExecutorError::runtime(format!(
                                         "Failed getting component metadata: {}",
                                         e.to_safe_string()
-                                    ))
+                                    )),
                                 })
                         })
                     })
@@ -354,6 +364,25 @@ impl ComponentService for ComponentServiceDefault {
 
         for key in keys {
             self.current_component_metadata_cache.remove(&key).await;
+        }
+    }
+
+    async fn invalidate_all_metadata_for_environment(&self, environment_id: EnvironmentId) {
+        self.invalidate_current_deployed_metadata_for_environment(environment_id)
+            .await;
+
+        let keys = self
+            .component_metadata_cache
+            .iter()
+            .await
+            .into_iter()
+            .filter_map(|(key, component)| {
+                (component.environment_id == environment_id).then_some(key)
+            })
+            .collect::<Vec<_>>();
+
+        for key in keys {
+            self.component_metadata_cache.remove(&key).await;
         }
     }
 

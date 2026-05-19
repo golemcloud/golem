@@ -30,8 +30,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
-static DB_MIGRATIONS: include_dir::Dir =
-    include_dir!("$CARGO_MANIFEST_DIR/db/migration/postgres/indexed");
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/indexed");
 
 const DB_TYPE: &str = "postgres";
 
