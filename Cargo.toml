@@ -183,6 +183,7 @@ poem = { version = "=3.1.12", features = ["cookie", "multipart", "opentelemetry"
 poem-derive = { version = "=3.1.12" }
 poem-openapi = { version = "=5.1.16", features = ["chrono", "cookie", "humantime", "swagger-ui", "time", "url", "uuid", "websocket", ] }
 poem-openapi-derive = "=5.1.16"
+portable-pty = "0.9.0"
 postgres = "0.19.10"
 pretty_assertions = "1.4.1"
 pretty_env_logger = "0.5.0"
@@ -297,6 +298,7 @@ wasmtime-wasi-http = { version = "=42.0.1" }
 wax = "0.6.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 which = "8.0.0"
 wit-bindgen = "0.51.0"
 wit-bindgen-rt = "=0.44.0"
