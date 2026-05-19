@@ -236,6 +236,61 @@ async fn startup_reconciliation_clears_stale_extra_shards() {
 }
 
 #[test]
+// Models a shard-manager crash after rebalance RPC side effects reached
+// executors but before the final routing-table write. On restart, persisted
+// state says pod A owns shard 0 and pod B owns none, while pod B still has the
+// stale local assignment from the interrupted rebalance. Startup reconciliation
+// must restore pod A and clear pod B.
+async fn startup_reconciliation_clears_stale_assignment_after_unpersisted_rebalance() {
+    let persisted_owner = pod(1, 9000);
+    let stale_new_owner = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    worker_executors
+        .set_local_assignment(stale_new_owner, &[0])
+        .await;
+
+    let (_shard_management, persistence, mut join_set) = new_shard_management(
+        routing_table_with_pods(
+            1,
+            vec![
+                (persisted_owner, "worker-executor-0", &[0]),
+                (stale_new_owner, "worker-executor-1", &[]),
+            ],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+
+    let routing_table = persistence.latest().await;
+    assert_eq!(
+        routing_table
+            .pod_states
+            .get(&persisted_owner)
+            .expect("persisted owner missing")
+            .assigned_shards,
+        [0].into_iter().map(ShardId::new).collect()
+    );
+    assert!(
+        routing_table
+            .pod_states
+            .get(&stale_new_owner)
+            .expect("stale new owner missing")
+            .assigned_shards
+            .is_empty()
+    );
+    assert_eq!(
+        worker_executors.local_assignment(persisted_owner).await,
+        [0].into_iter().map(ShardId::new).collect()
+    );
+    assert_eq!(
+        worker_executors.local_assignment(stale_new_owner).await,
+        BTreeSet::new()
+    );
+
+    join_set.abort_all();
+}
+
+#[test]
 // The "returned pod" path must replace the executor's local assignment. When
 // the authoritative assignment is empty, stale local ownership should be
 // cleared on re-registration.
