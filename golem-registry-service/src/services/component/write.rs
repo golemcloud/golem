@@ -338,6 +338,8 @@ impl ComponentWriteService {
             component.object_store_key = wasm_object_store_key;
             let existing_provision_configs =
                 component.metadata.agent_type_provision_configs().clone();
+            let existing_provision_configs =
+                provision_configs_for_agent_types(&agent_types, existing_provision_configs);
             component.metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 new_wasm.clone(),
@@ -353,6 +355,8 @@ impl ComponentWriteService {
 
             let existing_provision_configs =
                 component.metadata.agent_type_provision_configs().clone();
+            let existing_provision_configs =
+                provision_configs_for_agent_types(&agent_types, existing_provision_configs);
             component.metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 Arc::from(old_data),
@@ -942,6 +946,21 @@ async fn analyze_and_validate_component_wasm(
     .await?;
 
     Ok(component_metadata)
+}
+
+fn provision_configs_for_agent_types(
+    agent_types: &[AgentType],
+    provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfig> {
+    let agent_type_names = agent_types
+        .iter()
+        .map(|agent_type| &agent_type.type_name)
+        .collect::<HashSet<_>>();
+
+    provision_configs
+        .into_iter()
+        .filter(|(agent_type_name, _)| agent_type_names.contains(agent_type_name))
+        .collect()
 }
 
 fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), ComponentError> {
