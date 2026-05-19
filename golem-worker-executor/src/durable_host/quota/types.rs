@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::Reservation;
 use golem_common::model::quota::ResourceName;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::component::Resource;
 
 /// Parameters needed to perform a deferred (lazy) lease acquire during replay.
@@ -122,14 +123,19 @@ impl QuotaTokenEntry {
     }
 
     /// Update the replayed credit state. Used during replay of reserve/commit entries.
-    pub fn update_replayed_credit(&mut self, credit: i64, at: DateTime<Utc>) {
+    pub fn update_replayed_credit(
+        &mut self,
+        credit: i64,
+        at: DateTime<Utc>,
+    ) -> Result<(), WorkerExecutorError> {
         match &mut self.lease {
-            LeaseInterestHandle::Live(_) => {
-                panic!("update replayed credit may not be called with a live lease interest")
-            }
+            LeaseInterestHandle::Live(_) => Err(WorkerExecutorError::runtime(
+                "update replayed credit may not be called with a live lease interest",
+            )),
             LeaseInterestHandle::Pending(p) => {
                 p.last_credit = credit;
                 p.last_credit_at = at;
+                Ok(())
             }
         }
     }

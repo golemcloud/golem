@@ -76,7 +76,7 @@ impl ReplayState {
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
-    ) -> Self {
+    ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let last_oplog_index = oplog.current_oplog_index().await;
         let mut result = Self {
@@ -94,11 +94,11 @@ impl ReplayState {
             has_seen_logs: Arc::new(AtomicBool::new(false)),
         };
         result.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial skipped regions applied by manual updates correctly
-        result.skip_forward().await;
-        result
+        result.skip_forward().await?;
+        Ok(result)
     }
 
-    pub async fn drop_override_and_restart(&mut self) {
+    pub async fn drop_override_and_restart(&mut self) -> Result<(), WorkerExecutorError> {
         {
             let mut internal = self.internal.write().await;
             internal.skipped_regions.drop_override();
@@ -111,7 +111,7 @@ impl ReplayState {
         self.last_replayed_index.set(OplogIndex::NONE);
         self.last_replayed_non_hint_index.set(OplogIndex::NONE);
         self.move_replay_idx(OplogIndex::INITIAL).await;
-        self.skip_forward().await;
+        self.skip_forward().await
     }
 
     pub async fn switch_to_live(&mut self) {
@@ -167,8 +167,19 @@ impl ReplayState {
     /// Reads the next oplog entry, and skips every hint entry following it.
     /// Returns the oplog index of the entry read, no matter how many more hint entries
     /// were read.
-    pub async fn get_oplog_entry(&mut self) -> (OplogIndex, OplogEntry) {
-        self.try_get_oplog_entry(|_| true).await.unwrap()
+    ///
+    /// Returns an error if the underlying read fails (e.g. missing oplog entry,
+    /// corrupted GolemApiFork payload) so the worker can fail the agent with a
+    /// non-retriable trap rather than panicking the executor.
+    pub async fn get_oplog_entry(
+        &mut self,
+    ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
+        // The closure always returns true, so the outer Option is always Some(...)
+        // when the underlying read succeeds.
+        Ok(self
+            .try_get_oplog_entry(|_| true)
+            .await?
+            .expect("try_get_oplog_entry with always-true predicate must return Some"))
     }
 
     /// Checks whether the currently read `entry` is a hint entry is valid for replay, or
@@ -233,7 +244,7 @@ impl ReplayState {
     pub async fn try_get_oplog_entry(
         &mut self,
         condition: impl FnOnce(&OplogEntry) -> bool,
-    ) -> Option<(OplogIndex, OplogEntry)> {
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
         let saved_replay_idx = self.last_replayed_index.get();
         let saved_next_skipped_region = {
             let internal = self.internal.read().await;
@@ -241,23 +252,23 @@ impl ReplayState {
         };
 
         let read_idx = self.last_replayed_index.get().next();
-        let entry = self.internal_get_next_oplog_entry().await;
+        let entry = self.internal_get_next_oplog_entry().await?;
 
         if condition(&entry) {
-            self.skip_forward().await;
+            self.skip_forward().await?;
             self.last_replayed_non_hint_index.set(read_idx);
 
-            Some((read_idx, entry))
+            Ok(Some((read_idx, entry)))
         } else {
             self.last_replayed_index.set(saved_replay_idx);
             let mut internal = self.internal.write().await;
             internal.next_skipped_region = saved_next_skipped_region;
 
-            None
+            Ok(None)
         }
     }
 
-    async fn skip_forward(&mut self) {
+    async fn skip_forward(&mut self) -> Result<(), WorkerExecutorError> {
         // Skipping hint entries and recording log entries
         let mut logs = HashSet::new();
         while self.is_replay() {
@@ -266,7 +277,7 @@ impl ReplayState {
                 let internal = self.internal.read().await;
                 internal.next_skipped_region.clone()
             };
-            let entry = self.internal_get_next_oplog_entry().await;
+            let entry = self.internal_get_next_oplog_entry().await?;
             match self.should_skip_to(&entry).await {
                 Some(last_read_idx) => {
                     // Recording seen log entries
@@ -302,6 +313,7 @@ impl ReplayState {
             .store(!logs.is_empty(), Ordering::Relaxed);
         let mut internal = self.internal.write().await;
         internal.log_hashes = logs;
+        Ok(())
     }
 
     /// Returns true if the given log entry has been seen since the last non-hint oplog entry.
@@ -332,21 +344,35 @@ impl ReplayState {
         hasher.finish128()
     }
 
-    /// Gets the next oplog entry, no matter if it is hint or not, following jumps
-    async fn internal_get_next_oplog_entry(&mut self) -> OplogEntry {
+    /// Gets the next oplog entry, no matter if it is hint or not, following jumps.
+    ///
+    /// Returns an error (rather than panicking) if the expected entry is missing
+    /// or if the eager `GolemApiFork` payload inspection fails. The caller (and
+    /// transitively any host function) propagates the error up so the worker
+    /// fails the agent with a non-retriable trap instead of crashing the
+    /// executor process.
+    async fn internal_get_next_oplog_entry(&mut self) -> Result<OplogEntry, WorkerExecutorError> {
         let read_idx = self.last_replayed_index.get().next();
 
         let oplog_entries = self.read_oplog(read_idx, 1).await;
         let oplog_entry = if let Some((_, oplog_entry)) = oplog_entries.into_iter().next() {
             oplog_entry
         } else {
-            panic!(
-                "missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}",
-                self.owned_agent_id,
-                read_idx,
-                self.replay_target.get(),
-                self.last_replayed_non_hint_index.get()
-            )
+            // Use `unexpected_oplog_entry` so the typing survives the wasmtime
+            // round-trip and `TrapType::from_error` classifies it as a
+            // non-retriable internal error rather than a policy-retriable
+            // `Runtime`/`Unknown` failure (retrying replay against the same
+            // truncated oplog would just fail again).
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "next oplog entry to replay",
+                format!(
+                    "missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}",
+                    self.owned_agent_id,
+                    read_idx,
+                    self.replay_target.get(),
+                    self.last_replayed_non_hint_index.get()
+                ),
+            ));
         };
 
         // record side effects that need to be applied at the next opportunity
@@ -370,12 +396,19 @@ impl ReplayState {
                 .oplog
                 .download_payload(response.clone())
                 .await
-                .expect("Failed to download oplog entry payload");
+                .map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to download GolemApiFork oplog payload at index {read_idx}: {err}"
+                    ))
+                })?;
             let result: HostResponseGolemApiFork =
                 if let HostResponse::GolemApiFork(result) = response {
                     result
                 } else {
-                    panic!("Expected GolemApiFork response, got {:?}", response);
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "HostResponse::GolemApiFork",
+                        format!("{response:?}"),
+                    ));
                 };
             if result.result == Ok(ForkResult::Forked) {
                 self.record_replay_event(ReplayEvent::ForkReplayed {
@@ -391,7 +424,7 @@ impl ReplayState {
 
         self.move_replay_idx(read_idx).await;
 
-        oplog_entry
+        Ok(oplog_entry)
     }
 
     async fn move_replay_idx(&mut self, new_idx: OplogIndex) {
@@ -497,7 +530,7 @@ impl ReplayState {
     ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
-                let (_, oplog_entry) = self.get_oplog_entry().await;
+                let (_, oplog_entry) = self.get_oplog_entry().await?;
                 match oplog_entry {
                     OplogEntry::AgentInvocationStarted {
                         idempotency_key,
@@ -507,11 +540,12 @@ impl ReplayState {
                         invocation_context: spans,
                         ..
                     } => {
-                        let invocation_payload = self
-                            .oplog
-                            .download_payload(payload)
-                            .await
-                            .expect("failed to deserialize agent invocation payload");
+                        let invocation_payload =
+                            self.oplog.download_payload(payload).await.map_err(|err| {
+                                WorkerExecutorError::runtime(format!(
+                                    "failed to deserialize agent invocation payload: {err}"
+                                ))
+                            })?;
 
                         let invocation_context =
                             InvocationContextStack::from_oplog_data(trace_id, trace_states, spans);
@@ -541,14 +575,15 @@ impl ReplayState {
     ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
-                let (_, oplog_entry) = self.get_oplog_entry().await;
+                let (_, oplog_entry) = self.get_oplog_entry().await?;
                 match oplog_entry {
                     OplogEntry::AgentInvocationFinished { result, .. } => {
-                        let result: AgentInvocationResult = self
-                            .oplog
-                            .download_payload(result)
-                            .await
-                            .expect("failed to deserialize agent invocation result payload");
+                        let result: AgentInvocationResult =
+                            self.oplog.download_payload(result).await.map_err(|err| {
+                                WorkerExecutorError::runtime(format!(
+                                    "failed to deserialize agent invocation result payload: {err}"
+                                ))
+                            })?;
 
                         break Ok(Some(result));
                     }
