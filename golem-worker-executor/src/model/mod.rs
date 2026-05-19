@@ -443,13 +443,18 @@ impl TrapType {
                                         .clone(),
                                 }
                             }
-                            // Replay-corruption errors (unexpected oplog entries or
-                            // runtime errors raised from replay-time invariant
-                            // checks) must be classified as a hard non-retriable
-                            // failure so the worker is marked permanently failed
-                            // rather than being retried under the default retry
-                            // policy. `AgentError::InternalError` maps to
+                            // Replay-corruption errors (`UnexpectedOplogEntry`)
+                            // must be classified as a hard non-retriable failure
+                            // so the worker is marked permanently failed rather
+                            // than being retried under the default retry policy.
+                            // `AgentError::InternalError` maps to
                             // `RetryDecision::None` in `fixed_decision_for_trap_type`.
+                            //
+                            // `WorkerExecutorError::Runtime` is intentionally NOT
+                            // mapped here: it is also used as a generic transient
+                            // error wrapper (e.g. for `Oplog::fallible_add`
+                            // failures) and must remain retriable via the default
+                            // policy path (`AgentError::Unknown`).
                             Some(WorkerExecutorError::UnexpectedOplogEntry { expected, got }) => {
                                 TrapType::Error {
                                     error: AgentError::InternalError(format!(
@@ -460,11 +465,6 @@ impl TrapType {
                                         .clone(),
                                 }
                             }
-                            Some(WorkerExecutorError::Runtime { details }) => TrapType::Error {
-                                error: AgentError::InternalError(details.clone()),
-                                retry_from,
-                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
-                            },
                             _ => {
                                 // Search the full error chain for ClassifiedHostError
                                 if let Some(classified) = error
@@ -935,11 +935,15 @@ mod tests {
     }
 
     #[test]
-    fn runtime_error_is_non_retriable_internal_error() {
+    fn runtime_error_falls_back_to_unknown_and_is_policy_retriable() {
+        // `WorkerExecutorError::Runtime` is a generic transient-error wrapper
+        // (used e.g. for `Oplog::fallible_add` failures). It must not be
+        // classified as `InternalError` (non-retriable); it must fall through
+        // to `AgentError::Unknown` so the configured retry policy applies.
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(
                 golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
-                    "missing oplog entry at index 42",
+                    "transient oplog write failure",
                 ),
             ),
             OplogIndex::INITIAL,
@@ -948,32 +952,29 @@ mod tests {
 
         match trap {
             TrapType::Error {
-                error: AgentError::InternalError(ref msg),
+                error: AgentError::Unknown(_),
                 ..
-            } => {
-                assert_eq!(msg, "missing oplog entry at index 42");
-            }
-            other => panic!("expected TrapType::Error(AgentError::InternalError), got {other:?}"),
+            } => {}
+            other => panic!("expected TrapType::Error(AgentError::Unknown), got {other:?}"),
         }
 
+        // `AgentError::Unknown` has no fixed decision; the policy path applies.
         let decision = crate::durable_host::DurableWorkerCtx::<
             crate::workerctx::default::Context,
         >::fixed_decision_for_trap_type(&trap, false);
-        assert_eq!(decision, Some(RetryDecision::None));
+        assert_eq!(decision, None);
     }
 
     #[test]
-    fn replay_corruption_via_anyhow_round_trip_is_non_retriable_internal_error() {
-        // The HTTP/RPC/websocket replay paths return wasmtime::Error::from(WorkerExecutorError::...).
-        // In production this wasmtime::Error eventually flows through
-        // `From<anyhow::Error> for WorkerExecutorError`
-        // (golem-service-base/src/error/worker_executor.rs), which collapses any
-        // unrecognised anyhow error into `WorkerExecutorError::runtime(format!(...))`.
-        // `TrapType::from_error` then maps `Runtime` to
-        // `AgentError::InternalError` -> `RetryDecision::None`. This test confirms
-        // the end-to-end classification still results in a non-retriable agent failure
-        // even after the wasmtime/anyhow round-trip strips the original
-        // `UnexpectedOplogEntry` typing.
+    fn unexpected_oplog_entry_survives_anyhow_round_trip_and_stays_non_retriable() {
+        // The HTTP/RPC/websocket replay paths return
+        // `wasmtime::Error::from(WorkerExecutorError::...)`. The error then
+        // flows through `From<anyhow::Error> for WorkerExecutorError`
+        // (golem-service-base/src/error/worker_executor.rs). That `From` impl
+        // preserves the original `WorkerExecutorError` if it is still reachable
+        // in the error chain, so replay-corruption typing is not lost. This
+        // test pins down that round-trip and the resulting non-retriable
+        // classification.
         let wasmtime_error = wasmtime::Error::from(
             golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
                 "OplogEntry::HostCall",
@@ -981,17 +982,16 @@ mod tests {
             ),
         );
         let anyhow_error: anyhow::Error = wasmtime_error.into();
-        let collapsed: golem_service_base::error::worker_executor::WorkerExecutorError =
+        let preserved: golem_service_base::error::worker_executor::WorkerExecutorError =
             anyhow_error.into();
-        // Should land in the Runtime variant, not the original UnexpectedOplogEntry variant.
         assert!(matches!(
-            collapsed,
-            golem_service_base::error::worker_executor::WorkerExecutorError::Runtime { .. }
+            preserved,
+            golem_service_base::error::worker_executor::WorkerExecutorError::UnexpectedOplogEntry { .. }
         ));
 
         // Now classify it the way the invocation loop does.
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
-            &anyhow::Error::from(collapsed),
+            &anyhow::Error::from(preserved),
             OplogIndex::INITIAL,
             AgentMode::Durable,
         );

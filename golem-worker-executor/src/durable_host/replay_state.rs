@@ -358,13 +358,21 @@ impl ReplayState {
         let oplog_entry = if let Some((_, oplog_entry)) = oplog_entries.into_iter().next() {
             oplog_entry
         } else {
-            return Err(WorkerExecutorError::runtime(format!(
-                "missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}",
-                self.owned_agent_id,
-                read_idx,
-                self.replay_target.get(),
-                self.last_replayed_non_hint_index.get()
-            )));
+            // Use `unexpected_oplog_entry` so the typing survives the wasmtime
+            // round-trip and `TrapType::from_error` classifies it as a
+            // non-retriable internal error rather than a policy-retriable
+            // `Runtime`/`Unknown` failure (retrying replay against the same
+            // truncated oplog would just fail again).
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "next oplog entry to replay",
+                format!(
+                    "missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}",
+                    self.owned_agent_id,
+                    read_idx,
+                    self.replay_target.get(),
+                    self.last_replayed_non_hint_index.get()
+                ),
+            ));
         };
 
         // record side effects that need to be applied at the next opportunity

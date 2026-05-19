@@ -1210,7 +1210,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         } else {
             // Propagate WorkerExecutorError via `?` (From) so the downcast
             // survives the wasmtime::Error chain — TrapType::from_error
-            // classifies UnexpectedOplogEntry / Runtime as non-retriable.
+            // classifies UnexpectedOplogEntry as non-retriable.
             let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)?;
 
             let serialized_response = match oplog_entry {

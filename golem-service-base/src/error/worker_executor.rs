@@ -432,10 +432,33 @@ impl From<InterruptKind> for WorkerExecutorError {
 
 impl From<anyhow::Error> for WorkerExecutorError {
     fn from(error: anyhow::Error) -> Self {
-        match error.root_cause().downcast_ref::<InterruptKind>() {
-            Some(kind) => Self::Interrupted { kind: *kind },
-            None => Self::runtime(format!("{error:#?}")),
+        if let Some(kind) = error.root_cause().downcast_ref::<InterruptKind>() {
+            return Self::Interrupted { kind: *kind };
         }
+        // Preserve the original `WorkerExecutorError` if it survives in the
+        // error chain so callers like `TrapType::from_error` can still
+        // classify replay-corruption variants (`UnexpectedOplogEntry`, ...)
+        // as non-retriable instead of collapsing everything to a generic
+        // `Runtime` message.
+        //
+        // We have to look in two places: anyhow can hold the original error
+        // directly (when it was constructed via `anyhow::Error::new(we)`), or
+        // — when we round-trip through `wasmtime::Error` — anyhow holds a
+        // `Box<dyn StdError + Send + Sync>` whose concrete content is the
+        // original `WorkerExecutorError`. The latter happens because
+        // `From<wasmtime::Error> for anyhow::Error` uses
+        // `anyhow::Error::from_boxed`, which erases the inner TypeId from
+        // anyhow's vtable but keeps the original value inside the box.
+        if let Some(we) = error.downcast_ref::<WorkerExecutorError>() {
+            return we.clone();
+        }
+        if let Some(boxed) =
+            error.downcast_ref::<Box<dyn std::error::Error + Send + Sync + 'static>>()
+            && let Some(we) = boxed.downcast_ref::<WorkerExecutorError>()
+        {
+            return we.clone();
+        }
+        Self::runtime(format!("{error:#?}"))
     }
 }
 
