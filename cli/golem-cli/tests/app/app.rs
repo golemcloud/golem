@@ -678,6 +678,8 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
 
     ctx.cd(app_name);
 
+    std::fs::remove_file(ctx.cwd_path_join(Path::new("src").join("counter-agent.ts"))).unwrap();
+
     fs::create_dir_all(ctx.cwd_path_join(Path::new("scratch").join("workspace"))).unwrap();
     fs::write_str(
         ctx.cwd_path_join(Path::new("scratch").join("workspace").join(".keep")),
@@ -714,6 +716,24 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
                     });
                 }
             }
+
+            @agent({})
+            class SecondIfsProbeAgent extends BaseAgent {
+                constructor(name: string) {
+                    super();
+                }
+
+                async probe(): Promise<string> {
+                    fs.mkdirSync('/workspace/generated', { recursive: true });
+                    fs.writeFileSync('/workspace/generated/second-output.txt', 'second-generated', 'utf8');
+
+                    return JSON.stringify({
+                        keep: fs.readFileSync('/workspace/.keep', 'utf8'),
+                        nested: fs.readFileSync('/workspace/nested.txt', 'utf8'),
+                        generated: fs.readFileSync('/workspace/generated/second-output.txt', 'utf8'),
+                    });
+                }
+            }
             "#
         },
     )
@@ -723,7 +743,6 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
         ctx.cwd_path_join(Path::new("src").join("main.ts")),
         indoc! {
             r#"
-            export * from './counter-agent';
             export * from './ifs-probe-agent';
             "#
         },
@@ -814,6 +833,73 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
             cmd::AGENT,
             "files",
             "IfsProbeAgent(\"directory-source\")",
+            "/workspace",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_row_with_cells(&[".keep", "file", "rw"]));
+    assert!(outputs.stdout_contains_row_with_cells(&["nested.txt", "file", "rw"]));
+    assert!(outputs.stdout_contains_row_with_cells(&["generated", "directory"]));
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc! {"
+            manifestVersion: 1.5.0
+
+            app: test-app-directory-source-ifs
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              test-app-directory-source-ifs:ts-main:
+                templates: ts
+
+            agents:
+              IfsProbeAgent:
+                files:
+                - sourcePath: ./scratch/workspace
+                  targetPath: /workspace
+                  permissions: read-write
+              SecondIfsProbeAgent:
+                files:
+                - sourcePath: ./scratch/workspace
+                  targetPath: /workspace
+                  permissions: read-write
+        "},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("SecondIfsProbeAgent"));
+    assert!(outputs.stdout_contains("/workspace/.keep:"));
+    assert!(outputs.stdout_contains("/workspace/nested.txt:"));
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "SecondIfsProbeAgent(\"directory-source\")",
+            "probe",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("keep"));
+    assert!(outputs.stdout_contains("seed"));
+    assert!(outputs.stdout_contains("nested"));
+    assert!(outputs.stdout_contains("nested seed"));
+    assert!(outputs.stdout_contains("second-generated"));
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            "files",
+            "SecondIfsProbeAgent(\"directory-source\")",
             "/workspace",
         ])
         .await;
