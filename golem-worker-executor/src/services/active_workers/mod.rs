@@ -420,7 +420,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
     ) {
         let workers = self.workers.clone();
-        let semaphore = self.worker_memory.clone();
+        let memory_semaphore = self.worker_memory.clone();
+        let filesystem_semaphore = self.worker_filesystem_storage.clone();
+
         join_set.spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -429,41 +431,54 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
                 // Memory semaphore headroom
                 crate::metrics::workers::set_memory_semaphore_available(
-                    semaphore.available_permits(),
+                    memory_semaphore.available_permits(),
+                );
+
+                // filesystem semaphore headroom
+                crate::metrics::workers::set_filesystem_semaphore_available(
+                    filesystem_semaphore.available_bytes(),
                 );
 
                 // Per-status worker counts
-                let mut running = 0usize;
-                let mut idle = 0usize;
-                let mut suspended = 0usize;
-                let mut interrupted = 0usize;
-                let mut retrying = 0usize;
-                let mut failed = 0usize;
-                let mut exited = 0usize;
+                {
+                    let mut running = 0usize;
+                    let mut idle = 0usize;
+                    let mut suspended = 0usize;
+                    let mut interrupted = 0usize;
+                    let mut retrying = 0usize;
+                    let mut failed = 0usize;
+                    let mut exited = 0usize;
 
-                for (_, worker) in workers.iter().await {
-                    let last_known_status = worker.get_last_known_status().await;
-                    match last_known_status.status {
-                        golem_common::model::AgentStatus::Running => running += 1,
-                        golem_common::model::AgentStatus::Idle => idle += 1,
-                        golem_common::model::AgentStatus::Suspended => suspended += 1,
-                        golem_common::model::AgentStatus::Interrupted => interrupted += 1,
-                        golem_common::model::AgentStatus::Retrying => retrying += 1,
-                        golem_common::model::AgentStatus::Failed => failed += 1,
-                        golem_common::model::AgentStatus::Exited => exited += 1,
+                    for (_, worker) in workers.iter().await {
+                        let last_known_status = worker.get_last_known_status().await;
+                        match last_known_status.status {
+                            golem_common::model::AgentStatus::Running => running += 1,
+                            golem_common::model::AgentStatus::Idle => idle += 1,
+                            golem_common::model::AgentStatus::Suspended => suspended += 1,
+                            golem_common::model::AgentStatus::Interrupted => interrupted += 1,
+                            golem_common::model::AgentStatus::Retrying => retrying += 1,
+                            golem_common::model::AgentStatus::Failed => failed += 1,
+                            golem_common::model::AgentStatus::Exited => exited += 1,
+                        }
                     }
-                }
 
-                crate::metrics::workers::set_worker_count_by_status("Running", running as f64);
-                crate::metrics::workers::set_worker_count_by_status("Idle", idle as f64);
-                crate::metrics::workers::set_worker_count_by_status("Suspended", suspended as f64);
-                crate::metrics::workers::set_worker_count_by_status(
-                    "Interrupted",
-                    interrupted as f64,
-                );
-                crate::metrics::workers::set_worker_count_by_status("Retrying", retrying as f64);
-                crate::metrics::workers::set_worker_count_by_status("Failed", failed as f64);
-                crate::metrics::workers::set_worker_count_by_status("Exited", exited as f64);
+                    crate::metrics::workers::set_worker_count_by_status("Running", running as f64);
+                    crate::metrics::workers::set_worker_count_by_status("Idle", idle as f64);
+                    crate::metrics::workers::set_worker_count_by_status(
+                        "Suspended",
+                        suspended as f64,
+                    );
+                    crate::metrics::workers::set_worker_count_by_status(
+                        "Interrupted",
+                        interrupted as f64,
+                    );
+                    crate::metrics::workers::set_worker_count_by_status(
+                        "Retrying",
+                        retrying as f64,
+                    );
+                    crate::metrics::workers::set_worker_count_by_status("Failed", failed as f64);
+                    crate::metrics::workers::set_worker_count_by_status("Exited", exited as f64);
+                }
             }
         });
     }

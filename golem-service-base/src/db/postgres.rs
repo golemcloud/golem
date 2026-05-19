@@ -239,6 +239,7 @@ impl super::LabelledPoolTransaction for PostgresLabelledTransaction {
             api_name = self.api_name,
             "DB transaction rollback",
         );
+        golem_common::metrics::db::record_db_rollback("postgres", self.svc_name, self.api_name);
         PostgresLabelledApi::record(
             self.svc_name,
             self.api_name,

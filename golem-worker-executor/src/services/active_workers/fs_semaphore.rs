@@ -42,7 +42,6 @@ impl FilesystemStorageSemaphore {
     }
 
     /// Available bytes remaining in the pool (rounded down to KB boundary).
-    #[cfg(test)]
     pub(crate) fn available_bytes(&self) -> u64 {
         filesystem_storage_permits_to_bytes(self.semaphore.available_permits() as u32)
     }

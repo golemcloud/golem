@@ -108,6 +108,7 @@ pub mod events {
 
 pub mod workers {
     use lazy_static::lazy_static;
+    use prometheus::core::Number;
     use prometheus::*;
 
     lazy_static! {
@@ -134,6 +135,11 @@ pub mod workers {
             "Available memory semaphore permits (bytes)"
         )
         .unwrap();
+        static ref WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE: Gauge = register_gauge!(
+            "worker_filesystem_semaphore_available",
+            "Available filesystem semaphore permits (bytes)"
+        )
+        .unwrap();
     }
 
     pub fn record_worker_call(api_name: &'static str) {
@@ -154,6 +160,10 @@ pub mod workers {
 
     pub fn set_memory_semaphore_available(permits: usize) {
         WORKER_MEMORY_SEMAPHORE_AVAILABLE.set(permits as f64);
+    }
+
+    pub fn set_filesystem_semaphore_available(permits: u64) {
+        WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.set(permits.into_f64());
     }
 }
 
