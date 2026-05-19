@@ -210,6 +210,7 @@ impl ComponentWriteService {
             provision_configs,
         )
         .await?;
+        validate_component_metadata_invariants(&component_metadata)?;
 
         let component_size = wasm.len() as u64;
 
@@ -310,10 +311,79 @@ impl ComponentWriteService {
         info!(environment_id = %environment_id, "Update component");
 
         let agent_types_changed = component_update.agent_types.is_some();
+        let allow_incompatible_config = component_update.allow_incompatible_config;
 
         let agent_types = component_update
             .agent_types
             .unwrap_or(component.metadata.agent_types().to_vec());
+
+        let mut final_provision_configs = component.metadata.agent_type_provision_configs().clone();
+        if agent_types_changed {
+            final_provision_configs =
+                provision_configs_for_agent_types(&agent_types, final_provision_configs);
+        }
+
+        let mut provision_configs_changed = false;
+
+        if let Some(updates) = component_update.agent_type_provision_config_updates {
+            provision_configs_changed = true;
+
+            let referenced_paths: HashSet<ArchiveFilePath> = updates
+                .values()
+                .flat_map(|u| u.files_to_add_or_update.keys().cloned())
+                .collect();
+            let uploaded_files = match new_files_archive {
+                Some(archive) => {
+                    self.upload_agent_files(environment_id, archive, &referenced_paths)
+                        .await?
+                }
+                None => HashMap::new(),
+            };
+
+            for (agent_type_name, update) in updates {
+                let agent_type = agent_types
+                    .iter()
+                    .find(|agent_type| agent_type.type_name == agent_type_name)
+                    .ok_or_else(|| {
+                        ComponentError::UndeclaredAgentTypeInProvisionConfig(
+                            agent_type_name.clone(),
+                        )
+                    })?;
+
+                let existing = final_provision_configs
+                    .get(&agent_type_name)
+                    .cloned()
+                    .unwrap_or_default();
+
+                let updated = self
+                    .apply_provision_config_update(
+                        &agent_type_name,
+                        existing,
+                        update,
+                        &uploaded_files,
+                        agent_type,
+                        &environment,
+                        auth,
+                    )
+                    .await?;
+
+                final_provision_configs.insert(agent_type_name, updated);
+            }
+        }
+
+        if agent_types_changed && !allow_incompatible_config {
+            for (agent_type_name, config) in &final_provision_configs {
+                let agent_type = agent_types
+                    .iter()
+                    .find(|agent_type| &agent_type.type_name == agent_type_name)
+                    .ok_or_else(|| {
+                        ComponentError::UndeclaredAgentTypeInProvisionConfig(
+                            agent_type_name.clone(),
+                        )
+                    })?;
+                check_config_entries_match(agent_type, &config.config)?;
+            }
+        }
 
         if let Some(new_wasm) = new_wasm {
             self.account_usage_service
@@ -336,12 +406,10 @@ impl ComponentWriteService {
 
             component.wasm_hash = wasm_hash;
             component.object_store_key = wasm_object_store_key;
-            let existing_provision_configs =
-                component.metadata.agent_type_provision_configs().clone();
             component.metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 new_wasm.clone(),
-                existing_provision_configs,
+                final_provision_configs,
             )
             .await?;
         } else if agent_types_changed {
@@ -351,93 +419,19 @@ impl ComponentWriteService {
                 .get(environment_id, &component.object_store_key)
                 .await?;
 
-            let existing_provision_configs =
-                component.metadata.agent_type_provision_configs().clone();
             component.metadata = analyze_and_validate_component_wasm(
                 agent_types,
                 Arc::from(old_data),
-                existing_provision_configs,
+                final_provision_configs,
             )
             .await?;
-        };
-
-        if let Some(updates) = component_update.agent_type_provision_config_updates {
-            let referenced_paths: HashSet<ArchiveFilePath> = updates
-                .values()
-                .flat_map(|u| u.files_to_add_or_update.keys().cloned())
-                .collect();
-            let uploaded_files = match new_files_archive {
-                Some(archive) => {
-                    self.upload_agent_files(environment_id, archive, &referenced_paths)
-                        .await?
-                }
-                None => HashMap::new(),
-            };
-
-            let mut provision_configs = component.metadata.agent_type_provision_configs().clone();
-
-            for (agent_type_name, update) in updates {
-                let agent_type = component
-                    .metadata
-                    .find_agent_type_by_name(&agent_type_name)
-                    .ok_or_else(|| {
-                        ComponentError::UndeclaredAgentTypeInProvisionConfig(
-                            agent_type_name.clone(),
-                        )
-                    })?;
-
-                let existing = provision_configs
-                    .get(&agent_type_name)
-                    .cloned()
-                    .unwrap_or_default();
-
-                let updated = self
-                    .apply_provision_config_update(
-                        &agent_type_name,
-                        existing,
-                        update,
-                        &uploaded_files,
-                        &agent_type,
-                        &environment,
-                        auth,
-                    )
-                    .await?;
-
-                provision_configs.insert(agent_type_name, updated);
-            }
-
-            // If agent types changed without a new wasm, validate existing typed config still matches
-            if agent_types_changed && !component_update.allow_incompatible_config {
-                for (agent_type_name, config) in &provision_configs {
-                    let agent_type = component
-                        .metadata
-                        .find_agent_type_by_name(agent_type_name)
-                        .ok_or_else(|| {
-                            ComponentError::UndeclaredAgentTypeInProvisionConfig(
-                                agent_type_name.clone(),
-                            )
-                        })?;
-                    check_config_entries_match(&agent_type, &config.config)?;
-                }
-            }
-
-            // Preserve agent types from the (possibly updated) metadata, replace provision configs
-            component.metadata = component.metadata.with_provision_configs(provision_configs);
-        } else if agent_types_changed && !component_update.allow_incompatible_config {
-            // No explicit updates but agent types changed: validate existing typed config
-            let provision_configs = component.metadata.agent_type_provision_configs().clone();
-            for (agent_type_name, config) in &provision_configs {
-                let agent_type = component
-                    .metadata
-                    .find_agent_type_by_name(agent_type_name)
-                    .ok_or_else(|| {
-                        ComponentError::UndeclaredAgentTypeInProvisionConfig(
-                            agent_type_name.clone(),
-                        )
-                    })?;
-                check_config_entries_match(&agent_type, &config.config)?;
-            }
+        } else if provision_configs_changed {
+            component.metadata = component
+                .metadata
+                .with_provision_configs(final_provision_configs);
         }
+
+        validate_component_metadata_invariants(&component.metadata)?;
 
         let record = ComponentRevisionRecord::from_model(component, auth.actor_account_id());
 
@@ -942,6 +936,45 @@ async fn analyze_and_validate_component_wasm(
     .await?;
 
     Ok(component_metadata)
+}
+
+fn provision_configs_for_agent_types(
+    agent_types: &[AgentType],
+    provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfig> {
+    let agent_type_names = agent_types
+        .iter()
+        .map(|agent_type| &agent_type.type_name)
+        .collect::<HashSet<_>>();
+
+    provision_configs
+        .into_iter()
+        .filter(|(agent_type_name, _)| agent_type_names.contains(agent_type_name))
+        .collect()
+}
+
+fn validate_component_metadata_invariants(
+    metadata: &ComponentMetadata,
+) -> Result<(), ComponentError> {
+    let mut agent_type_names = HashSet::new();
+
+    for agent_type in metadata.agent_types() {
+        if !agent_type_names.insert(agent_type.type_name.clone()) {
+            return Err(ComponentError::DuplicateAgentTypeName(
+                agent_type.type_name.clone(),
+            ));
+        }
+    }
+
+    for agent_type_name in metadata.agent_type_provision_configs().keys() {
+        if !agent_type_names.contains(agent_type_name) {
+            return Err(ComponentError::UndeclaredAgentTypeInProvisionConfig(
+                agent_type_name.clone(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), ComponentError> {

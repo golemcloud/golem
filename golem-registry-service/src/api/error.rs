@@ -507,6 +507,9 @@ impl From<ComponentError> for ApiError {
             ComponentError::AgentTypeForNameNotFound(_) => {
                 Self::not_found(api::error_code::AGENT_TYPE_NOT_FOUND, error)
             }
+            ComponentError::DuplicateAgentTypeName(_) => {
+                Self::bad_request(api::error_code::DUPLICATE_AGENT_TYPE_NAME, error)
+            }
             ComponentError::DeploymentRevisionNotFound(_) => {
                 Self::not_found(api::error_code::DEPLOYMENT_NOT_FOUND, error)
             }
