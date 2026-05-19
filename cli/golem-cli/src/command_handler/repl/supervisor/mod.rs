@@ -383,11 +383,12 @@ impl Supervisor {
         let Some(repl) = self.repl.as_ref() else {
             return Ok(None);
         };
-        if !repl.output_closed || repl.exit.is_none() {
+        if repl.exit.is_none() {
             return Ok(None);
         }
 
         let exit = repl.exit.expect("checked above");
+
         self.repl = None;
 
         if exit.code == Some(75)
@@ -406,7 +407,7 @@ impl Supervisor {
         let Some(cli) = self.cli.as_ref() else {
             return Ok(None);
         };
-        if !cli.output_closed || cli.exit.is_none() {
+        if cli.exit.is_none() {
             return Ok(None);
         }
 
@@ -585,7 +586,7 @@ fn spawn_input_reader(event_tx: Sender<SupervisorEvent>) {
 
 fn normalize_terminal_line() {
     let mut stdout = std::io::stdout();
-    let _ = stdout.write_all(b"\x1b[?25h\x1b[0m\r");
+    let _ = stdout.write_all(b"\x1b[?25h\x1b[0m\r\x1b[2K");
     let _ = stdout.flush();
 }
 
