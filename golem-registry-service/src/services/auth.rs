@@ -15,10 +15,12 @@
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountBySecretRecord, AccountRepoError};
 use chrono::Utc;
-use golem_common::model::account::Account;
-use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::account::{Account, AccountId};
+use golem_common::model::auth::TokenSecret;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+use golem_service_base::model::auth::{
+    AdminImpersonationAuthCtx, AuthCtx, GlobalAction, UserAuthCtx,
+};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tracing::warn;
@@ -51,7 +53,7 @@ impl AuthService {
         Self { account_repo }
     }
 
-    pub async fn authenticate_user(&self, token: TokenSecret) -> Result<UserAuthCtx, AuthError> {
+    pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
         let record: AccountBySecretRecord = self
             .account_repo
             .get_by_secret(token.secret())
@@ -64,19 +66,55 @@ impl AuthService {
             return Err(AuthError::CouldNotAuthenticate);
         };
 
-        let account: Account = record.value.try_into()?;
+        let target_account: Account = record.value.try_into()?;
 
-        let account_roles: BTreeSet<AccountRole> = BTreeSet::from_iter(account.roles.clone());
+        match record.impersonated_by {
+            // Normal login flow
+            None => {
+                let account_roles = BTreeSet::from_iter(target_account.roles.clone());
+                Ok(AuthCtx::User(UserAuthCtx {
+                    account_id: target_account.id,
+                    account_roles,
+                    account_plan_id: target_account.plan_id,
+                }))
+            }
+            // Impersonation flow
+            Some(admin_uuid) => {
+                // ensure the admin account is still alive and still has impersonation rights
+                let admin_account: Account = self
+                    .account_repo
+                    .get_by_id(admin_uuid)
+                    .await?
+                    .ok_or(AuthError::CouldNotAuthenticate)?
+                    .try_into()?;
 
-        Ok(UserAuthCtx {
-            account_id: account.id,
-            account_roles,
-            account_plan_id: account.plan_id,
-        })
-    }
+                {
+                    let account_roles = BTreeSet::from_iter(admin_account.roles.clone());
+                    let admin_auth_ctx = AuthCtx::User(UserAuthCtx {
+                        account_id: admin_account.id,
+                        account_roles,
+                        account_plan_id: admin_account.plan_id,
+                    });
 
-    pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
-        let user = self.authenticate_user(token).await?;
-        Ok(AuthCtx::User(user))
+                    if admin_auth_ctx
+                        .authorize_global_action(GlobalAction::ImpersonateUser)
+                        .is_err()
+                    {
+                        warn!(
+                            "Admin that minted the token ({admin_uuid}), is no longer allowed to impersonate. Failing auth"
+                        );
+                        return Err(AuthError::CouldNotAuthenticate);
+                    };
+                }
+
+                let target_account_roles = BTreeSet::from_iter(target_account.roles.clone());
+                Ok(AuthCtx::AdminImpersonation(AdminImpersonationAuthCtx {
+                    admin_account_id: AccountId(admin_uuid),
+                    target_account_id: target_account.id,
+                    target_account_roles,
+                    target_account_plan_id: target_account.plan_id,
+                }))
+            }
+        }
     }
 }

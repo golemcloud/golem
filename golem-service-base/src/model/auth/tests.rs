@@ -25,7 +25,7 @@ fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) ->
 }
 
 fn mk_impersonated(id: AccountId) -> AuthCtx {
-    AuthCtx::ImpersonatedUser(ImpersonatedUserAuthCtx { account_id: id })
+    AuthCtx::Agent(AgentAuthCtx { account_id: id })
 }
 
 fn make_env_roles(roles: &[EnvironmentRole]) -> BTreeSet<EnvironmentRole> {

@@ -72,7 +72,7 @@ message AuthenticateTokenResponse {
 }
 
 message AuthenticateTokenSuccessResponse {
-    golem.auth.UserAuthCtx auth_ctx = 1;
+    golem.auth.AuthCtx auth_ctx = 1;
 }
 
 message GetAuthDetailsForEnvironmentRequest {

@@ -131,7 +131,7 @@ impl RegistryServiceGrpcApi {
     ) -> Result<AuthenticateTokenSuccessResponse, GrpcApiError> {
         let auth_ctx = self
             .auth_service
-            .authenticate_user(TokenSecret::trusted(request.secret))
+            .authenticate_token(TokenSecret::trusted(request.secret))
             .await?;
         Ok(AuthenticateTokenSuccessResponse {
             auth_ctx: Some(auth_ctx.into()),

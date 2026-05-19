@@ -226,7 +226,7 @@ impl AccountService {
 
         let record = AccountRevisionRecord::from_model(
             account,
-            DeletableRevisionAuditFields::deletion(auth.account_id().0),
+            DeletableRevisionAuditFields::deletion(auth.actor_account_id().0),
         );
 
         match self.account_repo.delete(record).await {
@@ -311,7 +311,7 @@ impl AccountService {
             account.email.into_inner(),
             plan_id,
             roles,
-            auth.account_id(),
+            auth.actor_account_id(),
         );
 
         let result = self.account_repo.create(record).await;
@@ -334,7 +334,7 @@ impl AccountService {
 
         let record = AccountRevisionRecord::from_model(
             account,
-            DeletableRevisionAuditFields::new(auth.account_id().0),
+            DeletableRevisionAuditFields::new(auth.actor_account_id().0),
         );
 
         let result = self.account_repo.update(record).await;
