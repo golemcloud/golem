@@ -201,7 +201,10 @@ impl<'a> ComponentStager<'a> {
                         .map(|file| resolve_ifs_entry(file, &manifest_config.files_source))
                         .collect::<anyhow::Result<Vec<_>>>()?;
 
-                    result.insert(agent_type_name.clone(), expand_component_files(&files).await?);
+                    result.insert(
+                        agent_type_name.clone(),
+                        expand_component_files(&files).await?,
+                    );
                 }
 
                 Ok(result)
@@ -604,10 +607,7 @@ impl<'a> ComponentStager<'a> {
             let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
             let mut creation = manifest_config.to_provision_config_creation(resolved_plugins);
             creation.files = self
-                .resolve_archive_files_for_agent(
-                    name,
-                    &changed_files.archive_paths_by_source,
-                )
+                .resolve_archive_files_for_agent(name, &changed_files.archive_paths_by_source)
                 .await?;
 
             let plugin_updates: Vec<PluginInstallationAction> = match &self.diff {
