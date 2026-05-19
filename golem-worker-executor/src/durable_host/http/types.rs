@@ -1208,7 +1208,10 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             )
             .into())
         } else {
-            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall).map_err(|golem_err| wasmtime::Error::msg(format!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}")))?;
+            // Propagate WorkerExecutorError via `?` (From) so the downcast
+            // survives the wasmtime::Error chain — TrapType::from_error
+            // classifies UnexpectedOplogEntry / Runtime as non-retriable.
+            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)?;
 
             let serialized_response = match oplog_entry {
                 OplogEntry::HostCall { response, .. } => {
@@ -1217,15 +1220,34 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         .oplog
                         .download_payload(response)
                         .await
-                        .unwrap_or_else(|err| {
-                            panic!("failed to deserialize function response: {err}")
-                        });
+                        .map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "failed to download http::types::future_incoming_response::get oplog payload: {err}"
+                            ))
+                        })?;
                     match response {
                         HostResponse::HttpResponse(response) => response.response,
-                        other => panic!("unexpected oplog payload: {other:?}"),
+                        other => {
+                            return Err(wasmtime::Error::from(
+                                WorkerExecutorError::unexpected_oplog_entry(
+                                    "HostResponse::HttpResponse",
+                                    format!("{other:?}"),
+                                ),
+                            ));
+                        }
                     }
                 }
-                other => panic!("unexpected oplog entry: {other:?}"),
+                // The macro above already guarantees `OplogEntry::HostCall`, so
+                // this arm is structurally unreachable. We still return an
+                // error rather than panicking to keep the function panic-free.
+                other => {
+                    return Err(wasmtime::Error::from(
+                        WorkerExecutorError::unexpected_oplog_entry(
+                            "OplogEntry::HostCall",
+                            format!("{other:?}"),
+                        ),
+                    ));
+                }
             };
 
             match serialized_response {

@@ -443,6 +443,28 @@ impl TrapType {
                                         .clone(),
                                 }
                             }
+                            // Replay-corruption errors (unexpected oplog entries or
+                            // runtime errors raised from replay-time invariant
+                            // checks) must be classified as a hard non-retriable
+                            // failure so the worker is marked permanently failed
+                            // rather than being retried under the default retry
+                            // policy. `AgentError::InternalError` maps to
+                            // `RetryDecision::None` in `fixed_decision_for_trap_type`.
+                            Some(WorkerExecutorError::UnexpectedOplogEntry { expected, got }) => {
+                                TrapType::Error {
+                                    error: AgentError::InternalError(format!(
+                                        "Unexpected oplog entry during replay: expected {expected}, got {got}"
+                                    )),
+                                    retry_from,
+                                    semantic_trap_retry_override: semantic_trap_retry_override
+                                        .clone(),
+                                }
+                            }
+                            Some(WorkerExecutorError::Runtime { details }) => TrapType::Error {
+                                error: AgentError::InternalError(details.clone()),
+                                retry_from,
+                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
+                            },
                             _ => {
                                 // Search the full error chain for ClassifiedHostError
                                 if let Some(classified) = error
@@ -856,6 +878,7 @@ impl Debug for InvocationContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker::RetryDecision;
     use golem_common::model::component::ComponentId;
     use test_r::test;
     use tracing::info;
@@ -875,6 +898,116 @@ mod tests {
             trap,
             TrapType::Interrupt(InterruptKind::Suspend(_))
         ));
+    }
+
+    #[test]
+    fn unexpected_oplog_entry_is_non_retriable_internal_error() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::Error::from(
+                golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                    "OplogEntry::HostCall",
+                    "EndRemoteWrite { .. }",
+                ),
+            ),
+            OplogIndex::INITIAL,
+            AgentMode::Durable,
+        );
+
+        match trap {
+            TrapType::Error {
+                error: AgentError::InternalError(ref msg),
+                ..
+            } => {
+                assert!(
+                    msg.contains("Unexpected oplog entry during replay"),
+                    "unexpected message: {msg}"
+                );
+                assert!(msg.contains("OplogEntry::HostCall"));
+                assert!(msg.contains("EndRemoteWrite"));
+            }
+            other => panic!("expected TrapType::Error(AgentError::InternalError), got {other:?}"),
+        }
+
+        let decision = crate::durable_host::DurableWorkerCtx::<
+            crate::workerctx::default::Context,
+        >::fixed_decision_for_trap_type(&trap, false);
+        assert_eq!(decision, Some(RetryDecision::None));
+    }
+
+    #[test]
+    fn runtime_error_is_non_retriable_internal_error() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::Error::from(
+                golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                    "missing oplog entry at index 42",
+                ),
+            ),
+            OplogIndex::INITIAL,
+            AgentMode::Durable,
+        );
+
+        match trap {
+            TrapType::Error {
+                error: AgentError::InternalError(ref msg),
+                ..
+            } => {
+                assert_eq!(msg, "missing oplog entry at index 42");
+            }
+            other => panic!("expected TrapType::Error(AgentError::InternalError), got {other:?}"),
+        }
+
+        let decision = crate::durable_host::DurableWorkerCtx::<
+            crate::workerctx::default::Context,
+        >::fixed_decision_for_trap_type(&trap, false);
+        assert_eq!(decision, Some(RetryDecision::None));
+    }
+
+    #[test]
+    fn replay_corruption_via_anyhow_round_trip_is_non_retriable_internal_error() {
+        // The HTTP/RPC/websocket replay paths return wasmtime::Error::from(WorkerExecutorError::...).
+        // In production this wasmtime::Error eventually flows through
+        // `From<anyhow::Error> for WorkerExecutorError`
+        // (golem-service-base/src/error/worker_executor.rs), which collapses any
+        // unrecognised anyhow error into `WorkerExecutorError::runtime(format!(...))`.
+        // `TrapType::from_error` then maps `Runtime` to
+        // `AgentError::InternalError` -> `RetryDecision::None`. This test confirms
+        // the end-to-end classification still results in a non-retriable agent failure
+        // even after the wasmtime/anyhow round-trip strips the original
+        // `UnexpectedOplogEntry` typing.
+        let wasmtime_error = wasmtime::Error::from(
+            golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                "OplogEntry::HostCall",
+                "BeginRemoteWrite { .. }",
+            ),
+        );
+        let anyhow_error: anyhow::Error = wasmtime_error.into();
+        let collapsed: golem_service_base::error::worker_executor::WorkerExecutorError =
+            anyhow_error.into();
+        // Should land in the Runtime variant, not the original UnexpectedOplogEntry variant.
+        assert!(matches!(
+            collapsed,
+            golem_service_base::error::worker_executor::WorkerExecutorError::Runtime { .. }
+        ));
+
+        // Now classify it the way the invocation loop does.
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::Error::from(collapsed),
+            OplogIndex::INITIAL,
+            AgentMode::Durable,
+        );
+
+        match trap {
+            TrapType::Error {
+                error: AgentError::InternalError(_),
+                ..
+            } => {}
+            other => panic!("expected TrapType::Error(AgentError::InternalError), got {other:?}"),
+        }
+
+        let decision = crate::durable_host::DurableWorkerCtx::<
+            crate::workerctx::default::Context,
+        >::fixed_decision_for_trap_type(&trap, false);
+        assert_eq!(decision, Some(RetryDecision::None));
     }
 
     #[test]

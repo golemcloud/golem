@@ -1212,10 +1212,14 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         request: Pair::Req,
         response: Pair::Resp,
     ) -> Result<Pair::Resp, WorkerExecutorError> {
-        let response = self
-            .persist_raw(ctx, request.into(), response.into())
+        // We keep a clone of the original response to return after persisting.
+        // `persist_raw` returns the same `HostResponse` it received unchanged,
+        // so the previous round-trip via `try_into().unwrap()` was always safe;
+        // the clone avoids the round-trip entirely and removes the `.unwrap()`.
+        let result = response.clone();
+        self.persist_raw(ctx, request.into(), response.into())
             .await?;
-        Ok(response.try_into().unwrap()) // Assuming converting to HostResponse and back always succeeds
+        Ok(result)
     }
 
     pub async fn persist_raw(

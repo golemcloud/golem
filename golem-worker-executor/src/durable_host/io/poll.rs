@@ -120,7 +120,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             for res in &in_ {
                 if let Some(promise_handle) = promise_backed_pollables.get(&res.rep()) {
-                    let ready = promise_handle.get_handle().await.is_ready().await;
+                    let ready = promise_handle.is_ready().await;
                     if ready {
                         all_blocked = false;
                         break;
@@ -156,7 +156,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
                 for res in &in_ {
                     if let Some(promise_handle) = promise_backed_pollables.get(&res.rep()) {
-                        let ready = promise_handle.get_handle().await.is_ready().await;
+                        let ready = promise_handle.is_ready().await;
                         if ready {
                             all_blocked = false;
                             break;

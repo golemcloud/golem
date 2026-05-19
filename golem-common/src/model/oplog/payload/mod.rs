@@ -432,7 +432,7 @@ oplog_payload! {
 
 pub trait HostPayloadPair {
     type Req: Into<HostRequest>;
-    type Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String>;
+    type Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String> + Clone;
 
     const INTERFACE: &'static str;
     const FUNCTION: &'static str;

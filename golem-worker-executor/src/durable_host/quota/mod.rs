@@ -63,14 +63,26 @@ async fn get_live_lease_interest<'a, Ctx: WorkerCtx>(
             )
             .await
         }
-        LeaseInterestHandle::Live(_) => unreachable!(),
+        LeaseInterestHandle::Live(_) => {
+            return Err(
+                golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                    "unexpected live lease interest variant during pending lease acquire",
+                )
+                .into(),
+            );
+        }
     };
 
     entry.lease = LeaseInterestHandle::Live(interest);
 
     match &mut entry.lease {
         LeaseInterestHandle::Live(i) => Ok(i),
-        _ => unreachable!(),
+        _ => Err(
+            golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                "lease interest is not live after being set to live",
+            )
+            .into(),
+        ),
     }
 }
 
@@ -165,7 +177,7 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
 
             self.table()
                 .get_mut(&self_)?
-                .update_replayed_credit(replayed.credit_after, credit_at);
+                .update_replayed_credit(replayed.credit_after, credit_at)?;
 
             replayed.result
         };
@@ -439,7 +451,7 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
 
             self.table()
                 .get_mut(&token_resource)?
-                .update_replayed_credit(replayed.credit_after, credit_at);
+                .update_replayed_credit(replayed.credit_after, credit_at)?;
         }
 
         Ok(())
