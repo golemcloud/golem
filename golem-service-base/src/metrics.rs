@@ -142,7 +142,7 @@ pub mod grpc {
         static ref INTERNAL_GRPC_FAILURE_TOTAL: CounterVec = register_counter_vec!(
             "internal_grpc_failure_total",
             "Number of failed internal gRPC calls that were not retried or exhausted retries",
-            &["target", "op"]
+            &["target", "op", "status_code"]
         )
         .unwrap();
         static ref INTERNAL_GRPC_RETRY_TOTAL: CounterVec = register_counter_vec!(
@@ -159,9 +159,10 @@ pub mod grpc {
             .observe(duration.as_secs_f64());
     }
 
-    pub fn record_internal_grpc_failure(target: &str, op: &str) {
+    pub fn record_internal_grpc_failure(target: &str, op: &str, status: &tonic::Status) {
+        let status_code = format!("{:?}", status.code());
         INTERNAL_GRPC_FAILURE_TOTAL
-            .with_label_values(&[target, op])
+            .with_label_values(&[target, op, &status_code])
             .inc();
     }
 

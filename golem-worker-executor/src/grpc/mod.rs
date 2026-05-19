@@ -2056,7 +2056,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             config: metadata.config.into_iter().map(Into::into).collect(),
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),
-            status: Into::<golem::worker::AgentStatus>::into(latest_status.status.clone()).into(),
+            status: Into::<golem::worker::AgentStatus>::into(latest_status.status).into(),
             retry_count: last_error_and_retry_count
                 .as_ref()
                 .and_then(|last_error| {

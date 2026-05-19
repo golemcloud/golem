@@ -61,6 +61,10 @@ impl PostgresKeyValueStorage {
         Ok(Self { pool })
     }
 
+    pub async fn run_metrics_loop(&self, svc_name: &'static str) -> anyhow::Result<()> {
+        self.pool.run_metrics_loop(svc_name).await
+    }
+
     fn namespace(namespace: KeyValueStorageNamespace) -> String {
         match namespace {
             KeyValueStorageNamespace::RunningWorkers => "running-workers".to_string(),

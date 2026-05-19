@@ -15,7 +15,6 @@
 pub mod login;
 
 use self::login::LoginSystem;
-use crate::config::BuiltinPluginsConfig;
 use crate::config::RegistryServiceConfig;
 use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
@@ -73,7 +72,6 @@ use crate::services::token::TokenService;
 use anyhow::{Context, anyhow};
 use golem_common::IntoAnyhow;
 use golem_common::config::DbConfig;
-use golem_common::model::account::AccountId;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
@@ -119,9 +117,6 @@ pub struct Services {
     pub reports_service: Arc<ReportsService>,
     pub security_scheme_service: Arc<SecuritySchemeService>,
     pub token_service: Arc<TokenService>,
-    builtin_plugins_config: BuiltinPluginsConfig,
-    builtin_plugin_owner_account_id: AccountId,
-    plugin_repo: Arc<dyn PluginRepo>,
 }
 
 struct Repos {
@@ -150,8 +145,11 @@ struct Repos {
 }
 
 impl Services {
-    pub async fn new(config: &RegistryServiceConfig) -> anyhow::Result<Self> {
-        let repos = make_repos(&config.db).await?;
+    pub async fn new(
+        config: &RegistryServiceConfig,
+        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+    ) -> anyhow::Result<Self> {
+        let repos = make_repos(&config.db, join_set).await?;
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
 
@@ -374,6 +372,36 @@ impl Services {
             retry_policy_service.clone(),
         ));
 
+        registry_change_notifier.start_background_tasks(join_set);
+
+        {
+            let cleanup_repo = repos.registry_change_repo.clone();
+            let cleanup_retention = config.deployment_events.retention;
+            let cleanup_interval = config.deployment_events.cleanup_interval;
+            join_set.spawn(async move {
+                cleanup_repo
+                    .run_cleanup_loop(cleanup_retention, cleanup_interval)
+                    .await
+            });
+        }
+
+        if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
+            &config.builtin_plugins,
+            builtin_plugin_owner_account_id,
+            &repos.plugin_repo,
+            &application_service,
+            &environment_service,
+            &component_service,
+            &component_write_service,
+            &deployment_service,
+            &deployment_write_service,
+            &plugin_registration_service,
+        )
+        .await
+        {
+            tracing::warn!("Failed to provision built-in plugins: {e}");
+        }
+
         Ok(Self {
             account_service,
             account_usage_service,
@@ -405,33 +433,14 @@ impl Services {
             reports_service,
             security_scheme_service,
             token_service,
-            builtin_plugins_config: config.builtin_plugins.clone(),
-            builtin_plugin_owner_account_id,
-            plugin_repo: repos.plugin_repo,
         })
-    }
-
-    pub async fn provision_builtin_plugins(&self) {
-        if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
-            &self.builtin_plugins_config,
-            self.builtin_plugin_owner_account_id,
-            &self.plugin_repo,
-            &self.application_service,
-            &self.environment_service,
-            &self.component_service,
-            &self.component_write_service,
-            &self.deployment_service,
-            &self.deployment_write_service,
-            &self.plugin_registration_service,
-        )
-        .await
-        {
-            tracing::warn!("Failed to provision built-in plugins: {e}");
-        }
     }
 }
 
-async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
+async fn make_repos(
+    db_config: &DbConfig,
+    join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+) -> anyhow::Result<Repos> {
     let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
 
     match db_config {
@@ -441,6 +450,9 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 .context("Postgres DB migration")?;
 
             let db_pool: PostgresPool = PostgresPool::configured(postgres_config).await?;
+
+            let pool_for_metrics = db_pool.clone();
+            join_set.spawn(async move { pool_for_metrics.run_metrics_loop("registry").await });
 
             let account_repo = Arc::new(DbAccountRepo::logged(db_pool.clone()));
             let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));

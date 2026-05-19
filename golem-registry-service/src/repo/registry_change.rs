@@ -617,6 +617,29 @@ pub trait RegistryChangeRepo: Send + Sync {
 
     /// Delete events older than the given cutoff.
     async fn cleanup_old_events(&self, retention_seconds: i64) -> RepoResult<u64>;
+
+    /// Runs the periodic cleanup loop. Sleeps for `interval` between iterations,
+    /// deletes events older than `retention`, and logs results.
+    /// Never returns — intended to be run as a background task.
+    async fn run_cleanup_loop(
+        &self,
+        retention: std::time::Duration,
+        interval: std::time::Duration,
+    ) -> anyhow::Result<()> {
+        loop {
+            tokio::time::sleep(interval).await;
+            match self.cleanup_old_events(retention.as_secs() as i64).await {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!("Cleaned up {count} old deployment change events");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to clean up old deployment change events: {e}");
+                }
+            }
+        }
+    }
 }
 
 static METRICS_SVC_NAME: &str = "registry_change";

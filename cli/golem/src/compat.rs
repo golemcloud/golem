@@ -17,6 +17,7 @@ use anyhow::anyhow;
 use golem_cli::error::NonSuccessfulExit;
 use golem_cli::log::{log_error, logln};
 use golem_common::config::DbSqliteConfig;
+use golem_service_base::db::PoolApi;
 use golem_service_base::db::sqlite::SqlitePool;
 use std::error::Error;
 use std::fmt::{Display, Formatter};

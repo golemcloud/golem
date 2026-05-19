@@ -88,6 +88,10 @@ impl PostgresIndexedStorage {
         })
     }
 
+    pub async fn run_metrics_loop(&self) -> anyhow::Result<()> {
+        self.pool.run_metrics_loop("indexed_storage").await
+    }
+
     fn namespace(namespace: IndexedStorageNamespace) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog {

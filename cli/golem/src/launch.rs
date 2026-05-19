@@ -497,8 +497,6 @@ async fn run_registry_service(
     let prometheus_registry = golem_registry_service::metrics::register_all();
     let span = tracing::info_span!("registry-service", component = "registry-service");
     RegistryService::new(config, prometheus_registry)
-        .instrument(span.clone())
-        .await?
         .start_for_single_executable(join_set)
         .instrument(span)
         .await
