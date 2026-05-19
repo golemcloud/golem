@@ -8,7 +8,7 @@ use serde_json::Value as JsonValue;
 use std::path::Path;
 use std::time::Duration;
 use strum::IntoEnumIterator;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use toml_edit::{DocumentMut, value};
 
 inherit_test_dep!(Tracing);
@@ -527,6 +527,74 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                 )?;
                 session.kill_line()?;
             }
+
+            Ok(())
+        },
+    )
+    .await;
+}
+
+#[test]
+#[timeout("5 minutes")]
+async fn ts_repl_foreground_cli_terminal_control(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "test-ts-repl-foreground-cli";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cli_interactive_repl_test(
+        [cmd::REPL, flag::LANGUAGE, "ts", "--disable-stream"],
+        move |session| {
+            session.set_expect_timeout(Some(Duration::from_secs(300)));
+            session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
+
+            session.set_expect_timeout(Some(Duration::from_secs(120)));
+            session.send_line_and_expect_str(
+                r#"await CounterAgent.get("x").then(_ => "AGENT_CREATED_1")"#,
+                "AGENT_CREATED_1",
+            )?;
+            session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
+
+            session.send_line_and_expect_regex(
+                ".deploy --reset",
+                r"Deleting [0-9]+ agents\(s\), do you want to continue",
+            )?;
+            session.send_line("y")?;
+            session.expect_str("Reloading TypeScript REPL")?;
+            session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
+
+            session.send_line_and_expect_str(
+                r#"await CounterAgent.get("x").then(_ => "AGENT_CREATED_2")"#,
+                "AGENT_CREATED_2",
+            )?;
+            session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
+
+            session.send_line_and_expect_regex(
+                ".deploy --reset",
+                r"Deleting [0-9]+ agents\(s\), do you want to continue",
+            )?;
+            session.send_ctrl_c()?;
+            session.expect_str("Operation was interrupted by the user")?;
+            session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
+
+            session
+                .send_line_and_expect_regex(".agent-list --refresh", r"CounterA|Agent|Component")?;
+            std::thread::sleep(Duration::from_secs(2));
+            session.send_ctrl_c()?;
+            session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
+
+            session.send_line(".exit")?;
+            session.expect_eof()?;
 
             Ok(())
         },
