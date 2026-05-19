@@ -383,6 +383,12 @@ impl Supervisor {
         let Some(repl) = self.repl.as_ref() else {
             return Ok(None);
         };
+        // We intentionally finish the REPL PTY session as soon as the process exits,
+        // without waiting for the PTY reader to report EOF. Requiring both worked on
+        // macOS, but it left Windows stuck after "Preparing" under ConPTY. The CLI PTY
+        // path is where we care most about output-drain ordering; for the long-lived REPL
+        // backend we currently prioritize the cross-platform startup behavior that we
+        // manually verified on both macOS and Windows.
         if repl.exit.is_none() {
             return Ok(None);
         }
