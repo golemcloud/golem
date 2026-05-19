@@ -674,7 +674,7 @@ pub struct AgentResourceDescription {
 ///
 /// This is always recorded together with the current oplog index, and it can only be used
 /// as a source of truth if there are no newer oplog entries since the record.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum AgentStatus {
@@ -702,8 +702,8 @@ impl PartialOrd for AgentStatus {
 
 impl Ord for AgentStatus {
     fn cmp(&self, other: &Self) -> Ordering {
-        let v1: i32 = self.clone().into();
-        let v2: i32 = other.clone().into();
+        let v1: i32 = (*self).into();
+        let v2: i32 = (*other).into();
         v1.cmp(&v2)
     }
 }

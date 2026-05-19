@@ -164,9 +164,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                         .in_current_span()
                         .await?,
                     );
-                    crate::metrics::workers::inc_worker_count_by_status(
-                        worker.get_last_known_status().await.status,
-                    );
                     Ok(worker)
                 })
             })
@@ -179,12 +176,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     pub async fn remove(&self, agent_id: &AgentId) {
-        if let Some(worker) = self.workers.get(agent_id).await {
-            self.workers.remove(agent_id).await;
-            crate::metrics::workers::dec_worker_count_by_status(
-                worker.get_last_known_status().await.status,
-            );
-        }
+        self.workers.remove(agent_id).await
     }
 
     pub async fn snapshot(&self) -> Vec<(AgentId, Arc<Worker<Ctx>>)> {

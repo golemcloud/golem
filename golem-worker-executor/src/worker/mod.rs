@@ -75,8 +75,8 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
@@ -116,6 +116,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     initial_worker_metadata: AgentMetadata,
     registered_concurrent_account: RegisteredConcurrentAccount,
     last_known_status: Arc<RwLock<AgentStatusRecord>>,
+    metrics_status: WorkerStatusMetric,
     last_known_status_detached: AtomicBool,
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
@@ -273,6 +274,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         let current_status_guard = current_status.read().await;
+        let metrics_status = WorkerStatusMetric::new(current_status_guard.status);
         let initial_pending_invocations = current_status_guard.pending_invocations.clone();
         let initial_invocation_results = current_status_guard.invocation_results.clone();
         let last_oplog_idx = current_status_guard.oplog_idx;
@@ -336,6 +338,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             initial_worker_metadata,
             registered_concurrent_account,
             last_known_status: current_status,
+            metrics_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
@@ -374,6 +377,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .expect("Failed enqueuing initial agent invocations to worker");
         };
         crate::metrics::wasm::record_create_worker(start.elapsed());
+
         Ok(worker)
     }
 
@@ -2077,15 +2081,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await;
 
-            let old_status = self.last_known_status.read().await.status.clone();
-            *self.last_known_status.write().await = worker_status.clone();
-            crate::metrics::workers::record_worker_status_transition(
-                old_status,
-                worker_status.status.clone(),
-            );
-            self.worker_service()
-                .update_cached_status(&self.owned_agent_id, &worker_status)
-                .await;
+            self.update_last_known_status(worker_status.clone()).await;
 
             // ensure we hold mutex for the full duration
             drop(update_state_lock_guard);
@@ -2115,15 +2111,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             if let Some(updated_status) = updated_status {
                 if updated_status != old_status {
-                    *self.last_known_status.write().await = updated_status.clone();
-                    crate::metrics::workers::record_worker_status_transition(
-                        old_status.status.clone(),
-                        updated_status.status.clone(),
-                    );
-                    // TODO: We should do this in the background on a timer instead of on every commit.
-                    self.worker_service()
-                        .update_cached_status(&self.owned_agent_id, &updated_status)
-                        .await;
+                    self.update_last_known_status(updated_status.clone()).await;
 
                     self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
                         .await;
@@ -2212,6 +2200,48 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 debug!("worker was not waiting for permit anymore, not starting");
             }
         }
+    }
+
+    async fn update_last_known_status(&self, new_status: AgentStatusRecord) {
+        let previous_status = self.metrics_status.status();
+        *self.last_known_status.write().await = new_status.clone();
+        self.metrics_status
+            .update(previous_status, new_status.status);
+        // TODO: We should do this in the background on a timer instead of on every commit.
+        self.worker_service()
+            .update_cached_status(&self.owned_agent_id, &new_status)
+            .await;
+    }
+}
+
+#[derive(Debug)]
+struct WorkerStatusMetric {
+    status: StdMutex<AgentStatus>,
+}
+
+impl WorkerStatusMetric {
+    fn new(status: AgentStatus) -> Self {
+        crate::metrics::workers::inc_worker_count_by_status(status);
+        Self {
+            status: StdMutex::new(status),
+        }
+    }
+
+    fn status(&self) -> AgentStatus {
+        *self.status.lock().expect("metrics status lock poisoned")
+    }
+
+    fn update(&self, previous_status: AgentStatus, current_status: AgentStatus) {
+        let mut status = self.status.lock().expect("metrics status lock poisoned");
+        debug_assert_eq!(*status, previous_status);
+        crate::metrics::workers::record_worker_status_transition(previous_status, current_status);
+        *status = current_status;
+    }
+}
+
+impl Drop for WorkerStatusMetric {
+    fn drop(&mut self) {
+        crate::metrics::workers::dec_worker_count_by_status(self.status());
     }
 }
 
