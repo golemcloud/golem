@@ -166,11 +166,19 @@ async fn expand_local_component_file(
     }
 
     let mut result = Vec::new();
+    let mut visited_dirs = HashSet::new();
     let mut queue: VecDeque<(PathBuf, CanonicalFilePathWithPermissions)> =
         vec![(source_path, component_file.target.clone())].into();
 
     while let Some((path, target)) = queue.pop_front() {
         if path.is_dir() {
+            let canonical_path = tokio::fs::canonicalize(&path)
+                .await
+                .with_context(|| anyhow!("Error canonicalizing directory: {}", path.display()))?;
+            if !visited_dirs.insert(canonical_path) {
+                continue;
+            }
+
             let read_dir = tokio::fs::read_dir(&path)
                 .await
                 .with_context(|| anyhow!("Error reading directory: {}", path.display()))?;
@@ -365,11 +373,19 @@ impl IfsFileManager {
         let source_path = PathBuf::from(component_file.source.as_url().path());
 
         let mut results: Vec<R> = vec![];
+        let mut visited_dirs = HashSet::new();
         let mut queue: VecDeque<(PathBuf, CanonicalFilePathWithPermissions)> =
             vec![(source_path, component_file.target.clone())].into();
 
         while let Some((path, target)) = queue.pop_front() {
             if path.is_dir() {
+                let canonical_path = tokio::fs::canonicalize(&path).await.with_context(|| {
+                    anyhow!("Error canonicalizing directory: {}", path.display())
+                })?;
+                if !visited_dirs.insert(canonical_path) {
+                    continue;
+                }
+
                 let read_dir = tokio::fs::read_dir(&path)
                     .await
                     .with_context(|| anyhow!("Error reading directory: {}", path.display()))?;

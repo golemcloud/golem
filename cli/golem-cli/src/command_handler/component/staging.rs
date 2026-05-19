@@ -37,6 +37,7 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::fs::File;
+use tokio::sync::OnceCell;
 
 fn resolve_ifs_entry(
     file: &app_raw::InitialComponentFile,
@@ -136,6 +137,7 @@ pub struct ComponentStager<'a> {
     component_deploy_properties: &'a ComponentDeployProperties,
     diff: ComponentDiff,
     plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
+    manifest_files_by_agent: OnceCell<BTreeMap<AgentTypeName, Vec<InitialComponentFile>>>,
 }
 
 impl<'a> ComponentStager<'a> {
@@ -156,6 +158,7 @@ impl<'a> ComponentStager<'a> {
                 }
             },
             plugin_grants,
+            manifest_files_by_agent: OnceCell::new(),
         }
     }
 
@@ -182,26 +185,50 @@ impl<'a> ComponentStager<'a> {
         }
     }
 
+    async fn manifest_files_by_agent(
+        &self,
+    ) -> anyhow::Result<&BTreeMap<AgentTypeName, Vec<InitialComponentFile>>> {
+        self.manifest_files_by_agent
+            .get_or_try_init(|| async {
+                let mut result = BTreeMap::new();
+
+                for (agent_type_name, manifest_config) in
+                    &self.component_deploy_properties.agent_type_configs
+                {
+                    let files = manifest_config
+                        .files
+                        .iter()
+                        .map(|file| resolve_ifs_entry(file, &manifest_config.files_source))
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+
+                    result.insert(agent_type_name.clone(), expand_component_files(&files).await?);
+                }
+
+                Ok(result)
+            })
+            .await
+    }
+
     async fn manifest_files_for_agent(
         &self,
-        manifest_config: &AgentTypeManifestProvisionConfig,
+        agent_type_name: &AgentTypeName,
     ) -> anyhow::Result<Vec<InitialComponentFile>> {
-        let files = manifest_config
-            .files
-            .iter()
-            .map(|file| resolve_ifs_entry(file, &manifest_config.files_source))
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        expand_component_files(&files).await
+        Ok(self
+            .manifest_files_by_agent()
+            .await?
+            .get(agent_type_name)
+            .cloned()
+            .unwrap_or_default())
     }
 
     async fn all_manifest_files(&self) -> anyhow::Result<Vec<InitialComponentFile>> {
-        let mut result = Vec::new();
-        for manifest_config in self.component_deploy_properties.agent_type_configs.values() {
-            result.extend(self.manifest_files_for_agent(manifest_config).await?);
-        }
-
-        Ok(result)
+        Ok(self
+            .manifest_files_by_agent()
+            .await?
+            .values()
+            .flatten()
+            .cloned()
+            .collect())
     }
 
     async fn changed_manifest_files(&self) -> anyhow::Result<Vec<InitialComponentFile>> {
@@ -212,14 +239,14 @@ impl<'a> ComponentStager<'a> {
                 // Only include files that have content changes — skip permissions-only
                 let content_changed_paths = self.content_changed_file_paths();
                 let mut result = Vec::new();
-                for (_, manifest_config) in self
+                for (agent_type_name, _) in self
                     .component_deploy_properties
                     .agent_type_configs
                     .iter()
                     .filter(|(name, _)| changed.contains(name.0.as_str()))
                 {
                     result.extend(
-                        self.manifest_files_for_agent(manifest_config)
+                        self.manifest_files_for_agent(agent_type_name)
                             .await?
                             .into_iter()
                             .filter(|file| {
@@ -323,7 +350,7 @@ impl<'a> ComponentStager<'a> {
                 .agent_type_configs
                 .get(&agent_name)
             {
-                Some(manifest_config) => self.manifest_files_for_agent(manifest_config).await?,
+                Some(_) => self.manifest_files_for_agent(&agent_name).await?,
                 None => Vec::new(),
             };
             let manifest_files: std::collections::HashMap<_, _> = manifest_files
@@ -414,12 +441,12 @@ impl<'a> ComponentStager<'a> {
 
     async fn resolve_archive_files_for_agent(
         &self,
-        manifest_config: &AgentTypeManifestProvisionConfig,
+        agent_type_name: &AgentTypeName,
         archive_paths_by_source: &BTreeMap<String, ArchiveFilePath>,
     ) -> anyhow::Result<BTreeMap<ArchiveFilePath, AgentFileOptions>> {
         let mut archive_files = BTreeMap::new();
 
-        for resolved in self.manifest_files_for_agent(manifest_config).await? {
+        for resolved in self.manifest_files_for_agent(agent_type_name).await? {
             let source = resolved.source.as_url().as_str().to_string();
             let Some(archive_path) = archive_paths_by_source.get(&source) else {
                 continue;
@@ -506,7 +533,7 @@ impl<'a> ComponentStager<'a> {
             let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
             let mut creation = manifest_config.to_provision_config_creation(resolved_plugins);
             creation.files = self
-                .resolve_archive_files_for_agent(manifest_config, &archive_paths_by_source)
+                .resolve_archive_files_for_agent(agent_type_name, &archive_paths_by_source)
                 .await?;
             result.insert(agent_type_name.clone(), creation);
         }
@@ -529,7 +556,7 @@ impl<'a> ComponentStager<'a> {
                         manifest_config.to_provision_config_creation(resolved_plugins);
                     creation.files = self
                         .resolve_archive_files_for_agent(
-                            manifest_config,
+                            name,
                             &changed_files.archive_paths_by_source,
                         )
                         .await?;
@@ -578,7 +605,7 @@ impl<'a> ComponentStager<'a> {
             let mut creation = manifest_config.to_provision_config_creation(resolved_plugins);
             creation.files = self
                 .resolve_archive_files_for_agent(
-                    manifest_config,
+                    name,
                     &changed_files.archive_paths_by_source,
                 )
                 .await?;
