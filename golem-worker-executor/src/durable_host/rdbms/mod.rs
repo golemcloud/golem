@@ -946,13 +946,13 @@ where
             .state
             .replay_state
             .try_get_oplog_entry(|e| e.is_pre_rollback_remote_transaction(entry.begin_index))
-            .await;
+            .await?;
 
         let _ = ctx
             .state
             .replay_state
             .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(entry.begin_index))
-            .await;
+            .await?;
     }
 
     Ok(())

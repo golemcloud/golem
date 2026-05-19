@@ -414,7 +414,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 per_invocation_rpc_call_limit,
                 resource_limits.clone(),
             )
-            .await,
+            .await?,
             worker_dir,
             execution_status,
             resource_limits,
@@ -714,7 +714,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// driven by named retry policies (`Unknown`, `TransientError`, and
     /// `DeterministicTrap` inside an atomic region), this returns `None` and
     /// the caller falls through to policy-based resolution.
-    fn fixed_decision_for_trap_type(
+    pub(crate) fn fixed_decision_for_trap_type(
         trap_type: &TrapType,
         in_atomic_region: bool,
     ) -> Option<RetryDecision> {
@@ -1530,7 +1530,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn finalize_pending_snapshot_update(
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Option<RetryDecision> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         let pending_update = store
             .as_context_mut()
             .data_mut()
@@ -1595,7 +1595,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         )),
                                     )
                                     .await;
-                                return Some(RetryDecision::Immediate);
+                                return Ok(Some(RetryDecision::Immediate));
                             }
                         };
 
@@ -1618,7 +1618,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     )),
                                 )
                                 .await;
-                            return Some(RetryDecision::Immediate);
+                            return Ok(Some(RetryDecision::Immediate));
                         }
 
                         store
@@ -1687,7 +1687,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 .data_mut()
                                 .on_worker_update_failed(target_revision, Some(error))
                                 .await;
-                            Some(RetryDecision::Immediate)
+                            Ok(Some(RetryDecision::Immediate))
                         } else {
                             let component_metadata =
                                 store.as_context().data().component_metadata().clone();
@@ -1713,7 +1713,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     ),
                                 )
                                 .await;
-                            None
+                            Ok(None)
                         }
                     }
                     Ok(None) => {
@@ -1725,7 +1725,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 Some("Failed to find snapshot data for update".to_string()),
                             )
                             .await;
-                        Some(RetryDecision::Immediate)
+                        Ok(Some(RetryDecision::Immediate))
                     }
                     Err(error) => {
                         store
@@ -1733,15 +1733,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .data_mut()
                             .on_worker_update_failed(target_revision, Some(error))
                             .await;
-                        Some(RetryDecision::Immediate)
+                        Ok(Some(RetryDecision::Immediate))
                     }
                 }
             }
-            _ => {
-                panic!(
-                    "`finalize_pending_snapshot_update` can only be called with a snapshot update description"
-                )
-            }
+            _ => Err(WorkerExecutorError::runtime(
+                "`finalize_pending_snapshot_update` can only be called with a snapshot update description",
+            )),
         }
     }
 
@@ -1786,14 +1784,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 warn!(
                     "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
                 );
-                store
+                if let Err(err) = store
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
                     .state
                     .replay_state
                     .drop_override_and_restart()
-                    .await;
+                    .await
+                {
+                    warn!("Failed to restart replay state after invalid snapshot entry: {err}");
+                    return SnapshotRecoveryResult::Failed;
+                }
                 return SnapshotRecoveryResult::NotAttempted;
             }
         };
@@ -1809,14 +1811,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Ok(data) => data,
             Err(err) => {
                 warn!("Failed to download snapshot payload: {err}; falling back to full replay");
-                store
+                if let Err(err) = store
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
                     .state
                     .replay_state
                     .drop_override_and_restart()
-                    .await;
+                    .await
+                {
+                    warn!("Failed to restart replay state after snapshot download failure: {err}");
+                    return SnapshotRecoveryResult::Failed;
+                }
                 return SnapshotRecoveryResult::NotAttempted;
             }
         };
@@ -2028,7 +2034,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             debug!("Finalizing automatic update to revision {target_revision}");
                         }
                         _ => {
-                            panic!("Expected automatic update description")
+                            return Err(WorkerExecutorError::runtime(
+                                "pending replay event finalization expected an automatic update description",
+                            ));
                         }
                     }
                 }
@@ -2393,9 +2401,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         if is_live {
             if self.state.snapshotting_mode.is_none() {
-                let component_revision = output
-                    .component_revision
-                    .expect("component_revision must be set in AgentInvocationOutput");
+                let component_revision = output.component_revision.ok_or_else(|| {
+                    WorkerExecutorError::runtime(
+                        "component_revision missing in AgentInvocationOutput during replay",
+                    )
+                })?;
                 self.public_state
                     .worker()
                     .oplog()
@@ -2502,11 +2512,17 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     fn end_call_snapshotting_function(&mut self) {
         // Restoring the state of persistence after calling a snapshotting function
-        self.state.persistence_level = self
-            .state
-            .snapshotting_mode
-            .take()
-            .expect("Not in snapshotting mode");
+        match self.state.snapshotting_mode.take() {
+            Some(level) => {
+                self.state.persistence_level = level;
+            }
+            None => {
+                warn!(
+                    "end_call_snapshotting_function called without a matching begin_call_snapshotting_function; \
+                     leaving persistence level unchanged"
+                );
+            }
+        }
     }
 
     async fn on_worker_update_failed(
@@ -2579,13 +2595,23 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 OplogEntry::StartSpan {
                     timestamp, span_id, ..
                 } => (timestamp, span_id),
-                _ => unreachable!(),
+                other => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "StartSpan",
+                        format!("{other:?}"),
+                    ));
+                }
             };
 
+            let parent_span = self.state.invocation_context.get(parent).map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "parent span {parent} missing during StartSpan replay: {err}"
+                ))
+            })?;
             let span = InvocationContextSpan::local()
                 .with_span_id(span_id)
                 .with_start(timestamp)
-                .with_parent(self.state.invocation_context.get(parent).unwrap())
+                .with_parent(parent_span)
                 .build();
             self.state.invocation_context.add_span(span.clone());
             span
@@ -2662,11 +2688,12 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         }
 
         if &self.state.current_span_id == span_id {
-            self.state.current_span_id = self
-                .state
-                .invocation_context
-                .get(span_id)
-                .unwrap()
+            let span = self.state.invocation_context.get(span_id).map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "span {span_id} missing during finish_span replay: {err}"
+                ))
+            })?;
+            self.state.current_span_id = span
                 .parent()
                 .map(|p| p.span_id().clone())
                 .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
@@ -3022,9 +3049,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     match &timestamped_update.description {
                         UpdateDescription::SnapshotBased { .. } => {
                             // If a snapshot based update is pending, no replay should be necessary
-                            assert!(store.as_context().data().durable_ctx().is_live());
+                            if !store.as_context().data().durable_ctx().is_live() {
+                                return Err(WorkerExecutorError::runtime(
+                                    "snapshot-based pending update expected replay state to already be live",
+                                ));
+                            }
 
-                            Ok(Self::finalize_pending_snapshot_update(instance, store).await)
+                            Self::finalize_pending_snapshot_update(instance, store).await
                         }
                         UpdateDescription::Automatic {
                             target_revision, ..
@@ -3958,7 +3989,7 @@ impl PrivateDurableWorkerState {
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
-    ) -> Self {
+    ) -> Result<Self, WorkerExecutorError> {
         let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
             let mut regions = deleted_regions;
             let snapshot_skip =
@@ -3972,10 +4003,10 @@ impl PrivateDurableWorkerState {
             deleted_regions
         };
         let replay_state =
-            ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await;
+            ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
-        Self {
+        Ok(Self {
             oplog_service,
             oplog,
             agent_id,
@@ -4038,7 +4069,7 @@ impl PrivateDurableWorkerState {
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
             resource_limit_entry,
-        }
+        })
     }
 
     /// Returns the agent-config-derived retry policies (cached, cheap).
@@ -4780,7 +4811,7 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
 macro_rules! get_oplog_entry {
     ($replay_state:expr, $($cases:path),+) => {
         loop {
-            let (oplog_index, oplog_entry) = $replay_state.get_oplog_entry().await;
+            let (oplog_index, oplog_entry) = $replay_state.get_oplog_entry().await?;
             match oplog_entry {
                 $($cases { .. } => {
                     break Ok((oplog_index, oplog_entry));
