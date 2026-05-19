@@ -210,6 +210,7 @@ impl ComponentWriteService {
             provision_configs,
         )
         .await?;
+        validate_component_metadata_invariants(&component_metadata)?;
 
         let component_size = wasm.len() as u64;
 
@@ -442,6 +443,8 @@ impl ComponentWriteService {
                 check_config_entries_match(&agent_type, &config.config)?;
             }
         }
+
+        validate_component_metadata_invariants(&component.metadata)?;
 
         let record = ComponentRevisionRecord::from_model(component, auth.actor_account_id());
 
@@ -961,6 +964,30 @@ fn provision_configs_for_agent_types(
         .into_iter()
         .filter(|(agent_type_name, _)| agent_type_names.contains(agent_type_name))
         .collect()
+}
+
+fn validate_component_metadata_invariants(
+    metadata: &ComponentMetadata,
+) -> Result<(), ComponentError> {
+    let mut agent_type_names = HashSet::new();
+
+    for agent_type in metadata.agent_types() {
+        if !agent_type_names.insert(agent_type.type_name.clone()) {
+            return Err(ComponentError::DuplicateAgentTypeName(
+                agent_type.type_name.clone(),
+            ));
+        }
+    }
+
+    for agent_type_name in metadata.agent_type_provision_configs().keys() {
+        if !agent_type_names.contains(agent_type_name) {
+            return Err(ComponentError::UndeclaredAgentTypeInProvisionConfig(
+                agent_type_name.clone(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), ComponentError> {
