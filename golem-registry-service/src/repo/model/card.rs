@@ -12,41 +12,51 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::repo::SqlDateTime;
+use golem_common::model::card::Card;
+use golem_common::serialization;
+use golem_service_base::repo::{RepoError, SqlDateTime};
+use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
-pub struct PatternGrant {
-    pub class: String,
-    pub owner: String,
-    pub recipient: String,
-    pub verb: String,
-    pub resource_id: String,
-}
+pub use golem_common::model::card::PatternGrant;
 
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
-pub struct CardData {
+pub struct CardDataRecord {
     pub parent_ids: Vec<Uuid>,
     pub lower_positive: Vec<PatternGrant>,
     pub lower_negative: Vec<PatternGrant>,
     pub upper_positive: Vec<PatternGrant>,
     pub upper_negative: Vec<PatternGrant>,
-    /// JSON encoded metadata bytes. The metadata is intentionally opaque to the
-    /// database because it is not currently used for joins, lookups, or FKs.
-    pub metadata: Option<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct CardRecord {
     pub card_id: Uuid,
-    pub parent_ids: Vec<Uuid>,
-    pub lower_positive: Vec<PatternGrant>,
-    pub lower_negative: Vec<PatternGrant>,
-    pub upper_positive: Vec<PatternGrant>,
-    pub upper_negative: Vec<PatternGrant>,
+    pub data: Vec<u8>,
     pub created_at: SqlDateTime,
     pub expires_at: Option<SqlDateTime>,
     pub system_card: bool,
     pub polymorphic: bool,
-    pub metadata: Option<serde_json::Value>,
+}
+
+impl TryFrom<CardRecord> for Card {
+    type Error = RepoError;
+
+    fn try_from(value: CardRecord) -> Result<Self, Self::Error> {
+        let data: CardDataRecord = serialization::deserialize(&value.data)
+            .map_err(|err| RepoError::InternalError(anyhow::anyhow!(err)))?;
+
+        Ok(Card {
+            card_id: value.card_id,
+            parent_ids: data.parent_ids,
+            lower_positive: data.lower_positive,
+            lower_negative: data.lower_negative,
+            upper_positive: data.upper_positive,
+            upper_negative: data.upper_negative,
+            created_at: value.created_at.into(),
+            expires_at: value.expires_at.map(Into::into),
+            system_card: value.system_card,
+            polymorphic: value.polymorphic,
+        })
+    }
 }

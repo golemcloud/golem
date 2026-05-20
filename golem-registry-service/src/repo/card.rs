@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::card::{CardData, CardRecord};
+use crate::repo::model::card::CardDataRecord;
 use crate::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
+use golem_common::model::card::Card;
 use golem_common::serialization;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo::{PoolLabelledTransaction, RepoError, RepoResult};
+use golem_service_base::repo::{PoolLabelledTransaction, RepoError, RepoResult, SqlDateTime};
 use indoc::indoc;
 use sqlx::Row;
 use tracing::{Instrument, Span, info_span};
@@ -30,7 +31,7 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait CardRepo: Send + Sync {
-    async fn create(&self, card: CardRecord) -> RepoResult<()>;
+    async fn create(&self, card: Card) -> RepoResult<()>;
 
     async fn hard_delete(&self, card_id: Uuid)
     -> RepoResult<RequiresNotificationSignal<Vec<Uuid>>>;
@@ -56,7 +57,7 @@ impl<Repo: CardRepo> LoggedCardRepo<Repo> {
 
 #[async_trait]
 impl<Repo: CardRepo> CardRepo for LoggedCardRepo<Repo> {
-    async fn create(&self, card: CardRecord) -> RepoResult<()> {
+    async fn create(&self, card: Card) -> RepoResult<()> {
         self.repo
             .create(card.clone())
             .instrument(Self::span_card_id(card.card_id))
@@ -127,7 +128,7 @@ impl DbCardRepo<PostgresPool> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl CardRepo for DbCardRepo<PostgresPool> {
-    async fn create(&self, card: CardRecord) -> RepoResult<()> {
+    async fn create(&self, card: Card) -> RepoResult<()> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
                 Box::pin(async move {
@@ -141,8 +142,8 @@ impl CardRepo for DbCardRepo<PostgresPool> {
                         "#})
                         .bind(card.card_id)
                         .bind(data)
-                        .bind(card.created_at)
-                        .bind(card.expires_at)
+                        .bind(SqlDateTime::from(card.created_at))
+                        .bind(card.expires_at.map(SqlDateTime::from))
                         .bind(card.system_card)
                         .bind(card.polymorphic),
                     )
@@ -224,28 +225,16 @@ fn serialize<T: desert_rust::BinarySerializer>(value: &T) -> RepoResult<Vec<u8>>
     serialization::serialize(value).map_err(to_repo_string)
 }
 
-fn serialize_card_data(card: &CardRecord) -> RepoResult<Vec<u8>> {
-    let metadata = card
-        .metadata
-        .as_ref()
-        .map(serde_json::to_vec)
-        .transpose()
-        .map_err(to_repo_error)?;
-
-    serialize(&CardData {
+fn serialize_card_data(card: &Card) -> RepoResult<Vec<u8>> {
+    serialize(&CardDataRecord {
         parent_ids: card.parent_ids.clone(),
         lower_positive: card.lower_positive.clone(),
         lower_negative: card.lower_negative.clone(),
         upper_positive: card.upper_positive.clone(),
         upper_negative: card.upper_negative.clone(),
-        metadata,
     })
 }
 
 fn to_repo_string(error: String) -> RepoError {
     RepoError::InternalError(anyhow::anyhow!(error))
-}
-
-fn to_repo_error(error: impl std::error::Error + Send + Sync + 'static) -> RepoError {
-    RepoError::InternalError(anyhow::Error::new(error))
 }
