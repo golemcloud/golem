@@ -25,6 +25,7 @@ use std::time::Duration;
 use test_r::test;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 
 #[derive(Clone, Debug)]
 struct TestPersistence {
@@ -61,6 +62,9 @@ impl RoutingTablePersistence for TestPersistence {
 #[derive(Clone, Debug, Default)]
 struct TestWorkerExecutors {
     local_assignments: Arc<Mutex<HashMap<Pod, BTreeSet<ShardId>>>>,
+    failed_assignments: Arc<Mutex<HashMap<Pod, usize>>>,
+    failed_revocations: Arc<Mutex<HashMap<Pod, usize>>>,
+    failed_reconciliations: Arc<Mutex<HashMap<Pod, usize>>>,
 }
 
 impl TestWorkerExecutors {
@@ -79,6 +83,29 @@ impl TestWorkerExecutors {
             .cloned()
             .unwrap_or_default()
     }
+
+    async fn fail_next_assignments(&self, pod: Pod, count: usize) {
+        self.failed_assignments.lock().await.insert(pod, count);
+    }
+
+    async fn fail_next_revocations(&self, pod: Pod, count: usize) {
+        self.failed_revocations.lock().await.insert(pod, count);
+    }
+
+    async fn fail_next_reconciliations(&self, pod: Pod, count: usize) {
+        self.failed_reconciliations.lock().await.insert(pod, count);
+    }
+
+    async fn should_fail(failures: &Arc<Mutex<HashMap<Pod, usize>>>, pod: Pod) -> bool {
+        let mut failures = failures.lock().await;
+        if let Some(count) = failures.get_mut(&pod)
+            && *count > 0
+        {
+            *count -= 1;
+            return true;
+        }
+        false
+    }
 }
 
 #[async_trait]
@@ -88,6 +115,10 @@ impl WorkerExecutorService for TestWorkerExecutors {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
+        if Self::should_fail(&self.failed_assignments, *pod).await {
+            return Err(ShardManagerError::Timeout);
+        }
+
         self.local_assignments
             .lock()
             .await
@@ -106,6 +137,10 @@ impl WorkerExecutorService for TestWorkerExecutors {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
+        if Self::should_fail(&self.failed_revocations, *pod).await {
+            return Err(ShardManagerError::Timeout);
+        }
+
         if let Some(local_assignment) = self.local_assignments.lock().await.get_mut(pod) {
             local_assignment.retain(|shard_id| !shard_ids.contains(shard_id));
         }
@@ -118,6 +153,10 @@ impl WorkerExecutorService for TestWorkerExecutors {
         _number_of_shards: usize,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
+        if Self::should_fail(&self.failed_reconciliations, *pod).await {
+            return Err(ShardManagerError::Timeout);
+        }
+
         self.local_assignments
             .lock()
             .await
@@ -171,6 +210,30 @@ fn routing_table_with_pods(
     RoutingTable {
         number_of_shards,
         pod_states,
+    }
+}
+
+fn shard_ids(ids: &[i64]) -> BTreeSet<ShardId> {
+    ids.iter().copied().map(ShardId::new).collect()
+}
+
+async fn wait_for_local_assignment(
+    worker_executors: &TestWorkerExecutors,
+    pod: Pod,
+    expected: BTreeSet<ShardId>,
+) {
+    let start = Instant::now();
+    loop {
+        let actual = worker_executors.local_assignment(pod).await;
+        if actual == expected {
+            return;
+        }
+
+        if start.elapsed() > Duration::from_secs(2) {
+            panic!("timed out waiting for local assignment {expected:?}, actual: {actual:?}");
+        }
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -383,6 +446,141 @@ async fn reconciliation_clears_duplicate_local_shard_owner() {
         worker_executors.local_assignment(stale_pod).await,
         BTreeSet::new()
     );
+
+    join_set.abort_all();
+}
+
+#[test]
+// A transient assign failure leaves shards unassigned for one loop, then the
+// next loop assigns them from the routing table's unassigned set.
+async fn failed_assignment_is_retried_from_unassigned_shards() {
+    let old_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    worker_executors
+        .set_local_assignment(old_pod, &[0, 1, 2, 3])
+        .await;
+    worker_executors.fail_next_assignments(new_pod, 1).await;
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        routing_table_with_pods(4, vec![(old_pod, "worker-executor-0", &[0, 1, 2, 3])]),
+        worker_executors.clone(),
+    )
+    .await;
+
+    shard_management
+        .register_pod(new_pod, Some("worker-executor-1".to_string()))
+        .await;
+
+    wait_for_local_assignment(&worker_executors, old_pod, shard_ids(&[2, 3])).await;
+    wait_for_local_assignment(&worker_executors, new_pod, shard_ids(&[0, 1])).await;
+
+    let routing_table = persistence.latest().await;
+    assert_eq!(
+        routing_table
+            .pod_states
+            .get(&old_pod)
+            .expect("old pod missing")
+            .assigned_shards,
+        shard_ids(&[2, 3])
+    );
+    assert_eq!(
+        routing_table
+            .pod_states
+            .get(&new_pod)
+            .expect("new pod missing")
+            .assigned_shards,
+        shard_ids(&[0, 1])
+    );
+
+    join_set.abort_all();
+}
+
+#[test]
+// A failed revoke must not assign the shard elsewhere, but it should be retried
+// and eventually converge without another shard-manager event.
+async fn failed_revoke_is_retried_without_assigning_to_new_executor_first() {
+    let old_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    worker_executors
+        .set_local_assignment(old_pod, &[0, 1, 2, 3])
+        .await;
+    worker_executors.fail_next_revocations(old_pod, 1).await;
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        routing_table_with_pods(4, vec![(old_pod, "worker-executor-0", &[0, 1, 2, 3])]),
+        worker_executors.clone(),
+    )
+    .await;
+
+    shard_management
+        .register_pod(new_pod, Some("worker-executor-1".to_string()))
+        .await;
+
+    wait_for_local_assignment(&worker_executors, old_pod, shard_ids(&[2, 3])).await;
+    wait_for_local_assignment(&worker_executors, new_pod, shard_ids(&[0, 1])).await;
+
+    assert_eq!(
+        worker_executors.local_assignment(old_pod).await,
+        shard_ids(&[2, 3])
+    );
+    assert_eq!(
+        worker_executors.local_assignment(new_pod).await,
+        shard_ids(&[0, 1])
+    );
+
+    let routing_table = persistence.latest().await;
+    assert_eq!(
+        routing_table
+            .pod_states
+            .get(&old_pod)
+            .expect("old pod missing")
+            .assigned_shards,
+        shard_ids(&[2, 3])
+    );
+    assert_eq!(
+        routing_table
+            .pod_states
+            .get(&new_pod)
+            .expect("new pod missing")
+            .assigned_shards,
+        shard_ids(&[0, 1])
+    );
+
+    join_set.abort_all();
+}
+
+#[test]
+// Reconnect reconciliation failures are retried by the shard-manager worker.
+async fn failed_reconnect_reconciliation_is_retried() {
+    let existing_pod = pod(1, 9000);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+
+    let (shard_management, _persistence, mut join_set) = new_shard_management(
+        routing_table_with_pods(
+            1,
+            vec![
+                (existing_pod, "worker-executor-0", &[]),
+                (pod(2, 9001), "worker-executor-1", &[0]),
+            ],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+
+    worker_executors
+        .set_local_assignment(existing_pod, &[0])
+        .await;
+    worker_executors
+        .fail_next_reconciliations(existing_pod, 1)
+        .await;
+
+    shard_management
+        .register_pod(existing_pod, Some("worker-executor-0".to_string()))
+        .await;
+
+    wait_for_local_assignment(&worker_executors, existing_pod, BTreeSet::new()).await;
 
     join_set.abort_all();
 }

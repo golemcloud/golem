@@ -186,12 +186,13 @@ impl ShardManagement {
             };
 
             debug!(rebalance=%rebalance, "Applying rebalance plan");
-            let failed_assignments =
+            let rebalance_failures =
                 Self::execute_rebalance(worker_executors.clone(), &mut rebalance).await;
 
             let mut needs_retry = false;
-            if !failed_assignments.is_empty() {
-                let failed_shards: HashSet<ShardId> = failed_assignments
+            if !rebalance_failures.failed_assignments.is_empty() {
+                let failed_shards: HashSet<ShardId> = rebalance_failures
+                    .failed_assignments
                     .iter()
                     .flat_map(|(_, shard_ids)| shard_ids.clone())
                     .collect();
@@ -204,12 +205,24 @@ impl ShardManagement {
 
                 {
                     let mut updates_guard = updates.lock().await;
-                    for (pod, _) in &failed_assignments {
+                    for (pod, _) in &rebalance_failures.failed_assignments {
                         if full_assignment_pods.contains(pod) {
                             updates_guard.retry_full_assignment(*pod);
                         }
                     }
                 }
+                needs_retry = true;
+            }
+
+            if !rebalance_failures.failed_unassignments.is_empty() {
+                warn!(
+                    failed_pods = rebalance_failures
+                        .failed_unassignments
+                        .iter()
+                        .map(|(pod, _)| pod)
+                        .join(", "),
+                    "Some shards could not be unassigned and rebalance will be retried"
+                );
                 needs_retry = true;
             }
 
@@ -270,7 +283,7 @@ impl ShardManagement {
     async fn execute_rebalance(
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
         rebalance: &mut Rebalance,
-    ) -> Vec<(Pod, BTreeSet<ShardId>)> {
+    ) -> RebalanceFailures {
         info!("Beginning rebalance...");
 
         if !rebalance.get_unassignments().is_empty() {
@@ -300,8 +313,20 @@ impl ShardManagement {
             );
         }
 
-        assign_shards(worker_executors.clone(), rebalance.get_assignments()).await
+        let failed_assignments =
+            assign_shards(worker_executors.clone(), rebalance.get_assignments()).await;
+
+        RebalanceFailures {
+            failed_assignments,
+            failed_unassignments,
+        }
     }
+}
+
+#[derive(Debug)]
+struct RebalanceFailures {
+    failed_assignments: Vec<(Pod, BTreeSet<ShardId>)>,
+    failed_unassignments: Vec<(Pod, BTreeSet<ShardId>)>,
 }
 
 #[derive(Debug)]
