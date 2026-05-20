@@ -16,17 +16,20 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, desert_rust::BinaryCodec)]
-#[desert(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
 pub struct OwnerPathPattern(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, desert_rust::BinaryCodec)]
-#[desert(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
 pub struct RecipientPathPattern(pub String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionPattern {}
 
+#[cfg(feature = "full")]
 impl desert_rust::BinarySerializer for PermissionPattern {
     fn serialize<Output: desert_rust::BinaryOutput>(
         &self,
@@ -36,6 +39,7 @@ impl desert_rust::BinarySerializer for PermissionPattern {
     }
 }
 
+#[cfg(feature = "full")]
 impl desert_rust::BinaryDeserializer for PermissionPattern {
     fn deserialize(
         _context: &mut desert_rust::DeserializationContext<'_>,
@@ -46,7 +50,8 @@ impl desert_rust::BinaryDeserializer for PermissionPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, desert_rust::BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct PatternGrant {
     pub owner: OwnerPathPattern,
     pub recipient: RecipientPathPattern,
