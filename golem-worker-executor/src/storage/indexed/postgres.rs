@@ -24,6 +24,7 @@ use golem_common::metrics::db::record_db_serialized_size;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
+use golem_service_base::repo::RepoError;
 use include_dir::include_dir;
 use sqlx::{Postgres, QueryBuilder};
 use std::sync::Arc;
@@ -133,12 +134,25 @@ impl PostgresIndexedStorage {
         })
     }
 
-    fn classify_repo_error(err: golem_service_base::repo::RepoError) -> IndexedStorageError {
+    fn classify_repo_error(err: RepoError, oplog_insert: bool) -> IndexedStorageError {
         if err.is_transient() {
             IndexedStorageError::Transient(err.to_string())
+        } else if oplog_insert && err.is_unique_violation() {
+            IndexedStorageError::Other(format!(
+                "possible shard ownership mismatch while writing oplog: {}",
+                err.to_safe_string()
+            ))
         } else {
             IndexedStorageError::Other(err.to_safe_string())
         }
+    }
+
+    fn classify_repo_error_general(err: RepoError) -> IndexedStorageError {
+        Self::classify_repo_error(err, false)
+    }
+
+    fn classify_repo_error_oplog_insert(err: RepoError) -> IndexedStorageError {
+        Self::classify_repo_error(err, true)
     }
 
     async fn acquire_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
@@ -203,7 +217,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_one_as(query)
             .await
             .map(|row| row.0)
-            .map_err(Self::classify_repo_error)
+            .map_err(Self::classify_repo_error_general)
     }
 
     async fn scan(
@@ -243,7 +257,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_all_as::<(String,), _>(query)
             .await
             .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
-            .map_err(Self::classify_repo_error)?;
+            .map_err(Self::classify_repo_error_general)?;
 
         let new_cursor = if keys.len() < count as usize {
             0
@@ -284,7 +298,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(Self::classify_repo_error)
+            .map_err(Self::classify_repo_error_oplog_insert)
     }
 
     async fn append_many(
@@ -334,7 +348,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(Self::classify_repo_error)
+            .map_err(Self::classify_repo_error_oplog_insert)
     }
 
     async fn length(
@@ -356,7 +370,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_one_as(query)
             .await
             .map(|row| row.0 as u64)
-            .map_err(Self::classify_repo_error)
+            .map_err(Self::classify_repo_error_general)
     }
 
     async fn delete(
@@ -376,7 +390,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(Self::classify_repo_error)
+            .map_err(Self::classify_repo_error_general)
     }
 
     async fn read(
@@ -405,7 +419,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_all_as::<DBIdValue, _>(query)
             .await
             .map(|vec| vec.into_iter().map(|row| row.into_pair()).collect())
-            .map_err(Self::classify_repo_error)
+            .map_err(Self::classify_repo_error_general)
     }
 
     async fn first(
@@ -428,7 +442,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(Self::classify_repo_error)
+            .map_err(Self::classify_repo_error_general)
     }
 
     async fn last(
@@ -451,7 +465,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(Self::classify_repo_error)
+            .map_err(Self::classify_repo_error_general)
     }
 
     async fn closest(
@@ -477,7 +491,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(Self::classify_repo_error)
+            .map_err(Self::classify_repo_error_general)
     }
 
     async fn drop_prefix(
@@ -519,7 +533,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(Self::classify_repo_error)
+            .map_err(Self::classify_repo_error_general)
     }
 }
 
