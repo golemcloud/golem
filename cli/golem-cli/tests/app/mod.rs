@@ -21,15 +21,10 @@ mod build_and_deploy_all;
 mod plugins;
 
 tag_suite!(app, group1);
-sequential_suite!(app);
 
 tag_suite!(plugins, group1);
-sequential_suite!(plugins);
 
 tag_suite!(build_and_deploy_all, group2);
-sequential_suite!(build_and_deploy_all);
-
-sequential_suite!(agents);
 
 inherit_test_dep!(Tracing);
 
@@ -54,7 +49,7 @@ use std::str::FromStr;
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::{inherit_test_dep, sequential_suite, tag_suite};
+use test_r::{inherit_test_dep, tag_suite};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
