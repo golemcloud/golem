@@ -49,16 +49,18 @@ jobs:
           cargo nextest -v archive --archive-file tmp/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
         timeout-minutes: 5
 
-      - name: Extract archive
-        run: |
-          mkdir tmp/golem-binaries
-          tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
-        timeout-minutes: 2
-      - name: Save packaged binaries to cache
-        uses: actions/cache/save@v5
+      - name: Ensure binaries mount point exists
+        run: mkdir -pv tmp/golem-binaries
+      - name: Mount packaged binaries sticky disk
+        uses: useblacksmith/stickydisk@v1
         with:
-          path: tmp/golem-binaries
-          key: golem-binaries-${{ github.run_id }}
+          path: ${{ github.workspace }}/tmp/golem-binaries
+          key: ${{ github.repository }}-binaries-${{ github.run_id }}
+      - name: Clean any stale contents from sticky disk
+        run: find tmp/golem-binaries -mindepth 1 -delete
+      - name: Extract archive onto sticky disk
+        run: tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
+        timeout-minutes: 2
 
   check-clippy-and-format:
     env:
@@ -270,20 +272,25 @@ jobs:
         run: |
           sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
 
-      - name: Restore built TS SDK
+      - name: Ensure TS SDK mount point exists
         if: startsWith(matrix.group.name, 'cli-integration-tests')
-        uses: actions/cache/restore@v5
+        run: mkdir -pv tmp/ts-sdk
+      - name: Mount TS SDK sticky disk
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        uses: useblacksmith/stickydisk@v1
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          path: ${{ github.workspace }}/tmp/ts-sdk
+          key: ${{ github.repository }}-ts-sdk-${{ github.run_id }}
+      - name: Verify TS SDK tarball is present
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        run: |
+          if [ ! -s tmp/ts-sdk/ts-sdk.tar ]; then
+            echo "::error::TS SDK sticky disk for run ${{ github.run_id }} is empty; the producer job (build-golem-ts) likely did not run or did not commit."
+            exit 1
+          fi
+      - name: Extract built TS SDK
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        run: tar -xf tmp/ts-sdk/ts-sdk.tar
 
       - name: Install TS SDK dependencies
         if: startsWith(matrix.group.name, 'cli-integration-tests')
@@ -356,19 +363,21 @@ jobs:
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
 
-      - name: Restore built TS SDK
-        uses: actions/cache/restore@v5
+      - name: Ensure TS SDK mount point exists
+        run: mkdir -pv tmp/ts-sdk
+      - name: Mount TS SDK sticky disk
+        uses: useblacksmith/stickydisk@v1
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          path: ${{ github.workspace }}/tmp/ts-sdk
+          key: ${{ github.repository }}-ts-sdk-${{ github.run_id }}
+      - name: Verify TS SDK tarball is present
+        run: |
+          if [ ! -s tmp/ts-sdk/ts-sdk.tar ]; then
+            echo "::error::TS SDK sticky disk for run ${{ github.run_id }} is empty; the producer job (build-golem-ts) likely did not run or did not commit."
+            exit 1
+          fi
+      - name: Extract built TS SDK
+        run: tar -xf tmp/ts-sdk/ts-sdk.tar
 
       - name: Install TS SDK dependencies
         working-directory: sdks/ts
@@ -582,18 +591,25 @@ jobs:
         run: |
           pnpm run test
 
-      - name: Save built TS SDK for test component builds
-        uses: actions/cache/save@v5
+      - name: Ensure TS SDK mount point exists
+        run: mkdir -pv tmp/ts-sdk
+      - name: Mount TS SDK sticky disk
+        uses: useblacksmith/stickydisk@v1
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
-            sdks/ts/packages/golem-ts-bridge/dist
+          path: ${{ github.workspace }}/tmp/ts-sdk
+          key: ${{ github.repository }}-ts-sdk-${{ github.run_id }}
+      - name: Clean any stale contents from sticky disk
+        run: find tmp/ts-sdk -mindepth 1 -delete
+      - name: Pack built TS SDK onto sticky disk
+        run: |
+          tar -cf tmp/ts-sdk/ts-sdk.tar \
+            sdks/ts/packages/golem-ts-sdk/dist \
+            sdks/ts/packages/golem-ts-sdk/types \
+            sdks/ts/packages/golem-ts-sdk/wasm \
+            sdks/ts/packages/golem-ts-typegen/dist \
+            sdks/ts/packages/golem-ts-types-core/dist \
+            sdks/ts/packages/golem-ts-bridge/dist \
             sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
 
   list-test-component-groups:
     runs-on: blacksmith
@@ -635,22 +651,26 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
-          fail-on-cache-miss: 'true'
 
-      - name: Restore built TS SDK
+      - name: Ensure TS SDK mount point exists
         if: matrix.chunk.needs-node
-        uses: actions/cache/restore@v5
+        run: mkdir -pv tmp/ts-sdk
+      - name: Mount TS SDK sticky disk
+        if: matrix.chunk.needs-node
+        uses: useblacksmith/stickydisk@v1
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          path: ${{ github.workspace }}/tmp/ts-sdk
+          key: ${{ github.repository }}-ts-sdk-${{ github.run_id }}
+      - name: Verify TS SDK tarball is present
+        if: matrix.chunk.needs-node
+        run: |
+          if [ ! -s tmp/ts-sdk/ts-sdk.tar ]; then
+            echo "::error::TS SDK sticky disk for run ${{ github.run_id }} is empty; the producer job (build-golem-ts) likely did not run or did not commit."
+            exit 1
+          fi
+      - name: Extract built TS SDK
+        if: matrix.chunk.needs-node
+        run: tar -xf tmp/ts-sdk/ts-sdk.tar
 
       - name: Setup JS and WASM build tools
         if: matrix.chunk.needs-node
@@ -693,6 +713,16 @@ jobs:
     runs-on: blacksmith
     needs: build-test-components
     steps:
+      - name: Ensure test components mount point exists
+        run: mkdir -pv tmp/test-components-wasm
+      - name: Mount test components sticky disk
+        uses: useblacksmith/stickydisk@v1
+        with:
+          path: ${{ github.workspace }}/tmp/test-components-wasm
+          key: ${{ github.repository }}-test-components-${{ github.run_id }}
+      - name: Clean any stale contents from sticky disk
+        run: find tmp/test-components-wasm -mindepth 1 -delete
+
       - name: Download all chunk WASMs
         uses: actions/download-artifact@v8
         with:
@@ -706,12 +736,6 @@ jobs:
           ls -1 tmp/test-components-wasm/*.wasm | sort
           count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
           echo "Total: $count WASM files"
-
-      - name: Save merged WASMs to cache
-        uses: actions/cache/save@v5
-        with:
-          path: tmp/test-components-wasm
-          key: golem-test-components-${{ github.run_id }}
 
   detect-skill-changes:
     name: Detect golem-skills changes
@@ -1080,3 +1104,36 @@ jobs:
           SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, docker-1 result: `${{ needs.docker-publish-1.result }}`, docker-2 result: `${{ needs.docker-publish-2.result }}`"
           SLACK_USERNAME: CI
           SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}
+
+  cleanup-per-run-sticky-disks:
+    name: Cleanup per-run sticky disks
+    runs-on: blacksmith
+    if: always()
+    needs:
+      - build-and-store
+      - unit-tests-and-checks
+      - worker-tests
+      - it
+      - build-golem-ts
+      - build-test-components
+      - merge-test-components
+      - scala-sdk-integration-tests
+    steps:
+      - name: Delete per-run binaries sticky disk
+        if: always()
+        continue-on-error: true
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ github.repository }}-binaries-${{ github.run_id }}
+      - name: Delete per-run test components sticky disk
+        if: always()
+        continue-on-error: true
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ github.repository }}-test-components-${{ github.run_id }}
+      - name: Delete per-run TS SDK sticky disk
+        if: always()
+        continue-on-error: true
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ github.repository }}-ts-sdk-${{ github.run_id }}

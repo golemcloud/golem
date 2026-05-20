@@ -1,14 +1,11 @@
 name: 'Restore Build Binaries'
-description: 'Install cargo-test-r, restore binary cache, and apply archive'
+description: 'Install cargo-test-r, mount the per-run binaries sticky disk, and re-hydrate the nextest archive'
 inputs:
   run-id:
-    description: 'GitHub run ID for cache key'
+    description: 'GitHub run ID for sticky disk key'
     required: true
   copy-to-target:
     description: 'Whether to copy binaries to target/debug'
-    default: 'false'
-  fail-on-cache-miss:
-    description: 'Whether to fail if cache is not found'
     default: 'false'
 runs:
   using: 'composite'
@@ -16,12 +13,21 @@ runs:
     - name: Install cargo-test-r
       shell: bash
       run: cargo binstall --force --locked cargo-test-r@2.2.5
-    - name: Restore packaged binaries from cache
-      uses: actions/cache/restore@v5
+    - name: Ensure binaries mount point exists
+      shell: bash
+      run: mkdir -pv tmp/golem-binaries
+    - name: Mount packaged binaries sticky disk
+      uses: useblacksmith/stickydisk@v1
       with:
-        path: tmp/golem-binaries
-        key: golem-binaries-${{ inputs.run-id }}
-        fail-on-cache-miss: ${{ inputs.fail-on-cache-miss }}
+        path: ${{ github.workspace }}/tmp/golem-binaries
+        key: ${{ github.repository }}-binaries-${{ inputs.run-id }}
+    - name: Verify binaries sticky disk is populated
+      shell: bash
+      run: |
+        if [ -z "$(ls -A tmp/golem-binaries 2>/dev/null)" ]; then
+          echo "::error::binaries sticky disk for run ${{ inputs.run-id }} is empty; the producer job (build-and-store) likely did not run or did not commit."
+          exit 1
+        fi
     - name: Apply binary archive
       shell: bash
       run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries

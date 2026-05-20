@@ -1,18 +1,28 @@
 name: 'Restore Test Components'
-description: 'Restore test component WASMs from cache and install them'
+description: 'Mount the per-run test-components sticky disk and install the WASM components'
 inputs:
   run-id:
-    description: 'GitHub run ID for cache key'
+    description: 'GitHub run ID for sticky disk key'
     required: true
 runs:
   using: 'composite'
   steps:
-    - name: Restore built test component WASMs
-      uses: actions/cache/restore@v5
+    - name: Ensure test components mount point exists
+      shell: bash
+      run: mkdir -pv tmp/test-components-wasm
+    - name: Mount test components sticky disk
+      uses: useblacksmith/stickydisk@v1
       with:
-        path: tmp/test-components-wasm
-        key: golem-test-components-${{ inputs.run-id }}
-        fail-on-cache-miss: true
+        path: ${{ github.workspace }}/tmp/test-components-wasm
+        key: ${{ github.repository }}-test-components-${{ inputs.run-id }}
+    - name: Verify test components sticky disk is populated
+      shell: bash
+      run: |
+        count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' 2>/dev/null | wc -l)
+        if [ "$count" -eq 0 ]; then
+          echo "::error::test components sticky disk for run ${{ inputs.run-id }} is empty; the producer job (merge-test-components) likely did not run or did not commit."
+          exit 1
+        fi
     - name: Install test component WASMs
       shell: bash
       run: cp -v tmp/test-components-wasm/*.wasm test-components/
