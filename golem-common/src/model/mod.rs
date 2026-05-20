@@ -505,9 +505,12 @@ impl ShardAssignment {
 
     pub fn register(&mut self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
         self.number_of_shards = number_of_shards;
-        for shard_id in shard_ids {
-            self.shard_ids.insert(*shard_id);
-        }
+        self.shard_ids = shard_ids.clone();
+    }
+
+    pub fn set_shards(&mut self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
+        self.number_of_shards = number_of_shards;
+        self.shard_ids = shard_ids.clone();
     }
 
     pub fn revoke_shards(&mut self, shard_ids: &HashSet<ShardId>) {
