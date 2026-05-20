@@ -1264,6 +1264,15 @@ fn proto_registry_event_to_model(
                 },
             )
         }
+        Some(Payload::CardRevoked(cr)) => {
+            let card_ids = cr.card_ids.into_iter().map(Into::into).collect();
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::CardRevoked {
+                    event_id,
+                    card_ids,
+                },
+            )
+        }
         Some(Payload::AgentSecretChanged(rpc)) => {
             let environment_id = rpc
                 .environment_id

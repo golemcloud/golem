@@ -231,6 +231,8 @@ pub enum RegistryInvalidationEvent {
         /// Human-readable environment name (matches AgentResolutionCache key).
         env_name: String,
     },
+    /// A permission card was revoked or deleted.
+    CardRevoked { event_id: u64, card_ids: Vec<Uuid> },
 }
 
 impl RegistryInvalidationEvent {
@@ -247,6 +249,7 @@ impl RegistryInvalidationEvent {
             Self::AgentSecretChanged { event_id, .. } => *event_id,
             Self::ApplicationDeleted { event_id, .. } => *event_id,
             Self::EnvironmentDeleted { event_id, .. } => *event_id,
+            Self::CardRevoked { event_id, .. } => *event_id,
         }
     }
 }

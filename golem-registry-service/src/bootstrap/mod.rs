@@ -20,6 +20,7 @@ use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
 use crate::repo::agent_secret::{AgentSecretRepo, DbAgentSecretRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
+use crate::repo::card::{CardRepo, DbCardRepo};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
 use crate::repo::deployment::{DbDeploymentRepo, DeploymentRepo};
 use crate::repo::domain_registration::{DbDomainRegistrationRepo, DomainRegistrationRepo};
@@ -124,6 +125,7 @@ struct Repos {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
     agent_secret_repo: Arc<dyn AgentSecretRepo>,
     application_repo: Arc<dyn ApplicationRepo>,
+    _card_repo: Arc<dyn CardRepo>,
     component_repo: Arc<dyn ComponentRepo>,
     registry_change_repo: Arc<dyn RegistryChangeRepo>,
     deployment_repo: Arc<dyn DeploymentRepo>,
@@ -458,6 +460,7 @@ async fn make_repos(
             let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));
             let agent_secret_repo = Arc::new(DbAgentSecretRepo::logged(db_pool.clone()));
             let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
+            let card_repo = Arc::new(DbCardRepo::logged(db_pool.clone()));
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
             let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
             let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
@@ -487,6 +490,7 @@ async fn make_repos(
                 account_usage_repo,
                 agent_secret_repo,
                 application_repo,
+                _card_repo: card_repo,
                 component_repo,
                 registry_change_repo,
                 deployment_repo,
@@ -518,6 +522,7 @@ async fn make_repos(
             let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));
             let agent_secret_repo = Arc::new(DbAgentSecretRepo::logged(db_pool.clone()));
             let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
+            let card_repo = Arc::new(DbCardRepo::logged(db_pool.clone()));
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
             let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
             let plan_repo = Arc::new(DbPlanRepo::logged(db_pool.clone()));
@@ -547,6 +552,7 @@ async fn make_repos(
                 account_usage_repo,
                 agent_secret_repo,
                 application_repo,
+                _card_repo: card_repo,
                 component_repo,
                 registry_change_repo,
                 deployment_repo,

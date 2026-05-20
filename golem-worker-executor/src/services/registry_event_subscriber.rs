@@ -134,6 +134,7 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                     .invalidate_environment(*environment_id)
                     .await;
             }
+            RegistryInvalidationEvent::CardRevoked { .. } => {}
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,
                 account_id,
