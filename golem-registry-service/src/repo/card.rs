@@ -124,13 +124,18 @@ impl DbCardRepo<PostgresPool> {
     async fn lock_parent_cards_for_create(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         parent_ids: &[Uuid],
-    ) -> RepoResult<()> {
+    ) -> Result<(), CardRepoError> {
         for parent_id in parent_ids {
-            tx.fetch_optional(
-                sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
-                    .bind(*parent_id),
-            )
-            .await?;
+            let row = tx
+                .fetch_optional(
+                    sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
+                        .bind(*parent_id),
+                )
+                .await?;
+
+            if row.is_none() {
+                return Err(CardRepoError::ParentNotFound(*parent_id));
+            }
         }
 
         Ok(())
