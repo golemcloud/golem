@@ -51,6 +51,13 @@ pub trait WorkerExecutorService: Send + Sync {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError>;
+
+    async fn set_shard_assignment(
+        &self,
+        pod: &Pod,
+        number_of_shards: usize,
+        shard_ids: &BTreeSet<ShardId>,
+    ) -> Result<(), ShardManagerError>;
 }
 
 /// Sends revoke requests to all worker executors based on an `Unassignments` plan
@@ -90,6 +97,35 @@ pub async fn assign_shards(
             let worker_executors = worker_executors.clone();
             Box::pin(async move {
                 match worker_executors.assign_shards(pod, shard_ids).await {
+                    Ok(_) => None,
+                    Err(_) => Some((*pod, shard_ids.clone())),
+                }
+            })
+        })
+        .collect();
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Reconciles executors to the routing-table shard assignments.
+pub async fn set_shard_assignments(
+    worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
+    number_of_shards: usize,
+    assignments: &Assignments,
+) -> Vec<(Pod, BTreeSet<ShardId>)> {
+    let futures: Vec<_> = assignments
+        .assignments
+        .iter()
+        .map(|(pod, shard_ids)| {
+            let worker_executors = worker_executors.clone();
+            Box::pin(async move {
+                match worker_executors
+                    .set_shard_assignment(pod, number_of_shards, shard_ids)
+                    .await
+                {
                     Ok(_) => None,
                     Err(_) => Some((*pod, shard_ids.clone())),
                 }
@@ -174,6 +210,30 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             &self.config.retries,
             &(pod, shard_ids),
             |(pod, shard_ids)| Box::pin(self.revoke_shards_internal(pod, shard_ids)),
+        )
+        .await
+    }
+
+    async fn set_shard_assignment(
+        &self,
+        pod: &Pod,
+        number_of_shards: usize,
+        shard_ids: &BTreeSet<ShardId>,
+    ) -> Result<(), ShardManagerError> {
+        info!(
+            assigned_shards = pod_shard_assignments_to_string(pod, None, shard_ids.iter()),
+            number_of_shards, "Setting authoritative shard assignment",
+        );
+
+        with_retriable_errors(
+            "worker_executor",
+            "set_shard_assignment",
+            Some(format!("{pod}")),
+            &self.config.retries,
+            &(pod, number_of_shards, shard_ids),
+            |(pod, number_of_shards, shard_ids)| {
+                Box::pin(self.set_shard_assignment_internal(pod, *number_of_shards, shard_ids))
+            },
         )
         .await
     }
@@ -282,6 +342,57 @@ impl WorkerExecutorServiceDefault {
                     .unwrap_or_else(WorkerExecutorError::unknown),
             )),
             golem::workerexecutor::v1::RevokeShardsResponse { result: None } => {
+                Err(ShardManagerError::NoResult)
+            }
+        }
+    }
+
+    async fn set_shard_assignment_internal(
+        &self,
+        pod: &Pod,
+        number_of_shards: usize,
+        shard_ids: &BTreeSet<ShardId>,
+    ) -> Result<(), ShardManagerError> {
+        let set_shard_assignment_request = golem::workerexecutor::v1::SetShardAssignmentRequest {
+            number_of_shards: number_of_shards as u32,
+            shard_ids: shard_ids
+                .clone()
+                .into_iter()
+                .map(|shard_id| shard_id.into())
+                .collect(),
+        };
+
+        let set_shard_assignment_response = timeout(
+            self.config.assign_shards_timeout,
+            self.client.call(
+                "set_shard_assignment",
+                pod.uri(self.config.client_config.tls_enabled()),
+                move |client| {
+                    let set_shard_assignment_request = set_shard_assignment_request.clone();
+                    Box::pin(client.set_shard_assignment(set_shard_assignment_request))
+                },
+            ),
+        )
+        .await
+        .map_err(|_: Elapsed| ShardManagerError::Timeout)?
+        .map_err(ShardManagerError::GrpcError)?;
+
+        match set_shard_assignment_response.into_inner() {
+            golem::workerexecutor::v1::SetShardAssignmentResponse {
+                result:
+                    Some(golem::workerexecutor::v1::set_shard_assignment_response::Result::Success(_)),
+            } => Ok(()),
+            golem::workerexecutor::v1::SetShardAssignmentResponse {
+                result:
+                    Some(golem::workerexecutor::v1::set_shard_assignment_response::Result::Failure(
+                        failure,
+                    )),
+            } => Err(ShardManagerError::WorkerExecutionError(
+                failure
+                    .try_into()
+                    .unwrap_or_else(WorkerExecutorError::unknown),
+            )),
+            golem::workerexecutor::v1::SetShardAssignmentResponse { result: None } => {
                 Err(ShardManagerError::NoResult)
             }
         }
