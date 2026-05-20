@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::card::CardDataRecord;
+use crate::repo::model::card::{CardRecord, CardRepoError};
 use crate::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use golem_common::model::card::Card;
-use golem_common::serialization;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo::{PoolLabelledTransaction, RepoError, RepoResult, SqlDateTime};
+use golem_service_base::repo::{PoolLabelledTransaction, RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::Row;
 use tracing::{Instrument, Span, info_span};
@@ -31,10 +29,10 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait CardRepo: Send + Sync {
-    async fn create(&self, card: Card) -> RepoResult<()>;
+    async fn create(&self, card: CardRecord) -> Result<CardRecord, CardRepoError>;
 
-    async fn hard_delete(&self, card_id: Uuid)
-    -> RepoResult<RequiresNotificationSignal<Vec<Uuid>>>;
+    // Delete a card including all descendents. Returns ids of all deleted cards.
+    async fn delete(&self, card_id: Uuid) -> RepoResult<RequiresNotificationSignal<Vec<Uuid>>>;
 
     async fn existing(&self, card_ids: Vec<Uuid>) -> RepoResult<Vec<Uuid>>;
 }
@@ -57,19 +55,15 @@ impl<Repo: CardRepo> LoggedCardRepo<Repo> {
 
 #[async_trait]
 impl<Repo: CardRepo> CardRepo for LoggedCardRepo<Repo> {
-    async fn create(&self, card: Card) -> RepoResult<()> {
-        self.repo
-            .create(card.clone())
-            .instrument(Self::span_card_id(card.card_id))
-            .await
+    async fn create(&self, card: CardRecord) -> Result<CardRecord, CardRepoError> {
+        let span = Self::span_card_id(card.card_id);
+
+        self.repo.create(card).instrument(span).await
     }
 
-    async fn hard_delete(
-        &self,
-        card_id: Uuid,
-    ) -> RepoResult<RequiresNotificationSignal<Vec<Uuid>>> {
+    async fn delete(&self, card_id: Uuid) -> RepoResult<RequiresNotificationSignal<Vec<Uuid>>> {
         self.repo
-            .hard_delete(card_id)
+            .delete(card_id)
             .instrument(Self::span_card_id(card_id))
             .await
     }
@@ -107,15 +101,33 @@ impl<DBP: Pool> DbCardRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbCardRepo<PostgresPool> {
-    async fn insert_parents(
+    async fn insert_parent_links(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         card_id: Uuid,
         parent_ids: &[Uuid],
-    ) -> RepoResult<()> {
+    ) -> Result<(), CardRepoError> {
         for parent_id in parent_ids {
             tx.execute(
                 sqlx::query("INSERT INTO card_parents (card_id, parent_id) VALUES ($1, $2)")
                     .bind(card_id)
+                    .bind(*parent_id),
+            )
+            .await
+            .to_error_on_foreign_key_violation(CardRepoError::ParentNotFound(*parent_id))?;
+        }
+
+        Ok(())
+    }
+}
+
+impl DbCardRepo<PostgresPool> {
+    async fn lock_parent_cards_for_create(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        parent_ids: &[Uuid],
+    ) -> RepoResult<()> {
+        for parent_id in parent_ids {
+            tx.fetch_optional(
+                sqlx::query("SELECT card_id FROM cards WHERE card_id = $1 FOR UPDATE")
                     .bind(*parent_id),
             )
             .await?;
@@ -125,40 +137,60 @@ impl DbCardRepo<PostgresPool> {
     }
 }
 
+impl DbCardRepo<SqlitePool> {
+    async fn lock_parent_cards_for_create(
+        _tx: &mut PoolLabelledTransaction<SqlitePool>,
+        _parent_ids: &[Uuid],
+    ) -> RepoResult<()> {
+        // SQLite serializes write transactions, so there is no separate row-locking
+        // primitive to use here. Missing parents are rejected by the card_parents FK.
+        Ok(())
+    }
+}
+
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl CardRepo for DbCardRepo<PostgresPool> {
-    async fn create(&self, card: Card) -> RepoResult<()> {
+    async fn create(&self, record: CardRecord) -> Result<CardRecord, CardRepoError> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
                 Box::pin(async move {
-                    let data = serialize_card_data(&card)?;
-
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            INSERT INTO cards
-                                (card_id, data, created_at, expires_at, system_card, polymorphic)
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                        "#})
-                        .bind(card.card_id)
-                        .bind(data)
-                        .bind(SqlDateTime::from(card.created_at))
-                        .bind(card.expires_at.map(SqlDateTime::from))
-                        .bind(card.system_card)
-                        .bind(card.polymorphic),
+                    Self::lock_parent_cards_for_create(
+                        tx,
+                        record.data.value().parent_ids.as_slice(),
                     )
                     .await?;
 
-                    Self::insert_parents(tx, card.card_id, &card.parent_ids).await
+                    let inserted: CardRecord = tx.fetch_one_as(
+                        sqlx::query_as(indoc! { r#"
+                            INSERT INTO cards
+                                (card_id, data, created_at, expires_at, system_card, polymorphic)
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            RETURNING card_id, data, created_at, expires_at, system_card, polymorphic
+                        "#})
+                        .bind(record.card_id)
+                        .bind(record.data)
+                        .bind(record.created_at)
+                        .bind(record.expires_at)
+                        .bind(record.system_card)
+                        .bind(record.polymorphic),
+                    )
+                    .await?;
+
+                    Self::insert_parent_links(
+                        tx,
+                        inserted.card_id,
+                        inserted.data.value().parent_ids.as_slice(),
+                    )
+                    .await?;
+
+                    Ok::<_, CardRepoError>(inserted)
                 })
             })
             .await
     }
 
-    async fn hard_delete(
-        &self,
-        card_id: Uuid,
-    ) -> RepoResult<RequiresNotificationSignal<Vec<Uuid>>> {
+    async fn delete(&self, card_id: Uuid) -> RepoResult<RequiresNotificationSignal<Vec<Uuid>>> {
         let deleted = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "hard_delete", |tx| {
@@ -219,22 +251,4 @@ impl CardRepo for DbCardRepo<PostgresPool> {
         }
         Ok(result)
     }
-}
-
-fn serialize<T: desert_rust::BinarySerializer>(value: &T) -> RepoResult<Vec<u8>> {
-    serialization::serialize(value).map_err(to_repo_string)
-}
-
-fn serialize_card_data(card: &Card) -> RepoResult<Vec<u8>> {
-    serialize(&CardDataRecord {
-        parent_ids: card.parent_ids.clone(),
-        lower_positive: card.lower_positive.clone(),
-        lower_negative: card.lower_negative.clone(),
-        upper_positive: card.upper_positive.clone(),
-        upper_negative: card.upper_negative.clone(),
-    })
-}
-
-fn to_repo_string(error: String) -> RepoError {
-    RepoError::InternalError(anyhow::anyhow!(error))
 }
