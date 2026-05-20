@@ -72,8 +72,16 @@ pub enum HealthCheckError {
     GrpcOther(&'static str),
     #[error("K8s: connect error: {0}")]
     K8sConnectError(#[source] kube::Error),
-    #[error("K8s: {0}")]
-    K8sOther(&'static str),
+    #[error("K8s: pod not found")]
+    K8sPodNotFound,
+    #[error("K8s: pod terminated")]
+    K8sPodTerminated,
+    #[error("K8s: pod is not ready")]
+    K8sPodNotReady,
+    #[error("K8s: no pod status")]
+    K8sNoPodStatus,
+    #[error("K8s: no pod name")]
+    K8sNoPodName,
 }
 
 impl IsRetriableError for HealthCheckError {
@@ -83,7 +91,11 @@ impl IsRetriableError for HealthCheckError {
             HealthCheckError::GrpcTransportError(_) => true,
             HealthCheckError::GrpcOther(_) => true,
             HealthCheckError::K8sConnectError(_) => true,
-            HealthCheckError::K8sOther(_) => true,
+            HealthCheckError::K8sPodNotFound => false,
+            HealthCheckError::K8sPodTerminated => false,
+            HealthCheckError::K8sPodNotReady => true,
+            HealthCheckError::K8sNoPodStatus => true,
+            HealthCheckError::K8sNoPodName => false,
         }
     }
 

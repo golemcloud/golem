@@ -158,16 +158,21 @@ pub mod kubernetes {
 
             match pod_name {
                 Some(pod_name) => match pods.get_opt(pod_name).await {
-                    Ok(Some(k8s_pod)) => match k8s_pod.status {
-                        Some(status) => Self::is_pod_ready(status)
-                            .then_some(())
-                            .ok_or(HealthCheckError::K8sOther("pod status is not ready")),
-                        None => Err(HealthCheckError::K8sOther("no pod status")),
-                    },
-                    Ok(None) => Err(HealthCheckError::K8sOther("pod not found")),
+                    Ok(Some(k8s_pod)) => Self::check_pod(k8s_pod),
+                    Ok(None) => Err(HealthCheckError::K8sPodNotFound),
                     Err(err) => Err(HealthCheckError::K8sConnectError(err)),
                 },
-                None => Err(HealthCheckError::K8sOther("no pod_name")),
+                None => Err(HealthCheckError::K8sNoPodName),
+            }
+        }
+
+        fn check_pod(pod: Pod) -> Result<(), HealthCheckError> {
+            let status = pod.status.ok_or(HealthCheckError::K8sNoPodStatus)?;
+            match status.phase.as_deref() {
+                Some("Failed" | "Succeeded") => Err(HealthCheckError::K8sPodTerminated),
+                _ => Self::is_pod_ready(status)
+                    .then_some(())
+                    .ok_or(HealthCheckError::K8sPodNotReady),
             }
         }
 
@@ -177,6 +182,53 @@ pub mod kubernetes {
                 .unwrap_or_default()
                 .iter()
                 .any(|c| c.type_ == "Ready" && c.status == "True")
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::KubernetesHealthCheck;
+        use crate::sharding::error::HealthCheckError;
+        use k8s_openapi::api::core::v1::{Pod, PodCondition, PodStatus};
+        use test_r::test;
+
+        fn pod(status: Option<PodStatus>) -> Pod {
+            Pod {
+                status,
+                ..Default::default()
+            }
+        }
+
+        fn pod_status(phase: &str, ready: bool) -> PodStatus {
+            PodStatus {
+                phase: Some(phase.to_string()),
+                conditions: Some(vec![PodCondition {
+                    type_: "Ready".to_string(),
+                    status: if ready { "True" } else { "False" }.to_string(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn failed_and_succeeded_pods_are_terminal() {
+            assert!(matches!(
+                KubernetesHealthCheck::check_pod(pod(Some(pod_status("Failed", false)))),
+                Err(HealthCheckError::K8sPodTerminated)
+            ));
+            assert!(matches!(
+                KubernetesHealthCheck::check_pod(pod(Some(pod_status("Succeeded", false)))),
+                Err(HealthCheckError::K8sPodTerminated)
+            ));
+        }
+
+        #[test]
+        fn running_not_ready_pod_is_transient() {
+            assert!(matches!(
+                KubernetesHealthCheck::check_pod(pod(Some(pod_status("Running", false)))),
+                Err(HealthCheckError::K8sPodNotReady)
+            ));
         }
     }
 
