@@ -185,6 +185,28 @@ pub mod kubernetes {
         }
     }
 
+    #[async_trait]
+    impl HealthCheck for KubernetesHealthCheck {
+        async fn health_check(
+            &self,
+            pod: golem_common::model::Pod,
+            pod_name: Option<String>,
+        ) -> bool {
+            health_check_with_retries(
+                "worker_executor_k8s",
+                |(_, pod_name)| {
+                    let health_check = self.clone();
+                    Box::pin(async move { health_check.health_check_impl(pod_name.as_ref()).await })
+                },
+                &self.retry_config,
+                pod,
+                pod_name,
+                self.silent,
+            )
+            .await
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::KubernetesHealthCheck;
@@ -229,28 +251,6 @@ pub mod kubernetes {
                 KubernetesHealthCheck::check_pod(pod(Some(pod_status("Running", false)))),
                 Err(HealthCheckError::K8sPodNotReady)
             ));
-        }
-    }
-
-    #[async_trait]
-    impl HealthCheck for KubernetesHealthCheck {
-        async fn health_check(
-            &self,
-            pod: golem_common::model::Pod,
-            pod_name: Option<String>,
-        ) -> bool {
-            health_check_with_retries(
-                "worker_executor_k8s",
-                |(_, pod_name)| {
-                    let health_check = self.clone();
-                    Box::pin(async move { health_check.health_check_impl(pod_name.as_ref()).await })
-                },
-                &self.retry_config,
-                pod,
-                pod_name,
-                self.silent,
-            )
-            .await
         }
     }
 }
