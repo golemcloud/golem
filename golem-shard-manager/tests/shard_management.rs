@@ -306,6 +306,15 @@ async fn reconnecting_pod_clears_stale_local_shards() {
     )
     .await;
 
+    worker_executors
+        .set_local_assignment(existing_pod, &[0])
+        .await;
+
+    assert_eq!(
+        worker_executors.local_assignment(existing_pod).await,
+        [0].into_iter().map(ShardId::new).collect()
+    );
+
     shard_management
         .register_pod(existing_pod, Some("worker-executor-0".to_string()))
         .await;
