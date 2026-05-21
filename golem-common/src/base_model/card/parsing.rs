@@ -140,7 +140,7 @@ pub fn parse_polymorphic_pattern_grant(
     }
 
     Ok(PolymorphicPatternGrant {
-        owner: PolymorphicOwnerPathPattern(parts.owner),
+        owner: parse_polymorphic_owner(&parts.owner),
         recipient: parse_polymorphic_recipient(&parts.recipient)?,
         permission: parse_polymorphic_permission(&parts.class, &parts.verb, &parts.resource)?,
     })
@@ -194,17 +194,30 @@ fn reject_slot_variables(parts: &PatternGrantParts) -> Result<(), CardParseError
     Ok(())
 }
 
+fn parse_polymorphic_owner(value: &str) -> PolymorphicOwnerPathPattern {
+    if let Ok(variable) = SlotVariable::parse(value) {
+        PolymorphicOwnerPathPattern::Slot(variable)
+    } else if contains_slot_reference(value) {
+        PolymorphicOwnerPathPattern::Template(value.to_string())
+    } else {
+        PolymorphicOwnerPathPattern::Concrete(OwnerPathPattern(value.to_string()))
+    }
+}
+
 fn parse_polymorphic_recipient(
     value: &str,
 ) -> Result<PolymorphicRecipientPathPattern, CardParseError> {
-    if contains_slot_reference(value) {
+    if let Ok(variable) = SlotVariable::parse(value) {
+        Ok(PolymorphicRecipientPathPattern::Slot(variable))
+    } else if contains_slot_reference(value) {
         if value != "*" && (value.is_empty() || value.split('/').any(str::is_empty)) {
             return Err(CardParseError::InvalidRecipientPath(value.to_string()));
         }
-        Ok(PolymorphicRecipientPathPattern(value.to_string()))
+        Ok(PolymorphicRecipientPathPattern::Template(value.to_string()))
     } else {
-        RecipientPathPattern::parse(value).map_err(CardParseError::InvalidRecipientPath)?;
-        Ok(PolymorphicRecipientPathPattern(value.to_string()))
+        Ok(PolymorphicRecipientPathPattern::Concrete(
+            RecipientPathPattern::parse(value).map_err(CardParseError::InvalidRecipientPath)?,
+        ))
     }
 }
 

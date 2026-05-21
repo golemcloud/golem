@@ -59,13 +59,19 @@ pub struct PatternGrant {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(transparent))]
-pub struct PolymorphicOwnerPathPattern(pub String);
+pub enum PolymorphicOwnerPathPattern {
+    Concrete(OwnerPathPattern),
+    Slot(SlotVariable),
+    Template(String),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(transparent))]
-pub struct PolymorphicRecipientPathPattern(pub String);
+pub enum PolymorphicRecipientPathPattern {
+    Concrete(RecipientPathPattern),
+    Slot(SlotVariable),
+    Template(String),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]

@@ -19,6 +19,12 @@ mod recipient;
 mod types;
 
 #[cfg(test)]
+mod parsing_tests;
+
+#[cfg(test)]
+mod subsumption_tests;
+
+#[cfg(test)]
 mod tests;
 
 pub use algebra::*;
