@@ -25,17 +25,14 @@ pub enum CardAlgebraError {
 
 impl PatternGrant {
     pub fn subsumes(&self, other: &Self) -> Result<bool, CardAlgebraError> {
-        Ok(
-            self.recipient.subsumes(&other.recipient)
-                && self.permission.subsumes(&other.permission),
-        )
+        Ok(self.permission.subsumes(&other.permission))
     }
 
     pub fn applies_to_recipient(
         &self,
         holder: &RecipientPathPattern,
     ) -> Result<bool, CardAlgebraError> {
-        Ok(self.recipient.matches_holder(holder))
+        Ok(self.permission.matches_recipient(holder))
     }
 }
 

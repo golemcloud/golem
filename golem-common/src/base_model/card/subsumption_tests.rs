@@ -22,26 +22,23 @@ use uuid::Uuid;
 fn fs(owner: &str, recipient: &str, resource: GlobResourcePattern) -> PatternGrant {
     PatternGrant::filesystem_read_pattern(
         owner,
-        RecipientPathPattern::parse(recipient).unwrap(),
+        AgentRecipientPattern::parse(recipient).unwrap(),
         resource,
     )
 }
 
-fn fs_permission(recipient: &str, permission: FilesystemPermissionPattern) -> PatternGrant {
-    PatternGrant::new(
-        RecipientPathPattern::parse(recipient).unwrap(),
-        PermissionPattern::Filesystem(permission),
-    )
+fn fs_permission(permission: FilesystemPermissionPattern) -> PatternGrant {
+    PatternGrant::new(PermissionPattern::Filesystem(permission))
 }
 
 fn network(recipient: &str, resource: NetworkResourcePattern) -> PatternGrant {
-    PatternGrant::new(
-        RecipientPathPattern::parse(recipient).unwrap(),
-        PermissionPattern::Network(NetworkPermissionPattern::Connect {
+    PatternGrant::new(PermissionPattern::Network(
+        NetworkPermissionPattern::Connect {
             owner: EmptyOwnerPattern,
+            recipient: AgentRecipientPattern::parse(recipient).unwrap(),
             resource,
-        }),
-    )
+        },
+    ))
 }
 
 fn card(lower_positive: Vec<PatternGrant>, upper_positive: Vec<PatternGrant>) -> Card {
@@ -319,8 +316,12 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
             format!("glob_resource_subsumption_{name}"),
             TestProperties::unit_test(),
             || {
-                let left = fs("acme/shop/prod/cart/agent", "acme", (*left).clone());
-                let right = fs("acme/shop/prod/cart/agent", "acme", (*right).clone());
+                let left = fs("acme/shop/prod/cart/agent", "acme/*/*/*/*", (*left).clone());
+                let right = fs(
+                    "acme/shop/prod/cart/agent",
+                    "acme/*/*/*/*",
+                    (*right).clone(),
+                );
 
                 assert_eq!(left.subsumes(&right).unwrap(), expected);
             }
@@ -330,27 +331,21 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
 
 #[test]
 fn verb_wildcard_subsumes_class_verbs_only() {
-    let any_filesystem = fs_permission(
-        "acme",
-        FilesystemPermissionPattern::Any {
-            owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
-            resource: GlobResourcePattern::glob("/data/**"),
-        },
-    );
-    let read_file = fs_permission(
-        "acme",
-        FilesystemPermissionPattern::Read {
-            owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
-            resource: GlobResourcePattern::exact("/data/file.txt"),
-        },
-    );
-    let write_file = fs_permission(
-        "acme",
-        FilesystemPermissionPattern::Write {
-            owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
-            resource: GlobResourcePattern::exact("/data/file.txt"),
-        },
-    );
+    let any_filesystem = fs_permission(FilesystemPermissionPattern::Any {
+        owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+        recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
+        resource: GlobResourcePattern::glob("/data/**"),
+    });
+    let read_file = fs_permission(FilesystemPermissionPattern::Read {
+        owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+        recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
+        resource: GlobResourcePattern::exact("/data/file.txt"),
+    });
+    let write_file = fs_permission(FilesystemPermissionPattern::Write {
+        owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+        recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
+        resource: GlobResourcePattern::exact("/data/file.txt"),
+    });
 
     assert!(any_filesystem.subsumes(&read_file).unwrap());
     assert!(any_filesystem.subsumes(&write_file).unwrap());
@@ -360,21 +355,21 @@ fn verb_wildcard_subsumes_class_verbs_only() {
 #[test]
 fn network_resource_subsumption_checks_host_and_ports() {
     let port_range = network(
-        "acme",
+        "acme/*/*/*/*",
         NetworkResourcePattern::HostPort {
             host: "api.internal".to_string(),
             ports: PortPattern::range(8000, 9000),
         },
     );
     let port_single = network(
-        "acme",
+        "acme/*/*/*/*",
         NetworkResourcePattern::HostPort {
             host: "api.internal".to_string(),
             ports: PortPattern::single(8080),
         },
     );
     let wrong_host = network(
-        "acme",
+        "acme/*/*/*/*",
         NetworkResourcePattern::HostPort {
             host: "other.internal".to_string(),
             ports: PortPattern::single(8080),
@@ -390,12 +385,12 @@ fn network_resource_subsumption_checks_host_and_ports() {
 fn oplog_ranges_subsume_inner_ranges() {
     let broad = PatternGrant::oplog_read(
         "acme/shop/prod/cart/agent",
-        RecipientPathPattern::account("acme"),
+        AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         OplogResourcePattern::range(Some(100), Some(500)),
     );
     let narrow = PatternGrant::oplog_read(
         "acme/shop/prod/cart/agent",
-        RecipientPathPattern::account("acme"),
+        AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         OplogResourcePattern::range(Some(200), Some(300)),
     );
 
@@ -497,22 +492,22 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
 fn negative_grants_override_positive_grants() {
     let allowed = fs(
         "acme/shop/prod/cart/agent",
-        "acme",
+        "acme/*/*/*/*",
         GlobResourcePattern::glob("/data/**"),
     );
     let denied = fs(
         "acme/shop/prod/cart/agent",
-        "acme",
+        "acme/*/*/*/*",
         GlobResourcePattern::exact("/data/secret.txt"),
     );
     let public = fs(
         "acme/shop/prod/cart/agent",
-        "acme",
+        "acme/*/*/*/*",
         GlobResourcePattern::exact("/data/public.txt"),
     );
     let secret = fs(
         "acme/shop/prod/cart/agent",
-        "acme",
+        "acme/*/*/*/*",
         GlobResourcePattern::exact("/data/secret.txt"),
     );
     let surface = GrantSurface {

@@ -23,9 +23,442 @@ pub(crate) trait OwnerSubsumes {
     fn subsumes(&self, other: &Self) -> bool;
 }
 
+pub(crate) trait RecipientSubsumes {
+    fn subsumes(&self, other: &Self) -> bool;
+}
+
+pub(crate) trait RecipientMatches {
+    fn matches_holder(&self, holder: &RecipientPathPattern) -> bool;
+}
+
 trait ResourceSubsumes {
     fn subsumes(&self, other: &Self) -> bool;
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum AccountRecipientPattern {
+    Any,
+    Account { account: String },
+}
+
+impl AccountRecipientPattern {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        Self::try_from(RecipientPathPattern::parse(value)?)
+    }
+}
+
+impl TryFrom<RecipientPathPattern> for AccountRecipientPattern {
+    type Error = String;
+
+    fn try_from(value: RecipientPathPattern) -> Result<Self, Self::Error> {
+        match value {
+            RecipientPathPattern::Any => Ok(Self::Any),
+            RecipientPathPattern::Account { account } => Ok(Self::Account { account }),
+            other => Err(format!("{other:?}")),
+        }
+    }
+}
+
+impl RecipientSubsumes for AccountRecipientPattern {
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Account { account: a }, Self::Account { account: b }) => a == b,
+            (Self::Account { .. }, Self::Any) => false,
+        }
+    }
+}
+
+impl RecipientMatches for AccountRecipientPattern {
+    fn matches_holder(&self, holder: &RecipientPathPattern) -> bool {
+        match (self, holder) {
+            (Self::Any, RecipientPathPattern::Account { .. }) => true,
+            (Self::Account { account: a }, RecipientPathPattern::Account { account: b }) => a == b,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum EnvironmentRecipientPattern {
+    Any,
+    AccountEnvironments {
+        account: String,
+    },
+    ApplicationEnvironments {
+        account: String,
+        application: String,
+    },
+    Environment {
+        account: String,
+        application: String,
+        environment: String,
+    },
+}
+
+impl EnvironmentRecipientPattern {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        Self::try_from(RecipientPathPattern::parse(value)?)
+    }
+}
+
+impl TryFrom<RecipientPathPattern> for EnvironmentRecipientPattern {
+    type Error = String;
+
+    fn try_from(value: RecipientPathPattern) -> Result<Self, Self::Error> {
+        match value {
+            RecipientPathPattern::Any => Ok(Self::Any),
+            RecipientPathPattern::AccountEnvironments { account } => {
+                Ok(Self::AccountEnvironments { account })
+            }
+            RecipientPathPattern::ApplicationEnvironments {
+                account,
+                application,
+            } => Ok(Self::ApplicationEnvironments {
+                account,
+                application,
+            }),
+            RecipientPathPattern::Environment {
+                account,
+                application,
+                environment,
+            } => Ok(Self::Environment {
+                account,
+                application,
+                environment,
+            }),
+            other => Err(format!("{other:?}")),
+        }
+    }
+}
+
+impl RecipientSubsumes for EnvironmentRecipientPattern {
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::AccountEnvironments { account: a }, other) => {
+                other.account_part().is_some_and(|account| a == account)
+            }
+            (
+                Self::ApplicationEnvironments {
+                    account: aa,
+                    application: ap,
+                },
+                other,
+            ) => other
+                .application_part()
+                .is_some_and(|(ba, bp)| aa == ba && ap == bp),
+            (
+                Self::Environment {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                },
+                Self::Environment {
+                    account: ba,
+                    application: bp,
+                    environment: be,
+                },
+            ) => aa == ba && ap == bp && ae == be,
+            (Self::Environment { .. }, _) => false,
+        }
+    }
+}
+
+impl RecipientMatches for EnvironmentRecipientPattern {
+    fn matches_holder(&self, holder: &RecipientPathPattern) -> bool {
+        let Ok(holder) = Self::try_from(holder.clone()) else {
+            return false;
+        };
+        self.subsumes(&holder)
+    }
+}
+
+impl EnvironmentRecipientPattern {
+    fn account_part(&self) -> Option<&str> {
+        match self {
+            Self::Any => None,
+            Self::AccountEnvironments { account }
+            | Self::ApplicationEnvironments { account, .. }
+            | Self::Environment { account, .. } => Some(account),
+        }
+    }
+
+    fn application_part(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::ApplicationEnvironments {
+                account,
+                application,
+            }
+            | Self::Environment {
+                account,
+                application,
+                ..
+            } => Some((account, application)),
+            Self::Any | Self::AccountEnvironments { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum AgentRecipientPattern {
+    Any,
+    AccountAgents {
+        account: String,
+    },
+    ApplicationAgents {
+        account: String,
+        application: String,
+    },
+    EnvironmentAgents {
+        account: String,
+        application: String,
+        environment: String,
+    },
+    ComponentAgents {
+        account: String,
+        application: String,
+        environment: String,
+        component: String,
+    },
+    Agent {
+        account: String,
+        application: String,
+        environment: String,
+        component: String,
+        agent: String,
+    },
+}
+
+impl AgentRecipientPattern {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        Self::try_from(RecipientPathPattern::parse(value)?)
+    }
+}
+
+impl TryFrom<RecipientPathPattern> for AgentRecipientPattern {
+    type Error = String;
+
+    fn try_from(value: RecipientPathPattern) -> Result<Self, Self::Error> {
+        match value {
+            RecipientPathPattern::Any => Ok(Self::Any),
+            RecipientPathPattern::AccountAgents { account } => Ok(Self::AccountAgents { account }),
+            RecipientPathPattern::ApplicationAgents {
+                account,
+                application,
+            } => Ok(Self::ApplicationAgents {
+                account,
+                application,
+            }),
+            RecipientPathPattern::EnvironmentAgents {
+                account,
+                application,
+                environment,
+            } => Ok(Self::EnvironmentAgents {
+                account,
+                application,
+                environment,
+            }),
+            RecipientPathPattern::ComponentAgents {
+                account,
+                application,
+                environment,
+                component,
+            } => Ok(Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                component,
+            }),
+            RecipientPathPattern::Agent {
+                account,
+                application,
+                environment,
+                component,
+                agent,
+            } => Ok(Self::Agent {
+                account,
+                application,
+                environment,
+                component,
+                agent,
+            }),
+            other => Err(format!("{other:?}")),
+        }
+    }
+}
+
+impl RecipientSubsumes for AgentRecipientPattern {
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::AccountAgents { account: a }, other) => {
+                other.account_part().is_some_and(|account| a == account)
+            }
+            (
+                Self::ApplicationAgents {
+                    account: aa,
+                    application: ap,
+                },
+                other,
+            ) => other
+                .application_part()
+                .is_some_and(|(ba, bp)| aa == ba && ap == bp),
+            (
+                Self::EnvironmentAgents {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                },
+                other,
+            ) => other
+                .environment_part()
+                .is_some_and(|(ba, bp, be)| aa == ba && ap == bp && ae == be),
+            (
+                Self::ComponentAgents {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                    component: ac,
+                },
+                other,
+            ) => other
+                .component_part()
+                .is_some_and(|(ba, bp, be, bc)| aa == ba && ap == bp && ae == be && ac == bc),
+            (
+                Self::Agent {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                    component: ac,
+                    agent: ag,
+                },
+                Self::Agent {
+                    account: ba,
+                    application: bp,
+                    environment: be,
+                    component: bc,
+                    agent: bg,
+                },
+            ) => aa == ba && ap == bp && ae == be && ac == bc && ag == bg,
+            (Self::Agent { .. }, _) => false,
+        }
+    }
+}
+
+impl RecipientMatches for AgentRecipientPattern {
+    fn matches_holder(&self, holder: &RecipientPathPattern) -> bool {
+        let Ok(holder) = Self::try_from(holder.clone()) else {
+            return false;
+        };
+        self.subsumes(&holder)
+    }
+}
+
+impl AgentRecipientPattern {
+    fn account_part(&self) -> Option<&str> {
+        match self {
+            Self::Any => None,
+            Self::AccountAgents { account }
+            | Self::ApplicationAgents { account, .. }
+            | Self::EnvironmentAgents { account, .. }
+            | Self::ComponentAgents { account, .. }
+            | Self::Agent { account, .. } => Some(account),
+        }
+    }
+
+    fn application_part(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::ApplicationAgents {
+                account,
+                application,
+            }
+            | Self::EnvironmentAgents {
+                account,
+                application,
+                ..
+            }
+            | Self::ComponentAgents {
+                account,
+                application,
+                ..
+            }
+            | Self::Agent {
+                account,
+                application,
+                ..
+            } => Some((account, application)),
+            Self::Any | Self::AccountAgents { .. } => None,
+        }
+    }
+
+    fn environment_part(&self) -> Option<(&str, &str, &str)> {
+        match self {
+            Self::EnvironmentAgents {
+                account,
+                application,
+                environment,
+            }
+            | Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                ..
+            }
+            | Self::Agent {
+                account,
+                application,
+                environment,
+                ..
+            } => Some((account, application, environment)),
+            Self::Any | Self::AccountAgents { .. } | Self::ApplicationAgents { .. } => None,
+        }
+    }
+
+    fn component_part(&self) -> Option<(&str, &str, &str, &str)> {
+        match self {
+            Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                component,
+            }
+            | Self::Agent {
+                account,
+                application,
+                environment,
+                component,
+                ..
+            } => Some((account, application, environment, component)),
+            Self::Any
+            | Self::AccountAgents { .. }
+            | Self::ApplicationAgents { .. }
+            | Self::EnvironmentAgents { .. } => None,
+        }
+    }
+}
+
+macro_rules! define_polymorphic_recipient_pattern {
+    ($name:ident, $concrete:ty) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+        pub enum $name {
+            Concrete($concrete),
+            Slot(SlotVariable),
+            Template(String),
+        }
+    };
+}
+
+define_polymorphic_recipient_pattern!(PolymorphicAccountRecipientPattern, AccountRecipientPattern);
+define_polymorphic_recipient_pattern!(
+    PolymorphicEnvironmentRecipientPattern,
+    EnvironmentRecipientPattern
+);
+define_polymorphic_recipient_pattern!(PolymorphicAgentRecipientPattern, AgentRecipientPattern);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -434,29 +867,37 @@ impl PortPattern {
 }
 
 macro_rules! define_class_permission_pattern {
-    ($name:ident, $owner:ty, $resource:ty, [$($verb:ident),+ $(,)?]) => {
+    ($name:ident, $owner:ty, $recipient:ty, $resource:ty, [$($verb:ident),+ $(,)?]) => {
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum $name {
-            Any { owner: $owner, resource: $resource },
-            $($verb { owner: $owner, resource: $resource }),+
+            Any { owner: $owner, recipient: $recipient, resource: $resource },
+            $($verb { owner: $owner, recipient: $recipient, resource: $resource }),+
         }
 
         impl PermissionSubsumes for $name {
             fn subsumes(&self, other: &Self) -> bool {
-                let (self_verb, self_owner, self_resource) = self.parts();
-                let (other_verb, other_owner, other_resource) = other.parts();
+                let (self_verb, self_owner, self_recipient, self_resource) = self.parts();
+                let (other_verb, other_owner, other_recipient, other_resource) = other.parts();
                 self_owner.subsumes(other_owner)
+                    && self_recipient.subsumes(other_recipient)
                     && (self_verb.is_none() || self_verb == other_verb)
                     && self_resource.subsumes(other_resource)
             }
         }
 
+        impl RecipientMatches for $name {
+            fn matches_holder(&self, holder: &RecipientPathPattern) -> bool {
+                let (_, _, recipient, _) = self.parts();
+                recipient.matches_holder(holder)
+            }
+        }
+
         impl $name {
-            fn parts(&self) -> (Option<&'static str>, &$owner, &$resource) {
+            fn parts(&self) -> (Option<&'static str>, &$owner, &$recipient, &$resource) {
                 match self {
-                    Self::Any { owner, resource } => (None, owner, resource),
-                    $(Self::$verb { owner, resource } => (Some(stringify!($verb)), owner, resource)),+
+                    Self::Any { owner, recipient, resource } => (None, owner, recipient, resource),
+                    $(Self::$verb { owner, recipient, resource } => (Some(stringify!($verb)), owner, recipient, resource)),+
                 }
             }
         }
@@ -464,12 +905,12 @@ macro_rules! define_class_permission_pattern {
 }
 
 macro_rules! define_polymorphic_class_permission_pattern {
-    ($name:ident, $owner:ty, $resource:ty, [$($verb:ident),+ $(,)?]) => {
+    ($name:ident, $owner:ty, $recipient:ty, $resource:ty, [$($verb:ident),+ $(,)?]) => {
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum $name {
-            Any { owner: $owner, resource: $resource },
-            $($verb { owner: $owner, resource: $resource }),+
+            Any { owner: $owner, recipient: $recipient, resource: $resource },
+            $($verb { owner: $owner, recipient: $recipient, resource: $resource }),+
         }
     };
 }
@@ -477,78 +918,91 @@ macro_rules! define_polymorphic_class_permission_pattern {
 define_class_permission_pattern!(
     FilesystemPermissionPattern,
     AgentOwnerPattern,
+    AgentRecipientPattern,
     GlobResourcePattern,
     [Read, Write, List, Stat, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicFilesystemPermissionPattern,
     PolymorphicAgentOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicGlobResourcePattern,
     [Read, Write, List, Stat, Delete]
 );
 define_class_permission_pattern!(
     NetworkPermissionPattern,
     EmptyOwnerPattern,
+    AgentRecipientPattern,
     NetworkResourcePattern,
     [Connect]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicNetworkPermissionPattern,
     PolymorphicEmptyOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicNetworkResourcePattern,
     [Connect]
 );
 define_class_permission_pattern!(
     EnvPermissionPattern,
     AgentOwnerPattern,
+    AgentRecipientPattern,
     IdentifierResourcePattern,
     [Read]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvPermissionPattern,
     PolymorphicAgentOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [Read]
 );
 define_class_permission_pattern!(
     OplogPermissionPattern,
     AgentOwnerPattern,
+    AgentRecipientPattern,
     OplogResourcePattern,
     [Read]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicOplogPermissionPattern,
     PolymorphicAgentOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicOplogResourcePattern,
     [Read]
 );
 define_class_permission_pattern!(
     ConfigPermissionPattern,
     AgentOwnerPattern,
+    AgentRecipientPattern,
     GlobResourcePattern,
     [Read]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicConfigPermissionPattern,
     PolymorphicAgentOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicGlobResourcePattern,
     [Read]
 );
 define_class_permission_pattern!(
     SecretPermissionPattern,
     EnvironmentOwnerPattern,
+    AgentRecipientPattern,
     GlobResourcePattern,
     [Hold, Mint, Reveal]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicSecretPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicGlobResourcePattern,
     [Hold, Mint, Reveal]
 );
 define_class_permission_pattern!(
     AgentPermissionPattern,
     AgentOwnerPattern,
+    AgentRecipientPattern,
     AgentResourcePattern,
     [
         Invoke,
@@ -568,6 +1022,7 @@ define_class_permission_pattern!(
 define_polymorphic_class_permission_pattern!(
     PolymorphicAgentPermissionPattern,
     PolymorphicAgentOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicAgentResourcePattern,
     [
         Invoke,
@@ -587,66 +1042,77 @@ define_polymorphic_class_permission_pattern!(
 define_class_permission_pattern!(
     ToolPermissionPattern,
     ToolOwnerPattern,
+    AgentRecipientPattern,
     ToolResourcePattern,
     [Invoke]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicToolPermissionPattern,
     PolymorphicToolOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicToolResourcePattern,
     [Invoke]
 );
 define_class_permission_pattern!(
     KvPermissionPattern,
     EnvironmentOwnerPattern,
+    AgentRecipientPattern,
     GlobResourcePattern,
     [Read, Write, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicKvPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicGlobResourcePattern,
     [Read, Write, Delete]
 );
 define_class_permission_pattern!(
     BlobPermissionPattern,
     EnvironmentOwnerPattern,
+    AgentRecipientPattern,
     GlobResourcePattern,
     [Read, Write, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicBlobPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicGlobResourcePattern,
     [Read, Write, Delete]
 );
 define_class_permission_pattern!(
     RdbmsPermissionPattern,
     EnvironmentOwnerPattern,
+    AgentRecipientPattern,
     GlobResourcePattern,
     [Query, Execute]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicRdbmsPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicGlobResourcePattern,
     [Query, Execute]
 );
 define_class_permission_pattern!(
     CardPermissionPattern,
     AccountOwnerPattern,
+    AgentRecipientPattern,
     CardResourcePattern,
     [Derive, Revoke, Inspect, Install]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicCardPermissionPattern,
     PolymorphicAccountOwnerPattern,
+    PolymorphicAgentRecipientPattern,
     PolymorphicCardResourcePattern,
     [Derive, Revoke, Inspect, Install]
 );
 define_class_permission_pattern!(
     SystemPermissionPattern,
     EmptyOwnerPattern,
+    AccountRecipientPattern,
     EmptyResourcePattern,
     [
         CreateAccount,
@@ -658,6 +1124,7 @@ define_class_permission_pattern!(
 define_polymorphic_class_permission_pattern!(
     PolymorphicSystemPermissionPattern,
     PolymorphicEmptyOwnerPattern,
+    PolymorphicAccountRecipientPattern,
     PolymorphicEmptyResourcePattern,
     [
         CreateAccount,
@@ -669,66 +1136,77 @@ define_polymorphic_class_permission_pattern!(
 define_class_permission_pattern!(
     PlanPermissionPattern,
     EmptyOwnerPattern,
+    AccountRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Update]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicPlanPermissionPattern,
     PolymorphicEmptyOwnerPattern,
+    PolymorphicAccountRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Update]
 );
 define_class_permission_pattern!(
     AccountPermissionPattern,
     AccountOwnerPattern,
+    AccountRecipientPattern,
     EmptyResourcePattern,
     [View, Update, Delete, SetRoles, SetPlan, Restore]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicAccountPermissionPattern,
     PolymorphicAccountOwnerPattern,
+    PolymorphicAccountRecipientPattern,
     PolymorphicEmptyResourcePattern,
     [View, Update, Delete, SetRoles, SetPlan, Restore]
 );
 define_class_permission_pattern!(
     AccountUsagePermissionPattern,
     AccountOwnerPattern,
+    AccountRecipientPattern,
     EmptyResourcePattern,
     [View]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicAccountUsagePermissionPattern,
     PolymorphicAccountOwnerPattern,
+    PolymorphicAccountRecipientPattern,
     PolymorphicEmptyResourcePattern,
     [View]
 );
 define_class_permission_pattern!(
     AccountTokenPermissionPattern,
     AccountOwnerPattern,
+    AccountRecipientPattern,
     IdentifierResourcePattern,
     [Create, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicAccountTokenPermissionPattern,
     PolymorphicAccountOwnerPattern,
+    PolymorphicAccountRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [Create, Delete]
 );
 define_class_permission_pattern!(
     AccountPluginPermissionPattern,
     AccountOwnerPattern,
+    AccountRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicAccountPluginPermissionPattern,
     PolymorphicAccountOwnerPattern,
+    PolymorphicAccountRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
     ApplicationPermissionPattern,
     ApplicationOwnerPattern,
+    AccountRecipientPattern,
     EmptyResourcePattern,
     [
         View,
@@ -745,6 +1223,7 @@ define_class_permission_pattern!(
 define_polymorphic_class_permission_pattern!(
     PolymorphicApplicationPermissionPattern,
     PolymorphicApplicationOwnerPattern,
+    PolymorphicAccountRecipientPattern,
     PolymorphicEmptyResourcePattern,
     [
         View,
@@ -761,6 +1240,7 @@ define_polymorphic_class_permission_pattern!(
 define_class_permission_pattern!(
     EnvironmentPermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     EmptyResourcePattern,
     [
         View,
@@ -777,6 +1257,7 @@ define_class_permission_pattern!(
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicEmptyResourcePattern,
     [
         View,
@@ -793,168 +1274,196 @@ define_polymorphic_class_permission_pattern!(
 define_class_permission_pattern!(
     EnvironmentSharePermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentSharePermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentPluginGrantPermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentPluginGrantPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentDomainRegistrationPermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentDomainRegistrationPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentSecuritySchemePermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentSecuritySchemePermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentHttpApiDeploymentPermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentHttpApiDeploymentPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentMcpDeploymentPermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentMcpDeploymentPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentAgentSecretPermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     GlobResourcePattern,
     [View, Create, Update, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentAgentSecretPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicGlobResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentResourceDefinitionPermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentResourceDefinitionPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentRetryPolicyPermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentRetryPolicyPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
     ComponentPermissionPattern,
     ComponentOwnerPattern,
+    EnvironmentRecipientPattern,
     EmptyResourcePattern,
     [View, Create, Update, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicComponentPermissionPattern,
     PolymorphicComponentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicEmptyResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
     AccountOauth2IdentityPermissionPattern,
     AccountOwnerPattern,
+    AccountRecipientPattern,
     IdentifierResourcePattern,
     [View, Link, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicAccountOauth2IdentityPermissionPattern,
     PolymorphicAccountOwnerPattern,
+    PolymorphicAccountRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Link, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentInitialFilesPermissionPattern,
     ComponentOwnerPattern,
+    EnvironmentRecipientPattern,
     GlobResourcePattern,
     [View, Update, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentInitialFilesPermissionPattern,
     PolymorphicComponentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicGlobResourcePattern,
     [View, Update, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentKvBucketPermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentKvBucketPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Delete]
 );
 define_class_permission_pattern!(
     EnvironmentBlobBucketPermissionPattern,
     EnvironmentOwnerPattern,
+    EnvironmentRecipientPattern,
     IdentifierResourcePattern,
     [View, Create, Delete]
 );
 define_polymorphic_class_permission_pattern!(
     PolymorphicEnvironmentBlobBucketPermissionPattern,
     PolymorphicEnvironmentOwnerPattern,
+    PolymorphicEnvironmentRecipientPattern,
     PolymorphicIdentifierResourcePattern,
     [View, Create, Delete]
 );
@@ -981,6 +1490,12 @@ macro_rules! define_permission_patterns {
                 match (self, other) {
                     $((Self::$variant(a), Self::$variant(b)) => a.subsumes(b)),+,
                     _ => false,
+                }
+            }
+
+            pub fn matches_recipient(&self, holder: &RecipientPathPattern) -> bool {
+                match self {
+                    $(Self::$variant(pattern) => pattern.matches_holder(holder)),+
                 }
             }
         }

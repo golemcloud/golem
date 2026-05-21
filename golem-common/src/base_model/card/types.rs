@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use crate::base_model::card::{
-    AccountOwnerPattern, AgentOwnerPattern, AgentPermissionPattern, AgentResourcePattern,
-    BlobPermissionPattern, CardPermissionPattern, CardResourcePattern, ConfigPermissionPattern,
-    EmptyOwnerPattern, EnvPermissionPattern, EnvironmentOwnerPattern, FilesystemPermissionPattern,
-    GlobResourcePattern, IdentifierResourcePattern, KvPermissionPattern, NetworkPermissionPattern,
-    NetworkResourcePattern, OplogPermissionPattern, OplogResourcePattern, PermissionPattern,
-    PolymorphicPermissionPattern, PortPattern, RdbmsPermissionPattern, RecipientPathPattern,
-    SecretPermissionPattern, ToolOwnerPattern, ToolPermissionPattern, ToolResourcePattern,
+    AccountOwnerPattern, AgentOwnerPattern, AgentPermissionPattern, AgentRecipientPattern,
+    AgentResourcePattern, BlobPermissionPattern, CardPermissionPattern, CardResourcePattern,
+    ConfigPermissionPattern, EmptyOwnerPattern, EnvPermissionPattern, EnvironmentOwnerPattern,
+    FilesystemPermissionPattern, GlobResourcePattern, IdentifierResourcePattern,
+    KvPermissionPattern, NetworkPermissionPattern, NetworkResourcePattern, OplogPermissionPattern,
+    OplogResourcePattern, PermissionPattern, PolymorphicPermissionPattern, PortPattern,
+    RdbmsPermissionPattern, RecipientPathPattern, SecretPermissionPattern, ToolOwnerPattern,
+    ToolPermissionPattern, ToolResourcePattern,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -53,21 +54,17 @@ impl SlotVariable {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct PatternGrant {
-    pub recipient: RecipientPathPattern,
     pub permission: PermissionPattern,
 }
 
 impl PatternGrant {
-    pub fn new(recipient: RecipientPathPattern, permission: PermissionPattern) -> Self {
-        Self {
-            recipient,
-            permission,
-        }
+    pub fn new(permission: PermissionPattern) -> Self {
+        Self { permission }
     }
 
     pub fn filesystem_read(
         owner: impl Into<AgentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         path: impl Into<String>,
     ) -> Self {
         Self::filesystem_read_pattern(owner, recipient, GlobResourcePattern::exact(path))
@@ -75,184 +72,164 @@ impl PatternGrant {
 
     pub fn filesystem_read_pattern(
         owner: impl Into<AgentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         resource: GlobResourcePattern,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Filesystem(FilesystemPermissionPattern::Read {
+        Self::new(PermissionPattern::Filesystem(
+            FilesystemPermissionPattern::Read {
                 owner: owner.into(),
+                recipient: recipient.into(),
                 resource,
-            }),
-        )
+            },
+        ))
     }
 
     pub fn filesystem_write(
         owner: impl Into<AgentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         path: impl Into<String>,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Filesystem(FilesystemPermissionPattern::Write {
+        Self::new(PermissionPattern::Filesystem(
+            FilesystemPermissionPattern::Write {
                 owner: owner.into(),
+                recipient: recipient.into(),
                 resource: GlobResourcePattern::exact(path),
-            }),
-        )
+            },
+        ))
     }
 
     pub fn network_connect(
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         host: impl Into<String>,
         ports: PortPattern,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Network(NetworkPermissionPattern::Connect {
+        Self::new(PermissionPattern::Network(
+            NetworkPermissionPattern::Connect {
                 owner: EmptyOwnerPattern,
+                recipient: recipient.into(),
                 resource: NetworkResourcePattern::host_port(host, ports),
-            }),
-        )
+            },
+        ))
     }
 
     pub fn env_read(
         owner: impl Into<AgentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         name: impl Into<String>,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Env(EnvPermissionPattern::Read {
-                owner: owner.into(),
-                resource: IdentifierResourcePattern::exact(name),
-            }),
-        )
+        Self::new(PermissionPattern::Env(EnvPermissionPattern::Read {
+            owner: owner.into(),
+            recipient: recipient.into(),
+            resource: IdentifierResourcePattern::exact(name),
+        }))
     }
 
     pub fn oplog_read(
         owner: impl Into<AgentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         resource: OplogResourcePattern,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Oplog(OplogPermissionPattern::Read {
-                owner: owner.into(),
-                resource,
-            }),
-        )
+        Self::new(PermissionPattern::Oplog(OplogPermissionPattern::Read {
+            owner: owner.into(),
+            recipient: recipient.into(),
+            resource,
+        }))
     }
 
     pub fn config_read(
         owner: impl Into<AgentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         key: impl Into<String>,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Config(ConfigPermissionPattern::Read {
-                owner: owner.into(),
-                resource: GlobResourcePattern::exact(key),
-            }),
-        )
+        Self::new(PermissionPattern::Config(ConfigPermissionPattern::Read {
+            owner: owner.into(),
+            recipient: recipient.into(),
+            resource: GlobResourcePattern::exact(key),
+        }))
     }
 
     pub fn secret_reveal(
         owner: impl Into<EnvironmentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         key: impl Into<String>,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Secret(SecretPermissionPattern::Reveal {
-                owner: owner.into(),
-                resource: GlobResourcePattern::exact(key),
-            }),
-        )
+        Self::new(PermissionPattern::Secret(SecretPermissionPattern::Reveal {
+            owner: owner.into(),
+            recipient: recipient.into(),
+            resource: GlobResourcePattern::exact(key),
+        }))
     }
 
     pub fn agent_invoke(
         owner: impl Into<AgentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         method: impl Into<String>,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Agent(AgentPermissionPattern::Invoke {
-                owner: owner.into(),
-                resource: AgentResourcePattern::method(method),
-            }),
-        )
+        Self::new(PermissionPattern::Agent(AgentPermissionPattern::Invoke {
+            owner: owner.into(),
+            recipient: recipient.into(),
+            resource: AgentResourcePattern::method(method),
+        }))
     }
 
     pub fn tool_invoke(
         owner: impl Into<ToolOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         command: impl Into<String>,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Tool(ToolPermissionPattern::Invoke {
-                owner: owner.into(),
-                resource: ToolResourcePattern::command(command),
-            }),
-        )
+        Self::new(PermissionPattern::Tool(ToolPermissionPattern::Invoke {
+            owner: owner.into(),
+            recipient: recipient.into(),
+            resource: ToolResourcePattern::command(command),
+        }))
     }
 
     pub fn kv_read(
         owner: impl Into<EnvironmentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         key: impl Into<String>,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Kv(KvPermissionPattern::Read {
-                owner: owner.into(),
-                resource: GlobResourcePattern::exact(key),
-            }),
-        )
+        Self::new(PermissionPattern::Kv(KvPermissionPattern::Read {
+            owner: owner.into(),
+            recipient: recipient.into(),
+            resource: GlobResourcePattern::exact(key),
+        }))
     }
 
     pub fn blob_read(
         owner: impl Into<EnvironmentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         key: impl Into<String>,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Blob(BlobPermissionPattern::Read {
-                owner: owner.into(),
-                resource: GlobResourcePattern::exact(key),
-            }),
-        )
+        Self::new(PermissionPattern::Blob(BlobPermissionPattern::Read {
+            owner: owner.into(),
+            recipient: recipient.into(),
+            resource: GlobResourcePattern::exact(key),
+        }))
     }
 
     pub fn rdbms_query(
         owner: impl Into<EnvironmentOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         query_target: impl Into<String>,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Rdbms(RdbmsPermissionPattern::Query {
-                owner: owner.into(),
-                resource: GlobResourcePattern::exact(query_target),
-            }),
-        )
+        Self::new(PermissionPattern::Rdbms(RdbmsPermissionPattern::Query {
+            owner: owner.into(),
+            recipient: recipient.into(),
+            resource: GlobResourcePattern::exact(query_target),
+        }))
     }
 
     pub fn card_install(
         owner: impl Into<AccountOwnerPattern>,
-        recipient: RecipientPathPattern,
+        recipient: impl Into<AgentRecipientPattern>,
         target: RecipientPathPattern,
     ) -> Self {
-        Self::new(
-            recipient,
-            PermissionPattern::Card(CardPermissionPattern::Install {
-                owner: owner.into(),
-                resource: CardResourcePattern::InstallTarget(target),
-            }),
-        )
+        Self::new(PermissionPattern::Card(CardPermissionPattern::Install {
+            owner: owner.into(),
+            recipient: recipient.into(),
+            resource: CardResourcePattern::InstallTarget(target),
+        }))
     }
 }
 
@@ -267,7 +244,6 @@ pub enum PolymorphicRecipientPathPattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct PolymorphicPatternGrant {
-    pub recipient: PolymorphicRecipientPathPattern,
     pub permission: PolymorphicPermissionPattern,
 }
 
