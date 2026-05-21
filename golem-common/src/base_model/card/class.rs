@@ -40,6 +40,16 @@ pub enum IdentifierResourcePattern {
     Exact(String),
 }
 
+impl IdentifierResourcePattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn exact(value: impl Into<String>) -> Self {
+        Self::Exact(value.into())
+    }
+}
+
 impl ResourceSubsumes for IdentifierResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
@@ -56,6 +66,20 @@ pub enum GlobResourcePattern {
     Any,
     Exact(String),
     Glob(String),
+}
+
+impl GlobResourcePattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn exact(value: impl Into<String>) -> Self {
+        Self::Exact(value.into())
+    }
+
+    pub fn glob(value: impl Into<String>) -> Self {
+        Self::Glob(value.into())
+    }
 }
 
 impl ResourceSubsumes for GlobResourcePattern {
@@ -76,6 +100,26 @@ impl ResourceSubsumes for GlobResourcePattern {
 pub enum NetworkResourcePattern {
     Any,
     HostPort { host: String, ports: PortPattern },
+}
+
+impl NetworkResourcePattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn host(host: impl Into<String>) -> Self {
+        Self::HostPort {
+            host: host.into(),
+            ports: PortPattern::Any,
+        }
+    }
+
+    pub fn host_port(host: impl Into<String>, ports: PortPattern) -> Self {
+        Self::HostPort {
+            host: host.into(),
+            ports,
+        }
+    }
 }
 
 impl ResourceSubsumes for NetworkResourcePattern {
@@ -107,6 +151,16 @@ pub enum OplogResourcePattern {
     },
 }
 
+impl OplogResourcePattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn range(start: Option<u64>, end: Option<u64>) -> Self {
+        Self::Range { start, end }
+    }
+}
+
 impl ResourceSubsumes for OplogResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
@@ -131,6 +185,20 @@ pub enum AgentResourcePattern {
     Method(String),
 }
 
+impl AgentResourcePattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn empty() -> Self {
+        Self::Empty
+    }
+
+    pub fn method(method: impl Into<String>) -> Self {
+        Self::Method(method.into())
+    }
+}
+
 impl ResourceSubsumes for AgentResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
@@ -149,6 +217,16 @@ pub enum ToolResourcePattern {
     Command(String),
 }
 
+impl ToolResourcePattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn command(command: impl Into<String>) -> Self {
+        Self::Command(command.into())
+    }
+}
+
 impl ResourceSubsumes for ToolResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
@@ -165,6 +243,20 @@ pub enum CardResourcePattern {
     Any,
     Empty,
     InstallTarget(RecipientPathPattern),
+}
+
+impl CardResourcePattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn empty() -> Self {
+        Self::Empty
+    }
+
+    pub fn install_target(target: RecipientPathPattern) -> Self {
+        Self::InstallTarget(target)
+    }
 }
 
 impl ResourceSubsumes for CardResourcePattern {
@@ -211,6 +303,18 @@ define_polymorphic_resource_pattern!(PolymorphicToolResourcePattern, ToolResourc
 define_polymorphic_resource_pattern!(PolymorphicCardResourcePattern, CardResourcePattern);
 
 impl PortPattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn single(port: u16) -> Self {
+        Self::Single(port)
+    }
+
+    pub fn range(start: u16, end: u16) -> Self {
+        Self::Range { start, end }
+    }
+
     pub fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,

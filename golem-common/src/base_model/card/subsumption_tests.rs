@@ -20,10 +20,10 @@ use test_r::{add_test, test, test_gen};
 use uuid::Uuid;
 
 fn fs(owner: &str, recipient: &str, resource: GlobResourcePattern) -> PatternGrant {
-    fs_permission(
+    PatternGrant::filesystem_read_pattern(
         owner,
-        recipient,
-        FilesystemPermissionPattern::Read(resource),
+        RecipientPathPattern::parse(recipient).unwrap(),
+        resource,
     )
 }
 
@@ -32,19 +32,19 @@ fn fs_permission(
     recipient: &str,
     permission: FilesystemPermissionPattern,
 ) -> PatternGrant {
-    PatternGrant {
-        owner: OwnerPathPattern(owner.to_string()),
-        recipient: RecipientPathPattern::parse(recipient).unwrap(),
-        permission: PermissionPattern::Filesystem(permission),
-    }
+    PatternGrant::new(
+        owner,
+        RecipientPathPattern::parse(recipient).unwrap(),
+        PermissionPattern::Filesystem(permission),
+    )
 }
 
 fn network(recipient: &str, resource: NetworkResourcePattern) -> PatternGrant {
-    PatternGrant {
-        owner: OwnerPathPattern(String::new()),
-        recipient: RecipientPathPattern::parse(recipient).unwrap(),
-        permission: PermissionPattern::Network(NetworkPermissionPattern::Connect(resource)),
-    }
+    PatternGrant::new(
+        OwnerPathPattern::new(String::new()),
+        RecipientPathPattern::parse(recipient).unwrap(),
+        PermissionPattern::Network(NetworkPermissionPattern::Connect(resource)),
+    )
 }
 
 fn card(lower_positive: Vec<PatternGrant>, upper_positive: Vec<PatternGrant>) -> Card {
@@ -64,8 +64,8 @@ fn card(lower_positive: Vec<PatternGrant>, upper_positive: Vec<PatternGrant>) ->
 
 #[test]
 fn owner_truncation_subsumes_trailing_segments() {
-    let broad = OwnerPathPattern("acme/shop".to_string());
-    let narrow = OwnerPathPattern("acme/shop/prod/cart/agent".to_string());
+    let broad = OwnerPathPattern::new("acme/shop");
+    let narrow = OwnerPathPattern::new("acme/shop/prod/cart/agent");
 
     assert!(broad.subsumes(&narrow).unwrap());
     assert!(!narrow.subsumes(&broad).unwrap());
@@ -99,8 +99,8 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
             ),
             TestProperties::unit_test(),
             || {
-                let left = OwnerPathPattern(left.to_string());
-                let right = OwnerPathPattern(right.to_string());
+                let left = OwnerPathPattern::new(left);
+                let right = OwnerPathPattern::new(right);
 
                 assert_eq!(left.subsumes(&right).unwrap(), expected);
             }
@@ -110,8 +110,8 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
 
 #[test]
 fn invalid_owner_paths_fail_subsumption() {
-    let invalid = OwnerPathPattern("acme//prod".to_string());
-    let valid = OwnerPathPattern("acme/shop/prod".to_string());
+    let invalid = OwnerPathPattern::new("acme//prod");
+    let valid = OwnerPathPattern::new("acme/shop/prod");
 
     assert_matches!(
         invalid.subsumes(&valid),
@@ -248,12 +248,12 @@ fn glob_resource_subsumes_concrete_resource() {
     let broad = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Glob("/data/**".to_string()),
+        GlobResourcePattern::glob("/data/**"),
     );
     let narrow = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Exact("/data/item.json".to_string()),
+        GlobResourcePattern::exact("/data/item.json"),
     );
 
     assert!(broad.subsumes(&narrow).unwrap());
@@ -265,38 +265,38 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
     let cases = [
         (
             "any_subsumes_exact",
-            GlobResourcePattern::Any,
-            GlobResourcePattern::Exact("/data/file.txt".to_string()),
+            GlobResourcePattern::any(),
+            GlobResourcePattern::exact("/data/file.txt"),
             true,
         ),
         (
             "double_star_glob_subsumes_exact_prefix",
-            GlobResourcePattern::Glob("/data/**".to_string()),
-            GlobResourcePattern::Exact("/data/file.txt".to_string()),
+            GlobResourcePattern::glob("/data/**"),
+            GlobResourcePattern::exact("/data/file.txt"),
             true,
         ),
         (
             "star_glob_subsumes_exact_prefix",
-            GlobResourcePattern::Glob("/data/*".to_string()),
-            GlobResourcePattern::Exact("/data/file.txt".to_string()),
+            GlobResourcePattern::glob("/data/*"),
+            GlobResourcePattern::exact("/data/file.txt"),
             true,
         ),
         (
             "exact_subsumes_same_exact",
-            GlobResourcePattern::Exact("/data/file.txt".to_string()),
-            GlobResourcePattern::Exact("/data/file.txt".to_string()),
+            GlobResourcePattern::exact("/data/file.txt"),
+            GlobResourcePattern::exact("/data/file.txt"),
             true,
         ),
         (
             "exact_does_not_subsume_glob",
-            GlobResourcePattern::Exact("/data/file.txt".to_string()),
-            GlobResourcePattern::Glob("/data/**".to_string()),
+            GlobResourcePattern::exact("/data/file.txt"),
+            GlobResourcePattern::glob("/data/**"),
             false,
         ),
         (
             "wrong_glob_prefix_does_not_subsume_exact",
-            GlobResourcePattern::Glob("/private/**".to_string()),
-            GlobResourcePattern::Exact("/data/file.txt".to_string()),
+            GlobResourcePattern::glob("/private/**"),
+            GlobResourcePattern::exact("/data/file.txt"),
             false,
         ),
     ];
@@ -323,19 +323,17 @@ fn verb_wildcard_subsumes_class_verbs_only() {
     let any_filesystem = fs_permission(
         "acme/shop/prod/cart/agent",
         "acme",
-        FilesystemPermissionPattern::Any(GlobResourcePattern::Glob("/data/**".to_string())),
+        FilesystemPermissionPattern::Any(GlobResourcePattern::glob("/data/**")),
     );
     let read_file = fs_permission(
         "acme/shop/prod/cart/agent",
         "acme",
-        FilesystemPermissionPattern::Read(GlobResourcePattern::Exact("/data/file.txt".to_string())),
+        FilesystemPermissionPattern::Read(GlobResourcePattern::exact("/data/file.txt")),
     );
     let write_file = fs_permission(
         "acme/shop/prod/cart/agent",
         "acme",
-        FilesystemPermissionPattern::Write(GlobResourcePattern::Exact(
-            "/data/file.txt".to_string(),
-        )),
+        FilesystemPermissionPattern::Write(GlobResourcePattern::exact("/data/file.txt")),
     );
 
     assert!(any_filesystem.subsumes(&read_file).unwrap());
@@ -349,24 +347,21 @@ fn network_resource_subsumption_checks_host_and_ports() {
         "acme",
         NetworkResourcePattern::HostPort {
             host: "api.internal".to_string(),
-            ports: PortPattern::Range {
-                start: 8000,
-                end: 9000,
-            },
+            ports: PortPattern::range(8000, 9000),
         },
     );
     let port_single = network(
         "acme",
         NetworkResourcePattern::HostPort {
             host: "api.internal".to_string(),
-            ports: PortPattern::Single(8080),
+            ports: PortPattern::single(8080),
         },
     );
     let wrong_host = network(
         "acme",
         NetworkResourcePattern::HostPort {
             host: "other.internal".to_string(),
-            ports: PortPattern::Single(8080),
+            ports: PortPattern::single(8080),
         },
     );
 
@@ -377,26 +372,16 @@ fn network_resource_subsumption_checks_host_and_ports() {
 
 #[test]
 fn oplog_ranges_subsume_inner_ranges() {
-    let broad = PatternGrant {
-        owner: OwnerPathPattern("acme/shop/prod/cart/agent".to_string()),
-        recipient: RecipientPathPattern::parse("acme").unwrap(),
-        permission: PermissionPattern::Oplog(OplogPermissionPattern::Read(
-            OplogResourcePattern::Range {
-                start: Some(100),
-                end: Some(500),
-            },
-        )),
-    };
-    let narrow = PatternGrant {
-        owner: OwnerPathPattern("acme/shop/prod/cart/agent".to_string()),
-        recipient: RecipientPathPattern::parse("acme").unwrap(),
-        permission: PermissionPattern::Oplog(OplogPermissionPattern::Read(
-            OplogResourcePattern::Range {
-                start: Some(200),
-                end: Some(300),
-            },
-        )),
-    };
+    let broad = PatternGrant::oplog_read(
+        "acme/shop/prod/cart/agent",
+        RecipientPathPattern::account("acme"),
+        OplogResourcePattern::range(Some(100), Some(500)),
+    );
+    let narrow = PatternGrant::oplog_read(
+        "acme/shop/prod/cart/agent",
+        RecipientPathPattern::account("acme"),
+        OplogResourcePattern::range(Some(200), Some(300)),
+    );
 
     assert!(broad.subsumes(&narrow).unwrap());
     assert!(!narrow.subsumes(&broad).unwrap());
@@ -407,7 +392,7 @@ fn subsumption_requires_same_permission_class() {
     let filesystem = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Glob("/data/**".to_string()),
+        GlobResourcePattern::glob("/data/**"),
     );
     let network = network(
         "acme/shop/prod/cart/agent",
@@ -427,17 +412,17 @@ fn derivation_must_be_subsumed_by_parent_union() {
     let parent_grant = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Glob("/data/**".to_string()),
+        GlobResourcePattern::glob("/data/**"),
     );
     let child_grant = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Exact("/data/file.txt".to_string()),
+        GlobResourcePattern::exact("/data/file.txt"),
     );
     let denied_child = fs(
         "other/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Exact("/data/file.txt".to_string()),
+        GlobResourcePattern::exact("/data/file.txt"),
     );
 
     let parent = card(vec![parent_grant], Vec::new());
@@ -463,17 +448,17 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
     let parent_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Glob("/data/**".to_string()),
+        GlobResourcePattern::glob("/data/**"),
     );
     let child_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Exact("/data/file.txt".to_string()),
+        GlobResourcePattern::exact("/data/file.txt"),
     );
     let too_broad_child_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Exact("/other/file.txt".to_string()),
+        GlobResourcePattern::exact("/other/file.txt"),
     );
     let parent = card(Vec::new(), vec![parent_upper]);
 
@@ -497,22 +482,22 @@ fn negative_grants_override_positive_grants() {
     let allowed = fs(
         "acme/shop/prod/cart/agent",
         "acme",
-        GlobResourcePattern::Glob("/data/**".to_string()),
+        GlobResourcePattern::glob("/data/**"),
     );
     let denied = fs(
         "acme/shop/prod/cart/agent",
         "acme",
-        GlobResourcePattern::Exact("/data/secret.txt".to_string()),
+        GlobResourcePattern::exact("/data/secret.txt"),
     );
     let public = fs(
         "acme/shop/prod/cart/agent",
         "acme",
-        GlobResourcePattern::Exact("/data/public.txt".to_string()),
+        GlobResourcePattern::exact("/data/public.txt"),
     );
     let secret = fs(
         "acme/shop/prod/cart/agent",
         "acme",
-        GlobResourcePattern::Exact("/data/secret.txt".to_string()),
+        GlobResourcePattern::exact("/data/secret.txt"),
     );
     let surface = GrantSurface {
         positive: vec![allowed],

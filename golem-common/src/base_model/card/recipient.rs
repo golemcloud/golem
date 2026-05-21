@@ -61,6 +61,99 @@ pub enum RecipientPathPattern {
 }
 
 impl RecipientPathPattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn account(account: impl Into<String>) -> Self {
+        Self::Account {
+            account: account.into(),
+        }
+    }
+
+    pub fn account_environments(account: impl Into<String>) -> Self {
+        Self::AccountEnvironments {
+            account: account.into(),
+        }
+    }
+
+    pub fn application_environments(
+        account: impl Into<String>,
+        application: impl Into<String>,
+    ) -> Self {
+        Self::ApplicationEnvironments {
+            account: account.into(),
+            application: application.into(),
+        }
+    }
+
+    pub fn account_agents(account: impl Into<String>) -> Self {
+        Self::AccountAgents {
+            account: account.into(),
+        }
+    }
+
+    pub fn application_agents(account: impl Into<String>, application: impl Into<String>) -> Self {
+        Self::ApplicationAgents {
+            account: account.into(),
+            application: application.into(),
+        }
+    }
+
+    pub fn environment(
+        account: impl Into<String>,
+        application: impl Into<String>,
+        environment: impl Into<String>,
+    ) -> Self {
+        Self::Environment {
+            account: account.into(),
+            application: application.into(),
+            environment: environment.into(),
+        }
+    }
+
+    pub fn environment_agents(
+        account: impl Into<String>,
+        application: impl Into<String>,
+        environment: impl Into<String>,
+    ) -> Self {
+        Self::EnvironmentAgents {
+            account: account.into(),
+            application: application.into(),
+            environment: environment.into(),
+        }
+    }
+
+    pub fn component_agents(
+        account: impl Into<String>,
+        application: impl Into<String>,
+        environment: impl Into<String>,
+        component: impl Into<String>,
+    ) -> Self {
+        Self::ComponentAgents {
+            account: account.into(),
+            application: application.into(),
+            environment: environment.into(),
+            component: component.into(),
+        }
+    }
+
+    pub fn agent(
+        account: impl Into<String>,
+        application: impl Into<String>,
+        environment: impl Into<String>,
+        component: impl Into<String>,
+        agent: impl Into<String>,
+    ) -> Self {
+        Self::Agent {
+            account: account.into(),
+            application: application.into(),
+            environment: environment.into(),
+            component: component.into(),
+            agent: agent.into(),
+        }
+    }
+
     pub fn parse(value: &str) -> Result<Self, String> {
         if value == "*" {
             return Ok(Self::Any);
@@ -169,9 +262,11 @@ impl RecipientPathPattern {
     pub fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Account { account }, other) => other.account().is_some_and(|b| account == b),
+            (Self::Account { account }, other) => {
+                other.account_part().is_some_and(|b| account == b)
+            }
             (Self::AccountEnvironments { account: a }, other) => {
-                other.account().is_some_and(|b| a == b) && other.is_environment_or_deeper()
+                other.account_part().is_some_and(|b| a == b) && other.is_environment_or_deeper()
             }
             (
                 Self::ApplicationEnvironments {
@@ -186,7 +281,7 @@ impl RecipientPathPattern {
                     && other.is_environment_or_deeper()
             }
             (Self::AccountAgents { account: a }, other) => {
-                other.account().is_some_and(|b| a == b) && other.is_agent_scope()
+                other.account_part().is_some_and(|b| a == b) && other.is_agent_scope()
             }
             (
                 Self::ApplicationAgents {
@@ -217,7 +312,7 @@ impl RecipientPathPattern {
                 other,
             ) => {
                 other
-                    .environment()
+                    .environment_part()
                     .is_some_and(|(ba, bp, be)| aa == ba && ap == bp && ae == be)
                     && (!matches!(self, Self::EnvironmentAgents { .. }) || other.is_agent_scope())
             }
@@ -259,7 +354,7 @@ impl RecipientPathPattern {
         self.subsumes(holder)
     }
 
-    fn account(&self) -> Option<&str> {
+    fn account_part(&self) -> Option<&str> {
         match self {
             Self::Any => None,
             Self::Account { account }
@@ -311,7 +406,7 @@ impl RecipientPathPattern {
         }
     }
 
-    fn environment(&self) -> Option<(&str, &str, &str)> {
+    fn environment_part(&self) -> Option<(&str, &str, &str)> {
         match self {
             Self::Environment {
                 account,

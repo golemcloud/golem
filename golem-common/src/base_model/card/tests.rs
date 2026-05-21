@@ -18,11 +18,11 @@ use test_r::test;
 use uuid::Uuid;
 
 fn fs(owner: &str, recipient: &str, resource: GlobResourcePattern) -> PatternGrant {
-    PatternGrant {
-        owner: OwnerPathPattern(owner.to_string()),
-        recipient: RecipientPathPattern::parse(recipient).unwrap(),
-        permission: PermissionPattern::Filesystem(FilesystemPermissionPattern::Read(resource)),
-    }
+    PatternGrant::filesystem_read_pattern(
+        owner,
+        RecipientPathPattern::parse(recipient).unwrap(),
+        resource,
+    )
 }
 
 fn card(lower_positive: Vec<PatternGrant>, upper_positive: Vec<PatternGrant>) -> Card {
@@ -70,17 +70,17 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
     let read_all = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Glob("/data/**".to_string()),
+        GlobResourcePattern::glob("/data/**"),
     );
     let read_secret = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Exact("/data/secret.txt".to_string()),
+        GlobResourcePattern::exact("/data/secret.txt"),
     );
     let read_public = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::Exact("/data/public.txt".to_string()),
+        GlobResourcePattern::exact("/data/public.txt"),
     );
 
     let lower = card(vec![read_all], Vec::new());
