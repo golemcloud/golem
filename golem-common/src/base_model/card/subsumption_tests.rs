@@ -149,6 +149,61 @@ fn recipient_patterns_subsume_only_matching_holder_subtrees() {
 }
 
 #[test_gen]
+fn generate_recipient_subsumption_scope_tests(r: &mut DynamicTestRegistration) {
+    let cases = [
+        ("acme", "acme/*/*", true),
+        ("acme/*/*", "acme", false),
+        ("acme", "acme/*/*/*/*", true),
+        ("acme/*/*/*/*", "acme", false),
+        ("acme/*/*", "acme/*/*/*/*", true),
+        ("acme/*/*/*/*", "acme/*/*", false),
+        ("acme/shop/*", "acme/shop/prod", true),
+        ("acme/shop/prod", "acme/shop/*", false),
+        ("acme/shop/*", "acme/shop/prod/*/*", true),
+        ("acme/shop/prod/*/*", "acme/shop/*", false),
+        ("acme/shop/*/*/*", "acme/shop/prod/*/*", true),
+        ("acme/shop/prod/*/*", "acme/shop/*/*/*", false),
+        ("acme/shop/prod", "acme/shop/prod/*/*", true),
+        ("acme/shop/prod/*/*", "acme/shop/prod", false),
+        ("acme/shop/prod/*/*", "acme/shop/prod/cart-svc/*", true),
+        ("acme/shop/prod/cart-svc/*", "acme/shop/prod/*/*", false),
+        (
+            "acme/shop/prod/cart-svc/*",
+            "acme/shop/prod/cart-svc/ShoppingCart(\"42\")",
+            true,
+        ),
+        (
+            "acme/shop/prod/cart-svc/ShoppingCart(\"42\")",
+            "acme/shop/prod/cart-svc/*",
+            false,
+        ),
+    ];
+
+    for (left, right, expected) in cases {
+        add_test!(
+            r,
+            format!(
+                "recipient_subsumption_{}_{}_{}",
+                test_name(left),
+                if expected {
+                    "subsumes"
+                } else {
+                    "does_not_subsume"
+                },
+                test_name(right)
+            ),
+            TestProperties::unit_test(),
+            || {
+                let left = RecipientPathPattern::parse(left).unwrap();
+                let right = RecipientPathPattern::parse(right).unwrap();
+
+                assert_eq!(left.subsumes(&right), expected);
+            }
+        );
+    }
+}
+
+#[test_gen]
 fn generate_recipient_matching_tests(r: &mut DynamicTestRegistration) {
     let cases = [
         ("*", true),

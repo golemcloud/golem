@@ -47,6 +47,46 @@ fn parses_canonical_pattern_grant() {
 }
 
 #[test]
+fn parses_email_account_recipient() {
+    let grant = parse_pattern_grant("system() @ alice@example.com : create-account :").unwrap();
+
+    assert_eq!(
+        grant.recipient,
+        RecipientPathPattern::Account {
+            account: "alice@example.com".to_string()
+        }
+    );
+    assert_eq!(
+        grant.permission,
+        PermissionPattern::System(SystemPermissionPattern::CreateAccount(EmptyResourcePattern))
+    );
+}
+
+#[test]
+fn parses_email_recipient_inside_agent_scope() {
+    let grant = parse_pattern_grant(
+        "filesystem(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ alice@example.com/shop/prod/cart-svc/CartAgent(\"42\") : read : /data/**",
+    )
+    .unwrap();
+
+    assert_eq!(
+        grant.recipient,
+        RecipientPathPattern::Agent {
+            account: "alice@example.com".to_string(),
+            application: "shop".to_string(),
+            environment: "prod".to_string(),
+            component: "cart-svc".to_string(),
+            agent: "CartAgent(\"42\")".to_string(),
+        }
+    );
+    assert_matches!(
+        grant.permission,
+        PermissionPattern::Filesystem(FilesystemPermissionPattern::Read(GlobResourcePattern::Glob(path)))
+            if path == "/data/**"
+    );
+}
+
+#[test]
 fn parses_resource_ids_with_colons() {
     let grant = parse_pattern_grant(
         "oplog(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : start=1000:end=2000",
