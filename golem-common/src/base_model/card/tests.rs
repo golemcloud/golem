@@ -347,3 +347,62 @@ fn parses_admin_class_examples() {
             if path == "cart.*"
     ));
 }
+
+#[test]
+fn parses_polymorphic_pattern_grant_with_slot_paths() {
+    let grant =
+        parse_polymorphic_pattern_grant("secret(?env) @ ?self : reveal : billing.?account.*")
+            .unwrap();
+
+    assert_eq!(grant.owner, PolymorphicOwnerPathPattern("?env".to_string()));
+    assert_eq!(
+        grant.recipient,
+        PolymorphicRecipientPathPattern("?self".to_string())
+    );
+    assert!(matches!(
+        grant.permission,
+        PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Reveal(
+            PolymorphicGlobResourcePattern::Template(resource)
+        )) if resource == "billing.?account.*"
+    ));
+}
+
+#[test]
+fn parses_polymorphic_resource_slots_and_templates() {
+    let env = parse_polymorphic_pattern_grant("env(?self) @ ?self : read : ?env_var").unwrap();
+    assert!(matches!(
+        env.permission,
+        PolymorphicPermissionPattern::Env(PolymorphicEnvPermissionPattern::Read(
+            PolymorphicIdentifierResourcePattern::Slot(SlotVariable(name))
+        )) if name == "env_var"
+    ));
+
+    let card =
+        parse_polymorphic_pattern_grant("card(?account) @ ?account : install : ?self").unwrap();
+    assert!(matches!(
+        card.permission,
+        PolymorphicPermissionPattern::Card(PolymorphicCardPermissionPattern::Install(
+            PolymorphicCardResourcePattern::Slot(SlotVariable(name))
+        )) if name == "self"
+    ));
+
+    let card =
+        parse_polymorphic_pattern_grant("card(?account) @ ?account : install : acme/shop/?env/*/*")
+            .unwrap();
+    assert!(matches!(
+        card.permission,
+        PolymorphicPermissionPattern::Card(PolymorphicCardPermissionPattern::Install(
+            PolymorphicCardResourcePattern::Template(target)
+        )) if target == "acme/shop/?env/*/*"
+    ));
+}
+
+#[test]
+fn concrete_parser_rejects_slot_variables() {
+    let result = parse_pattern_grant("secret(?env) @ ?self : reveal : billing.*");
+
+    assert!(matches!(
+        result,
+        Err(CardParseError::SlotVariableInConcreteGrant(value)) if value == "?env"
+    ));
+}

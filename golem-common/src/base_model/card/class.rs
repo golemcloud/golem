@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::RecipientPathPattern;
+use crate::base_model::card::{RecipientPathPattern, SlotVariable};
 use serde::{Deserialize, Serialize};
 
 pub(crate) trait PermissionSubsumes {
@@ -186,6 +186,30 @@ pub enum PortPattern {
     Range { start: u16, end: u16 },
 }
 
+macro_rules! define_polymorphic_resource_pattern {
+    ($name:ident, $concrete:ty) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+        pub enum $name {
+            Concrete($concrete),
+            Slot(SlotVariable),
+            Template(String),
+        }
+    };
+}
+
+define_polymorphic_resource_pattern!(PolymorphicEmptyResourcePattern, EmptyResourcePattern);
+define_polymorphic_resource_pattern!(
+    PolymorphicIdentifierResourcePattern,
+    IdentifierResourcePattern
+);
+define_polymorphic_resource_pattern!(PolymorphicGlobResourcePattern, GlobResourcePattern);
+define_polymorphic_resource_pattern!(PolymorphicNetworkResourcePattern, NetworkResourcePattern);
+define_polymorphic_resource_pattern!(PolymorphicOplogResourcePattern, OplogResourcePattern);
+define_polymorphic_resource_pattern!(PolymorphicAgentResourcePattern, AgentResourcePattern);
+define_polymorphic_resource_pattern!(PolymorphicToolResourcePattern, ToolResourcePattern);
+define_polymorphic_resource_pattern!(PolymorphicCardResourcePattern, CardResourcePattern);
+
 impl PortPattern {
     pub fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
@@ -240,18 +264,59 @@ macro_rules! define_class_permission_pattern {
     };
 }
 
+macro_rules! define_polymorphic_class_permission_pattern {
+    ($name:ident, $resource:ty, [$($verb:ident),+ $(,)?]) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+        pub enum $name {
+            Any($resource),
+            $($verb($resource)),+
+        }
+    };
+}
+
 define_class_permission_pattern!(
     FilesystemPermissionPattern,
     GlobResourcePattern,
     [Read, Write, List, Stat, Delete]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicFilesystemPermissionPattern,
+    PolymorphicGlobResourcePattern,
+    [Read, Write, List, Stat, Delete]
+);
 define_class_permission_pattern!(NetworkPermissionPattern, NetworkResourcePattern, [Connect]);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicNetworkPermissionPattern,
+    PolymorphicNetworkResourcePattern,
+    [Connect]
+);
 define_class_permission_pattern!(EnvPermissionPattern, IdentifierResourcePattern, [Read]);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
+    [Read]
+);
 define_class_permission_pattern!(OplogPermissionPattern, OplogResourcePattern, [Read]);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicOplogPermissionPattern,
+    PolymorphicOplogResourcePattern,
+    [Read]
+);
 define_class_permission_pattern!(ConfigPermissionPattern, GlobResourcePattern, [Read]);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicConfigPermissionPattern,
+    PolymorphicGlobResourcePattern,
+    [Read]
+);
 define_class_permission_pattern!(
     SecretPermissionPattern,
     GlobResourcePattern,
+    [Hold, Mint, Reveal]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicSecretPermissionPattern,
+    PolymorphicGlobResourcePattern,
     [Hold, Mint, Reveal]
 );
 define_class_permission_pattern!(
@@ -272,10 +337,38 @@ define_class_permission_pattern!(
         DeactivatePlugin
     ]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicAgentPermissionPattern,
+    PolymorphicAgentResourcePattern,
+    [
+        Invoke,
+        View,
+        Create,
+        Delete,
+        Interrupt,
+        Resume,
+        UpdateRevision,
+        Fork,
+        Revert,
+        CancelInvocation,
+        ActivatePlugin,
+        DeactivatePlugin
+    ]
+);
 define_class_permission_pattern!(ToolPermissionPattern, ToolResourcePattern, [Invoke]);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicToolPermissionPattern,
+    PolymorphicToolResourcePattern,
+    [Invoke]
+);
 define_class_permission_pattern!(
     KvPermissionPattern,
     GlobResourcePattern,
+    [Read, Write, Delete]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicKvPermissionPattern,
+    PolymorphicGlobResourcePattern,
     [Read, Write, Delete]
 );
 define_class_permission_pattern!(
@@ -283,14 +376,29 @@ define_class_permission_pattern!(
     GlobResourcePattern,
     [Read, Write, Delete]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicBlobPermissionPattern,
+    PolymorphicGlobResourcePattern,
+    [Read, Write, Delete]
+);
 define_class_permission_pattern!(
     RdbmsPermissionPattern,
     GlobResourcePattern,
     [Query, Execute]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicRdbmsPermissionPattern,
+    PolymorphicGlobResourcePattern,
+    [Query, Execute]
+);
 define_class_permission_pattern!(
     CardPermissionPattern,
     CardResourcePattern,
+    [Derive, Revoke, Inspect, Install]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicCardPermissionPattern,
+    PolymorphicCardResourcePattern,
     [Derive, Revoke, Inspect, Install]
 );
 define_class_permission_pattern!(
@@ -303,9 +411,24 @@ define_class_permission_pattern!(
         ViewAccountCountsReport
     ]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicSystemPermissionPattern,
+    PolymorphicEmptyResourcePattern,
+    [
+        CreateAccount,
+        ViewDefaultPlan,
+        ViewAccountSummariesReport,
+        ViewAccountCountsReport
+    ]
+);
 define_class_permission_pattern!(
     PlanPermissionPattern,
     IdentifierResourcePattern,
+    [View, Create, Update]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicPlanPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
     [View, Create, Update]
 );
 define_class_permission_pattern!(
@@ -313,10 +436,25 @@ define_class_permission_pattern!(
     EmptyResourcePattern,
     [View, Update, Delete, SetRoles, SetPlan, Restore]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicAccountPermissionPattern,
+    PolymorphicEmptyResourcePattern,
+    [View, Update, Delete, SetRoles, SetPlan, Restore]
+);
 define_class_permission_pattern!(AccountUsagePermissionPattern, EmptyResourcePattern, [View]);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicAccountUsagePermissionPattern,
+    PolymorphicEmptyResourcePattern,
+    [View]
+);
 define_class_permission_pattern!(
     AccountTokenPermissionPattern,
     IdentifierResourcePattern,
+    [Create, Delete]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicAccountTokenPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
     [Create, Delete]
 );
 define_class_permission_pattern!(
@@ -324,9 +462,29 @@ define_class_permission_pattern!(
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicAccountPluginPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
 define_class_permission_pattern!(
     ApplicationPermissionPattern,
     EmptyResourcePattern,
+    [
+        View,
+        Create,
+        Update,
+        Delete,
+        Restore,
+        MintCredential,
+        RotateCredential,
+        RevokeCredential,
+        ViewCredentials
+    ]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicApplicationPermissionPattern,
+    PolymorphicEmptyResourcePattern,
     [
         View,
         Create,
@@ -354,9 +512,29 @@ define_class_permission_pattern!(
         WriteDeploymentRecord
     ]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentPermissionPattern,
+    PolymorphicEmptyResourcePattern,
+    [
+        View,
+        Create,
+        Update,
+        Delete,
+        Restore,
+        Deploy,
+        Rollback,
+        ViewDeploymentPlan,
+        WriteDeploymentRecord
+    ]
+);
 define_class_permission_pattern!(
     EnvironmentSharePermissionPattern,
     IdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentSharePermissionPattern,
+    PolymorphicIdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
@@ -364,9 +542,19 @@ define_class_permission_pattern!(
     IdentifierResourcePattern,
     [View, Create, Delete]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentPluginGrantPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
+    [View, Create, Delete]
+);
 define_class_permission_pattern!(
     EnvironmentDomainRegistrationPermissionPattern,
     IdentifierResourcePattern,
+    [View, Create, Delete]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentDomainRegistrationPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
     [View, Create, Delete]
 );
 define_class_permission_pattern!(
@@ -374,9 +562,19 @@ define_class_permission_pattern!(
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentSecuritySchemePermissionPattern,
+    PolymorphicIdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
 define_class_permission_pattern!(
     EnvironmentHttpApiDeploymentPermissionPattern,
     IdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentHttpApiDeploymentPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
@@ -384,9 +582,19 @@ define_class_permission_pattern!(
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentMcpDeploymentPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
 define_class_permission_pattern!(
     EnvironmentAgentSecretPermissionPattern,
     GlobResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentAgentSecretPermissionPattern,
+    PolymorphicGlobResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
@@ -394,9 +602,19 @@ define_class_permission_pattern!(
     IdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentResourceDefinitionPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
 define_class_permission_pattern!(
     EnvironmentRetryPolicyPermissionPattern,
     IdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentRetryPolicyPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
     [View, Create, Update, Delete]
 );
 define_class_permission_pattern!(
@@ -404,9 +622,19 @@ define_class_permission_pattern!(
     EmptyResourcePattern,
     [View, Create, Update, Delete]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicComponentPermissionPattern,
+    PolymorphicEmptyResourcePattern,
+    [View, Create, Update, Delete]
+);
 define_class_permission_pattern!(
     AccountOauth2IdentityPermissionPattern,
     IdentifierResourcePattern,
+    [View, Link, Delete]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicAccountOauth2IdentityPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
     [View, Link, Delete]
 );
 define_class_permission_pattern!(
@@ -414,14 +642,29 @@ define_class_permission_pattern!(
     GlobResourcePattern,
     [View, Update, Delete]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentInitialFilesPermissionPattern,
+    PolymorphicGlobResourcePattern,
+    [View, Update, Delete]
+);
 define_class_permission_pattern!(
     EnvironmentKvBucketPermissionPattern,
     IdentifierResourcePattern,
     [View, Create, Delete]
 );
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentKvBucketPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
+    [View, Create, Delete]
+);
 define_class_permission_pattern!(
     EnvironmentBlobBucketPermissionPattern,
     IdentifierResourcePattern,
+    [View, Create, Delete]
+);
+define_polymorphic_class_permission_pattern!(
+    PolymorphicEnvironmentBlobBucketPermissionPattern,
+    PolymorphicIdentifierResourcePattern,
     [View, Create, Delete]
 );
 
@@ -488,6 +731,64 @@ define_permission_patterns! {
     EnvironmentInitialFiles(EnvironmentInitialFilesPermissionPattern) => "environment.initial-files",
     EnvironmentKvBucket(EnvironmentKvBucketPermissionPattern) => "environment.kv-bucket",
     EnvironmentBlobBucket(EnvironmentBlobBucketPermissionPattern) => "environment.blob-bucket",
+}
+
+macro_rules! define_polymorphic_permission_patterns {
+    ($(
+        $variant:ident($pattern:ident) => $class_name:literal
+    ),+ $(,)?) => {
+
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+        pub enum PolymorphicPermissionPattern {
+            $($variant($pattern)),+
+        }
+
+        impl PolymorphicPermissionPattern {
+            pub fn class_name(&self) -> &'static str {
+                match self {
+                    $(Self::$variant(_) => $class_name),+
+                }
+            }
+        }
+    };
+}
+
+define_polymorphic_permission_patterns! {
+    Filesystem(PolymorphicFilesystemPermissionPattern) => "filesystem",
+    Network(PolymorphicNetworkPermissionPattern) => "network",
+    Env(PolymorphicEnvPermissionPattern) => "env",
+    Oplog(PolymorphicOplogPermissionPattern) => "oplog",
+    Config(PolymorphicConfigPermissionPattern) => "config",
+    Secret(PolymorphicSecretPermissionPattern) => "secret",
+    Agent(PolymorphicAgentPermissionPattern) => "agent",
+    Tool(PolymorphicToolPermissionPattern) => "tool",
+    Kv(PolymorphicKvPermissionPattern) => "kv",
+    Blob(PolymorphicBlobPermissionPattern) => "blob",
+    Rdbms(PolymorphicRdbmsPermissionPattern) => "rdbms",
+    Card(PolymorphicCardPermissionPattern) => "card",
+    System(PolymorphicSystemPermissionPattern) => "system",
+    Plan(PolymorphicPlanPermissionPattern) => "plan",
+    Account(PolymorphicAccountPermissionPattern) => "account",
+    AccountUsage(PolymorphicAccountUsagePermissionPattern) => "account.usage",
+    AccountToken(PolymorphicAccountTokenPermissionPattern) => "account.token",
+    AccountPlugin(PolymorphicAccountPluginPermissionPattern) => "account.plugin",
+    Application(PolymorphicApplicationPermissionPattern) => "application",
+    Environment(PolymorphicEnvironmentPermissionPattern) => "environment",
+    EnvironmentShare(PolymorphicEnvironmentSharePermissionPattern) => "environment.share",
+    EnvironmentPluginGrant(PolymorphicEnvironmentPluginGrantPermissionPattern) => "environment.plugin-grant",
+    EnvironmentDomainRegistration(PolymorphicEnvironmentDomainRegistrationPermissionPattern) => "environment.domain-registration",
+    EnvironmentSecurityScheme(PolymorphicEnvironmentSecuritySchemePermissionPattern) => "environment.security-scheme",
+    EnvironmentHttpApiDeployment(PolymorphicEnvironmentHttpApiDeploymentPermissionPattern) => "environment.http-api-deployment",
+    EnvironmentMcpDeployment(PolymorphicEnvironmentMcpDeploymentPermissionPattern) => "environment.mcp-deployment",
+    EnvironmentAgentSecret(PolymorphicEnvironmentAgentSecretPermissionPattern) => "environment.agent-secret",
+    EnvironmentResourceDefinition(PolymorphicEnvironmentResourceDefinitionPermissionPattern) => "environment.resource-definition",
+    EnvironmentRetryPolicy(PolymorphicEnvironmentRetryPolicyPermissionPattern) => "environment.retry-policy",
+    Component(PolymorphicComponentPermissionPattern) => "component",
+    AccountOauth2Identity(PolymorphicAccountOauth2IdentityPermissionPattern) => "account.oauth2-identity",
+    EnvironmentInitialFiles(PolymorphicEnvironmentInitialFilesPermissionPattern) => "environment.initial-files",
+    EnvironmentKvBucket(PolymorphicEnvironmentKvBucketPermissionPattern) => "environment.kv-bucket",
+    EnvironmentBlobBucket(PolymorphicEnvironmentBlobBucketPermissionPattern) => "environment.blob-bucket",
 }
 
 fn glob_subsumes(left: &str, right: &str) -> bool {

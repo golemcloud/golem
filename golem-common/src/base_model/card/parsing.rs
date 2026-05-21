@@ -34,6 +34,7 @@ pub enum CardParseError {
     UnknownClass(String),
     UnknownVerb { class: String, verb: String },
     InvalidResource { class: String, resource: String },
+    SlotVariableInConcreteGrant(String),
 }
 
 impl std::fmt::Display for CardParseError {
@@ -57,6 +58,12 @@ impl std::fmt::Display for CardParseError {
                     "invalid resource {resource} for permission class {class}"
                 )
             }
+            Self::SlotVariableInConcreteGrant(value) => {
+                write!(
+                    f,
+                    "slot variable is only valid in polymorphic grant {value}"
+                )
+            }
         }
     }
 }
@@ -68,6 +75,14 @@ impl FromStr for PatternGrant {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         parse_pattern_grant(value)
+    }
+}
+
+impl FromStr for PolymorphicPatternGrant {
+    type Err = CardParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        parse_polymorphic_pattern_grant(value)
     }
 }
 
@@ -91,12 +106,43 @@ pub fn parse_pattern_grant(value: &str) -> Result<PatternGrant, CardParseError> 
     if parts.verb.is_empty() {
         return Err(CardParseError::MissingVerb);
     }
+    reject_slot_variables(&parts)?;
 
     Ok(PatternGrant {
         owner: OwnerPathPattern(parts.owner),
         recipient: RecipientPathPattern::parse(&parts.recipient)
             .map_err(CardParseError::InvalidRecipientPath)?,
         permission: parse_permission(&parts.class, &parts.verb, &parts.resource)?,
+    })
+}
+
+pub fn parse_polymorphic_pattern_grant(
+    value: &str,
+) -> Result<PolymorphicPatternGrant, CardParseError> {
+    if !value.contains('@') {
+        return Err(CardParseError::MissingAtSeparator);
+    }
+
+    let (_, parts) = all_consuming(pattern_grant_parts)(value)
+        .map_err(|err| CardParseError::Malformed(err.to_string()))?;
+
+    if parts.class.is_empty() {
+        return Err(CardParseError::MissingClassOpenParen);
+    }
+    if parts.owner.is_empty() && !value.contains("()") {
+        return Err(CardParseError::MissingClassCloseParen);
+    }
+    if parts.recipient.is_empty() {
+        return Err(CardParseError::MissingRecipient);
+    }
+    if parts.verb.is_empty() {
+        return Err(CardParseError::MissingVerb);
+    }
+
+    Ok(PolymorphicPatternGrant {
+        owner: PolymorphicOwnerPathPattern(parts.owner),
+        recipient: parse_polymorphic_recipient(&parts.recipient)?,
+        permission: parse_polymorphic_permission(&parts.class, &parts.verb, &parts.resource)?,
     })
 }
 
@@ -135,6 +181,31 @@ fn pattern_grant_parts(input: &str) -> IResult<&str, PatternGrantParts> {
             resource: resource.trim().to_string(),
         },
     ))
+}
+
+fn reject_slot_variables(parts: &PatternGrantParts) -> Result<(), CardParseError> {
+    for value in [&parts.owner, &parts.recipient, &parts.resource] {
+        if contains_slot_reference(value) {
+            return Err(CardParseError::SlotVariableInConcreteGrant(
+                value.to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_polymorphic_recipient(
+    value: &str,
+) -> Result<PolymorphicRecipientPathPattern, CardParseError> {
+    if contains_slot_reference(value) {
+        if value != "*" && (value.is_empty() || value.split('/').any(str::is_empty)) {
+            return Err(CardParseError::InvalidRecipientPath(value.to_string()));
+        }
+        Ok(PolymorphicRecipientPathPattern(value.to_string()))
+    } else {
+        RecipientPathPattern::parse(value).map_err(CardParseError::InvalidRecipientPath)?;
+        Ok(PolymorphicRecipientPathPattern(value.to_string()))
+    }
 }
 
 macro_rules! parse_permission {
@@ -192,6 +263,65 @@ fn parse_permission(
     parse_permission!(class, verb, resource, "environment.initial-files", EnvironmentInitialFiles, EnvironmentInitialFilesPermissionPattern, parse_glob_resource, ["view" => View, "update" => Update, "delete" => Delete]);
     parse_permission!(class, verb, resource, "environment.kv-bucket", EnvironmentKvBucket, EnvironmentKvBucketPermissionPattern, parse_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
     parse_permission!(class, verb, resource, "environment.blob-bucket", EnvironmentBlobBucket, EnvironmentBlobBucketPermissionPattern, parse_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+
+    Err(CardParseError::UnknownClass(class.to_string()))
+}
+
+macro_rules! parse_polymorphic_permission {
+    ($class:expr, $verb:expr, $resource:expr, $class_name:literal, $variant:ident, $pattern:ident, $resource_parser:ident, [$($verb_name:literal => $verb_variant:ident),+ $(,)?]) => {
+        if $class == $class_name {
+            let resource = $resource_parser($class, $resource)?;
+            return Ok(PolymorphicPermissionPattern::$variant(match $verb {
+                "*" => $pattern::Any(resource),
+                $($verb_name => $pattern::$verb_variant(resource),)+
+                other => return Err(CardParseError::UnknownVerb {
+                    class: $class.to_string(),
+                    verb: other.to_string(),
+                }),
+            }));
+        }
+    };
+}
+
+fn parse_polymorphic_permission(
+    class: &str,
+    verb: &str,
+    resource: &str,
+) -> Result<PolymorphicPermissionPattern, CardParseError> {
+    parse_polymorphic_permission!(class, verb, resource, "filesystem", Filesystem, PolymorphicFilesystemPermissionPattern, parse_polymorphic_glob_resource, ["read" => Read, "write" => Write, "list" => List, "stat" => Stat, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "network", Network, PolymorphicNetworkPermissionPattern, parse_polymorphic_network_resource, ["connect" => Connect]);
+    parse_polymorphic_permission!(class, verb, resource, "env", Env, PolymorphicEnvPermissionPattern, parse_polymorphic_identifier_resource, ["read" => Read]);
+    parse_polymorphic_permission!(class, verb, resource, "oplog", Oplog, PolymorphicOplogPermissionPattern, parse_polymorphic_oplog_resource, ["read" => Read]);
+    parse_polymorphic_permission!(class, verb, resource, "config", Config, PolymorphicConfigPermissionPattern, parse_polymorphic_glob_resource, ["read" => Read]);
+    parse_polymorphic_permission!(class, verb, resource, "secret", Secret, PolymorphicSecretPermissionPattern, parse_polymorphic_glob_resource, ["hold" => Hold, "mint" => Mint, "reveal" => Reveal]);
+    parse_polymorphic_permission!(class, verb, resource, "agent", Agent, PolymorphicAgentPermissionPattern, parse_polymorphic_agent_resource, ["invoke" => Invoke, "view" => View, "create" => Create, "delete" => Delete, "interrupt" => Interrupt, "resume" => Resume, "update-revision" => UpdateRevision, "fork" => Fork, "revert" => Revert, "cancel-invocation" => CancelInvocation, "activate-plugin" => ActivatePlugin, "deactivate-plugin" => DeactivatePlugin]);
+    parse_polymorphic_permission!(class, verb, resource, "tool", Tool, PolymorphicToolPermissionPattern, parse_polymorphic_tool_resource, ["invoke" => Invoke]);
+    parse_polymorphic_permission!(class, verb, resource, "kv", Kv, PolymorphicKvPermissionPattern, parse_polymorphic_glob_resource, ["read" => Read, "write" => Write, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "blob", Blob, PolymorphicBlobPermissionPattern, parse_polymorphic_glob_resource, ["read" => Read, "write" => Write, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "rdbms", Rdbms, PolymorphicRdbmsPermissionPattern, parse_polymorphic_glob_resource, ["query" => Query, "execute" => Execute]);
+    parse_polymorphic_permission!(class, verb, resource, "card", Card, PolymorphicCardPermissionPattern, parse_polymorphic_card_resource, ["derive" => Derive, "revoke" => Revoke, "inspect" => Inspect, "install" => Install]);
+    parse_polymorphic_permission!(class, verb, resource, "system", System, PolymorphicSystemPermissionPattern, parse_polymorphic_empty_resource, ["create-account" => CreateAccount, "view-default-plan" => ViewDefaultPlan, "view-account-summaries-report" => ViewAccountSummariesReport, "view-account-counts-report" => ViewAccountCountsReport]);
+    parse_polymorphic_permission!(class, verb, resource, "plan", Plan, PolymorphicPlanPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update]);
+    parse_polymorphic_permission!(class, verb, resource, "account", Account, PolymorphicAccountPermissionPattern, parse_polymorphic_empty_resource, ["view" => View, "update" => Update, "delete" => Delete, "set-roles" => SetRoles, "set-plan" => SetPlan, "restore" => Restore]);
+    parse_polymorphic_permission!(class, verb, resource, "account.usage", AccountUsage, PolymorphicAccountUsagePermissionPattern, parse_polymorphic_empty_resource, ["view" => View]);
+    parse_polymorphic_permission!(class, verb, resource, "account.token", AccountToken, PolymorphicAccountTokenPermissionPattern, parse_polymorphic_identifier_resource, ["create" => Create, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "account.plugin", AccountPlugin, PolymorphicAccountPluginPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "application", Application, PolymorphicApplicationPermissionPattern, parse_polymorphic_empty_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete, "restore" => Restore, "mint-credential" => MintCredential, "rotate-credential" => RotateCredential, "revoke-credential" => RevokeCredential, "view-credentials" => ViewCredentials]);
+    parse_polymorphic_permission!(class, verb, resource, "environment", Environment, PolymorphicEnvironmentPermissionPattern, parse_polymorphic_empty_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete, "restore" => Restore, "deploy" => Deploy, "rollback" => Rollback, "view-deployment-plan" => ViewDeploymentPlan, "write-deployment-record" => WriteDeploymentRecord]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.share", EnvironmentShare, PolymorphicEnvironmentSharePermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.plugin-grant", EnvironmentPluginGrant, PolymorphicEnvironmentPluginGrantPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.domain-registration", EnvironmentDomainRegistration, PolymorphicEnvironmentDomainRegistrationPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.security-scheme", EnvironmentSecurityScheme, PolymorphicEnvironmentSecuritySchemePermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.http-api-deployment", EnvironmentHttpApiDeployment, PolymorphicEnvironmentHttpApiDeploymentPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.mcp-deployment", EnvironmentMcpDeployment, PolymorphicEnvironmentMcpDeploymentPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.agent-secret", EnvironmentAgentSecret, PolymorphicEnvironmentAgentSecretPermissionPattern, parse_polymorphic_glob_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.resource-definition", EnvironmentResourceDefinition, PolymorphicEnvironmentResourceDefinitionPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.retry-policy", EnvironmentRetryPolicy, PolymorphicEnvironmentRetryPolicyPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "component", Component, PolymorphicComponentPermissionPattern, parse_polymorphic_empty_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "account.oauth2-identity", AccountOauth2Identity, PolymorphicAccountOauth2IdentityPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "link" => Link, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.initial-files", EnvironmentInitialFiles, PolymorphicEnvironmentInitialFilesPermissionPattern, parse_polymorphic_glob_resource, ["view" => View, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.kv-bucket", EnvironmentKvBucket, PolymorphicEnvironmentKvBucketPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_polymorphic_permission!(class, verb, resource, "environment.blob-bucket", EnvironmentBlobBucket, PolymorphicEnvironmentBlobBucketPermissionPattern, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
 
     Err(CardParseError::UnknownClass(class.to_string()))
 }
@@ -343,4 +473,171 @@ fn parse_card_resource(
             RecipientPathPattern::parse(resource).map_err(CardParseError::InvalidRecipientPath)?,
         ))
     }
+}
+
+fn parse_polymorphic_empty_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEmptyResourcePattern, CardParseError> {
+    if let Ok(resource) = parse_empty_resource(class, resource) {
+        Ok(PolymorphicEmptyResourcePattern::Concrete(resource))
+    } else if let Ok(slot) = SlotVariable::parse(resource) {
+        Ok(PolymorphicEmptyResourcePattern::Slot(slot))
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_polymorphic_identifier_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicIdentifierResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_identifier_resource,
+        PolymorphicIdentifierResourcePattern::Concrete,
+        PolymorphicIdentifierResourcePattern::Slot,
+        PolymorphicIdentifierResourcePattern::Template,
+    )
+}
+
+fn parse_polymorphic_glob_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicGlobResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_glob_resource,
+        PolymorphicGlobResourcePattern::Concrete,
+        PolymorphicGlobResourcePattern::Slot,
+        PolymorphicGlobResourcePattern::Template,
+    )
+}
+
+fn parse_polymorphic_network_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicNetworkResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_network_resource,
+        PolymorphicNetworkResourcePattern::Concrete,
+        PolymorphicNetworkResourcePattern::Slot,
+        PolymorphicNetworkResourcePattern::Template,
+    )
+}
+
+fn parse_polymorphic_oplog_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicOplogResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_oplog_resource,
+        PolymorphicOplogResourcePattern::Concrete,
+        PolymorphicOplogResourcePattern::Slot,
+        PolymorphicOplogResourcePattern::Template,
+    )
+}
+
+fn parse_polymorphic_agent_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicAgentResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_agent_resource,
+        PolymorphicAgentResourcePattern::Concrete,
+        PolymorphicAgentResourcePattern::Slot,
+        PolymorphicAgentResourcePattern::Template,
+    )
+}
+
+fn parse_polymorphic_tool_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicToolResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_tool_resource,
+        PolymorphicToolResourcePattern::Concrete,
+        PolymorphicToolResourcePattern::Slot,
+        PolymorphicToolResourcePattern::Template,
+    )
+}
+
+fn parse_polymorphic_card_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicCardResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_card_resource,
+        PolymorphicCardResourcePattern::Concrete,
+        PolymorphicCardResourcePattern::Slot,
+        PolymorphicCardResourcePattern::Template,
+    )
+}
+
+fn parse_polymorphic_resource<T, U, Parse, Concrete, Slot, Template>(
+    class: &str,
+    resource: &str,
+    parse_concrete: Parse,
+    concrete: Concrete,
+    slot: Slot,
+    template: Template,
+) -> Result<T, CardParseError>
+where
+    Parse: Fn(&str, &str) -> Result<U, CardParseError>,
+    Concrete: Fn(U) -> T,
+    Slot: Fn(SlotVariable) -> T,
+    Template: Fn(String) -> T,
+{
+    if let Ok(variable) = SlotVariable::parse(resource) {
+        return Ok(slot(variable));
+    }
+
+    if contains_slot_reference(resource) {
+        return Ok(template(resource.to_string()));
+    }
+
+    match parse_concrete(class, resource) {
+        Ok(resource) => Ok(concrete(resource)),
+        Err(err) => Err(err),
+    }
+}
+
+fn contains_slot_reference(value: &str) -> bool {
+    value
+        .match_indices('?')
+        .any(|(idx, _)| slot_prefix(&value[idx..]).is_some())
+}
+
+fn slot_prefix(value: &str) -> Option<&str> {
+    let mut chars = value.char_indices();
+    let (_, first) = chars.next()?;
+    if first != '?' {
+        return None;
+    }
+
+    let mut end = 1;
+    for (idx, c) in chars {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            end = idx + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    if end == 1 { None } else { Some(&value[..end]) }
 }
