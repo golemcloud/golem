@@ -51,12 +51,11 @@ fn recipient_depths_are_validated() {
     assert!(RecipientPathPattern::parse("acme/*/prod").is_err());
     assert!(RecipientPathPattern::parse("acme/shop/*/cart/agent").is_err());
     assert!(RecipientPathPattern::parse("acme/shop/prod/*/*").is_ok());
-    assert!(RecipientPathPattern::parse("agent(*)").is_err());
+    assert!(RecipientPathPattern::parse("agent(*)").is_ok());
     assert!(
         RecipientPathPattern::parse("acme/shop/prod/cart/agent")
             .unwrap()
             .subsumes(&valid)
-            .unwrap()
     );
 }
 

@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::{
-    Card, OwnerPathPattern, PathSegmentPattern, PatternGrant, RecipientPathPattern,
-};
+use crate::base_model::card::{Card, OwnerPathPattern, PatternGrant, RecipientPathPattern};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,7 +26,7 @@ pub enum CardAlgebraError {
 impl PatternGrant {
     pub fn subsumes(&self, other: &Self) -> Result<bool, CardAlgebraError> {
         Ok(self.owner.subsumes(&other.owner)?
-            && self.recipient.subsumes(&other.recipient)?
+            && self.recipient.subsumes(&other.recipient)
             && self.permission.subsumes(&other.permission))
     }
 
@@ -36,7 +34,7 @@ impl PatternGrant {
         &self,
         holder: &RecipientPathPattern,
     ) -> Result<bool, CardAlgebraError> {
-        self.recipient.matches_holder(holder)
+        Ok(self.recipient.matches_holder(holder))
     }
 }
 
@@ -150,21 +148,6 @@ impl OwnerPathPattern {
     }
 }
 
-impl RecipientPathPattern {
-    pub fn subsumes(&self, other: &Self) -> Result<bool, CardAlgebraError> {
-        Ok(typed_path_subsumes(&self.segments(), &other.segments()))
-    }
-
-    pub fn matches_holder(&self, holder: &Self) -> Result<bool, CardAlgebraError> {
-        let pattern = self.segments();
-        let holder = holder.segments();
-        Ok(
-            pattern.len() <= holder.len()
-                && typed_path_subsumes(&pattern, &holder[..pattern.len()]),
-        )
-    }
-}
-
 fn filter_by_recipient(
     grants: &[PatternGrant],
     holder: &RecipientPathPattern,
@@ -238,16 +221,4 @@ fn path_subsumes(left: &[&str], right: &[&str]) -> bool {
 
 fn segment_subsumes(left: &str, right: &str) -> bool {
     left == "*" || left == right
-}
-
-fn typed_path_subsumes(left: &[PathSegmentPattern], right: &[PathSegmentPattern]) -> bool {
-    let max_len = left.len().max(right.len());
-    for idx in 0..max_len {
-        let left = left.get(idx).cloned().unwrap_or(PathSegmentPattern::Any);
-        let right = right.get(idx).cloned().unwrap_or(PathSegmentPattern::Any);
-        if !left.subsumes(&right) {
-            return false;
-        }
-    }
-    true
 }

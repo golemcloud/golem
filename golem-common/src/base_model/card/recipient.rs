@@ -80,19 +80,30 @@ impl EnvironmentPathPattern {
 pub enum RecipientPathPattern {
     Any,
     Account {
-        account: PathSegmentPattern,
+        account: String,
     },
     Environment {
-        account: PathSegmentPattern,
-        application: PathSegmentPattern,
-        environment: PathSegmentPattern,
+        account: String,
+        application: String,
+        environment: String,
+    },
+    EnvironmentAgents {
+        account: String,
+        application: String,
+        environment: String,
+    },
+    ComponentAgents {
+        account: String,
+        application: String,
+        environment: String,
+        component: String,
     },
     Agent {
-        account: PathSegmentPattern,
-        application: PathSegmentPattern,
-        environment: PathSegmentPattern,
-        component: PathSegmentPattern,
-        agent: PathSegmentPattern,
+        account: String,
+        application: String,
+        environment: String,
+        component: String,
+        agent: String,
     },
 }
 
@@ -102,52 +113,64 @@ impl RecipientPathPattern {
             return Ok(Self::Any);
         }
 
-        let segments = parse_path_segments(value)?;
+        let segments = parse_exact_segments(value)?;
 
         match segments.as_slice() {
-            [account]
-                if is_concrete_root(account)
-                    && !matches!(account, PathSegmentPattern::Exact(value) if value.contains('(')) =>
-            {
-                Ok(Self::Account {
-                    account: account.clone(),
-                })
-            }
-            [account, application, environment] if is_concrete_root(account) => {
-                Ok(Self::Environment {
-                    account: account.clone(),
-                    application: application.clone(),
-                    environment: environment.clone(),
-                })
-            }
-            [account, application, environment, component, agent] if is_concrete_root(account) => {
-                Ok(Self::Agent {
-                    account: account.clone(),
-                    application: application.clone(),
-                    environment: environment.clone(),
-                    component: component.clone(),
-                    agent: agent.clone(),
-                })
-            }
+            [account] => Ok(Self::Account {
+                account: account.to_string(),
+            }),
+            [account, application, environment] => Ok(Self::Environment {
+                account: account.to_string(),
+                application: application.to_string(),
+                environment: environment.to_string(),
+            }),
+            [account, application, environment, "*", "*"] => Ok(Self::EnvironmentAgents {
+                account: account.to_string(),
+                application: application.to_string(),
+                environment: environment.to_string(),
+            }),
+            [account, application, environment, component, "*"] => Ok(Self::ComponentAgents {
+                account: account.to_string(),
+                application: application.to_string(),
+                environment: environment.to_string(),
+                component: component.to_string(),
+            }),
+            [account, application, environment, component, agent] => Ok(Self::Agent {
+                account: account.to_string(),
+                application: application.to_string(),
+                environment: environment.to_string(),
+                component: component.to_string(),
+                agent: agent.to_string(),
+            }),
             _ => Err(value.to_string()),
         }
     }
 
-    pub fn segments(&self) -> Vec<PathSegmentPattern> {
+    pub fn concrete_prefix(&self) -> Vec<&str> {
         match self {
-            Self::Any => vec![
-                PathSegmentPattern::Any,
-                PathSegmentPattern::Any,
-                PathSegmentPattern::Any,
-                PathSegmentPattern::Any,
-                PathSegmentPattern::Any,
-            ],
-            Self::Account { account } => vec![account.clone()],
+            Self::Any => Vec::new(),
+            Self::Account { account } => vec![account.as_str()],
             Self::Environment {
                 account,
                 application,
                 environment,
-            } => vec![account.clone(), application.clone(), environment.clone()],
+            }
+            | Self::EnvironmentAgents {
+                account,
+                application,
+                environment,
+            } => vec![account.as_str(), application.as_str(), environment.as_str()],
+            Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                component,
+            } => vec![
+                account.as_str(),
+                application.as_str(),
+                environment.as_str(),
+                component.as_str(),
+            ],
             Self::Agent {
                 account,
                 application,
@@ -155,12 +178,146 @@ impl RecipientPathPattern {
                 component,
                 agent,
             } => vec![
-                account.clone(),
-                application.clone(),
-                environment.clone(),
-                component.clone(),
-                agent.clone(),
+                account.as_str(),
+                application.as_str(),
+                environment.as_str(),
+                component.as_str(),
+                agent.as_str(),
             ],
+        }
+    }
+
+    pub fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Account { account: a }, other) => other.account().is_some_and(|b| a == b),
+            (
+                Self::Environment {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                },
+                other,
+            )
+            | (
+                Self::EnvironmentAgents {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                },
+                other,
+            ) => {
+                other
+                    .environment()
+                    .is_some_and(|(ba, bp, be)| aa == ba && ap == bp && ae == be)
+                    && (!matches!(self, Self::EnvironmentAgents { .. })
+                        || other.agent_scope_depth() == Some(5))
+            }
+            (
+                Self::ComponentAgents {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                    component: ac,
+                },
+                other,
+            ) => {
+                other
+                    .component()
+                    .is_some_and(|(ba, bp, be, bc)| aa == ba && ap == bp && ae == be && ac == bc)
+                    && other.agent_scope_depth() == Some(5)
+            }
+            (
+                Self::Agent {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                    component: ac,
+                    agent: ag,
+                },
+                Self::Agent {
+                    account: ba,
+                    application: bp,
+                    environment: be,
+                    component: bc,
+                    agent: bg,
+                },
+            ) => aa == ba && ap == bp && ae == be && ac == bc && ag == bg,
+            (Self::Agent { .. }, _) => false,
+        }
+    }
+
+    pub fn matches_holder(&self, holder: &Self) -> bool {
+        self.subsumes(holder)
+    }
+
+    fn account(&self) -> Option<&str> {
+        match self {
+            Self::Any => None,
+            Self::Account { account }
+            | Self::Environment { account, .. }
+            | Self::EnvironmentAgents { account, .. }
+            | Self::ComponentAgents { account, .. }
+            | Self::Agent { account, .. } => Some(account),
+        }
+    }
+
+    fn environment(&self) -> Option<(&str, &str, &str)> {
+        match self {
+            Self::Environment {
+                account,
+                application,
+                environment,
+            }
+            | Self::EnvironmentAgents {
+                account,
+                application,
+                environment,
+            }
+            | Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                ..
+            }
+            | Self::Agent {
+                account,
+                application,
+                environment,
+                ..
+            } => Some((account, application, environment)),
+            Self::Any | Self::Account { .. } => None,
+        }
+    }
+
+    fn component(&self) -> Option<(&str, &str, &str, &str)> {
+        match self {
+            Self::ComponentAgents {
+                account,
+                application,
+                environment,
+                component,
+            }
+            | Self::Agent {
+                account,
+                application,
+                environment,
+                component,
+                ..
+            } => Some((account, application, environment, component)),
+            Self::Any
+            | Self::Account { .. }
+            | Self::Environment { .. }
+            | Self::EnvironmentAgents { .. } => None,
+        }
+    }
+
+    fn agent_scope_depth(&self) -> Option<usize> {
+        match self {
+            Self::EnvironmentAgents { .. } | Self::ComponentAgents { .. } | Self::Agent { .. } => {
+                Some(5)
+            }
+            Self::Any | Self::Account { .. } | Self::Environment { .. } => None,
         }
     }
 }
@@ -171,10 +328,6 @@ fn parse_segment(value: &str) -> PathSegmentPattern {
     } else {
         PathSegmentPattern::Exact(value.to_string())
     }
-}
-
-fn is_concrete_root(segment: &PathSegmentPattern) -> bool {
-    matches!(segment, PathSegmentPattern::Exact(_))
 }
 
 fn parse_path_segments(value: &str) -> Result<Vec<PathSegmentPattern>, String> {
@@ -188,6 +341,31 @@ fn parse_path_segments(value: &str) -> Result<Vec<PathSegmentPattern>, String> {
             Ok(segments)
         }
     }
+}
+
+fn parse_exact_segments(value: &str) -> Result<Vec<&str>, String> {
+    if value.is_empty() {
+        return Err(value.to_string());
+    }
+
+    let segments = value.split('/').collect::<Vec<_>>();
+    if segments.first() == Some(&"*") || segments.iter().any(|s| s.is_empty()) || has_concrete_after_wildcard_str(&segments) {
+        Err(value.to_string())
+    } else {
+        Ok(segments)
+    }
+}
+
+fn has_concrete_after_wildcard_str(segments: &[&str]) -> bool {
+    let mut seen_wildcard = false;
+    for segment in segments {
+        match *segment {
+            "*" => seen_wildcard = true,
+            _ if seen_wildcard => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn has_concrete_after_wildcard(segments: &[PathSegmentPattern]) -> bool {

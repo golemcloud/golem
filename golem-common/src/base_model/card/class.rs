@@ -172,7 +172,7 @@ impl ResourceSubsumes for CardResourcePattern {
         match (self, other) {
             (Self::Any, _) => true,
             (Self::Empty, Self::Empty) => true,
-            (Self::InstallTarget(a), Self::InstallTarget(b)) => a.subsumes(b).unwrap_or(false),
+            (Self::InstallTarget(a), Self::InstallTarget(b)) => a.subsumes(b),
             _ => false,
         }
     }

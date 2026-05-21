@@ -90,8 +90,8 @@ fn rejects_malformed_grants() {
             if class == "system" && resource == "not-empty"
     );
     assert_matches!(
-        parse_pattern_grant("card(acme) @ acme : install : agent(*)"),
-        Err(CardParseError::InvalidRecipientPath(path)) if path == "agent(*)"
+        parse_pattern_grant("card(acme) @ acme : install : acme/shop"),
+        Err(CardParseError::InvalidRecipientPath(path)) if path == "acme/shop"
     );
     assert_matches!(
         parse_pattern_grant("unknown(acme) @ acme : view :"),

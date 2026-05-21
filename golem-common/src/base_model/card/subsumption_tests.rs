@@ -129,11 +129,11 @@ fn recipient_patterns_subsume_only_matching_holder_subtrees() {
     let other =
         RecipientPathPattern::parse("other/shop/prod/cart-svc/ShoppingCart(\"42\")").unwrap();
 
-    assert!(account.subsumes(&agent).unwrap());
-    assert!(environment.subsumes(&agent).unwrap());
-    assert!(agent_type.subsumes(&agent).unwrap());
-    assert!(!agent.subsumes(&agent_type).unwrap());
-    assert!(!account.subsumes(&other).unwrap());
+    assert!(account.subsumes(&agent));
+    assert!(environment.subsumes(&agent));
+    assert!(agent_type.subsumes(&agent));
+    assert!(!agent.subsumes(&agent_type));
+    assert!(!account.subsumes(&other));
 }
 
 #[test_gen]
@@ -166,7 +166,7 @@ fn generate_recipient_matching_tests(r: &mut DynamicTestRegistration) {
                         .unwrap();
                 let recipient = RecipientPathPattern::parse(recipient).unwrap();
 
-                assert_eq!(recipient.matches_holder(&holder).unwrap(), expected);
+                assert_eq!(recipient.matches_holder(&holder), expected);
             }
         );
     }
