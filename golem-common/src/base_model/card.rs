@@ -34,15 +34,33 @@ pub struct OwnerPathPattern(pub String);
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct RecipientPathPattern(pub String);
 
+trait PermissionSubsumes {
+    fn subsumes(&self, other: &Self) -> bool;
+}
+
+trait ResourceSubsumes {
+    fn subsumes(&self, other: &Self) -> bool;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum VerbPattern {
+pub struct EmptyResourcePattern;
+
+impl ResourceSubsumes for EmptyResourcePattern {
+    fn subsumes(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum IdentifierResourcePattern {
     Any,
     Exact(String),
 }
 
-impl VerbPattern {
-    pub fn subsumes(&self, other: &Self) -> bool {
+impl ResourceSubsumes for IdentifierResourcePattern {
+    fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
             (Self::Exact(a), Self::Exact(b)) => a == b,
@@ -53,46 +71,127 @@ impl VerbPattern {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum ResourcePattern {
+pub enum GlobResourcePattern {
     Any,
-    Empty,
     Exact(String),
     Glob(String),
-    NetworkHostPort {
-        host: String,
-        ports: PortPattern,
-    },
-    OplogRange {
+}
+
+impl ResourceSubsumes for GlobResourcePattern {
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Exact(a), Self::Exact(b)) => a == b,
+            (Self::Glob(a), Self::Glob(b)) => glob_subsumes(a, b),
+            (Self::Glob(a), Self::Exact(b)) => glob_matches(a, b),
+            (Self::Glob(_), Self::Any) => false,
+            (Self::Exact(_), Self::Any | Self::Glob(_)) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum NetworkResourcePattern {
+    Any,
+    HostPort { host: String, ports: PortPattern },
+}
+
+impl ResourceSubsumes for NetworkResourcePattern {
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (
+                Self::HostPort {
+                    host: ah,
+                    ports: ap,
+                },
+                Self::HostPort {
+                    host: bh,
+                    ports: bp,
+                },
+            ) => glob_subsumes(ah, bh) && ap.subsumes(bp),
+            (Self::HostPort { .. }, Self::Any) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum OplogResourcePattern {
+    Any,
+    Range {
         start: Option<u64>,
         end: Option<u64>,
     },
 }
 
-impl ResourcePattern {
-    pub fn subsumes(&self, other: &Self) -> bool {
+impl ResourceSubsumes for OplogResourcePattern {
+    fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Empty, Self::Empty) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Glob(a), Self::Glob(b)) => glob_subsumes(a, b),
-            (Self::Glob(a), Self::Exact(b)) => glob_matches(a, b),
             (
-                Self::NetworkHostPort {
-                    host: ah,
-                    ports: ap,
-                },
-                Self::NetworkHostPort {
-                    host: bh,
-                    ports: bp,
-                },
-            ) => glob_subsumes(ah, bh) && ap.subsumes(bp),
-            (
-                Self::OplogRange {
+                Self::Range {
                     start: as_,
                     end: ae,
                 },
-                Self::OplogRange { start: bs, end: be },
+                Self::Range { start: bs, end: be },
             ) => range_subsumes(*as_, *ae, *bs, *be),
+            (Self::Range { .. }, Self::Any) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum AgentResourcePattern {
+    Any,
+    Empty,
+    Method(String),
+}
+
+impl ResourceSubsumes for AgentResourcePattern {
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Empty, Self::Empty) => true,
+            (Self::Method(a), Self::Method(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum ToolResourcePattern {
+    Any,
+    Command(String),
+}
+
+impl ResourceSubsumes for ToolResourcePattern {
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Command(a), Self::Command(b)) => a == b,
+            (Self::Command(_), Self::Any) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum CardResourcePattern {
+    Any,
+    Empty,
+    InstallTarget(RecipientPathPattern),
+}
+
+impl ResourceSubsumes for CardResourcePattern {
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Empty, Self::Empty) => true,
+            (Self::InstallTarget(a), Self::InstallTarget(b)) => a.subsumes(b).unwrap_or(false),
             _ => false,
         }
     }
@@ -131,28 +230,224 @@ impl PortPattern {
     }
 }
 
+macro_rules! define_class_permission_pattern {
+    ($name:ident, $resource:ty, [$($verb:ident),+ $(,)?]) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+        pub enum $name {
+            Any($resource),
+            $($verb($resource)),+
+        }
+
+        impl PermissionSubsumes for $name {
+            fn subsumes(&self, other: &Self) -> bool {
+                let (self_verb, self_resource) = self.parts();
+                let (other_verb, other_resource) = other.parts();
+                (self_verb.is_none() || self_verb == other_verb)
+                    && self_resource.subsumes(other_resource)
+            }
+        }
+
+        impl $name {
+            fn parts(&self) -> (Option<&'static str>, &$resource) {
+                match self {
+                    Self::Any(resource) => (None, resource),
+                    $(Self::$verb(resource) => (Some(stringify!($verb)), resource)),+
+                }
+            }
+        }
+    };
+}
+
+define_class_permission_pattern!(
+    FilesystemPermissionPattern,
+    GlobResourcePattern,
+    [Read, Write, List, Stat, Delete]
+);
+define_class_permission_pattern!(NetworkPermissionPattern, NetworkResourcePattern, [Connect]);
+define_class_permission_pattern!(EnvPermissionPattern, IdentifierResourcePattern, [Read]);
+define_class_permission_pattern!(OplogPermissionPattern, OplogResourcePattern, [Read]);
+define_class_permission_pattern!(ConfigPermissionPattern, GlobResourcePattern, [Read]);
+define_class_permission_pattern!(
+    SecretPermissionPattern,
+    GlobResourcePattern,
+    [Hold, Mint, Reveal]
+);
+define_class_permission_pattern!(
+    AgentPermissionPattern,
+    AgentResourcePattern,
+    [
+        Invoke,
+        View,
+        Create,
+        Delete,
+        Interrupt,
+        Resume,
+        UpdateRevision,
+        Fork,
+        Revert,
+        CancelInvocation,
+        ActivatePlugin,
+        DeactivatePlugin
+    ]
+);
+define_class_permission_pattern!(ToolPermissionPattern, ToolResourcePattern, [Invoke]);
+define_class_permission_pattern!(
+    KvPermissionPattern,
+    GlobResourcePattern,
+    [Read, Write, Delete]
+);
+define_class_permission_pattern!(
+    BlobPermissionPattern,
+    GlobResourcePattern,
+    [Read, Write, Delete]
+);
+define_class_permission_pattern!(
+    RdbmsPermissionPattern,
+    GlobResourcePattern,
+    [Query, Execute]
+);
+define_class_permission_pattern!(
+    CardPermissionPattern,
+    CardResourcePattern,
+    [Derive, Revoke, Inspect, Install]
+);
+define_class_permission_pattern!(
+    SystemPermissionPattern,
+    EmptyResourcePattern,
+    [
+        CreateAccount,
+        ViewDefaultPlan,
+        ViewAccountSummariesReport,
+        ViewAccountCountsReport
+    ]
+);
+define_class_permission_pattern!(
+    PlanPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Update]
+);
+define_class_permission_pattern!(
+    AccountPermissionPattern,
+    EmptyResourcePattern,
+    [View, Update, Delete, SetRoles, SetPlan, Restore]
+);
+define_class_permission_pattern!(AccountUsagePermissionPattern, EmptyResourcePattern, [View]);
+define_class_permission_pattern!(
+    AccountTokenPermissionPattern,
+    IdentifierResourcePattern,
+    [Create, Delete]
+);
+define_class_permission_pattern!(
+    AccountPluginPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_class_permission_pattern!(
+    ApplicationPermissionPattern,
+    EmptyResourcePattern,
+    [
+        View,
+        Create,
+        Update,
+        Delete,
+        Restore,
+        MintCredential,
+        RotateCredential,
+        RevokeCredential,
+        ViewCredentials
+    ]
+);
+define_class_permission_pattern!(
+    EnvironmentPermissionPattern,
+    EmptyResourcePattern,
+    [
+        View,
+        Create,
+        Update,
+        Delete,
+        Restore,
+        Deploy,
+        Rollback,
+        ViewDeploymentPlan,
+        WriteDeploymentRecord
+    ]
+);
+define_class_permission_pattern!(
+    EnvironmentSharePermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentPluginGrantPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentDomainRegistrationPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentSecuritySchemePermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentHttpApiDeploymentPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentMcpDeploymentPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentAgentSecretPermissionPattern,
+    GlobResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentResourceDefinitionPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentRetryPolicyPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_class_permission_pattern!(
+    ComponentPermissionPattern,
+    EmptyResourcePattern,
+    [View, Create, Update, Delete]
+);
+define_class_permission_pattern!(
+    AccountOauth2IdentityPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Link, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentInitialFilesPermissionPattern,
+    GlobResourcePattern,
+    [View, Update, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentKvBucketPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Delete]
+);
+define_class_permission_pattern!(
+    EnvironmentBlobBucketPermissionPattern,
+    IdentifierResourcePattern,
+    [View, Create, Delete]
+);
+
 macro_rules! define_permission_patterns {
     ($(
-        $variant:ident($pattern:ident, $verb:ident, $resource:ident) => $class_name:literal
+        $variant:ident($pattern:ident) => $class_name:literal
     ),+ $(,)?) => {
-        $(
-            #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-            #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-            #[cfg_attr(feature = "full", desert(transparent))]
-            pub struct $verb(pub VerbPattern);
-
-            #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-            #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-            #[cfg_attr(feature = "full", desert(transparent))]
-            pub struct $resource(pub ResourcePattern);
-
-            #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-            #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-            pub struct $pattern {
-                pub verb: $verb,
-                pub resource: $resource,
-            }
-        )+
 
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -169,9 +464,7 @@ macro_rules! define_permission_patterns {
 
             pub fn subsumes(&self, other: &Self) -> bool {
                 match (self, other) {
-                    $((Self::$variant(a), Self::$variant(b)) => {
-                        a.verb.0.subsumes(&b.verb.0) && a.resource.0.subsumes(&b.resource.0)
-                    }),+,
+                    $((Self::$variant(a), Self::$variant(b)) => a.subsumes(b)),+,
                     _ => false,
                 }
             }
@@ -180,40 +473,40 @@ macro_rules! define_permission_patterns {
 }
 
 define_permission_patterns! {
-    Filesystem(FilesystemPermissionPattern, FilesystemVerb, FilesystemResourcePattern) => "filesystem",
-    Network(NetworkPermissionPattern, NetworkVerb, NetworkResourcePattern) => "network",
-    Env(EnvPermissionPattern, EnvVerb, EnvResourcePattern) => "env",
-    Oplog(OplogPermissionPattern, OplogVerb, OplogResourcePattern) => "oplog",
-    Config(ConfigPermissionPattern, ConfigVerb, ConfigResourcePattern) => "config",
-    Secret(SecretPermissionPattern, SecretVerb, SecretResourcePattern) => "secret",
-    Agent(AgentPermissionPattern, AgentVerb, AgentResourcePattern) => "agent",
-    Tool(ToolPermissionPattern, ToolVerb, ToolResourcePattern) => "tool",
-    Kv(KvPermissionPattern, KvVerb, KvResourcePattern) => "kv",
-    Blob(BlobPermissionPattern, BlobVerb, BlobResourcePattern) => "blob",
-    Rdbms(RdbmsPermissionPattern, RdbmsVerb, RdbmsResourcePattern) => "rdbms",
-    Card(CardPermissionPattern, CardVerb, CardResourcePattern) => "card",
-    System(SystemPermissionPattern, SystemVerb, SystemResourcePattern) => "system",
-    Plan(PlanPermissionPattern, PlanVerb, PlanResourcePattern) => "plan",
-    Account(AccountPermissionPattern, AccountVerb, AccountResourcePattern) => "account",
-    AccountUsage(AccountUsagePermissionPattern, AccountUsageVerb, AccountUsageResourcePattern) => "account.usage",
-    AccountToken(AccountTokenPermissionPattern, AccountTokenVerb, AccountTokenResourcePattern) => "account.token",
-    AccountPlugin(AccountPluginPermissionPattern, AccountPluginVerb, AccountPluginResourcePattern) => "account.plugin",
-    Application(ApplicationPermissionPattern, ApplicationVerb, ApplicationResourcePattern) => "application",
-    Environment(EnvironmentPermissionPattern, EnvironmentVerb, EnvironmentResourcePattern) => "environment",
-    EnvironmentShare(EnvironmentSharePermissionPattern, EnvironmentShareVerb, EnvironmentShareResourcePattern) => "environment.share",
-    EnvironmentPluginGrant(EnvironmentPluginGrantPermissionPattern, EnvironmentPluginGrantVerb, EnvironmentPluginGrantResourcePattern) => "environment.plugin-grant",
-    EnvironmentDomainRegistration(EnvironmentDomainRegistrationPermissionPattern, EnvironmentDomainRegistrationVerb, EnvironmentDomainRegistrationResourcePattern) => "environment.domain-registration",
-    EnvironmentSecurityScheme(EnvironmentSecuritySchemePermissionPattern, EnvironmentSecuritySchemeVerb, EnvironmentSecuritySchemeResourcePattern) => "environment.security-scheme",
-    EnvironmentHttpApiDeployment(EnvironmentHttpApiDeploymentPermissionPattern, EnvironmentHttpApiDeploymentVerb, EnvironmentHttpApiDeploymentResourcePattern) => "environment.http-api-deployment",
-    EnvironmentMcpDeployment(EnvironmentMcpDeploymentPermissionPattern, EnvironmentMcpDeploymentVerb, EnvironmentMcpDeploymentResourcePattern) => "environment.mcp-deployment",
-    EnvironmentAgentSecret(EnvironmentAgentSecretPermissionPattern, EnvironmentAgentSecretVerb, EnvironmentAgentSecretResourcePattern) => "environment.agent-secret",
-    EnvironmentResourceDefinition(EnvironmentResourceDefinitionPermissionPattern, EnvironmentResourceDefinitionVerb, EnvironmentResourceDefinitionResourcePattern) => "environment.resource-definition",
-    EnvironmentRetryPolicy(EnvironmentRetryPolicyPermissionPattern, EnvironmentRetryPolicyVerb, EnvironmentRetryPolicyResourcePattern) => "environment.retry-policy",
-    Component(ComponentPermissionPattern, ComponentVerb, ComponentResourcePattern) => "component",
-    AccountOauth2Identity(AccountOauth2IdentityPermissionPattern, AccountOauth2IdentityVerb, AccountOauth2IdentityResourcePattern) => "account.oauth2-identity",
-    EnvironmentInitialFiles(EnvironmentInitialFilesPermissionPattern, EnvironmentInitialFilesVerb, EnvironmentInitialFilesResourcePattern) => "environment.initial-files",
-    EnvironmentKvBucket(EnvironmentKvBucketPermissionPattern, EnvironmentKvBucketVerb, EnvironmentKvBucketResourcePattern) => "environment.kv-bucket",
-    EnvironmentBlobBucket(EnvironmentBlobBucketPermissionPattern, EnvironmentBlobBucketVerb, EnvironmentBlobBucketResourcePattern) => "environment.blob-bucket",
+    Filesystem(FilesystemPermissionPattern) => "filesystem",
+    Network(NetworkPermissionPattern) => "network",
+    Env(EnvPermissionPattern) => "env",
+    Oplog(OplogPermissionPattern) => "oplog",
+    Config(ConfigPermissionPattern) => "config",
+    Secret(SecretPermissionPattern) => "secret",
+    Agent(AgentPermissionPattern) => "agent",
+    Tool(ToolPermissionPattern) => "tool",
+    Kv(KvPermissionPattern) => "kv",
+    Blob(BlobPermissionPattern) => "blob",
+    Rdbms(RdbmsPermissionPattern) => "rdbms",
+    Card(CardPermissionPattern) => "card",
+    System(SystemPermissionPattern) => "system",
+    Plan(PlanPermissionPattern) => "plan",
+    Account(AccountPermissionPattern) => "account",
+    AccountUsage(AccountUsagePermissionPattern) => "account.usage",
+    AccountToken(AccountTokenPermissionPattern) => "account.token",
+    AccountPlugin(AccountPluginPermissionPattern) => "account.plugin",
+    Application(ApplicationPermissionPattern) => "application",
+    Environment(EnvironmentPermissionPattern) => "environment",
+    EnvironmentShare(EnvironmentSharePermissionPattern) => "environment.share",
+    EnvironmentPluginGrant(EnvironmentPluginGrantPermissionPattern) => "environment.plugin-grant",
+    EnvironmentDomainRegistration(EnvironmentDomainRegistrationPermissionPattern) => "environment.domain-registration",
+    EnvironmentSecurityScheme(EnvironmentSecuritySchemePermissionPattern) => "environment.security-scheme",
+    EnvironmentHttpApiDeployment(EnvironmentHttpApiDeploymentPermissionPattern) => "environment.http-api-deployment",
+    EnvironmentMcpDeployment(EnvironmentMcpDeploymentPermissionPattern) => "environment.mcp-deployment",
+    EnvironmentAgentSecret(EnvironmentAgentSecretPermissionPattern) => "environment.agent-secret",
+    EnvironmentResourceDefinition(EnvironmentResourceDefinitionPermissionPattern) => "environment.resource-definition",
+    EnvironmentRetryPolicy(EnvironmentRetryPolicyPermissionPattern) => "environment.retry-policy",
+    Component(ComponentPermissionPattern) => "component",
+    AccountOauth2Identity(AccountOauth2IdentityPermissionPattern) => "account.oauth2-identity",
+    EnvironmentInitialFiles(EnvironmentInitialFilesPermissionPattern) => "environment.initial-files",
+    EnvironmentKvBucket(EnvironmentKvBucketPermissionPattern) => "environment.kv-bucket",
+    EnvironmentBlobBucket(EnvironmentBlobBucketPermissionPattern) => "environment.blob-bucket",
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -502,19 +795,11 @@ mod tests {
     use super::*;
     use test_r::test;
 
-    fn fs(
-        owner: &str,
-        recipient: &str,
-        verb: VerbPattern,
-        resource: ResourcePattern,
-    ) -> PatternGrant {
+    fn fs(owner: &str, recipient: &str, resource: GlobResourcePattern) -> PatternGrant {
         PatternGrant {
             owner: OwnerPathPattern(owner.to_string()),
             recipient: RecipientPathPattern(recipient.to_string()),
-            permission: PermissionPattern::Filesystem(FilesystemPermissionPattern {
-                verb: FilesystemVerb(verb),
-                resource: FilesystemResourcePattern(resource),
-            }),
+            permission: PermissionPattern::Filesystem(FilesystemPermissionPattern::Read(resource)),
         }
     }
 
@@ -560,14 +845,12 @@ mod tests {
         let broad = fs(
             "acme/shop/prod/cart/agent",
             "acme/shop/prod/cart/agent",
-            VerbPattern::Exact("read".to_string()),
-            ResourcePattern::Glob("/data/**".to_string()),
+            GlobResourcePattern::Glob("/data/**".to_string()),
         );
         let narrow = fs(
             "acme/shop/prod/cart/agent",
             "acme/shop/prod/cart/agent",
-            VerbPattern::Exact("read".to_string()),
-            ResourcePattern::Exact("/data/item.json".to_string()),
+            GlobResourcePattern::Exact("/data/item.json".to_string()),
         );
 
         assert!(broad.subsumes(&narrow).unwrap());
@@ -580,20 +863,17 @@ mod tests {
         let read_all = fs(
             "acme/shop/prod/cart/agent",
             "acme/shop/prod/cart/agent",
-            VerbPattern::Exact("read".to_string()),
-            ResourcePattern::Glob("/data/**".to_string()),
+            GlobResourcePattern::Glob("/data/**".to_string()),
         );
         let read_secret = fs(
             "acme/shop/prod/cart/agent",
             "acme/shop/prod/cart/agent",
-            VerbPattern::Exact("read".to_string()),
-            ResourcePattern::Exact("/data/secret.txt".to_string()),
+            GlobResourcePattern::Exact("/data/secret.txt".to_string()),
         );
         let read_public = fs(
             "acme/shop/prod/cart/agent",
             "acme/shop/prod/cart/agent",
-            VerbPattern::Exact("read".to_string()),
-            ResourcePattern::Exact("/data/public.txt".to_string()),
+            GlobResourcePattern::Exact("/data/public.txt".to_string()),
         );
 
         let lower = card(vec![read_all], Vec::new());
@@ -610,20 +890,17 @@ mod tests {
         let parent_grant = fs(
             "acme/shop/prod/cart/agent",
             "acme/shop/prod/cart/agent",
-            VerbPattern::Exact("read".to_string()),
-            ResourcePattern::Glob("/data/**".to_string()),
+            GlobResourcePattern::Glob("/data/**".to_string()),
         );
         let child_grant = fs(
             "acme/shop/prod/cart/agent",
             "acme/shop/prod/cart/agent",
-            VerbPattern::Exact("read".to_string()),
-            ResourcePattern::Exact("/data/file.txt".to_string()),
+            GlobResourcePattern::Exact("/data/file.txt".to_string()),
         );
         let denied_child = fs(
             "other/shop/prod/cart/agent",
             "acme/shop/prod/cart/agent",
-            VerbPattern::Exact("read".to_string()),
-            ResourcePattern::Exact("/data/file.txt".to_string()),
+            GlobResourcePattern::Exact("/data/file.txt".to_string()),
         );
 
         let parent = card(vec![parent_grant], Vec::new());
