@@ -18,6 +18,7 @@ mod agents;
 mod app;
 
 mod build_and_deploy_all;
+mod directory_source_ifs;
 mod plugins;
 
 tag_suite!(app, group1);
@@ -28,6 +29,9 @@ sequential_suite!(plugins);
 
 tag_suite!(build_and_deploy_all, group2);
 sequential_suite!(build_and_deploy_all);
+
+tag_suite!(directory_source_ifs, group3);
+sequential_suite!(directory_source_ifs);
 
 sequential_suite!(agents);
 

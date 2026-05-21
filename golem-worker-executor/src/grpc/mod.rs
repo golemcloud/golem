@@ -925,6 +925,34 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
+    async fn set_shard_assignment_internal(
+        &self,
+        request: golem::workerexecutor::v1::SetShardAssignmentRequest,
+    ) -> Result<(), WorkerExecutorError> {
+        let shard_ids = request.shard_ids.into_iter().map(ShardId::from).collect();
+        let number_of_shards = request
+            .number_of_shards
+            .try_into()
+            .map_err(|_| WorkerExecutorError::runtime("Invalid number of shards"))?;
+
+        self.shard_service()
+            .set_shard_assignment(number_of_shards, &shard_ids)?;
+
+        for (agent_id, worker_details) in self.active_workers().snapshot().await {
+            if self.shard_service().check_worker(&agent_id).is_err()
+                && let Some(mut await_interrupted) = worker_details
+                    .set_interrupting(InterruptKind::Restart)
+                    .await
+            {
+                await_interrupted.recv().await.unwrap();
+            }
+        }
+
+        Ctx::on_shard_assignment_changed(self).await?;
+
+        Ok(())
+    }
+
     async fn get_agent_metadata_internal(
         &self,
         request: golem::workerexecutor::v1::GetAgentMetadataRequest,
@@ -2340,6 +2368,42 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     golem::workerexecutor::v1::AssignShardsResponse {
                         result: Some(
                             golem::workerexecutor::v1::assign_shards_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn set_shard_assignment(
+        &self,
+        request: Request<golem::workerexecutor::v1::SetShardAssignmentRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::SetShardAssignmentResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("set_shard_assignment",);
+
+        match self
+            .set_shard_assignment_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::v1::SetShardAssignmentResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::set_shard_assignment_response::Result::Success(
+                            golem::common::Empty {},
+                        ),
+                    ),
+                },
+            ))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::v1::SetShardAssignmentResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::set_shard_assignment_response::Result::Failure(
                                 err.clone().into(),
                             ),
                         ),
