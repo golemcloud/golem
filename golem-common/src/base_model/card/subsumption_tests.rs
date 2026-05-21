@@ -27,13 +27,8 @@ fn fs(owner: &str, recipient: &str, resource: GlobResourcePattern) -> PatternGra
     )
 }
 
-fn fs_permission(
-    owner: &str,
-    recipient: &str,
-    permission: FilesystemPermissionPattern,
-) -> PatternGrant {
+fn fs_permission(recipient: &str, permission: FilesystemPermissionPattern) -> PatternGrant {
     PatternGrant::new(
-        owner,
         RecipientPathPattern::parse(recipient).unwrap(),
         PermissionPattern::Filesystem(permission),
     )
@@ -41,9 +36,11 @@ fn fs_permission(
 
 fn network(recipient: &str, resource: NetworkResourcePattern) -> PatternGrant {
     PatternGrant::new(
-        OwnerPathPattern::new(String::new()),
         RecipientPathPattern::parse(recipient).unwrap(),
-        PermissionPattern::Network(NetworkPermissionPattern::Connect(resource)),
+        PermissionPattern::Network(NetworkPermissionPattern::Connect {
+            owner: EmptyOwnerPattern,
+            resource,
+        }),
     )
 }
 
@@ -63,25 +60,41 @@ fn card(lower_positive: Vec<PatternGrant>, upper_positive: Vec<PatternGrant>) ->
 }
 
 #[test]
-fn owner_truncation_subsumes_trailing_segments() {
-    let broad = OwnerPathPattern::new("acme/shop");
-    let narrow = OwnerPathPattern::new("acme/shop/prod/cart/agent");
+fn owner_wildcards_subsume_segments() {
+    let broad = AgentOwnerPattern::new("acme/shop/prod/*/*");
+    let narrow = AgentOwnerPattern::new("acme/shop/prod/cart/agent");
 
-    assert!(broad.subsumes(&narrow).unwrap());
-    assert!(!narrow.subsumes(&broad).unwrap());
+    assert!(broad.subsumes(&narrow));
+    assert!(!narrow.subsumes(&broad));
 }
 
 #[test_gen]
 fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
     let cases = [
-        ("acme", "acme/shop/prod/cart/agent", true),
-        ("acme/shop", "acme/shop/prod/cart/agent", true),
-        ("acme/*/prod", "acme/shop/prod", true),
-        ("*/shop/prod", "acme/shop/prod", true),
-        ("acme/shop/prod", "acme/shop/prod", true),
-        ("acme/shop/prod/cart/agent", "acme/shop", false),
-        ("acme/shop/prod", "other/shop/prod", false),
-        ("acme/shop/prod", "acme/*/prod", false),
+        ("acme/shop/prod/*/*", "acme/shop/prod/cart/agent", true),
+        ("acme/*/prod/*/*", "acme/shop/prod/cart/agent", true),
+        ("*/shop/prod/cart/agent", "acme/shop/prod/cart/agent", true),
+        (
+            "acme/shop/prod/cart/agent",
+            "acme/shop/prod/cart/agent",
+            true,
+        ),
+        ("acme/shop/prod/cart/agent", "acme/shop/prod/cart/*", false),
+        (
+            "acme/shop/prod/cart/agent",
+            "other/shop/prod/cart/agent",
+            false,
+        ),
+        (
+            "acme/shop/prod/cart/CartAgent(*)",
+            "acme/shop/prod/cart/CartAgent(\"42\")",
+            true,
+        ),
+        (
+            "acme/shop/prod/cart/CartAgent(\"42\")",
+            "acme/shop/prod/cart/CartAgent(*)",
+            false,
+        ),
     ];
 
     for (left, right, expected) in cases {
@@ -99,10 +112,10 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
             ),
             TestProperties::unit_test(),
             || {
-                let left = OwnerPathPattern::new(left);
-                let right = OwnerPathPattern::new(right);
+                let left = AgentOwnerPattern::new(left);
+                let right = AgentOwnerPattern::new(right);
 
-                assert_eq!(left.subsumes(&right).unwrap(), expected);
+                assert_eq!(left.subsumes(&right), expected);
             }
         );
     }
@@ -110,13 +123,10 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
 
 #[test]
 fn invalid_owner_paths_fail_subsumption() {
-    let invalid = OwnerPathPattern::new("acme//prod");
-    let valid = OwnerPathPattern::new("acme/shop/prod");
+    let invalid = AgentOwnerPattern::new("acme//prod/cart/agent");
+    let valid = AgentOwnerPattern::new("acme/shop/prod/cart/agent");
 
-    assert_matches!(
-        invalid.subsumes(&valid),
-        Err(CardAlgebraError::InvalidOwnerPath(path)) if path == "acme//prod"
-    );
+    assert!(!invalid.subsumes(&valid));
 }
 
 #[test]
@@ -321,19 +331,25 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
 #[test]
 fn verb_wildcard_subsumes_class_verbs_only() {
     let any_filesystem = fs_permission(
-        "acme/shop/prod/cart/agent",
         "acme",
-        FilesystemPermissionPattern::Any(GlobResourcePattern::glob("/data/**")),
+        FilesystemPermissionPattern::Any {
+            owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+            resource: GlobResourcePattern::glob("/data/**"),
+        },
     );
     let read_file = fs_permission(
-        "acme/shop/prod/cart/agent",
         "acme",
-        FilesystemPermissionPattern::Read(GlobResourcePattern::exact("/data/file.txt")),
+        FilesystemPermissionPattern::Read {
+            owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+            resource: GlobResourcePattern::exact("/data/file.txt"),
+        },
     );
     let write_file = fs_permission(
-        "acme/shop/prod/cart/agent",
         "acme",
-        FilesystemPermissionPattern::Write(GlobResourcePattern::exact("/data/file.txt")),
+        FilesystemPermissionPattern::Write {
+            owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+            resource: GlobResourcePattern::exact("/data/file.txt"),
+        },
     );
 
     assert!(any_filesystem.subsumes(&read_file).unwrap());

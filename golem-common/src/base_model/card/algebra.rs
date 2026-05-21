@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::{Card, OwnerPathPattern, PatternGrant, RecipientPathPattern};
+use crate::base_model::card::{Card, PatternGrant, RecipientPathPattern};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,9 +25,10 @@ pub enum CardAlgebraError {
 
 impl PatternGrant {
     pub fn subsumes(&self, other: &Self) -> Result<bool, CardAlgebraError> {
-        Ok(self.owner.subsumes(&other.owner)?
-            && self.recipient.subsumes(&other.recipient)
-            && self.permission.subsumes(&other.permission))
+        Ok(
+            self.recipient.subsumes(&other.recipient)
+                && self.permission.subsumes(&other.permission),
+        )
     }
 
     pub fn applies_to_recipient(
@@ -140,14 +141,6 @@ impl EffectiveSurface {
     }
 }
 
-impl OwnerPathPattern {
-    pub fn subsumes(&self, other: &Self) -> Result<bool, CardAlgebraError> {
-        let left = parse_path(&self.0).map_err(CardAlgebraError::InvalidOwnerPath)?;
-        let right = parse_path(&other.0).map_err(CardAlgebraError::InvalidOwnerPath)?;
-        Ok(path_subsumes(&left, &right))
-    }
-}
-
 fn filter_by_recipient(
     grants: &[PatternGrant],
     holder: &RecipientPathPattern,
@@ -195,30 +188,4 @@ fn union_upper_allows(
         }
     }
     Ok(false)
-}
-
-fn parse_path(path: &str) -> Result<Vec<&str>, String> {
-    if path.is_empty() {
-        Ok(Vec::new())
-    } else if path.split('/').any(str::is_empty) {
-        Err(path.to_string())
-    } else {
-        Ok(path.split('/').collect())
-    }
-}
-
-fn path_subsumes(left: &[&str], right: &[&str]) -> bool {
-    let max_len = left.len().max(right.len());
-    for idx in 0..max_len {
-        let left = left.get(idx).copied().unwrap_or("*");
-        let right = right.get(idx).copied().unwrap_or("*");
-        if !segment_subsumes(left, right) {
-            return false;
-        }
-    }
-    true
-}
-
-fn segment_subsumes(left: &str, right: &str) -> bool {
-    left == "*" || left == right
 }
