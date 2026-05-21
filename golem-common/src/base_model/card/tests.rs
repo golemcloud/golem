@@ -216,3 +216,134 @@ fn rejects_unknown_verbs_for_class() {
         Err(CardParseError::UnknownVerb { class, verb }) if class == "filesystem" && verb == "query"
     ));
 }
+
+fn parsed_permission(input: &str) -> PermissionPattern {
+    parse_pattern_grant(input)
+        .expect("grant should parse")
+        .permission
+}
+
+#[test]
+fn parses_runtime_class_examples_from_spec() {
+    assert!(matches!(
+        parsed_permission(
+            "filesystem(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : /data/**"
+        ),
+        PermissionPattern::Filesystem(FilesystemPermissionPattern::Read(GlobResourcePattern::Glob(path)))
+            if path == "/data/**"
+    ));
+
+    assert!(matches!(
+        parsed_permission(
+            "filesystem(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : * : /data/**"
+        ),
+        PermissionPattern::Filesystem(FilesystemPermissionPattern::Any(GlobResourcePattern::Glob(path)))
+            if path == "/data/**"
+    ));
+
+    assert!(matches!(
+        parsed_permission("network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : *.openai.com"),
+        PermissionPattern::Network(NetworkPermissionPattern::Connect(NetworkResourcePattern::HostPort { host, ports }))
+            if host == "*.openai.com" && matches!(ports, PortPattern::Any)
+    ));
+
+    assert!(matches!(
+        parsed_permission("network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : api.internal:8080-9000"),
+        PermissionPattern::Network(NetworkPermissionPattern::Connect(NetworkResourcePattern::HostPort { host, ports }))
+            if host == "api.internal" && matches!(ports, PortPattern::Range { start: 8080, end: 9000 })
+    ));
+
+    assert!(matches!(
+        parsed_permission("env(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : HOME"),
+        PermissionPattern::Env(EnvPermissionPattern::Read(IdentifierResourcePattern::Exact(name)))
+            if name == "HOME"
+    ));
+
+    assert!(matches!(
+        parsed_permission(
+            "oplog(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : *"
+        ),
+        PermissionPattern::Oplog(OplogPermissionPattern::Read(OplogResourcePattern::Any))
+    ));
+
+    assert!(matches!(
+        parsed_permission("secret(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : reveal : cart.api-key"),
+        PermissionPattern::Secret(SecretPermissionPattern::Reveal(GlobResourcePattern::Exact(key)))
+            if key == "cart.api-key"
+    ));
+
+    assert!(matches!(
+        parsed_permission("kv(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : my-store.user-*"),
+        PermissionPattern::Kv(KvPermissionPattern::Read(GlobResourcePattern::Glob(key)))
+            if key == "my-store.user-*"
+    ));
+
+    assert!(matches!(
+        parsed_permission("blob(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : my-bucket.models/*.bin"),
+        PermissionPattern::Blob(BlobPermissionPattern::Read(GlobResourcePattern::Glob(key)))
+            if key == "my-bucket.models/*.bin"
+    ));
+}
+
+#[test]
+fn parses_agent_tool_and_card_examples_from_spec() {
+    assert!(matches!(
+        parsed_permission("agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : add-item"),
+        PermissionPattern::Agent(AgentPermissionPattern::Invoke(AgentResourcePattern::Method(method)))
+            if method == "add-item"
+    ));
+
+    assert!(matches!(
+        parsed_permission(
+            "agent(acme/shop/prod/cart-svc/*) @ acme/shop/prod/cart-svc/* : delete :"
+        ),
+        PermissionPattern::Agent(AgentPermissionPattern::Delete(AgentResourcePattern::Empty))
+    ));
+
+    assert!(matches!(
+        parsed_permission("tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : search"),
+        PermissionPattern::Tool(ToolPermissionPattern::Invoke(ToolResourcePattern::Command(command)))
+            if command == "search"
+    ));
+
+    assert!(matches!(
+        parsed_permission("card(acme) @ acme/shop/prod/cart-svc/ShoppingCart(*) : derive :"),
+        PermissionPattern::Card(CardPermissionPattern::Derive(CardResourcePattern::Empty))
+    ));
+
+    assert!(matches!(
+        parsed_permission("card(acme) @ acme : install : acme/shop/prod/cart-svc/ShoppingCart(*)"),
+        PermissionPattern::Card(CardPermissionPattern::Install(
+            CardResourcePattern::InstallTarget(RecipientPathPattern::Agent { .. })
+        ))
+    ));
+}
+
+#[test]
+fn parses_admin_class_examples() {
+    assert!(matches!(
+        parsed_permission("system() @ acme : create-account :"),
+        PermissionPattern::System(SystemPermissionPattern::CreateAccount(EmptyResourcePattern))
+    ));
+
+    assert!(matches!(
+        parsed_permission("plan() @ acme : view : *"),
+        PermissionPattern::Plan(PlanPermissionPattern::View(IdentifierResourcePattern::Any))
+    ));
+
+    assert!(matches!(
+        parsed_permission("account(acme) @ acme : set-plan :"),
+        PermissionPattern::Account(AccountPermissionPattern::SetPlan(EmptyResourcePattern))
+    ));
+
+    assert!(matches!(
+        parsed_permission("environment(acme/shop/prod) @ acme/shop/prod : deploy :"),
+        PermissionPattern::Environment(EnvironmentPermissionPattern::Deploy(EmptyResourcePattern))
+    ));
+
+    assert!(matches!(
+        parsed_permission("environment.agent-secret(acme/shop/prod) @ acme/shop/prod : update : cart.*"),
+        PermissionPattern::EnvironmentAgentSecret(EnvironmentAgentSecretPermissionPattern::Update(GlobResourcePattern::Glob(path)))
+            if path == "cart.*"
+    ));
+}

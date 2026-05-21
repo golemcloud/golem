@@ -82,6 +82,9 @@ pub fn parse_pattern_grant(value: &str) -> Result<PatternGrant, CardParseError> 
     if parts.class.is_empty() {
         return Err(CardParseError::MissingClassOpenParen);
     }
+    if parts.owner.is_empty() && !value.contains("()") {
+        return Err(CardParseError::MissingClassCloseParen);
+    }
     if parts.recipient.is_empty() {
         return Err(CardParseError::MissingRecipient);
     }
@@ -109,8 +112,7 @@ struct PatternGrantParts {
 fn pattern_grant_parts(input: &str) -> IResult<&str, PatternGrantParts> {
     let (input, class) = take_until("(")(input)?;
     let (input, _) = char('(')(input)?;
-    let (input, owner) = take_until(")")(input)?;
-    let (input, _) = char(')')(input)?;
+    let (input, owner) = take_until("@")(input)?;
     let (input, _) = multispace0(input)?;
     let (input, _) = char('@')(input)?;
     let (input, _) = multispace0(input)?;
@@ -120,11 +122,14 @@ fn pattern_grant_parts(input: &str) -> IResult<&str, PatternGrantParts> {
     let (input, _) = tag(":")(input)?;
     let (input, resource) = rest(input)?;
 
+    let owner = owner.trim();
+    let owner = owner.strip_suffix(')').unwrap_or(owner).trim();
+
     Ok((
         input,
         PatternGrantParts {
             class: class.trim().to_string(),
-            owner: owner.trim().to_string(),
+            owner: owner.to_string(),
             recipient: recipient.trim().to_string(),
             verb: verb.trim().to_string(),
             resource: resource.trim().to_string(),
