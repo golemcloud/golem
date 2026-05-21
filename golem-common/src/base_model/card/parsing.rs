@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use crate::base_model::card::*;
-use combine::parser::char::spaces;
-use combine::{EasyParser, Parser, Stream, any, eof, many, many1, none_of, token};
+use nom::IResult;
+use nom::bytes::complete::{tag, take_until};
+use nom::character::complete::{char, multispace0};
+use nom::combinator::{all_consuming, rest};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -70,9 +72,11 @@ impl FromStr for PatternGrant {
 }
 
 pub fn parse_pattern_grant(value: &str) -> Result<PatternGrant, CardParseError> {
-    let mut parser = pattern_grant_parts().skip(eof());
-    let (parts, _) = parser
-        .easy_parse(value)
+    if !value.contains('@') {
+        return Err(CardParseError::MissingAtSeparator);
+    }
+
+    let (_, parts) = all_consuming(pattern_grant_parts)(value)
         .map_err(|err| CardParseError::Malformed(err.to_string()))?;
 
     if parts.class.is_empty() {
@@ -102,35 +106,30 @@ struct PatternGrantParts {
     resource: String,
 }
 
-fn pattern_grant_parts<Input>() -> impl Parser<Input, Output = PatternGrantParts>
-where
-    Input: Stream<Token = char>,
-{
-    let trimmed = |value: String| value.trim().to_string();
-    let class = many1(none_of("(".chars())).map(trimmed);
-    let owner = token('(')
-        .with(many(none_of(")".chars())).map(trimmed))
-        .skip(token(')'));
-    let recipient = many1(none_of(":".chars())).map(trimmed);
-    let verb = many1(none_of(":".chars())).map(trimmed);
-    let resource = many(any()).map(trimmed);
+fn pattern_grant_parts(input: &str) -> IResult<&str, PatternGrantParts> {
+    let (input, class) = take_until("(")(input)?;
+    let (input, _) = char('(')(input)?;
+    let (input, owner) = take_until(")")(input)?;
+    let (input, _) = char(')')(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char('@')(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, recipient) = take_until(":")(input)?;
+    let (input, _) = tag(":")(input)?;
+    let (input, verb) = take_until(":")(input)?;
+    let (input, _) = tag(":")(input)?;
+    let (input, resource) = rest(input)?;
 
-    (
-        class,
-        owner,
-        spaces().with(token('@')).with(spaces()).with(recipient),
-        token(':').with(verb),
-        token(':').with(resource),
-    )
-        .map(
-            |(class, owner, recipient, verb, resource)| PatternGrantParts {
-                class,
-                owner,
-                recipient,
-                verb,
-                resource,
-            },
-        )
+    Ok((
+        input,
+        PatternGrantParts {
+            class: class.trim().to_string(),
+            owner: owner.trim().to_string(),
+            recipient: recipient.trim().to_string(),
+            verb: verb.trim().to_string(),
+            resource: resource.trim().to_string(),
+        },
+    ))
 }
 
 macro_rules! parse_permission {

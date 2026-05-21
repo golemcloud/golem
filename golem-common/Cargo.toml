@@ -92,6 +92,7 @@ itertools = { workspace = true, optional = true }
 lazy_static = { workspace = true, optional = true }
 mac_address = { workspace = true, optional = true }
 nonempty-collections = { workspace = true, optional = true }
+nom = { workspace = true }
 openidconnect = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
