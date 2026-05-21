@@ -98,58 +98,58 @@ export const Counter = defineAgent({
       success: Schema.Number,
     }),
   },
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ counter: name }))
-      const state = yield* snap.init({ count: 0 })
-      const ownerPrincipal = yield* Principal.Principal
-      const ownerTag =
-        ownerPrincipal.tag === "oidc" ? `oidc:${ownerPrincipal.val.sub}` : ownerPrincipal.tag
-      return {
-        value: () =>
-          Ref.get(state).pipe(
-            Effect.map((s) => s.count),
-            Effect.withSpan("Counter.value"),
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ counter: name }))
+    const state = yield* snap.init({ count: 0 })
+    const ownerPrincipal = yield* Principal.Principal
+    const ownerTag =
+      ownerPrincipal.tag === "oidc" ? `oidc:${ownerPrincipal.val.sub}` : ownerPrincipal.tag
+    return {
+      value: () =>
+        Ref.get(state).pipe(
+          Effect.map((s) => s.count),
+          Effect.withSpan("Counter.value"),
+        ),
+      increment: () =>
+        Ref.updateAndGet(state, (s) => ({ count: s.count + 1 })).pipe(
+          Effect.tap((s) =>
+            Effect.logInfo("incremented").pipe(Effect.annotateLogs({ to: s.count })),
           ),
-        increment: () =>
-          Ref.updateAndGet(state, (s) => ({ count: s.count + 1 })).pipe(
-            Effect.tap((s) =>
-              Effect.logInfo("incremented").pipe(Effect.annotateLogs({ to: s.count })),
-            ),
-            Effect.map((s) => s.count),
-            Effect.withSpan("Counter.increment"),
-          ),
-        add: ({ by }) =>
-          Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
-            Effect.tap(() => Effect.logDebug("added").pipe(Effect.annotateLogs({ by }))),
-            Effect.map((s) => s.count),
-            Effect.withSpan("Counter.add", { attributes: { by } }),
-          ),
-        reset: () => Ref.set(state, { count: 0 }),
-        owner: () => Effect.succeed(ownerTag),
-        caller: () =>
-          Effect.gen(function* () {
-            const p = yield* Principal.Principal
-            return p.tag === "oidc" ? `oidc:${p.val.sub}` : p.tag
-          }),
-        currentGreeting: () =>
-          Effect.gen(function* () {
-            const cfg = yield* CounterConfig
-            return yield* cfg.greeting
-          }),
-        keyTail: () =>
-          Effect.gen(function* () {
-            const cfg = yield* CounterConfig
-            const r = yield* cfg.apiKey.get
-            return Redacted.value(r).slice(-4)
-          }),
-        slowValue: ({ seconds }) =>
-          Effect.gen(function* () {
-            yield* Effect.logInfo("slowValue: sleeping").pipe(Effect.annotateLogs({ seconds }))
-            yield* Effect.sleep(`${seconds} seconds`)
-            const s = yield* Ref.get(state)
-            return s.count
-          }).pipe(Effect.withSpan("Counter.slowValue", { attributes: { seconds } })),
-      }
-    }),
-})
+          Effect.map((s) => s.count),
+          Effect.withSpan("Counter.increment"),
+        ),
+      add: ({ by }) =>
+        Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
+          Effect.tap(() => Effect.logDebug("added").pipe(Effect.annotateLogs({ by }))),
+          Effect.map((s) => s.count),
+          Effect.withSpan("Counter.add", { attributes: { by } }),
+        ),
+      reset: () => Ref.set(state, { count: 0 }),
+      owner: () => Effect.succeed(ownerTag),
+      caller: () =>
+        Effect.gen(function* () {
+          const p = yield* Principal.Principal
+          return p.tag === "oidc" ? `oidc:${p.val.sub}` : p.tag
+        }),
+      currentGreeting: () =>
+        Effect.gen(function* () {
+          const cfg = yield* CounterConfig
+          return yield* cfg.greeting
+        }),
+      keyTail: () =>
+        Effect.gen(function* () {
+          const cfg = yield* CounterConfig
+          const r = yield* cfg.apiKey.get
+          return Redacted.value(r).slice(-4)
+        }),
+      slowValue: ({ seconds }) =>
+        Effect.gen(function* () {
+          yield* Effect.logInfo("slowValue: sleeping").pipe(Effect.annotateLogs({ seconds }))
+          yield* Effect.sleep(`${seconds} seconds`)
+          const s = yield* Ref.get(state)
+          return s.count
+        }).pipe(Effect.withSpan("Counter.slowValue", { attributes: { seconds } })),
+    }
+  }),
+)

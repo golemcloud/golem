@@ -126,7 +126,7 @@ type AnyMethodSpec = MethodSpec<any, any, any>
  * Mirrors (defence-in-depth) the runtime "any endpoints declared" check
  * in `validateAgentHttp` (Http.ts L1452: `m.endpoints.length > 0`). The
  * runtime check stays the canonical error source — this helper is
- * consumed by {@link AgentDefinition} below to make the agent's `http`
+ * consumed by {@link AgentMetadata} below to make the agent's `http`
  * field a *required* mount when at least one method has endpoints, and
  * an *optional* mount otherwise.
  *
@@ -146,7 +146,7 @@ type AnyMethodHasHttp<Methods extends Record<string, AnyMethodSpec>> = true exte
   : false
 
 /**
- * Per-call constraint added on top of {@link AgentDefinition} that
+ * Per-call constraint added on top of {@link AgentMetadata} that
  * makes the agent's `http` field required (and fully constrained by
  * {@link MountDefCovering} + {@link WebhookVarsValid}) iff
  * {@link AnyMethodHasHttp} resolves to `true` for the agent's
@@ -155,7 +155,7 @@ type AnyMethodHasHttp<Methods extends Record<string, AnyMethodSpec>> = true exte
  *
  * Intersected with the `def` parameter at the `defineAgent` /
  * `registerAgent` call sites. Intersection rather than
- * an in-line conditional on `AgentDefinition.http` because the
+ * an in-line conditional on `AgentMetadata.http` because the
  * interface declares `http?: …` (optional) and there is no per-arity
  * way to flip a property between optional and required inside an
  * interface body. The intersection makes `http` required exactly when
@@ -199,7 +199,7 @@ export type Handlers<Methods extends Record<string, AnyMethodSpec>, CfgTag = nev
 }
 
 /**
- * Optional `config` field on an {@link AgentDefinition}. Built with
+ * Optional `config` field on an {@link AgentMetadata}. Built with
  * {@link defineConfig}; serves as both an Effect-Context tag (yieldable
  * to its compiled `ConfigShape`) and a carrier for the field schema
  * record so {@link clientFor} can derive a typed `overrides` channel.
@@ -249,27 +249,41 @@ export type ImplArgs<C extends MethodParams, S, CfgTag = never> = [S] extends [n
   : readonly [input: MethodInput<C>, snapshot: SnapshotBinding<S, Principal | CfgTag>]
 
 /**
- * A user-defined agent: a named bundle of method *specs* (no bodies) plus
- * an `impl` that, given the decoded constructor input, returns an Effect
- * producing per-instance handlers.
- *
- * `impl` runs in the agent's lifetime `Scope`, so resources allocated
- * with `Effect.acquireRelease` are released when the agent shuts down.
- *
- * The optional `F` (config-fields) generic threads a config service tag
- * through impl's required-services slot AND every Handler. Defaults to
- * `never` so agents without `config` keep the pre-existing API exactly.
- *
- * The optional `S` (snapshot) generic captures the agent's
- * snapshot-definition shape — `Snapshot.define({ schema, policy })` or
- * `Snapshot.custom({ policy })`. When present, `impl` receives a second
- * `SnapshotBinding<S>` argument and the agent's WIT
- * `snapshotting` metadata is `enabled` rather than `disabled`.
+ * Constructor effect signature for an agent. Runs once per agent
+ * instance in the agent's lifetime `Scope`. May depend on
+ * {@link Principal} (provided by the dispatcher with the value the
+ * host passed to `initialize`) and on the optional config service.
+ * When `S` is a {@link SnapshotDef}, the constructor receives a
+ * second {@link SnapshotBinding} argument.
  *
  * @since 1.5.0
  * @category models
  */
-export interface AgentDefinition<
+export type AgentImpl<
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  F extends ConfigFields = never,
+  S extends SnapshotDef = never,
+> = (
+  ...args: ImplArgs<C, S, CfgTagOf<F>>
+) => Effect.Effect<
+  Handlers<Methods, CfgTagOf<F>>,
+  unknown,
+  Scope.Scope | Principal | HostServices | CfgTagOf<F>
+>
+
+/**
+ * Metadata describing an agent's *type*: the constructor and method
+ * signatures, plus any optional host capabilities (HTTP mount, config
+ * service, snapshot policy, execution mode). This is the input to
+ * {@link defineAgent}; it carries everything the WIT-visible
+ * `AgentType` needs except the per-component implementation, which is
+ * supplied separately via {@link AgentSpec.implement}.
+ *
+ * @since 1.5.0
+ * @category models
+ */
+export interface AgentMetadata<
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
   M extends AgentCommon.AgentMode = AgentCommon.AgentMode,
@@ -313,60 +327,101 @@ export interface AgentDefinition<
   /**
    * Optional snapshot definition. Built with `Snapshot.define(...)` for
    * the schema-driven auto path or `Snapshot.custom(...)` for the
-   * user-managed path. When present, the dispatcher passes a
-   * {@link SnapshotBinding} to `impl` as its second argument, and the
-   * agent type's `snapshotting` metadata reflects the configured policy.
+   * user-managed path. When present, the agent's `impl` receives a
+   * second {@link SnapshotBinding} argument, and the agent type's
+   * `snapshotting` metadata reflects the configured policy.
    */
   readonly snapshot?: S
-  /**
-   * Constructor effect. Runs once per agent instance, in the agent's
-   * lifetime `Scope`. May depend on {@link Principal} (provided by the
-   * dispatcher with the value the host passed to `initialize`) and on
-   * the optional config service. When `snapshot` is set, `impl` receives
-   * a second `SnapshotBinding<S>` argument.
-   */
-  readonly impl: (
-    ...args: ImplArgs<C, S, CfgTagOf<F>>
-  ) => Effect.Effect<
-    Handlers<Methods, CfgTagOf<F>>,
-    unknown,
-    Scope.Scope | Principal | HostServices | CfgTagOf<F>
-  >
 }
 
 /**
- * The value returned by {@link defineAgent}: the original definition plus
- * a derived `client` namespace for connecting to remote instances of this
- * agent type via the Golem RPC host. The `client` shape depends on the
- * agent's `mode`:
+ * The value returned by {@link defineAgent}: an immutable, canonical
+ * snapshot of the agent's {@link AgentMetadata} plus
+ *
+ * - a derived `client` namespace for connecting to remote instances of
+ *   this agent type via the Golem RPC host, and
+ * - an `implement(...)` method that registers the agent with the runtime
+ *   and returns an {@link ImplementedAgent}.
+ *
+ * The `client` shape depends on the agent's `mode`:
  *
  * - durable agents expose `get`, `getPhantom`, and `newPhantom`.
  * - ephemeral agents expose only `getPhantom` and `newPhantom`.
  *
+ * A spec on its own performs NO runtime registration — it is safe for
+ * pure RPC callers to import a module that only constructs spec values.
+ * Registration happens when `.implement(...)` is invoked.
+ *
  * @since 1.5.0
  * @category models
  */
-export type DefinedAgent<
+export type AgentSpec<
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  M extends AgentCommon.AgentMode = AgentCommon.AgentMode,
+  F extends ConfigFields = never,
+  S extends SnapshotDef = never,
+> = AgentMetadata<C, Methods, M, F, S> & {
+  readonly client: AgentClient<C, Methods, M, F>
+  /**
+   * Attach an implementation to the spec and eagerly register the agent
+   * with the runtime. Returns an {@link ImplementedAgent} that exposes
+   * the same {@link AgentClient} instance as the spec.
+   *
+   * Calling `implement` twice on the same spec — or on two specs that
+   * share the same `name` — surfaces a {@link DuplicateAgentNameError}
+   * via the same deferred-error path as today's eager `defineAgent`
+   * (stashed in {@link pendingRegistrationErrors}, re-emitted from
+   * {@link dispatchDiscoverAgentTypes}).
+   */
+  readonly implement: (impl: AgentImpl<C, Methods, F, S>) => ImplementedAgent<C, Methods, M, F, S>
+}
+
+/**
+ * The value returned by {@link AgentSpec.implement}: the canonical
+ * {@link AgentMetadata} plus the same `client` reference the spec
+ * exposes, and a `spec` back-reference so consumers can reach the
+ * original spec without storing it in a separate top-level binding.
+ *
+ * Notably, an `ImplementedAgent` does NOT expose `implement(...)`
+ * itself — this prevents accidental double-registration at the type
+ * level.
+ *
+ * @since 1.5.0
+ * @category models
+ */
+export type ImplementedAgent<
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
   M extends AgentCommon.AgentMode,
   F extends ConfigFields = never,
   S extends SnapshotDef = never,
-> = AgentDefinition<C, Methods, M, F, S> & {
+> = AgentMetadata<C, Methods, M, F, S> & {
   readonly client: AgentClient<C, Methods, M, F>
+  readonly spec: AgentSpec<C, Methods, M, F, S>
 }
 
 /**
- * Define an agent type and register it eagerly with the runtime.
+ * Define an agent type and build a typed RPC client for it WITHOUT
+ * registering the agent with the runtime.
  *
- * **Details**
+ * **Why the split**
  *
- * Eager registration ensures simply importing an agent module makes
- * the type discoverable by the host — no separate `registerAgent`
- * call at the component entrypoint is required. The returned value
- * mirrors the input definition and additionally exposes a typed
- * {@link clientFor} `client` namespace for connecting to remote
- * instances of this agent type.
+ * The returned {@link AgentSpec} is safe to import from modules whose
+ * only job is to make remote calls to this agent type via
+ * `spec.client.*`. Importing a spec module does not pull in the
+ * implementation code or trigger any registration side effect on the
+ * host. Registration happens when {@link AgentSpec.implement} is
+ * called — typically from the component's entry point.
+ *
+ * **Canonicalization**
+ *
+ * `defineAgent` shallow-clones and freezes the supplied metadata
+ * (top-level object, `constructorParams`, `methods`) so that the
+ * spec's `client` (built immediately) and any later
+ * `spec.implement(...)` registration always agree on the same view of
+ * the metadata. Mutating the original user-supplied literal after
+ * `defineAgent` returns has no effect on the spec.
  *
  * **Compile-time guarantees on the `http` field**
  *
@@ -393,8 +448,7 @@ export type DefinedAgent<
  * Trivial path-shape rules and per-endpoint duplicate-binding /
  * case-fold / bodyless-unbound checks fire earlier — at the
  * `Http.mount(...)` / `Http.get(...)` / `method({ http: [...] })`
- * call sites — so by the time `defineAgent` is called the only
- * remaining type-level checks are the three agent-wide ones above.
+ * call sites.
  *
  * **Runtime fallbacks (defence-in-depth)**
  *
@@ -402,30 +456,29 @@ export type DefinedAgent<
  * the brace-balance check, the var-name regex, and any
  * configuration whose path string was supplied as a non-literal
  * `string` value still run inside `validateAgentHttp` /
- * `validateMount` / `validateEndpoint` and surface as `HttpRouteError`.
+ * `validateMount` / `validateEndpoint` and surface as `HttpRouteError`
+ * from `spec.implement(...)`.
  *
  * **Validation-error reporting**
  *
- * `defineAgent` does NOT throw on validation failures from
- * {@link registerAgent} (i.e. `UnsupportedSchemaError`,
- * `HttpRouteError`, `InvalidSnapshotError`,
- * `DuplicateAgentNameError`, or any other typed failure /
- * defect). Instead the failure is captured in
+ * Validation failures from a later `spec.implement(...)` call (i.e.
+ * `UnsupportedSchemaError`, `HttpRouteError`, `InvalidSnapshotError`,
+ * `DuplicateAgentNameError`, or any other typed failure / defect)
+ * are NOT thrown synchronously. Instead the failure is captured in
  * {@link pendingRegistrationErrors} and re-emitted as a typed
  * `golem:agent/common@1.5.0.agent-error` (`invalid-type` variant)
  * thrown from the WIT-exported
  * {@link dispatchDiscoverAgentTypes} host call. This lets the
  * Golem CLI's metadata-extraction step surface misconfigurations
  * as proper structured diagnostics rather than as a WASM
- * instantiation crash. The returned {@link DefinedAgent} value is
- * still constructed so that other modules importing the agent
- * (e.g. for its typed `client` proxy) keep working — any
- * subsequent `initialize` / `invoke` against an un-registered
- * type still fails at the dispatcher with the usual "unknown
- * agent" error.
+ * instantiation crash. The returned {@link ImplementedAgent} value
+ * is still constructed so that other modules importing the agent
+ * keep working — any subsequent `initialize` / `invoke` against the
+ * un-registered type still fails at the dispatcher with the usual
+ * "unknown agent" error.
  *
  * @see {@link registerAgent} for the lower-level registration-only
- *      entry point.
+ *      entry point (Effect-typed failures).
  *
  * @since 1.5.0
  * @category constructors
@@ -439,51 +492,102 @@ export const defineAgent = <
   MV extends string = BindableKeys<C>,
   WV extends string = never,
 >(
-  def: AgentDefinition<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
-): DefinedAgent<C, Methods, M, F, S> => {
-  // Register eagerly so simply importing an agent module makes it
-  // discoverable by the runtime — no separate `registerAgent` call is
-  // required at the component entrypoint.
+  metadata: AgentMetadata<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
+): AgentSpec<C, Methods, M, F, S> => {
+  // Canonicalize: shallow-clone the top-level object and the two
+  // nested containers, then freeze them so the spec is immutable from
+  // the caller's perspective. This closes the mutation window between
+  // spec construction (which `clientFor` reads from) and
+  // `.implement(...)` (which `registerAgent` re-reads from later).
+  const canonicalConstructorParams = Object.freeze({ ...metadata.constructorParams }) as C
+  const canonicalMethods = Object.freeze({ ...metadata.methods }) as Methods
+  const canonical = Object.freeze({
+    ...metadata,
+    constructorParams: canonicalConstructorParams,
+    methods: canonicalMethods,
+  }) as AgentMetadata<C, Methods, M, F, S, MV, WV>
+
+  // Build the typed RPC client once from the canonical metadata. The
+  // same reference is shared between the spec and any
+  // `ImplementedAgent` produced by `spec.implement(...)` below.
+  const sharedClient = clientFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
+
+  // `implement` is created as a closure rather than a prototype method
+  // so the generics inferred by `defineAgent` (C, Methods, M, F, S)
+  // flow into the constructor parameter shape without requiring the
+  // user to re-state them.
   //
-  // Validation failures are NOT thrown here: they are stashed in
-  // {@link pendingRegistrationErrors} and re-emitted as a typed
-  // `AgentError` from {@link dispatchDiscoverAgentTypes}. This lets
-  // tooling (e.g. the Golem CLI's metadata-extraction step) surface
-  // misconfigurations as proper diagnostics rather than as a WASM
-  // instantiation crash. The returned {@link DefinedAgent} value is
-  // still constructed (the typed `client` proxy is purely structural),
-  // so importing a misconfigured agent module won't break siblings —
-  // any subsequent `initialize` / `invoke` against the un-registered
-  // type will fail with the usual "unknown agent" error.
-  const exit = Effect.runSyncExit(registerAgent(def))
-  if (Exit.isFailure(exit)) {
-    pendingRegistrationErrors.push({ agentName: def.name, cause: exit.cause })
+  // `.implement(...)` is single-shot per spec — the `consumed` flag is
+  // set on the first call regardless of whether registration succeeded
+  // or pushed a deferred error. A second call always becomes a deferred
+  // {@link DuplicateAgentNameError} so a flaky retry loop cannot leak
+  // additional registrations or accumulate stacked errors.
+  let consumed = false
+  const implement = (impl: AgentImpl<C, Methods, F, S>): ImplementedAgent<C, Methods, M, F, S> => {
+    if (consumed) {
+      pendingRegistrationErrors.push({
+        agentName: canonical.name,
+        cause: Cause.fail(new DuplicateAgentNameError(canonical.name)),
+      })
+    } else {
+      consumed = true
+      // The caller-side `AgentHttpRequirement` intersection is already
+      // satisfied at the `defineAgent` call site; re-introduce it here
+      // for `registerAgent`'s strictly-typed input.
+      const metadataForRegistration = canonical as AgentMetadata<C, Methods, M, F, S, MV, WV> &
+        AgentHttpRequirement<C, Methods, MV, WV>
+      const exit = Effect.runSyncExit(registerAgent(metadataForRegistration, impl))
+      if (Exit.isFailure(exit)) {
+        pendingRegistrationErrors.push({ agentName: canonical.name, cause: exit.cause })
+      }
+    }
+    // Erase the `MV` / `WV` mount-vars phantoms — the public
+    // {@link ImplementedAgent} surfaces only the user-visible fields.
+    return Object.freeze({
+      ...canonical,
+      client: sharedClient,
+      spec,
+    }) as unknown as ImplementedAgent<C, Methods, M, F, S>
   }
-  // The client view ignores the snapshot definition; erase `S` here so
-  // `clientFor` can stay snapshot-agnostic. Likewise erase the `MV`
-  // mount-vars phantom — the public {@link DefinedAgent} type only
-  // surfaces the value, not the inferred mount-vars set.
-  const clientDef = def as unknown as AgentDefinition<C, Methods, M, F>
-  return { ...def, client: clientFor(clientDef) } as unknown as DefinedAgent<C, Methods, M, F, S>
+
+  // Erase the `MV` / `WV` phantoms as above; the public
+  // {@link AgentSpec} surface is generic only over the user-visible
+  // parameters.
+  const spec = Object.freeze({
+    ...canonical,
+    client: sharedClient,
+    implement,
+  }) as unknown as AgentSpec<C, Methods, M, F, S>
+  return spec
 }
 
 interface CompiledAgent {
   readonly name: string
-  readonly definition: AgentDefinition<
+  /**
+   * The agent's metadata, type-erased over its generics. Carries every
+   * field except the implementation (`impl` lives in its own slot).
+   */
+  readonly metadata: AgentMetadata<
     MethodParams,
     Record<string, AnyMethodSpec>,
     AgentCommon.AgentMode,
     never,
     SnapshotDef
   >
+  /**
+   * The user-supplied constructor effect, supplied to {@link registerAgent}
+   * alongside the metadata. Called by {@link dispatchInitialize} and
+   * {@link dispatchLoadSnapshot} with the decoded constructor input.
+   */
+  readonly impl: AgentImpl<MethodParams, Record<string, AnyMethodSpec>, never, SnapshotDef>
   readonly constructorBindings: ReadonlyArray<ParamBinding>
   /** Filtered view of {@link constructorBindings}: only component-model wire bindings. */
   readonly constructorCodecs: ReadonlyArray<ParamCodec>
   readonly methodCodecs: ReadonlyMap<string, MethodCodec<MethodParams, Schema.Top, Schema.Top>>
   readonly agentType: AgentCommon.AgentType
-  /** Compiled config bundle when `def.config` is set; `null` otherwise. */
+  /** Compiled config bundle when `metadata.config` is set; `null` otherwise. */
   readonly compiledConfig: CompiledConfig | null
-  /** Compiled snapshot bundle when `def.snapshot` is set; `null` otherwise. */
+  /** Compiled snapshot bundle when `metadata.snapshot` is set; `null` otherwise. */
   readonly compiledSnapshot: CompiledSnapshot | null
 }
 
@@ -532,12 +636,17 @@ export class DuplicateAgentNameError {
 }
 
 /**
- * Register an agent definition with the runtime. Pure schema-walking work
- * — no `impl` is executed here, no per-instance state is created. Safe to
+ * Register an agent metadata + implementation pair with the runtime.
+ * Pure schema-walking work for the metadata side — `impl` is captured
+ * but NOT executed here; no per-instance state is created. Safe to
  * call at deploy time for type discovery.
  *
- * @see {@link defineAgent} for the eager-registration shorthand that
- *      additionally returns a typed RPC client.
+ * Surfaces validation failures as typed Effect failures, unlike the
+ * chained `defineAgent(...).implement(...)` form, which defers them
+ * to {@link dispatchDiscoverAgentTypes}.
+ *
+ * @see {@link defineAgent} for the chained-API shorthand that additionally
+ *      builds a typed RPC client.
  *
  * @since 1.5.0
  * @category constructors
@@ -551,19 +660,20 @@ export const registerAgent = <
   MV extends string = BindableKeys<C>,
   WV extends string = never,
 >(
-  def: AgentDefinition<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
+  metadata: AgentMetadata<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
+  impl: AgentImpl<C, Methods, F, S>,
 ): Effect.Effect<
   void,
   UnsupportedSchemaError | HttpRouteError | InvalidSnapshotError | DuplicateAgentNameError
 > =>
   Effect.gen(function* () {
-    if (registry.has(def.name)) {
-      return yield* Effect.fail(new DuplicateAgentNameError(def.name))
+    if (registry.has(metadata.name)) {
+      return yield* Effect.fail(new DuplicateAgentNameError(metadata.name))
     }
 
     const constructorBindings = (yield* compileParamBindings(
-      `${def.name} constructor`,
-      def.constructorParams,
+      `${metadata.name} constructor`,
+      metadata.constructorParams,
     )) as Array<ParamBinding>
 
     const constructorWire = constructorBindings.filter(
@@ -576,7 +686,7 @@ export const registerAgent = <
 
     const methodCodecs = new Map<string, MethodCodec<MethodParams, Schema.Top, Schema.Top>>()
     const methodHttpInputs: Array<MethodHttpInput> = []
-    for (const [methodName, spec] of Object.entries(def.methods)) {
+    for (const [methodName, spec] of Object.entries(metadata.methods)) {
       const mc = (yield* compileMethodSpec(methodName, spec)) as MethodCodec<
         MethodParams,
         Schema.Top,
@@ -599,18 +709,20 @@ export const registerAgent = <
 
     // Validate + compile HTTP routes (mount + per-method endpoints).
     const compiledHttp = yield* validateAgentHttp({
-      agentName: def.name,
-      mount: def.http,
-      constructorParamNames: Object.keys(def.constructorParams),
-      nonStringBindableConstructorParams: collectNonStringBindableParams(def.constructorParams),
-      stringBindableConstructorParams: collectStringBindableParams(def.constructorParams),
+      agentName: metadata.name,
+      mount: metadata.http,
+      constructorParamNames: Object.keys(metadata.constructorParams),
+      nonStringBindableConstructorParams: collectNonStringBindableParams(
+        metadata.constructorParams,
+      ),
+      stringBindableConstructorParams: collectStringBindableParams(metadata.constructorParams),
       methods: methodHttpInputs,
     })
 
     // Now build the AgentMethod records, attaching the compiled
     // httpEndpoint list per method.
     const agentMethods: Array<AgentCommon.AgentMethod> = []
-    for (const [methodName, spec] of Object.entries(def.methods)) {
+    for (const [methodName, spec] of Object.entries(metadata.methods)) {
       const mc = methodCodecs.get(methodName)!
       const eps = compiledHttp.endpoints.get(methodName) ?? []
       agentMethods.push({
@@ -625,43 +737,49 @@ export const registerAgent = <
 
     let compiledConfig: CompiledConfig | null = null
     let configDeclarations: Array<AgentCommon.AgentConfigDeclaration> = []
-    if (def.config !== undefined) {
-      const cc = yield* def.config.__compile()
+    if (metadata.config !== undefined) {
+      const cc = yield* metadata.config.__compile()
       compiledConfig = cc
       configDeclarations = [...cc.declarations]
     }
 
     let compiledSnapshot: CompiledSnapshot | null = null
     let snapshotting: AgentCommon.Snapshotting = { tag: "disabled" }
-    if (def.snapshot !== undefined) {
-      const cs = yield* compileSnapshot(def.name, def.snapshot)
+    if (metadata.snapshot !== undefined) {
+      const cs = yield* compileSnapshot(metadata.name, metadata.snapshot)
       compiledSnapshot = cs
       snapshotting = { tag: "enabled", val: cs.witConfig }
     }
 
     const agentType: AgentCommon.AgentType = {
-      typeName: def.name,
-      description: def.description ?? "",
+      typeName: metadata.name,
+      description: metadata.description ?? "",
       sourceLanguage: "typescript",
       constructor: {
         description: "",
-        promptHint: def.promptHint,
+        promptHint: metadata.promptHint,
         inputSchema: constructorSchema,
       },
       methods: agentMethods,
       dependencies: [],
-      mode: def.mode ?? "durable",
+      mode: metadata.mode ?? "durable",
       httpMount: compiledHttp.mount,
       snapshotting,
       config: configDeclarations,
     }
 
-    registry.set(def.name, {
-      name: def.name,
-      definition: def as unknown as AgentDefinition<
+    registry.set(metadata.name, {
+      name: metadata.name,
+      metadata: metadata as unknown as AgentMetadata<
         MethodParams,
         Record<string, AnyMethodSpec>,
         AgentCommon.AgentMode,
+        never,
+        SnapshotDef
+      >,
+      impl: impl as unknown as AgentImpl<
+        MethodParams,
+        Record<string, AnyMethodSpec>,
         never,
         SnapshotDef
       >,
@@ -827,9 +945,7 @@ const initAgentInstance = async (
     const implArgs: Array<unknown> = [constructorInput]
     if (bindingHandle !== null) implArgs.push(bindingHandle.binding)
     let program = (
-      (compiled.definition.impl as (...a: ReadonlyArray<unknown>) => unknown)(
-        ...implArgs,
-      ) as Effect.Effect<
+      (compiled.impl as (...a: ReadonlyArray<unknown>) => unknown)(...implArgs) as Effect.Effect<
         Record<string, Handler<AnyMethodSpec>>,
         unknown,
         Scope.Scope | Principal | SelfAgentId
@@ -838,14 +954,14 @@ const initAgentInstance = async (
       Effect.provideService(Principal, principal),
       Effect.provideService(SelfAgentId, selfAgentId),
     )
-    if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
+    if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
       const shape = await runUserPromise(compiled.compiledConfig.buildShape())
       program = (program as Effect.Effect<unknown, unknown, never>).pipe(
         // The config class is a Context.Service tag (Self/Identifier
         // resolved via the user's `defineConfig`-class declaration). We
         // erase the static generics here because the dispatcher works
         // generically over every registered agent.
-        Effect.provideService(compiled.definition.config as never, shape as never),
+        Effect.provideService(compiled.metadata.config as never, shape as never),
       ) as typeof program
     }
     // Use `Scope.provide` (NOT `Scope.use`) — the latter auto-closes
@@ -949,10 +1065,10 @@ export const dispatchInvoke = async (
     Effect.provideService(Principal, principal),
     Effect.provideService(SelfAgentId, activeAgent.selfAgentId),
   ) as Effect.Effect<CoreTypes.DataValue, unknown, never>
-  if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
+  if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
     const shape = await runUserPromise(compiled.compiledConfig.buildShape())
     program = program.pipe(
-      Effect.provideService(compiled.definition.config as never, shape as never),
+      Effect.provideService(compiled.metadata.config as never, shape as never),
     ) as typeof program
   }
   return await runUserPromise(program)
@@ -1115,10 +1231,10 @@ const dispatchSaveCustomSnapshot = async (
   // Mirror `dispatchInvoke`: when the agent declares a config service,
   // make it available to the user's custom save handler too. Auto
   // snapshots don't run user code here, so they don't need this branch.
-  if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
+  if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
     const shape = await runUserPromise(compiled.compiledConfig.buildShape())
     saveProgram = saveProgram.pipe(
-      Effect.provideService(compiled.definition.config as never, shape as never),
+      Effect.provideService(compiled.metadata.config as never, shape as never),
     ) as Effect.Effect<Uint8Array, unknown, never>
   }
   const bytes = await runUserPromise(saveProgram)
@@ -1285,10 +1401,10 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
       // Mirror the save path + `dispatchInvoke`: when the agent declares
       // a config service, make it available to the user's custom load
       // handler too.
-      if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
+      if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
         const shape = await runUserPromise(compiled.compiledConfig.buildShape())
         loadProgram = loadProgram.pipe(
-          Effect.provideService(compiled.definition.config as never, shape as never),
+          Effect.provideService(compiled.metadata.config as never, shape as never),
         ) as Effect.Effect<void, unknown, never>
       }
       await runUserPromise(loadProgram)

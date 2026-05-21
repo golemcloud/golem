@@ -132,6 +132,68 @@ Direct host-call signatures (raw `(a, b) => Host.fn(a, b)` wrappers in `src/host
 - **Per-module deep imports are open by default; `internal/` and `host/` are blocked.** `package.json` has a `"./*": { "types": "./dist/src/*.d.ts", "import": "./dist/src/*.js" }` wildcard so consumers can deep-import any public module: `import { Quota } from "effect-golem/Quota"` resolves to `dist/src/Quota.js`, `import { PgClient } from "effect-golem/Postgres/PgClient"` resolves to `dist/src/Postgres/PgClient.js`, and so on. The four bundled sub-imports (`./sqlite`, `./postgres`, `./mysql`, `./ignite2`) keep their explicit entries pointing at the rolled-up `.mjs` bundles — exact matches in the exports map win over the wildcard, so the WASM-targeted bundles stay reachable for components embedded into the base WASM. Two prefixes are explicitly **blocked** with `null`: `"./internal/*": null` (impl-only modules; mirrors `effect`'s convention) and `"./host/*": null` (the WIT host-binding wrappers under `src/host/` are SDK-internal even though they have PascalCase names). Consumers attempting to import them get `ERR_PACKAGE_PATH_NOT_EXPORTED`.
 - **Facade / impl split for large modules.** When a top-level module's implementation grows past a comfortable read length, follow the `effect` pattern: keep the public types and re-exports in `src/<Module>.ts`, move the implementation to `src/internal/<module>.ts` (camelCase), and import siblings inside `internal/` as `type *` where needed to avoid runtime cycles. The first example of this in effect-golem is `Durability.ts` (30-line facade re-exporting `* from "./internal/durabilityMode.js"` + `* from "./internal/durableFunction.js"`); `Agent.ts` (20-line facade re-exporting `* from "./internal/agent.js"`) and `Method.ts` (20-line facade re-exporting `* from "./internal/method.js"`) follow the same shape.
 
+## Agent definition vs implementation (`defineAgent` / `.implement(...)`)
+
+`defineAgent({...})` and `.implement(impl)` are split into two distinct steps. `defineAgent` returns a metadata-only `AgentSpec` that already carries a fully-typed RPC `client`; calling `.implement(impl)` on the spec is what actually registers the agent with the dispatcher.
+
+```ts
+import { defineAgent, method, Schema } from "effect-golem"
+import { Effect } from "effect"
+
+// Spec module — no `impl`, no registration. Can be imported by anyone who
+// only needs the RPC client (other agents, separately-deployed callers,
+// integration tests).
+export const Counter = defineAgent({
+  name: "Counter",
+  constructorParams: { name: Schema.String },
+  methods: {
+    value: method({ params: {}, success: Schema.Number }),
+    add: method({ params: { by: Schema.Number }, success: Schema.Number }),
+  },
+})
+
+// Implementation module — only the component that exports the agent
+// pulls this in. `.implement(...)` eagerly registers the agent with the
+// dispatcher and returns an `ImplementedAgent` whose `.client` is the
+// SAME object as `Counter.client` (referentially identical).
+export const CounterImpl = Counter.implement(({ name }) =>
+  Effect.gen(function* () {
+    let count = 0
+    return {
+      value: () => Effect.succeed(count),
+      add: ({ by }) => Effect.sync(() => (count += by)),
+    }
+  }),
+)
+
+// Simple single-file agents chain the two calls — `Counter` is never
+// stored as a top-level binding:
+defineAgent({
+  name: "Counter",
+  constructorParams: { name: Schema.String },
+  methods: { ... },
+}).implement(({ name }) => ...)
+```
+
+Surface:
+
+- `AgentSpec<C, Methods>` (returned by `defineAgent`) — `AgentMetadata & { client, implement(impl): ImplementedAgent }`. Metadata fields (`name`, `constructorParams`, `methods`, `mode`, `http`, `config`, `snapshot`) live **directly** on the spec, not under a nested `.metadata` property. Does NOT register; safe to import from anywhere.
+- `ImplementedAgent<C, Methods>` (returned by `.implement(...)`) — `AgentMetadata & { client, spec }`. Same flat-metadata shape. **Does NOT expose `.implement`** at the top level (`implemented.implement` is absent). `implemented.spec.implement` IS still reachable through the back-reference if a caller really wants to re-register; the top-level stripping is a deliberate ergonomic guard, not a hard double-registration ban — the runtime guard (next bullet) is the source of truth.
+- `defineAgent({ ... })` — spec-only. `mode`, `http`, `config`, `snapshot` all stay on the spec/metadata side; only `impl` moved to the chained call.
+- The top-level metadata carrier, the `constructorParams` record, and the `methods` record are frozen inside `defineAgent`. Nested objects (individual method specs, `http` arrays, `snapshot` definition) are NOT deep-frozen — treat any nested method/http/snapshot object as private to the spec from the moment `defineAgent` returns. The agent client is built once and reused by reference between the spec and the implemented value.
+
+Two-file convention (recommended for cross-component RPC):
+
+- `agents/Counter.ts` — exports the `AgentSpec` (no impl). Other components import this for the `client`.
+- `agents/Counter.impl.ts` — `import { Counter } from "./Counter.js"` then `Counter.implement(...)`. The component's entry-point module imports `Counter.impl.ts` so the agent registers at load time.
+
+Registration semantics:
+
+- `defineAgent` never throws; never registers. Importing a spec module has no side effects beyond client construction.
+- `.implement(impl)` registers eagerly and is **single-shot** per spec. Each spec carries a closure-local `consumed` flag set on the first call, regardless of whether that first call succeeded or pushed a deferred registration error. A second `.implement(...)` on the same spec object always becomes a `DuplicateAgentNameError` stashed in `pendingRegistrationErrors` — no accidental re-registration of the same body, no accumulating errors from a flaky retry loop.
+- Registration failures (duplicate `name`, bad `http`, bad `snapshot`, bad `config`) follow the same deferred-trap pattern as before — they are stashed in `pendingRegistrationErrors` and re-emitted from the WIT-exported `discoverAgentTypes` host call so the Golem CLI's metadata-extraction step sees them as structured diagnostics rather than a WASM instantiation crash. Tests reset both the active registration and the pending list via `__resetAgents()`.
+- Two distinct specs with the same `name` collide via the registry — the second `.implement(...)` reports `DuplicateAgentNameError` through the same deferred-error path.
+
 ## HTTP routes
 
 `effect-golem` only advertises route metadata via `discoverAgentTypes()`; the Golem host owns HTTP serving, auth, CORS, and decoding path/query/header values into a `DataValue` before calling `invoke` — agent code never sees raw HTTP requests.
@@ -153,8 +215,7 @@ defineAgent({
       http: [Http.post("/add"), Http.get("/add?by={by}")],
     }),
   },
-  impl: ...,
-})
+}).implement(...)
 ```
 
 Path syntax:
@@ -260,19 +321,19 @@ defineAgent({
   constructorParams: { name: Schema.String },
   config: CounterConfig,
   methods: { greet: method({ params: {}, success: Schema.String }) },
-  impl: ({ name }) =>
-    Effect.gen(function* () {
-      const cfg = yield* CounterConfig // yield the Context.Service tag
-      const greeting = yield* cfg.greeting // Effect<string, ConfigError>
-      const apiKey = yield* cfg.apiKey.get // Effect<Redacted<string>, ConfigError>
-      const dbHost = yield* cfg.database.host // recursive struct
-      void apiKey
-      void dbHost
-      return {
-        greet: () => Effect.succeed(`${greeting}, ${name}`),
-      }
-    }),
-})
+}).implement(({ name }) =>
+  Effect.gen(function* () {
+    const cfg = yield* CounterConfig // yield the Context.Service tag
+    const greeting = yield* cfg.greeting // Effect<string, ConfigError>
+    const apiKey = yield* cfg.apiKey.get // Effect<Redacted<string>, ConfigError>
+    const dbHost = yield* cfg.database.host // recursive struct
+    void apiKey
+    void dbHost
+    return {
+      greet: () => Effect.succeed(`${greeting}, ${name}`),
+    }
+  }),
+)
 ```
 
 Field shape rules (compiled by `compileConfig` in `src/Config.ts`):
@@ -338,19 +399,19 @@ defineAgent({
       http: [Http.post("/wait")],
     }),
   },
-  impl: () =>
-    Effect.gen(function* () {
-      return {
-        waitForPayment: () =>
-          Effect.gen(function* () {
-            const hook = yield* Webhook.create
-            // ... share `hook.url` with the payment provider via an outgoing API call ...
-            const payload = yield* hook.await
-            return yield* payload.decode(PaymentEvent)
-          }),
-      }
-    }),
-})
+}).implement(() =>
+  Effect.gen(function* () {
+    return {
+      waitForPayment: () =>
+        Effect.gen(function* () {
+          const hook = yield* Webhook.create
+          // ... share `hook.url` with the payment provider via an outgoing API call ...
+          const payload = yield* hook.await
+          return yield* payload.decode(PaymentEvent)
+        }),
+    }
+  }),
+)
 ```
 
 API:
@@ -420,18 +481,18 @@ defineAgent({
     value: method({ params: {}, success: Schema.Number }),
     add: method({ params: { by: Schema.Number }, success: Schema.Number }),
   },
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      const state = yield* snap.init({ count: 0, owner: name })
-      return {
-        value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(state, (s) => ({ ...s, count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-      }
-    }),
-})
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    const state = yield* snap.init({ count: 0, owner: name })
+    return {
+      value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
+      add: ({ by }) =>
+        Ref.updateAndGet(state, (s) => ({ ...s, count: s.count + by })).pipe(
+          Effect.map((s) => s.count),
+        ),
+    }
+  }),
+)
 ```
 
 Policy constructors (in `Snapshot.policy`):
@@ -474,16 +535,16 @@ defineAgent({
     value: method({ params: {}, success: Schema.Number }),
     add: method({ params: { by: Schema.Number }, success: Schema.Number }),
   },
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      yield* snap.init({})
-      const sql = yield* SqliteClient.make({ filename: ":memory:" })
-      yield* sql.exec(`CREATE TABLE IF NOT EXISTS counters (id TEXT PRIMARY KEY, count INTEGER)`)
-      yield* sql.exec(`INSERT OR IGNORE INTO counters (id, count) VALUES ('${name}', 0)`)
-      yield* snap.attachDatabase("counters", sql)
-      // ...handlers...
-    }),
-})
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    yield* snap.init({})
+    const sql = yield* SqliteClient.make({ filename: ":memory:" })
+    yield* sql.exec(`CREATE TABLE IF NOT EXISTS counters (id TEXT PRIMARY KEY, count INTEGER)`)
+    yield* sql.exec(`INSERT OR IGNORE INTO counters (id, count) VALUES ('${name}', 0)`)
+    yield* snap.attachDatabase("counters", sql)
+    // ...handlers...
+  }),
+)
 ```
 
 Wire format: when `databases` is non-empty the snapshot envelope becomes `multipart/mixed`. The `state` part carries `{ version: 1, principal, state }` JSON; one `db:<name>` part per declared database carries the raw SQLite file bytes (`application/x-sqlite3`). Bit-compatible with `golem-ts-sdk`.
@@ -536,26 +597,26 @@ defineAgent({
       success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
     }),
   },
-  impl: () =>
-    Effect.gen(function* () {
-      return {
-        fetchQuote: ({ symbol }) =>
-          Durability.wrap(
-            {
-              iface: "myapp",
-              function: "fetchQuote",
-              functionType: Durability.FunctionType.writeRemote,
-              requestSchema: Schema.Struct({ symbol: Schema.String }),
-              success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
-              // optional: error: SomeErrorSchema
-            },
-            { symbol },
-            // body — runs once in live mode, skipped on replay
-            Effect.sync(() => fetchFromRemote(symbol)),
-          ),
-      }
-    }),
-})
+}).implement(() =>
+  Effect.gen(function* () {
+    return {
+      fetchQuote: ({ symbol }) =>
+        Durability.wrap(
+          {
+            iface: "myapp",
+            function: "fetchQuote",
+            functionType: Durability.FunctionType.writeRemote,
+            requestSchema: Schema.Struct({ symbol: Schema.String }),
+            success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
+            // optional: error: SomeErrorSchema
+          },
+          { symbol },
+          // body — runs once in live mode, skipped on replay
+          Effect.sync(() => fetchFromRemote(symbol)),
+        ),
+    }
+  }),
+)
 ```
 
 Live vs replay protocol (matches Rust bit-for-bit):
@@ -833,16 +894,16 @@ defineAgent({
     }),
     get: method({ params: { id: Schema.String }, success: Schema.Option(User) }),
   },
-  impl: ({ name }) =>
-    Effect.gen(function* () {
-      const bucket = yield* KeyValue.openBucket(name) // scoped resource
-      const users = bucket.forSchema(User)
-      return {
-        put: ({ id, name }) => users.set(id, { id, name }),
-        get: ({ id }) => users.get(id),
-      }
-    }),
-})
+}).implement(({ name }) =>
+  Effect.gen(function* () {
+    const bucket = yield* KeyValue.openBucket(name) // scoped resource
+    const users = bucket.forSchema(User)
+    return {
+      put: ({ id, name }) => users.set(id, { id, name }),
+      get: ({ id }) => users.get(id),
+    }
+  }),
+)
 ```
 
 API (re-exported from the package barrel as `KeyValue`):
@@ -889,18 +950,18 @@ defineAgent({
       success: Schema.Void,
     }),
   },
-  impl: ({ name }) =>
-    Effect.gen(function* () {
-      const photos = yield* Blobstore.getOrCreateContainer(name) // scoped
-      const meta = photos.forSchema(Photo)
-      return {
-        upload: ({ key, body }) => photos.writeData(key, body),
-        list: () => Stream.runCollect(photos.listObjects).pipe(Effect.map((c) => c.slice())),
-        putMeta: ({ key, filename, takenAtMillis }) =>
-          meta.writeData(key, { filename, takenAtMillis }),
-      }
-    }),
-})
+}).implement(({ name }) =>
+  Effect.gen(function* () {
+    const photos = yield* Blobstore.getOrCreateContainer(name) // scoped
+    const meta = photos.forSchema(Photo)
+    return {
+      upload: ({ key, body }) => photos.writeData(key, body),
+      list: () => Stream.runCollect(photos.listObjects).pipe(Effect.map((c) => c.slice())),
+      putMeta: ({ key, filename, takenAtMillis }) =>
+        meta.writeData(key, { filename, takenAtMillis }),
+    }
+  }),
+)
 ```
 
 API (re-exported from the package barrel as `Blobstore`):

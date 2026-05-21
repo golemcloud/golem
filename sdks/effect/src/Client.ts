@@ -6,7 +6,7 @@ import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import type * as AgentHost from "golem:agent/host@1.5.0"
 import { parseUuid, uuidToString } from "golem:core/types@1.5.0"
-import type { AgentDefinition } from "./Agent.js"
+import type { AgentMetadata } from "./Agent.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import {
   RpcClient,
@@ -281,7 +281,7 @@ interface CompiledClient {
 
 /** Lazily compile a definition's codecs (constructor + methods), then cache. */
 const makeCompiler = (
-  def: AgentDefinition<MethodParams, Record<string, AnyMethodSpec>>,
+  def: AgentMetadata<MethodParams, Record<string, AnyMethodSpec>>,
 ): Effect.Effect<CompiledClient, UnsupportedSchemaError> => {
   let cached: CompiledClient | null = null
   return Effect.suspend(() => {
@@ -585,7 +585,7 @@ const parsePhantomId = (id: string): Effect.Effect<CoreTypes.Uuid, RemoteCallErr
   })
 
 /**
- * Build an {@link AgentClient} for the given agent definition. Codecs are
+ * Build an {@link AgentClient} for the given agent metadata. Codecs are
  * compiled lazily on first use and cached for the lifetime of the
  * returned client. The client does not require the agent to also be
  * `registerAgent`'d in the same component — pure consumers can use it
@@ -600,9 +600,9 @@ export const clientFor = <
   M extends AgentCommon.AgentMode,
   F extends ConfigFields = never,
 >(
-  def: AgentDefinition<C, Methods, M, F>,
+  def: AgentMetadata<C, Methods, M, F>,
 ): AgentClient<C, Methods, M, F> => {
-  const compile = makeCompiler(def as AgentDefinition<MethodParams, Record<string, AnyMethodSpec>>)
+  const compile = makeCompiler(def as AgentMetadata<MethodParams, Record<string, AnyMethodSpec>>)
 
   /**
    * Encode any user-supplied non-secret overrides through the

@@ -54,32 +54,32 @@ export const SqliteCounter = defineAgent({
       http: [Http.post("/reset")],
     }),
   },
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      yield* snap.init({})
-      const sql = yield* SqliteClient.make({ filename: ":memory:" })
-      yield* sql.exec(
-        `CREATE TABLE IF NOT EXISTS counters (id TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0)`,
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    yield* snap.init({})
+    const sql = yield* SqliteClient.make({ filename: ":memory:" })
+    yield* sql.exec(
+      `CREATE TABLE IF NOT EXISTS counters (id TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0)`,
+    )
+    yield* sql`INSERT OR IGNORE INTO counters (id, count) VALUES (${name}, 0)`
+    yield* snap.attachDatabase("counters", sql)
+
+    const readCount = (): Effect.Effect<number, unknown> =>
+      sql`SELECT count FROM counters WHERE id = ${name}`.pipe(
+        Effect.map((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0)),
       )
-      yield* sql`INSERT OR IGNORE INTO counters (id, count) VALUES (${name}, 0)`
-      yield* snap.attachDatabase("counters", sql)
 
-      const readCount = (): Effect.Effect<number, unknown> =>
-        sql`SELECT count FROM counters WHERE id = ${name}`.pipe(
-          Effect.map((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0)),
-        )
-
-      return {
-        value: () => readCount(),
-        increment: () =>
-          sql`UPDATE counters SET count = count + 1 WHERE id = ${name}`.pipe(
-            Effect.flatMap(() => readCount()),
-          ),
-        add: ({ by }) =>
-          sql`UPDATE counters SET count = count + ${by} WHERE id = ${name}`.pipe(
-            Effect.flatMap(() => readCount()),
-          ),
-        reset: () => sql`UPDATE counters SET count = 0 WHERE id = ${name}`.pipe(Effect.asVoid),
-      }
-    }),
-})
+    return {
+      value: () => readCount(),
+      increment: () =>
+        sql`UPDATE counters SET count = count + 1 WHERE id = ${name}`.pipe(
+          Effect.flatMap(() => readCount()),
+        ),
+      add: ({ by }) =>
+        sql`UPDATE counters SET count = count + ${by} WHERE id = ${name}`.pipe(
+          Effect.flatMap(() => readCount()),
+        ),
+      reset: () => sql`UPDATE counters SET count = 0 WHERE id = ${name}`.pipe(Effect.asVoid),
+    }
+  }),
+)

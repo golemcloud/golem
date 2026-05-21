@@ -75,105 +75,105 @@ export const BookingSaga = defineAgent({
       description: "Returns the trace recorded by the most recent book() call.",
     }),
   },
-  impl: (_params, snap) =>
-    Effect.gen(function* () {
-      yield* snap.init({})
-      const traceRef = yield* Ref.make<Array<string>>([])
+}).implement((_params, snap) =>
+  Effect.gen(function* () {
+    yield* snap.init({})
+    const traceRef = yield* Ref.make<Array<string>>([])
 
-      const log = (line: string) =>
-        Ref.update(traceRef, (xs) => [...xs, line]).pipe(Effect.tap(() => Effect.logInfo(line)))
+    const log = (line: string) =>
+      Ref.update(traceRef, (xs) => [...xs, line]).pipe(Effect.tap(() => Effect.logInfo(line)))
 
-      const flightOp = Saga.operation({
-        execute: ({ name, fail }: { name: string; fail: boolean }) =>
+    const flightOp = Saga.operation({
+      execute: ({ name, fail }: { name: string; fail: boolean }) =>
+        Effect.gen(function* () {
+          yield* log(`exec:flight:${name}`)
+          if (fail) return yield* Effect.fail(`booking-failed:flight` as const)
+          return { ref: `FLT-${name}` }
+        }),
+      compensate: ({ name }: { name: string; fail: boolean }) => log(`comp:flight:${name}`),
+    })
+
+    const carOp = Saga.operation({
+      execute: ({ name, fail }: { name: string; fail: boolean }) =>
+        Effect.gen(function* () {
+          yield* log(`exec:car:${name}`)
+          if (fail) return yield* Effect.fail(`booking-failed:car` as const)
+          return { ref: `CAR-${name}` }
+        }),
+      compensate: ({ name }: { name: string; fail: boolean }) => log(`comp:car:${name}`),
+    })
+
+    const bookHotel = (input: { name: string; fail: boolean; compShouldFail: boolean }) =>
+      Saga.withFallibleCompensation(
+        Effect.gen(function* () {
+          yield* log(`exec:hotel:${input.name}`)
+          if (input.fail) return yield* Effect.fail(`booking-failed:hotel` as const)
+          return { ref: `HTL-${input.name}` }
+        }),
+        () =>
           Effect.gen(function* () {
-            yield* log(`exec:flight:${name}`)
-            if (fail) return yield* Effect.fail(`booking-failed:flight` as const)
-            return { ref: `FLT-${name}` }
-          }),
-        compensate: ({ name }: { name: string; fail: boolean }) => log(`comp:flight:${name}`),
-      })
-
-      const carOp = Saga.operation({
-        execute: ({ name, fail }: { name: string; fail: boolean }) =>
-          Effect.gen(function* () {
-            yield* log(`exec:car:${name}`)
-            if (fail) return yield* Effect.fail(`booking-failed:car` as const)
-            return { ref: `CAR-${name}` }
-          }),
-        compensate: ({ name }: { name: string; fail: boolean }) => log(`comp:car:${name}`),
-      })
-
-      const bookHotel = (input: { name: string; fail: boolean; compShouldFail: boolean }) =>
-        Saga.withFallibleCompensation(
-          Effect.gen(function* () {
-            yield* log(`exec:hotel:${input.name}`)
-            if (input.fail) return yield* Effect.fail(`booking-failed:hotel` as const)
-            return { ref: `HTL-${input.name}` }
-          }),
-          () =>
-            Effect.gen(function* () {
-              yield* log(`comp:hotel:${input.name}`)
-              if (input.compShouldFail) {
-                return yield* Effect.fail(`hotel-comp-failed:${input.name}` as const)
-              }
-            }),
-        )
-
-      return {
-        book: ({ shouldFailAt, compFailsAt }) =>
-          Effect.gen(function* () {
-            yield* Ref.set(traceRef, [])
-            const ownerName = "demo"
-            const exit = yield* Effect.exit(
-              Saga.fallibleTransaction(
-                Effect.gen(function* () {
-                  yield* flightOp({ name: ownerName, fail: shouldFailAt === "flight" })
-                  yield* bookHotel({
-                    name: ownerName,
-                    fail: shouldFailAt === "hotel",
-                    compShouldFail: compFailsAt === "hotel",
-                  })
-                  yield* carOp({ name: ownerName, fail: shouldFailAt === "car" })
-                  return "ok" as const
-                }),
-              ),
-            )
-            const trace = yield* Ref.get(traceRef)
-            if (Exit.isSuccess(exit)) {
-              const out: BookOk = { tag: "ok", trace }
-              return out as BookResult
+            yield* log(`comp:hotel:${input.name}`)
+            if (input.compShouldFail) {
+              return yield* Effect.fail(`hotel-comp-failed:${input.name}` as const)
             }
-            const fail = exit.cause.reasons.find(Cause.isFailReason)
-            const f = fail?.error
-            if (
-              typeof f === "object" &&
-              f !== null &&
-              "_tag" in f &&
-              (f._tag === "FailedAndRolledBackCompletely" ||
-                f._tag === "FailedAndRolledBackPartially")
-            ) {
-              const failure = f as Saga.TransactionFailure<string>
-              if (failure._tag === "FailedAndRolledBackPartially") {
-                const out: BookFailedPartially = {
-                  tag: "failed-partially",
-                  trace,
-                  error: String(failure.error),
-                  compensationError: String(failure.compensationError),
-                }
-                return out as BookResult
-              }
-              const out: BookFailedCompletely = {
-                tag: "failed-completely",
+          }),
+      )
+
+    return {
+      book: ({ shouldFailAt, compFailsAt }) =>
+        Effect.gen(function* () {
+          yield* Ref.set(traceRef, [])
+          const ownerName = "demo"
+          const exit = yield* Effect.exit(
+            Saga.fallibleTransaction(
+              Effect.gen(function* () {
+                yield* flightOp({ name: ownerName, fail: shouldFailAt === "flight" })
+                yield* bookHotel({
+                  name: ownerName,
+                  fail: shouldFailAt === "hotel",
+                  compShouldFail: compFailsAt === "hotel",
+                })
+                yield* carOp({ name: ownerName, fail: shouldFailAt === "car" })
+                return "ok" as const
+              }),
+            ),
+          )
+          const trace = yield* Ref.get(traceRef)
+          if (Exit.isSuccess(exit)) {
+            const out: BookOk = { tag: "ok", trace }
+            return out as BookResult
+          }
+          const fail = exit.cause.reasons.find(Cause.isFailReason)
+          const f = fail?.error
+          if (
+            typeof f === "object" &&
+            f !== null &&
+            "_tag" in f &&
+            (f._tag === "FailedAndRolledBackCompletely" ||
+              f._tag === "FailedAndRolledBackPartially")
+          ) {
+            const failure = f as Saga.TransactionFailure<string>
+            if (failure._tag === "FailedAndRolledBackPartially") {
+              const out: BookFailedPartially = {
+                tag: "failed-partially",
                 trace,
                 error: String(failure.error),
+                compensationError: String(failure.compensationError),
               }
               return out as BookResult
             }
-            // Should never happen — surface as a defect so the host
-            // sees the genuine root cause.
-            return yield* Effect.die(exit.cause)
-          }).pipe(Effect.withSpan("BookingSaga.book")),
-        trace: () => Ref.get(traceRef).pipe(Effect.map((xs) => [...xs] as ReadonlyArray<string>)),
-      }
-    }),
-})
+            const out: BookFailedCompletely = {
+              tag: "failed-completely",
+              trace,
+              error: String(failure.error),
+            }
+            return out as BookResult
+          }
+          // Should never happen — surface as a defect so the host
+          // sees the genuine root cause.
+          return yield* Effect.die(exit.cause)
+        }).pipe(Effect.withSpan("BookingSaga.book")),
+      trace: () => Ref.get(traceRef).pipe(Effect.map((xs) => [...xs] as ReadonlyArray<string>)),
+    }
+  }),
+)

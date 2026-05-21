@@ -15,12 +15,12 @@ const Counter = defineAgent({
     getValue: method({ params: {}, success: Schema.Number }),
     add: method({ params: { by: Schema.Number }, success: Schema.Void }),
   },
-  impl: () =>
-    Effect.succeed({
-      getValue: () => Effect.succeed(0),
-      add: () => Effect.void,
-    }),
-})
+}).implement(() =>
+  Effect.succeed({
+    getValue: () => Effect.succeed(0),
+    add: () => Effect.void,
+  }),
+)
 
 const Worker = defineAgent({
   name: "Worker",
@@ -29,11 +29,11 @@ const Worker = defineAgent({
   methods: {
     run: method({ params: { times: Schema.Number }, success: Schema.String }),
   },
-  impl: () =>
-    Effect.succeed({
-      run: () => Effect.succeed("ok"),
-    }),
-})
+}).implement(() =>
+  Effect.succeed({
+    run: () => Effect.succeed("ok"),
+  }),
+)
 
 const decodeWv = <S extends Schema.Top>(s: S, wv: any): Effect.Effect<S["Type"], unknown> =>
   Effect.gen(function* () {
@@ -434,11 +434,11 @@ describe("AgentClient overrides (config)", () => {
     methods: {
       noop: method({ params: {}, success: Schema.Void }),
     },
-    impl: () =>
-      Effect.succeed({
-        noop: () => Effect.void,
-      }),
-  })
+  }).implement(() =>
+    Effect.succeed({
+      noop: () => Effect.void,
+    }),
+  )
 
   it.effect(
     "forwards non-secret overrides to the WasmRpc constructor as TypedAgentConfigValue[]",
@@ -790,12 +790,12 @@ const Lookup = defineAgent({
       error: NotFoundErr,
     }),
   },
-  impl: () =>
-    Effect.succeed({
-      fetch: () => Effect.succeed(0),
-      cmd: () => Effect.void,
-    }),
-})
+}).implement(() =>
+  Effect.succeed({
+    fetch: () => Effect.succeed(0),
+    cmd: () => Effect.void,
+  }),
+)
 
 describe("AgentClient — typed errors", () => {
   beforeEach(() => {

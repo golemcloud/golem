@@ -339,7 +339,7 @@ export const compileConfig = (
 
 /**
  * Static metadata attached to a `defineConfig`-class so
- * {@link AgentDefinition} (and the runtime dispatcher) can discover the
+ * {@link AgentMetadata} (and the runtime dispatcher) can discover the
  * compiled bundle, build per-invocation shapes, and type the
  * `overrides` channel of {@link AgentClient.GetOptions}.
  *

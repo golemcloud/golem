@@ -52,19 +52,19 @@ const AutoSnapshotCounter = defineAgent({
     add: method({ params: { by: Schema.Number }, success: Schema.Number }),
     owner: method({ params: {}, success: Schema.String }),
   },
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      const state = yield* snap.init({ count: 0, owner: name })
-      return {
-        value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(state, (s) => ({ ...s, count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-        owner: () => Ref.get(state).pipe(Effect.map((s) => s.owner)),
-      }
-    }),
-})
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    const state = yield* snap.init({ count: 0, owner: name })
+    return {
+      value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
+      add: ({ by }) =>
+        Ref.updateAndGet(state, (s) => ({ ...s, count: s.count + by })).pipe(
+          Effect.map((s) => s.count),
+        ),
+      owner: () => Ref.get(state).pipe(Effect.map((s) => s.owner)),
+    }
+  }),
+)
 
 // ---------------------------------------------------------------------------
 // Custom-snapshot agent
@@ -83,34 +83,34 @@ const CustomSnapshotAgent = defineAgent({
     value: method({ params: {}, success: Schema.Number }),
     add: method({ params: { by: Schema.Number }, success: Schema.Number }),
   },
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      const ref = yield* Ref.make({ count: 0, owner: name })
-      yield* snap.register({
-        save: Effect.gen(function* () {
-          customStore.saveCalls++
-          const s = yield* Ref.get(ref)
-          return new TextEncoder().encode(JSON.stringify(s))
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    const ref = yield* Ref.make({ count: 0, owner: name })
+    yield* snap.register({
+      save: Effect.gen(function* () {
+        customStore.saveCalls++
+        const s = yield* Ref.get(ref)
+        return new TextEncoder().encode(JSON.stringify(s))
+      }),
+      load: (bytes) =>
+        Effect.gen(function* () {
+          customStore.loadCalls++
+          const decoded = JSON.parse(new TextDecoder().decode(bytes)) as {
+            count: number
+            owner: string
+          }
+          yield* Ref.set(ref, decoded)
         }),
-        load: (bytes) =>
-          Effect.gen(function* () {
-            customStore.loadCalls++
-            const decoded = JSON.parse(new TextDecoder().decode(bytes)) as {
-              count: number
-              owner: string
-            }
-            yield* Ref.set(ref, decoded)
-          }),
-      })
-      return {
-        value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-      }
-    }),
-})
+    })
+    return {
+      value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
+      add: ({ by }) =>
+        Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
+          Effect.map((s) => s.count),
+        ),
+    }
+  }),
+)
 
 // ---------------------------------------------------------------------------
 // Agent that declares snapshot but never binds (negative test)
@@ -126,12 +126,13 @@ const ForgetfulSnapshotAgent = defineAgent({
   methods: {
     noop: method({ params: {}, success: Schema.Void }),
   },
+})
   // Intentionally never call snap.init: triggers SnapshotNotBoundError.
-  impl: (_, _snap) =>
+  .implement((_, _snap) =>
     Effect.succeed({
       noop: () => Effect.void,
     }),
-})
+  )
 
 // ---------------------------------------------------------------------------
 // Custom-snapshot agent that reads a config service inside its save/load
@@ -158,46 +159,46 @@ const ConfigCustomAgent = defineAgent({
     value: method({ params: {}, success: Schema.Number }),
     add: method({ params: { by: Schema.Number }, success: Schema.Number }),
   },
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      const ref = yield* Ref.make({ count: 0, owner: name })
-      yield* snap.register({
-        save: Effect.gen(function* () {
-          configCustomStore.saveCalls++
-          // Read the config service from inside the save handler.
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    const ref = yield* Ref.make({ count: 0, owner: name })
+    yield* snap.register({
+      save: Effect.gen(function* () {
+        configCustomStore.saveCalls++
+        // Read the config service from inside the save handler.
+        const cfg = yield* ConfigCustomCfg
+        const prefix = yield* cfg.prefix
+        const s = yield* Ref.get(ref)
+        return new TextEncoder().encode(`${prefix}:${JSON.stringify(s)}`)
+      }),
+      load: (bytes) =>
+        Effect.gen(function* () {
+          configCustomStore.loadCalls++
+          // Read the config service from inside the load handler too.
           const cfg = yield* ConfigCustomCfg
           const prefix = yield* cfg.prefix
-          const s = yield* Ref.get(ref)
-          return new TextEncoder().encode(`${prefix}:${JSON.stringify(s)}`)
+          const text = new TextDecoder().decode(bytes)
+          if (!text.startsWith(`${prefix}:`)) {
+            throw new Error(
+              `load handler: payload prefix '${text.slice(0, 20)}' does not match config prefix '${prefix}'`,
+            )
+          }
+          const decoded = JSON.parse(text.slice(prefix.length + 1)) as {
+            count: number
+            owner: string
+          }
+          yield* Ref.set(ref, decoded)
         }),
-        load: (bytes) =>
-          Effect.gen(function* () {
-            configCustomStore.loadCalls++
-            // Read the config service from inside the load handler too.
-            const cfg = yield* ConfigCustomCfg
-            const prefix = yield* cfg.prefix
-            const text = new TextDecoder().decode(bytes)
-            if (!text.startsWith(`${prefix}:`)) {
-              throw new Error(
-                `load handler: payload prefix '${text.slice(0, 20)}' does not match config prefix '${prefix}'`,
-              )
-            }
-            const decoded = JSON.parse(text.slice(prefix.length + 1)) as {
-              count: number
-              owner: string
-            }
-            yield* Ref.set(ref, decoded)
-          }),
-      })
-      return {
-        value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-      }
-    }),
-})
+    })
+    return {
+      value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
+      add: ({ by }) =>
+        Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
+          Effect.map((s) => s.count),
+        ),
+    }
+  }),
+)
 
 describe("snapshotting", () => {
   beforeEach(async () => {
@@ -253,8 +254,7 @@ describe("snapshotting", () => {
         name: "NoSnapAgent",
         constructorParams: {},
         methods: { ping: method({ params: {}, success: Schema.Void }) },
-        impl: () => Effect.succeed({ ping: () => Effect.void }),
-      })
+      }).implement(() => Effect.succeed({ ping: () => Effect.void }))
       void NoSnapAgent
       const types = yield* Effect.promise(() => guest.discoverAgentTypes())
       const t = types.find((t) => t.typeName === "NoSnapAgent")!
@@ -529,8 +529,7 @@ describe("snapshotting", () => {
       name: "NoSnap",
       constructorParams: {},
       methods: { ping: method({ params: {}, success: Schema.Void }) },
-      impl: () => Effect.succeed({ ping: () => Effect.void }),
-    })
+    }).implement(() => Effect.succeed({ ping: () => Effect.void }))
     void NoSnap
     await guest.initialize("NoSnap", { tag: "tuple", val: [] }, anonymous)
     await expect(dispatchSaveSnapshot()).rejects.toThrow(/did not declare a snapshot/)
@@ -591,13 +590,13 @@ describe("snapshotting", () => {
         policy: Snapshot.policy.default,
       }),
       methods: { ping: method({ params: {}, success: Schema.Void }) },
-      impl: (_input, snap) =>
-        Effect.gen(function* () {
-          yield* snap.init(0)
-          yield* snap.init(1) // boom
-          return { ping: () => Effect.void }
-        }),
-    })
+    }).implement((_input, snap) =>
+      Effect.gen(function* () {
+        yield* snap.init(0)
+        yield* snap.init(1) // boom
+        return { ping: () => Effect.void }
+      }),
+    )
     void TwiceBound
     await expect(
       guest.initialize("TwiceBound", { tag: "tuple", val: [] }, anonymous),

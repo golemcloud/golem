@@ -88,94 +88,94 @@ export const QuotaTester = defineAgent({
       success: ReserveOutcome,
     }),
   },
-  impl: () =>
-    Effect.gen(function* () {
-      return {
-        acquire: ({ expected }) =>
-          Effect.gen(function* () {
-            const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(expected))
-            const rec = token.toRecord()
-            return {
-              resourceName: rec.resourceName,
-              expectedUse: rec.expectedUse.toString(),
-            }
-          }),
+}).implement(() =>
+  Effect.gen(function* () {
+    return {
+      acquire: ({ expected }) =>
+        Effect.gen(function* () {
+          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(expected))
+          const rec = token.toRecord()
+          return {
+            resourceName: rec.resourceName,
+            expectedUse: rec.expectedUse.toString(),
+          }
+        }),
 
-        withReservationOk: ({ amount, used }) =>
-          Effect.gen(function* () {
-            const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
-            return yield* Quota.withReservation(token, BigInt(amount), () =>
-              Effect.succeed({ used: BigInt(used), value: `committed:${used}` }),
-            )
-          }),
+      withReservationOk: ({ amount, used }) =>
+        Effect.gen(function* () {
+          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
+          return yield* Quota.withReservation(token, BigInt(amount), () =>
+            Effect.succeed({ used: BigInt(used), value: `committed:${used}` }),
+          )
+        }),
 
-        withReservationFailure: ({ amount }) =>
-          Effect.gen(function* () {
-            const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
-            return yield* Quota.withReservation(token, BigInt(amount), () =>
-              Effect.gen(function* () {
-                yield* Effect.fail("body-said-no" as const)
-                return { used: 0n, value: "unreachable" }
-              }),
-            ).pipe(Effect.catch((e) => Effect.succeed(`failed:${String(e)}`)))
-          }),
+      withReservationFailure: ({ amount }) =>
+        Effect.gen(function* () {
+          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
+          return yield* Quota.withReservation(token, BigInt(amount), () =>
+            Effect.gen(function* () {
+              yield* Effect.fail("body-said-no" as const)
+              return { used: 0n, value: "unreachable" }
+            }),
+          ).pipe(Effect.catch((e) => Effect.succeed(`failed:${String(e)}`)))
+        }),
 
-        manualReserveCommit: ({ amount, used }) =>
-          Effect.gen(function* () {
-            const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
-            yield* Effect.scoped(
-              Effect.gen(function* () {
-                const reservation = yield* Quota.reserve(token, BigInt(amount))
-                yield* Quota.commit(reservation, BigInt(used))
-              }),
-            )
-            return `manual-commit:${used}`
-          }),
+      manualReserveCommit: ({ amount, used }) =>
+        Effect.gen(function* () {
+          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const reservation = yield* Quota.reserve(token, BigInt(amount))
+              yield* Quota.commit(reservation, BigInt(used))
+            }),
+          )
+          return `manual-commit:${used}`
+        }),
 
-        manualReserveDrop: ({ amount }) =>
-          Effect.gen(function* () {
-            const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
-            yield* Effect.scoped(
-              Effect.gen(function* () {
-                yield* Quota.reserve(token, BigInt(amount))
-                // No explicit commit — scope close ≡ host commit(0).
-              }),
-            )
-            return "manual-drop:0"
-          }),
+      manualReserveDrop: ({ amount }) =>
+        Effect.gen(function* () {
+          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* Quota.reserve(token, BigInt(amount))
+              // No explicit commit — scope close ≡ host commit(0).
+            }),
+          )
+          return "manual-drop:0"
+        }),
 
-        splitMerge: ({ initial, child }) =>
-          Effect.gen(function* () {
-            const parent = yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(initial))
-            const childToken = yield* Quota.split(parent, BigInt(child))
-            const afterSplitParent = parent.toRecord().expectedUse
-            const afterSplitChild = childToken.toRecord().expectedUse
-            yield* Quota.merge(parent, childToken)
-            const afterMerge = parent.toRecord().expectedUse
-            return {
-              afterSplitParent: afterSplitParent.toString(),
-              afterSplitChild: afterSplitChild.toString(),
-              afterMerge: afterMerge.toString(),
-            }
-          }),
+      splitMerge: ({ initial, child }) =>
+        Effect.gen(function* () {
+          const parent = yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(initial))
+          const childToken = yield* Quota.split(parent, BigInt(child))
+          const afterSplitParent = parent.toRecord().expectedUse
+          const afterSplitChild = childToken.toRecord().expectedUse
+          yield* Quota.merge(parent, childToken)
+          const afterMerge = parent.toRecord().expectedUse
+          return {
+            afterSplitParent: afterSplitParent.toString(),
+            afterSplitChild: afterSplitChild.toString(),
+            afterMerge: afterMerge.toString(),
+          }
+        }),
 
-        exhaustAndReject: ({ amount }) =>
-          Effect.gen(function* () {
-            const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
-            return yield* Quota.withReservation(token, BigInt(amount), () =>
+      exhaustAndReject: ({ amount }) =>
+        Effect.gen(function* () {
+          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
+          return yield* Quota.withReservation(token, BigInt(amount), () =>
+            Effect.succeed({
+              used: BigInt(amount),
+              value: { _tag: "ok" as const, used: amount },
+            }),
+          ).pipe(
+            Effect.catchTag("FailedReservationError", (e) =>
               Effect.succeed({
-                used: BigInt(amount),
-                value: { _tag: "ok" as const, used: amount },
+                _tag: "rejected" as const,
+                estimatedWaitNanos: e.estimatedWaitNanos?.toString(),
               }),
-            ).pipe(
-              Effect.catchTag("FailedReservationError", (e) =>
-                Effect.succeed({
-                  _tag: "rejected" as const,
-                  estimatedWaitNanos: e.estimatedWaitNanos?.toString(),
-                }),
-              ),
-            )
-          }),
-      }
-    }),
-})
+            ),
+          )
+        }),
+    }
+  }),
+)

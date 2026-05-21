@@ -53,30 +53,30 @@ export const KvAgent = defineAgent({
       success: Schema.Array(Schema.NullOr(Schema.String)),
     }),
   },
-  impl: ({ name }) =>
-    Effect.gen(function* () {
-      const bucket = yield* KeyValue.openBucket(name)
-      const users = bucket.forSchema(User)
-      const enc = (s: string) => new TextEncoder().encode(s)
-      const dec = (b: Uint8Array) => new TextDecoder().decode(b)
+}).implement(({ name }) =>
+  Effect.gen(function* () {
+    const bucket = yield* KeyValue.openBucket(name)
+    const users = bucket.forSchema(User)
+    const enc = (s: string) => new TextEncoder().encode(s)
+    const dec = (b: Uint8Array) => new TextDecoder().decode(b)
 
-      return {
-        putBytes: ({ key, value }) => bucket.set(key, enc(value)),
-        getBytes: ({ key }) =>
-          bucket.get(key).pipe(Effect.map((opt) => (Option.isSome(opt) ? dec(opt.value) : null))),
-        exists: ({ key }) => bucket.exists(key),
-        deleteKey: ({ key }) => bucket.delete(key),
-        keys: () => bucket.keys.pipe(Effect.map((ks) => ks.slice())),
-        putUser: ({ id, name }) => users.set(id, { id, name }),
-        getUser: ({ id }) =>
-          users.get(id).pipe(Effect.map((opt) => (Option.isSome(opt) ? opt.value : null))),
-        putBatch: ({ entries }) => bucket.setMany(entries.map(([k, v]) => [k, enc(v)] as const)),
-        getBatch: ({ keys }) =>
-          bucket
-            .getMany(keys)
-            .pipe(
-              Effect.map((arr) => arr.map((opt) => (Option.isSome(opt) ? dec(opt.value) : null))),
-            ),
-      }
-    }),
-})
+    return {
+      putBytes: ({ key, value }) => bucket.set(key, enc(value)),
+      getBytes: ({ key }) =>
+        bucket.get(key).pipe(Effect.map((opt) => (Option.isSome(opt) ? dec(opt.value) : null))),
+      exists: ({ key }) => bucket.exists(key),
+      deleteKey: ({ key }) => bucket.delete(key),
+      keys: () => bucket.keys.pipe(Effect.map((ks) => ks.slice())),
+      putUser: ({ id, name }) => users.set(id, { id, name }),
+      getUser: ({ id }) =>
+        users.get(id).pipe(Effect.map((opt) => (Option.isSome(opt) ? opt.value : null))),
+      putBatch: ({ entries }) => bucket.setMany(entries.map(([k, v]) => [k, enc(v)] as const)),
+      getBatch: ({ keys }) =>
+        bucket
+          .getMany(keys)
+          .pipe(
+            Effect.map((arr) => arr.map((opt) => (Option.isSome(opt) ? dec(opt.value) : null))),
+          ),
+    }
+  }),
+)

@@ -58,31 +58,31 @@ export const BlobAgent = defineAgent({
       success: Schema.Number,
     }),
   },
-  impl: ({ name }) =>
-    Effect.gen(function* () {
-      const container = yield* Blobstore.getOrCreateContainer(name)
-      const photos = container.forSchema(Photo)
-      const enc = (s: string) => new TextEncoder().encode(s)
-      const dec = (b: Uint8Array) => new TextDecoder().decode(b)
+}).implement(({ name }) =>
+  Effect.gen(function* () {
+    const container = yield* Blobstore.getOrCreateContainer(name)
+    const photos = container.forSchema(Photo)
+    const enc = (s: string) => new TextEncoder().encode(s)
+    const dec = (b: Uint8Array) => new TextDecoder().decode(b)
 
-      return {
-        write: ({ key, value }) => container.writeData(key, enc(value)),
-        read: ({ key }) => container.getData(key).pipe(Effect.map(dec)),
-        has: ({ key }) => container.hasObject(key),
-        size: ({ key }) => container.objectInfo(key).pipe(Effect.map((m) => m.size)),
-        list: () => Stream.runCollect(container.listObjects).pipe(Effect.map((c) => c.slice())),
-        deleteOne: ({ key }) => container.deleteObject(key),
-        clear: () => container.clear,
-        putPhoto: ({ key, filename, takenAtMillis }) =>
-          photos.writeData(key, { filename, takenAtMillis }),
-        getPhoto: ({ key }) => photos.getData(key),
-        writeBig: ({ key, len }) =>
-          Effect.gen(function* () {
-            const buf = new Uint8Array(len)
-            for (let i = 0; i < len; i++) buf[i] = i & 0xff
-            yield* container.writeData(key, buf)
-          }),
-        readSize: ({ key }) => container.getData(key).pipe(Effect.map((b) => b.length)),
-      }
-    }),
-})
+    return {
+      write: ({ key, value }) => container.writeData(key, enc(value)),
+      read: ({ key }) => container.getData(key).pipe(Effect.map(dec)),
+      has: ({ key }) => container.hasObject(key),
+      size: ({ key }) => container.objectInfo(key).pipe(Effect.map((m) => m.size)),
+      list: () => Stream.runCollect(container.listObjects).pipe(Effect.map((c) => c.slice())),
+      deleteOne: ({ key }) => container.deleteObject(key),
+      clear: () => container.clear,
+      putPhoto: ({ key, filename, takenAtMillis }) =>
+        photos.writeData(key, { filename, takenAtMillis }),
+      getPhoto: ({ key }) => photos.getData(key),
+      writeBig: ({ key, len }) =>
+        Effect.gen(function* () {
+          const buf = new Uint8Array(len)
+          for (let i = 0; i < len; i++) buf[i] = i & 0xff
+          yield* container.writeData(key, buf)
+        }),
+      readSize: ({ key }) => container.getData(key).pipe(Effect.map((b) => b.length)),
+    }
+  }),
+)

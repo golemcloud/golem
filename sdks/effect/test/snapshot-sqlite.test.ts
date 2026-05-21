@@ -47,17 +47,17 @@ const SqliteCounter = defineAgent({
     note: method({ params: {}, success: Schema.String }),
     setNote: method({ params: { v: Schema.String }, success: Schema.Void }),
   },
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      const state = yield* snap.init({ note: name })
-      const db = new DatabaseSync(":memory:")
-      yield* snap.attachDatabase("counters", db)
-      return {
-        note: () => Ref.get(state).pipe(Effect.map((s) => s.note)),
-        setNote: ({ v }) => Ref.set(state, { note: v }),
-      }
-    }),
-})
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    const state = yield* snap.init({ note: name })
+    const db = new DatabaseSync(":memory:")
+    yield* snap.attachDatabase("counters", db)
+    return {
+      note: () => Ref.get(state).pipe(Effect.map((s) => s.note)),
+      setNote: ({ v }) => Ref.set(state, { note: v }),
+    }
+  }),
+)
 
 // ---------------------------------------------------------------------------
 // Agent that declares a DB but never attaches it (negative test)
@@ -74,13 +74,13 @@ const SqliteForgetfulAttach = defineAgent({
   methods: {
     ping: method({ params: {}, success: Schema.Void }),
   },
-  impl: (_input, snap) =>
-    Effect.gen(function* () {
-      yield* snap.init({})
-      // Intentionally never call snap.attachDatabase("counters", ...).
-      return { ping: () => Effect.void }
-    }),
-})
+}).implement((_input, snap) =>
+  Effect.gen(function* () {
+    yield* snap.init({})
+    // Intentionally never call snap.attachDatabase("counters", ...).
+    return { ping: () => Effect.void }
+  }),
+)
 
 describe("snapshot + sqlite databases", () => {
   beforeEach(async () => {

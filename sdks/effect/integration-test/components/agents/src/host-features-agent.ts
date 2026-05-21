@@ -99,131 +99,131 @@ export const HostFeatures = defineAgent({
       error: Schema.Struct({ code: Schema.String, symbol: Schema.String }),
     }),
   },
-  impl: (_input, snap) =>
-    Effect.gen(function* () {
-      const state = yield* snap.init({ count: 0 })
+}).implement((_input, snap) =>
+  Effect.gen(function* () {
+    const state = yield* snap.init({ count: 0 })
 
-      return {
-        oplogIndex: () =>
-          Effect.gen(function* () {
-            const idx = yield* Oplog.currentIndex
-            return idx.toString()
-          }),
+    return {
+      oplogIndex: () =>
+        Effect.gen(function* () {
+          const idx = yield* Oplog.currentIndex
+          return idx.toString()
+        }),
 
-        withAtomic: ({ by }) =>
-          Durability.atomically(
-            Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
-              Effect.map((s) => s.count),
+      withAtomic: ({ by }) =>
+        Durability.atomically(
+          Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
+            Effect.map((s) => s.count),
+          ),
+        ),
+
+      withPersistNothing: ({ by }) =>
+        Durability.withPersistenceLevel(
+          Durability.PersistenceLevel.persistNothing,
+          Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
+            Effect.map((s) => s.count),
+          ),
+        ),
+
+      idempotencyKey: () =>
+        Effect.gen(function* () {
+          const uuid = yield* Durability.generateIdempotencyKey
+          return uuidToString(uuid)
+        }),
+
+      selfMetadata: () =>
+        Effect.gen(function* () {
+          const meta = yield* Agents.getSelfMetadata
+          return {
+            agentName: meta.agentId.agentId,
+            componentRevision: meta.componentRevision.toString(),
+            status: meta.status,
+            retryCount: meta.retryCount.toString(),
+          }
+        }),
+
+      forkSelf: () =>
+        Effect.gen(function* () {
+          const result = yield* Agents.fork
+          return result.tag
+        }),
+
+      readOplog: ({ count }) =>
+        Effect.gen(function* () {
+          const self = yield* SelfAgentId.SelfAgentId
+          const tags = yield* Stream.runCollect(
+            Oplog.read({ agentId: self, start: 0n }).pipe(
+              Stream.map((entry) => entry.tag),
+              Stream.take(count),
             ),
-          ),
+          )
+          return Array.from(tags)
+        }),
 
-        withPersistNothing: ({ by }) =>
-          Durability.withPersistenceLevel(
-            Durability.PersistenceLevel.persistNothing,
-            Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
-              Effect.map((s) => s.count),
+      searchOplog: ({ query, count }) =>
+        Effect.gen(function* () {
+          const self = yield* SelfAgentId.SelfAgentId
+          const tags = yield* Stream.runCollect(
+            Oplog.search({ agentId: self, text: query }).pipe(
+              Stream.map(([, entry]) => entry.tag),
+              Stream.take(count),
             ),
-          ),
+          )
+          return Array.from(tags)
+        }),
 
-        idempotencyKey: () =>
-          Effect.gen(function* () {
-            const uuid = yield* Durability.generateIdempotencyKey
-            return uuidToString(uuid)
-          }),
+      promiseRoundtrip: ({ payload }) =>
+        Effect.gen(function* () {
+          const id = yield* Agents.Promises.create
+          const bytes = new TextEncoder().encode(payload)
+          yield* Agents.Promises.complete(id, bytes)
+          const out = yield* Agents.Promises.await(id)
+          return new TextDecoder().decode(out)
+        }),
 
-        selfMetadata: () =>
-          Effect.gen(function* () {
-            const meta = yield* Agents.getSelfMetadata
-            return {
-              agentName: meta.agentId.agentId,
-              componentRevision: meta.componentRevision.toString(),
-              status: meta.status,
-              retryCount: meta.retryCount.toString(),
-            }
-          }),
+      wrappedQuote: ({ symbol }) =>
+        // The body returns Math.random — a non-deterministic value
+        // that would diverge across replays without `Durability.wrap`.
+        // The first call persists `Result.succeed({symbol, price})`
+        // to the oplog; subsequent replays return that exact value
+        // without re-rolling the dice.
+        Durability.wrap(
+          {
+            iface: "host-features",
+            function: "wrappedQuote",
+            functionType: Durability.FunctionType.writeRemote,
+            requestSchema: Schema.Struct({ symbol: Schema.String }),
+            success: Schema.Struct({
+              symbol: Schema.String,
+              price: Schema.Number,
+            }),
+          },
+          { symbol },
+          Effect.sync(() => ({
+            symbol,
+            price: Math.round(Math.random() * 1_000_000) / 100,
+          })),
+        ),
 
-        forkSelf: () =>
-          Effect.gen(function* () {
-            const result = yield* Agents.fork
-            return result.tag
-          }),
-
-        readOplog: ({ count }) =>
-          Effect.gen(function* () {
-            const self = yield* SelfAgentId.SelfAgentId
-            const tags = yield* Stream.runCollect(
-              Oplog.read({ agentId: self, start: 0n }).pipe(
-                Stream.map((entry) => entry.tag),
-                Stream.take(count),
-              ),
-            )
-            return Array.from(tags)
-          }),
-
-        searchOplog: ({ query, count }) =>
-          Effect.gen(function* () {
-            const self = yield* SelfAgentId.SelfAgentId
-            const tags = yield* Stream.runCollect(
-              Oplog.search({ agentId: self, text: query }).pipe(
-                Stream.map(([, entry]) => entry.tag),
-                Stream.take(count),
-              ),
-            )
-            return Array.from(tags)
-          }),
-
-        promiseRoundtrip: ({ payload }) =>
-          Effect.gen(function* () {
-            const id = yield* Agents.Promises.create
-            const bytes = new TextEncoder().encode(payload)
-            yield* Agents.Promises.complete(id, bytes)
-            const out = yield* Agents.Promises.await(id)
-            return new TextDecoder().decode(out)
-          }),
-
-        wrappedQuote: ({ symbol }) =>
-          // The body returns Math.random — a non-deterministic value
-          // that would diverge across replays without `Durability.wrap`.
-          // The first call persists `Result.succeed({symbol, price})`
-          // to the oplog; subsequent replays return that exact value
-          // without re-rolling the dice.
-          Durability.wrap(
-            {
-              iface: "host-features",
-              function: "wrappedQuote",
-              functionType: Durability.FunctionType.writeRemote,
-              requestSchema: Schema.Struct({ symbol: Schema.String }),
-              success: Schema.Struct({
-                symbol: Schema.String,
-                price: Schema.Number,
-              }),
-            },
-            { symbol },
-            Effect.sync(() => ({
-              symbol,
-              price: Math.round(Math.random() * 1_000_000) / 100,
-            })),
-          ),
-
-        wrappedQuoteFailing: ({ symbol }) =>
-          Durability.wrap(
-            {
-              iface: "host-features",
-              function: "wrappedQuoteFailing",
-              functionType: Durability.FunctionType.writeRemote,
-              requestSchema: Schema.Struct({ symbol: Schema.String }),
-              success: Schema.Struct({
-                symbol: Schema.String,
-                price: Schema.Number,
-              }),
-              error: Schema.Struct({
-                code: Schema.String,
-                symbol: Schema.String,
-              }),
-            },
-            { symbol },
-            Effect.fail({ code: "UNAVAILABLE", symbol }),
-          ),
-      }
-    }),
-})
+      wrappedQuoteFailing: ({ symbol }) =>
+        Durability.wrap(
+          {
+            iface: "host-features",
+            function: "wrappedQuoteFailing",
+            functionType: Durability.FunctionType.writeRemote,
+            requestSchema: Schema.Struct({ symbol: Schema.String }),
+            success: Schema.Struct({
+              symbol: Schema.String,
+              price: Schema.Number,
+            }),
+            error: Schema.Struct({
+              code: Schema.String,
+              symbol: Schema.String,
+            }),
+          },
+          { symbol },
+          Effect.fail({ code: "UNAVAILABLE", symbol }),
+        ),
+    }
+  }),
+)

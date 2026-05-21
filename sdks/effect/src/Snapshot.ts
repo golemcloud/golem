@@ -345,7 +345,7 @@ export interface CustomSnapshotDef {
 
 /**
  * Either flavour of snapshot definition that may appear on
- * `AgentDefinition.snapshot`.
+ * `AgentMetadata.snapshot`.
  *
  * @since 1.5.0
  * @category models

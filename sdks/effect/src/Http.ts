@@ -373,7 +373,7 @@ declare const endpointHeaderNamesBrand: unique symbol
 export type EndpointKind = "bodyful" | "bodyless"
 
 /**
- * Mount declaration carried by `AgentDefinition.http`. Compiled to
+ * Mount declaration carried by `AgentMetadata.http`. Compiled to
  * `agent-type.http-mount` (`HttpMountDetails`) at registration time.
  *
  * The phantom `MountVars` parameter is **not** present at runtime —

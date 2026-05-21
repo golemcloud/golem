@@ -29,13 +29,12 @@ const Greeter = defineAgent({
     }),
     ping: method({ params: {}, success: Schema.Void }),
   },
-  impl: () =>
-    Effect.succeed({
-      greet: ({ person, greeting }) =>
-        Effect.succeed(`${greeting}, ${person.name} (${person.age})!`),
-      ping: () => Effect.void,
-    }),
-})
+}).implement(() =>
+  Effect.succeed({
+    greet: ({ person, greeting }) => Effect.succeed(`${greeting}, ${person.name} (${person.age})!`),
+    ping: () => Effect.void,
+  }),
+)
 
 /** A stateful agent that exercises the closure-based state pattern, plus a
  *  side-effect during initialization. */
@@ -46,15 +45,15 @@ const Counter = defineAgent({
     getValue: method({ params: {}, success: Schema.Number }),
     add: method({ params: { by: Schema.Number }, success: Schema.Void }),
   },
-  impl: ({ initial }) =>
-    Effect.gen(function* () {
-      const ref = yield* Ref.make(initial)
-      return {
-        getValue: () => Ref.get(ref),
-        add: ({ by }) => Ref.update(ref, (n) => n + by),
-      }
-    }),
-})
+}).implement(({ initial }) =>
+  Effect.gen(function* () {
+    const ref = yield* Ref.make(initial)
+    return {
+      getValue: () => Ref.get(ref),
+      add: ({ by }) => Ref.update(ref, (n) => n + by),
+    }
+  }),
+)
 
 const anonymousPrincipal = { tag: "anonymous" } as const
 
@@ -83,32 +82,32 @@ const PrincipalAgent = defineAgent({
     caller: method({ params: {}, success: Schema.String }),
     callerForked: method({ params: {}, success: Schema.String }),
   },
-  impl: () =>
-    Effect.gen(function* () {
-      const ownerPrincipal = yield* Principal
-      const owner = principalTag(ownerPrincipal)
-      return {
-        owner: () => Effect.succeed(owner),
-        caller: () =>
-          Effect.gen(function* () {
-            const callerPrincipal = yield* Principal
-            return principalTag(callerPrincipal)
-          }),
-        // Verifies that the per-call Principal service propagates to
-        // child fibers spawned inside a handler.
-        callerForked: () =>
-          Effect.gen(function* () {
-            const fiber = yield* Effect.forkChild(
-              Effect.gen(function* () {
-                const childPrincipal = yield* Principal
-                return principalTag(childPrincipal)
-              }),
-            )
-            return yield* Fiber.join(fiber)
-          }),
-      }
-    }),
-})
+}).implement(() =>
+  Effect.gen(function* () {
+    const ownerPrincipal = yield* Principal
+    const owner = principalTag(ownerPrincipal)
+    return {
+      owner: () => Effect.succeed(owner),
+      caller: () =>
+        Effect.gen(function* () {
+          const callerPrincipal = yield* Principal
+          return principalTag(callerPrincipal)
+        }),
+      // Verifies that the per-call Principal service propagates to
+      // child fibers spawned inside a handler.
+      callerForked: () =>
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(
+            Effect.gen(function* () {
+              const childPrincipal = yield* Principal
+              return principalTag(childPrincipal)
+            }),
+          )
+          return yield* Fiber.join(fiber)
+        }),
+    }
+  }),
+)
 
 /**
  * Exercises an Effect-Context-based config service from BOTH the
@@ -134,33 +133,33 @@ const ConfigAgent = defineAgent({
     currentGreeting: method({ params: {}, success: Schema.String }),
     keyTail: method({ params: {}, success: Schema.String }),
   },
-  impl: () =>
-    Effect.gen(function* () {
-      const cfg = yield* TestConfig
-      // Reads the greeting at *initialize* time and captures it; later
-      // shape rebuilds (one per invocation) won't mutate this closure.
-      const initial = yield* cfg.greeting
-      return {
-        initialGreeting: () => Effect.succeed(initial),
-        currentGreeting: () =>
-          Effect.gen(function* () {
-            const c = yield* TestConfig
-            // Reading the same field twice inside one invocation must
-            // hit the host only once (memoization within one shape).
-            const a = yield* c.greeting
-            const b = yield* c.greeting
-            return `${a}/${b}`
-          }),
-        keyTail: () =>
-          Effect.gen(function* () {
-            const c = yield* TestConfig
-            const r = yield* c.apiKey.get
-            const raw = Redacted.value(r)
-            return raw.slice(-4)
-          }),
-      }
-    }),
-})
+}).implement(() =>
+  Effect.gen(function* () {
+    const cfg = yield* TestConfig
+    // Reads the greeting at *initialize* time and captures it; later
+    // shape rebuilds (one per invocation) won't mutate this closure.
+    const initial = yield* cfg.greeting
+    return {
+      initialGreeting: () => Effect.succeed(initial),
+      currentGreeting: () =>
+        Effect.gen(function* () {
+          const c = yield* TestConfig
+          // Reading the same field twice inside one invocation must
+          // hit the host only once (memoization within one shape).
+          const a = yield* c.greeting
+          const b = yield* c.greeting
+          return `${a}/${b}`
+        }),
+      keyTail: () =>
+        Effect.gen(function* () {
+          const c = yield* TestConfig
+          const r = yield* c.apiKey.get
+          const raw = Redacted.value(r)
+          return raw.slice(-4)
+        }),
+    }
+  }),
+)
 
 describe("agent-guest exports", () => {
   beforeEach(async () => {
@@ -369,8 +368,7 @@ describe("agent-guest exports", () => {
       name: "Greeter",
       constructorParams: {},
       methods: { ping: method({ params: {}, success: Schema.Void }) },
-      impl: () => Effect.succeed({ ping: () => Effect.void }),
-    })
+    }).implement(() => Effect.succeed({ ping: () => Effect.void }))
     let caught: unknown
     try {
       await guest.discoverAgentTypes()

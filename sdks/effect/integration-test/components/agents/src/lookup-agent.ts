@@ -49,16 +49,16 @@ export const Lookup = defineAgent({
       error: NotFoundError,
     }),
   },
-  impl: () =>
-    Effect.succeed({
-      fetch: ({ id }) =>
-        id === "missing"
-          ? Effect.fail({ _tag: "NotFoundError" as const, resource: id })
-          : Effect.succeed(7),
-      cmd: ({ fail }) =>
-        fail ? Effect.fail({ _tag: "NotFoundError" as const, resource: "always" }) : Effect.void,
-    }),
-})
+}).implement(() =>
+  Effect.succeed({
+    fetch: ({ id }) =>
+      id === "missing"
+        ? Effect.fail({ _tag: "NotFoundError" as const, resource: id })
+        : Effect.succeed(7),
+    cmd: ({ fail }) =>
+      fail ? Effect.fail({ _tag: "NotFoundError" as const, resource: "always" }) : Effect.void,
+  }),
+)
 
 /**
  * Discriminate between the typed user error (`NotFoundError`) and any
@@ -98,23 +98,23 @@ export const LookupCaller = defineAgent({
       success: Schema.String,
     }),
   },
-  impl: ({ realm }) =>
-    Effect.succeed({
-      fetchAndReport: ({ id }) =>
-        Effect.gen(function* () {
-          const lookup = yield* Lookup.client.get({ realm })
-          return yield* lookup.fetch({ id }).pipe(
-            Effect.map((n) => `ok:${n}`),
-            Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
-          )
-        }),
-      cmdAndReport: ({ fail }) =>
-        Effect.gen(function* () {
-          const lookup = yield* Lookup.client.get({ realm })
-          return yield* lookup.cmd({ fail }).pipe(
-            Effect.map(() => "ok:void"),
-            Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
-          )
-        }),
-    }),
-})
+}).implement(({ realm }) =>
+  Effect.succeed({
+    fetchAndReport: ({ id }) =>
+      Effect.gen(function* () {
+        const lookup = yield* Lookup.client.get({ realm })
+        return yield* lookup.fetch({ id }).pipe(
+          Effect.map((n) => `ok:${n}`),
+          Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
+        )
+      }),
+    cmdAndReport: ({ fail }) =>
+      Effect.gen(function* () {
+        const lookup = yield* Lookup.client.get({ realm })
+        return yield* lookup.cmd({ fail }).pipe(
+          Effect.map(() => "ok:void"),
+          Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
+        )
+      }),
+  }),
+)

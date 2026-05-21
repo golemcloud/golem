@@ -38,40 +38,40 @@ export const Caller = defineAgent({
      */
     abortInFlight: method({ params: { seconds: Schema.Number }, success: Schema.Boolean }),
   },
-  impl: ({ counterName }) =>
-    Effect.succeed({
-      bump: () =>
-        Effect.gen(function* () {
-          const counter = yield* Counter.client.get({ name: counterName })
-          return yield* counter.increment({})
-        }).pipe(Effect.catch(() => Effect.succeed(-1))),
-      peek: () =>
-        Effect.gen(function* () {
-          const counter = yield* Counter.client.get({ name: counterName })
-          return yield* counter.value({})
-        }).pipe(Effect.catch(() => Effect.succeed(-1))),
-      greetWithOverride: ({ override }) =>
-        Effect.gen(function* () {
-          const counter = yield* Counter.client.get(
-            { name: counterName },
-            { overrides: { greeting: override } },
-          )
-          return yield* counter.currentGreeting({})
-        }).pipe(Effect.catch((e) => Effect.succeed(`error: ${String(e)}`))),
-      abortInFlight: ({ seconds }) =>
-        Effect.gen(function* () {
-          const counter = yield* Counter.client.get({ name: counterName })
-          // Fork the remote invoke; let it park inside the SDK's
-          // pollable.abortablePromise; then interrupt.
-          const fiber = yield* Effect.forkChild(counter.slowValue({ seconds }))
-          yield* Effect.sleep("100 millis")
-          yield* Fiber.interrupt(fiber)
-          const exit = yield* Fiber.await(fiber)
-          // Either we're truly interrupted, or the slow remote already
-          // started executing and the result was discarded — both are
-          // valid "host cancel was issued" outcomes. Test passes if
-          // we did NOT successfully receive the slow value.
-          return Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)
-        }).pipe(Effect.catch(() => Effect.succeed(false))),
-    }),
-})
+}).implement(({ counterName }) =>
+  Effect.succeed({
+    bump: () =>
+      Effect.gen(function* () {
+        const counter = yield* Counter.client.get({ name: counterName })
+        return yield* counter.increment({})
+      }).pipe(Effect.catch(() => Effect.succeed(-1))),
+    peek: () =>
+      Effect.gen(function* () {
+        const counter = yield* Counter.client.get({ name: counterName })
+        return yield* counter.value({})
+      }).pipe(Effect.catch(() => Effect.succeed(-1))),
+    greetWithOverride: ({ override }) =>
+      Effect.gen(function* () {
+        const counter = yield* Counter.client.get(
+          { name: counterName },
+          { overrides: { greeting: override } },
+        )
+        return yield* counter.currentGreeting({})
+      }).pipe(Effect.catch((e) => Effect.succeed(`error: ${String(e)}`))),
+    abortInFlight: ({ seconds }) =>
+      Effect.gen(function* () {
+        const counter = yield* Counter.client.get({ name: counterName })
+        // Fork the remote invoke; let it park inside the SDK's
+        // pollable.abortablePromise; then interrupt.
+        const fiber = yield* Effect.forkChild(counter.slowValue({ seconds }))
+        yield* Effect.sleep("100 millis")
+        yield* Fiber.interrupt(fiber)
+        const exit = yield* Fiber.await(fiber)
+        // Either we're truly interrupted, or the slow remote already
+        // started executing and the result was discarded — both are
+        // valid "host cancel was issued" outcomes. Test passes if
+        // we did NOT successfully receive the slow value.
+        return Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)
+      }).pipe(Effect.catch(() => Effect.succeed(false))),
+  }),
+)
