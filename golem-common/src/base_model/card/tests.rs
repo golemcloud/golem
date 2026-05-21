@@ -60,24 +60,6 @@ fn recipient_depths_are_validated() {
 }
 
 #[test]
-fn environment_path_pattern_requires_environment_depth() {
-    let pattern = EnvironmentPathPattern::parse("acme/shop/prod").unwrap();
-
-    assert_eq!(
-        pattern.segments(),
-        vec![
-            PathSegmentPattern::Exact("acme".to_string()),
-            PathSegmentPattern::Exact("shop".to_string()),
-            PathSegmentPattern::Exact("prod".to_string())
-        ]
-    );
-    assert!(EnvironmentPathPattern::parse("acme/shop").is_err());
-    assert!(EnvironmentPathPattern::parse("acme/shop/prod/cart").is_err());
-    assert!(EnvironmentPathPattern::parse("acme/*/prod").is_err());
-    assert!(EnvironmentPathPattern::parse("acme/shop/*").is_ok());
-}
-
-#[test]
 fn effective_surface_requires_lower_and_all_upper_bounds() {
     let holder = RecipientPathPattern::parse("acme/shop/prod/cart/agent").unwrap();
     let read_all = fs(

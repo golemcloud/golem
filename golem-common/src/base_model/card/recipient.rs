@@ -16,67 +16,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PathSegmentPattern {
-    Any,
-    Exact(String),
-}
-
-impl PathSegmentPattern {
-    pub fn subsumes(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum EnvironmentPathPattern {
-    Any,
-    Environment {
-        account: PathSegmentPattern,
-        application: PathSegmentPattern,
-        environment: PathSegmentPattern,
-    },
-}
-
-impl EnvironmentPathPattern {
-    pub fn parse(value: &str) -> Result<Self, String> {
-        if value == "*" {
-            return Ok(Self::Any);
-        }
-
-        let segments = parse_path_segments(value)?;
-        match segments.as_slice() {
-            [account, application, environment] => Ok(Self::Environment {
-                account: account.clone(),
-                application: application.clone(),
-                environment: environment.clone(),
-            }),
-            _ => Err(value.to_string()),
-        }
-    }
-
-    pub fn segments(&self) -> Vec<PathSegmentPattern> {
-        match self {
-            Self::Any => vec![
-                PathSegmentPattern::Any,
-                PathSegmentPattern::Any,
-                PathSegmentPattern::Any,
-            ],
-            Self::Environment {
-                account,
-                application,
-                environment,
-            } => vec![account.clone(), application.clone(), environment.clone()],
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum RecipientPathPattern {
     Any,
     Account {
@@ -322,59 +261,26 @@ impl RecipientPathPattern {
     }
 }
 
-fn parse_segment(value: &str) -> PathSegmentPattern {
-    if value == "*" {
-        PathSegmentPattern::Any
-    } else {
-        PathSegmentPattern::Exact(value.to_string())
-    }
-}
-
-fn parse_path_segments(value: &str) -> Result<Vec<PathSegmentPattern>, String> {
-    if value.is_empty() || value.split('/').any(str::is_empty) {
-        Err(value.to_string())
-    } else {
-        let segments = value.split('/').map(parse_segment).collect::<Vec<_>>();
-        if has_concrete_after_wildcard(&segments) {
-            Err(value.to_string())
-        } else {
-            Ok(segments)
-        }
-    }
-}
-
 fn parse_exact_segments(value: &str) -> Result<Vec<&str>, String> {
     if value.is_empty() {
         return Err(value.to_string());
     }
 
     let segments = value.split('/').collect::<Vec<_>>();
-    if segments.first() == Some(&"*") || segments.iter().any(|s| s.is_empty()) || has_concrete_after_wildcard_str(&segments) {
+    if segments.first() == Some(&"*") || segments.iter().any(|s| s.is_empty()) || has_concrete_after_wildcard_segment(&segments) {
         Err(value.to_string())
     } else {
         Ok(segments)
     }
 }
 
-fn has_concrete_after_wildcard_str(segments: &[&str]) -> bool {
+fn has_concrete_after_wildcard_segment(segments: &[&str]) -> bool {
     let mut seen_wildcard = false;
     for segment in segments {
         match *segment {
             "*" => seen_wildcard = true,
             _ if seen_wildcard => return true,
             _ => {}
-        }
-    }
-    false
-}
-
-fn has_concrete_after_wildcard(segments: &[PathSegmentPattern]) -> bool {
-    let mut seen_wildcard = false;
-    for segment in segments {
-        match segment {
-            PathSegmentPattern::Any => seen_wildcard = true,
-            PathSegmentPattern::Exact(_) if seen_wildcard => return true,
-            PathSegmentPattern::Exact(_) => {}
         }
     }
     false
