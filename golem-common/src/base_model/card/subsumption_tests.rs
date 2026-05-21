@@ -122,6 +122,10 @@ fn invalid_owner_paths_fail_subsumption() {
 #[test]
 fn recipient_patterns_subsume_only_matching_holder_subtrees() {
     let account = RecipientPathPattern::parse("acme").unwrap();
+    let account_environments = RecipientPathPattern::parse("acme/*/*").unwrap();
+    let account_agents = RecipientPathPattern::parse("acme/*/*/*/*").unwrap();
+    let application_environments = RecipientPathPattern::parse("acme/shop/*").unwrap();
+    let application_agents = RecipientPathPattern::parse("acme/shop/*/*/*").unwrap();
     let environment = RecipientPathPattern::parse("acme/shop/prod").unwrap();
     let agent_type = RecipientPathPattern::parse("acme/shop/prod/cart-svc/*").unwrap();
     let agent =
@@ -130,6 +134,14 @@ fn recipient_patterns_subsume_only_matching_holder_subtrees() {
         RecipientPathPattern::parse("other/shop/prod/cart-svc/ShoppingCart(\"42\")").unwrap();
 
     assert!(account.subsumes(&agent));
+    assert!(account.subsumes(&environment));
+    assert!(account_environments.subsumes(&environment));
+    assert!(account_environments.subsumes(&agent));
+    assert!(application_environments.subsumes(&environment));
+    assert!(application_environments.subsumes(&agent));
+    assert!(account_agents.subsumes(&agent));
+    assert!(application_agents.subsumes(&agent));
+    assert!(!account_agents.subsumes(&environment));
     assert!(environment.subsumes(&agent));
     assert!(agent_type.subsumes(&agent));
     assert!(!agent.subsumes(&agent_type));
@@ -141,7 +153,11 @@ fn generate_recipient_matching_tests(r: &mut DynamicTestRegistration) {
     let cases = [
         ("*", true),
         ("acme", true),
+        ("acme/*/*", true),
+        ("acme/shop/*", true),
         ("acme/shop/prod", true),
+        ("acme/*/*/*/*", true),
+        ("acme/shop/*/*/*", true),
         ("acme/shop/prod/cart-svc/*", true),
         ("acme/shop/prod/other-svc/*", false),
         ("other", false),

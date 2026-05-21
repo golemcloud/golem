@@ -21,6 +21,20 @@ pub enum RecipientPathPattern {
     Account {
         account: String,
     },
+    AccountEnvironments {
+        account: String,
+    },
+    ApplicationEnvironments {
+        account: String,
+        application: String,
+    },
+    AccountAgents {
+        account: String,
+    },
+    ApplicationAgents {
+        account: String,
+        application: String,
+    },
     Environment {
         account: String,
         application: String,
@@ -58,6 +72,20 @@ impl RecipientPathPattern {
             [account] => Ok(Self::Account {
                 account: account.to_string(),
             }),
+            [account, "*", "*"] => Ok(Self::AccountEnvironments {
+                account: account.to_string(),
+            }),
+            [account, application, "*"] => Ok(Self::ApplicationEnvironments {
+                account: account.to_string(),
+                application: application.to_string(),
+            }),
+            [account, "*", "*", "*", "*"] => Ok(Self::AccountAgents {
+                account: account.to_string(),
+            }),
+            [account, application, "*", "*", "*"] => Ok(Self::ApplicationAgents {
+                account: account.to_string(),
+                application: application.to_string(),
+            }),
             [account, application, environment] => Ok(Self::Environment {
                 account: account.to_string(),
                 application: application.to_string(),
@@ -88,7 +116,19 @@ impl RecipientPathPattern {
     pub fn concrete_prefix(&self) -> Vec<&str> {
         match self {
             Self::Any => Vec::new(),
-            Self::Account { account } => vec![account.as_str()],
+            Self::Account { account }
+            | Self::AccountEnvironments { account }
+            | Self::AccountAgents { account } => {
+                vec![account.as_str()]
+            }
+            Self::ApplicationEnvironments {
+                account,
+                application,
+            }
+            | Self::ApplicationAgents {
+                account,
+                application,
+            } => vec![account.as_str(), application.as_str()],
             Self::Environment {
                 account,
                 application,
@@ -129,7 +169,37 @@ impl RecipientPathPattern {
     pub fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Account { account: a }, other) => other.account().is_some_and(|b| a == b),
+            (Self::Account { account }, other) => other.account().is_some_and(|b| account == b),
+            (Self::AccountEnvironments { account: a }, other) => {
+                other.account().is_some_and(|b| a == b) && other.is_environment_or_deeper()
+            }
+            (
+                Self::ApplicationEnvironments {
+                    account: aa,
+                    application: ap,
+                },
+                other,
+            ) => {
+                other
+                    .application()
+                    .is_some_and(|(ba, bp)| aa == ba && ap == bp)
+                    && other.is_environment_or_deeper()
+            }
+            (Self::AccountAgents { account: a }, other) => {
+                other.account().is_some_and(|b| a == b) && other.is_agent_scope()
+            }
+            (
+                Self::ApplicationAgents {
+                    account: aa,
+                    application: ap,
+                },
+                other,
+            ) => {
+                other
+                    .application()
+                    .is_some_and(|(ba, bp)| aa == ba && ap == bp)
+                    && other.is_agent_scope()
+            }
             (
                 Self::Environment {
                     account: aa,
@@ -149,8 +219,7 @@ impl RecipientPathPattern {
                 other
                     .environment()
                     .is_some_and(|(ba, bp, be)| aa == ba && ap == bp && ae == be)
-                    && (!matches!(self, Self::EnvironmentAgents { .. })
-                        || other.agent_scope_depth() == Some(5))
+                    && (!matches!(self, Self::EnvironmentAgents { .. }) || other.is_agent_scope())
             }
             (
                 Self::ComponentAgents {
@@ -164,7 +233,7 @@ impl RecipientPathPattern {
                 other
                     .component()
                     .is_some_and(|(ba, bp, be, bc)| aa == ba && ap == bp && ae == be && ac == bc)
-                    && other.agent_scope_depth() == Some(5)
+                    && other.is_agent_scope()
             }
             (
                 Self::Agent {
@@ -194,10 +263,51 @@ impl RecipientPathPattern {
         match self {
             Self::Any => None,
             Self::Account { account }
+            | Self::AccountEnvironments { account }
+            | Self::AccountAgents { account }
+            | Self::ApplicationEnvironments { account, .. }
+            | Self::ApplicationAgents { account, .. }
             | Self::Environment { account, .. }
             | Self::EnvironmentAgents { account, .. }
             | Self::ComponentAgents { account, .. }
             | Self::Agent { account, .. } => Some(account),
+        }
+    }
+
+    fn application(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::ApplicationEnvironments {
+                account,
+                application,
+            }
+            | Self::ApplicationAgents {
+                account,
+                application,
+            }
+            | Self::Environment {
+                account,
+                application,
+                ..
+            }
+            | Self::EnvironmentAgents {
+                account,
+                application,
+                ..
+            }
+            | Self::ComponentAgents {
+                account,
+                application,
+                ..
+            }
+            | Self::Agent {
+                account,
+                application,
+                ..
+            } => Some((account, application)),
+            Self::Any
+            | Self::Account { .. }
+            | Self::AccountEnvironments { .. }
+            | Self::AccountAgents { .. } => None,
         }
     }
 
@@ -225,7 +335,12 @@ impl RecipientPathPattern {
                 environment,
                 ..
             } => Some((account, application, environment)),
-            Self::Any | Self::Account { .. } => None,
+            Self::Any
+            | Self::Account { .. }
+            | Self::AccountEnvironments { .. }
+            | Self::ApplicationEnvironments { .. }
+            | Self::AccountAgents { .. }
+            | Self::ApplicationAgents { .. } => None,
         }
     }
 
@@ -246,17 +361,41 @@ impl RecipientPathPattern {
             } => Some((account, application, environment, component)),
             Self::Any
             | Self::Account { .. }
+            | Self::AccountEnvironments { .. }
+            | Self::ApplicationEnvironments { .. }
+            | Self::AccountAgents { .. }
+            | Self::ApplicationAgents { .. }
             | Self::Environment { .. }
             | Self::EnvironmentAgents { .. } => None,
         }
     }
 
-    fn agent_scope_depth(&self) -> Option<usize> {
+    fn is_environment_or_deeper(&self) -> bool {
+        matches!(
+            self,
+            Self::AccountEnvironments { .. }
+                | Self::ApplicationEnvironments { .. }
+                | Self::Environment { .. }
+                | Self::AccountAgents { .. }
+                | Self::ApplicationAgents { .. }
+                | Self::EnvironmentAgents { .. }
+                | Self::ComponentAgents { .. }
+                | Self::Agent { .. }
+        )
+    }
+
+    fn is_agent_scope(&self) -> bool {
         match self {
-            Self::EnvironmentAgents { .. } | Self::ComponentAgents { .. } | Self::Agent { .. } => {
-                Some(5)
-            }
-            Self::Any | Self::Account { .. } | Self::Environment { .. } => None,
+            Self::AccountAgents { .. }
+            | Self::ApplicationAgents { .. }
+            | Self::EnvironmentAgents { .. }
+            | Self::ComponentAgents { .. }
+            | Self::Agent { .. } => true,
+            Self::Any
+            | Self::Account { .. }
+            | Self::AccountEnvironments { .. }
+            | Self::ApplicationEnvironments { .. }
+            | Self::Environment { .. } => false,
         }
     }
 }
@@ -267,7 +406,10 @@ fn parse_exact_segments(value: &str) -> Result<Vec<&str>, String> {
     }
 
     let segments = value.split('/').collect::<Vec<_>>();
-    if segments.first() == Some(&"*") || segments.iter().any(|s| s.is_empty()) || has_concrete_after_wildcard_segment(&segments) {
+    if segments.first() == Some(&"*")
+        || segments.iter().any(|s| s.is_empty())
+        || has_concrete_after_wildcard_segment(&segments)
+    {
         Err(value.to_string())
     } else {
         Ok(segments)
