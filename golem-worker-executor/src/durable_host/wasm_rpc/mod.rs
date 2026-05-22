@@ -147,6 +147,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_agent_id,
                 response.target_environment_id,
                 response.target_fingerprint,
+                span,
             )
             .await
         }
@@ -1223,8 +1224,8 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_agent_id: AgentId,
     target_environment_id: EnvironmentId,
     target_fingerprint: AgentFingerprint,
+    span: Arc<InvocationContextSpan>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-    let span = create_rpc_connection_span(ctx, &remote_agent_id).await?;
     let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
