@@ -337,20 +337,31 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
-        // NOTE: to return creation (limit) errors, we still "get_or_create",
-        //       even if the worker already exists with ignore_already_existing requested
-        let existing_worker = self.worker_service().get(&owned_agent_id).await;
-        if let Some(existing) = existing_worker
-            && !request.ignore_already_existing
-            && !Self::is_same_worker_creation_request(
-                &existing.initial_worker_metadata,
-                &env,
-                &config,
-            )
-        {
-            return Err(WorkerExecutorError::worker_already_exists(
-                owned_agent_id.agent_id(),
-            ));
+        if !request.ignore_already_existing {
+            if let Some(existing) = self.active_workers().try_get(&owned_agent_id).await {
+                if !Self::is_same_worker_creation_request(
+                    &existing.get_initial_worker_metadata(),
+                    &env,
+                    &config,
+                ) {
+                    return Err(WorkerExecutorError::worker_already_exists(
+                        owned_agent_id.agent_id(),
+                    ));
+                }
+            } else {
+                let existing_worker = self.worker_service().get(&owned_agent_id).await;
+                if let Some(existing) = existing_worker
+                    && !Self::is_same_worker_creation_request(
+                        &existing.initial_worker_metadata,
+                        &env,
+                        &config,
+                    )
+                {
+                    return Err(WorkerExecutorError::worker_already_exists(
+                        owned_agent_id.agent_id(),
+                    ));
+                }
+            }
         }
 
         let invocation_context = self.limit_invocation_context_stack_depth(

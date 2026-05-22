@@ -27,7 +27,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction, ShardId};
+use golem_common::model::{
+    AgentFingerprint, AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction, ShardId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::future::Future;
 use std::ops::{Add, Deref};
@@ -56,6 +58,11 @@ pub trait SchedulerService: Send + Sync {
 /// for `SchedulerServiceDefault`, making it easier to test (by being independent of `WorkerCtx`).
 #[async_trait]
 pub trait SchedulerWorkerAccess {
+    async fn active_worker_fingerprint(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint>;
+
     async fn activate_worker(&self, owned_agent_id: &OwnedAgentId);
     async fn open_oplog(
         &self,
@@ -72,6 +79,13 @@ pub trait SchedulerWorkerAccess {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
+    async fn active_worker_fingerprint(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint> {
+        self.deref().active_worker_fingerprint(owned_agent_id).await
+    }
+
     async fn activate_worker(&self, owned_agent_id: &OwnedAgentId) {
         self.deref().activate_worker(owned_agent_id).await;
     }
@@ -413,11 +427,18 @@ impl SchedulerServiceDefault {
             } => {
                 // A mismatch means the original worker was deleted and recreated — drop the stale
                 // invocation silently.
-                let stale = match self.worker_service.get(&owned_agent_id).await {
-                    Some(meta) => {
-                        meta.initial_worker_metadata.fingerprint != target_worker_fingerprint
-                    }
-                    None => true,
+                let stale = match self
+                    .worker_access
+                    .active_worker_fingerprint(&owned_agent_id)
+                    .await
+                {
+                    Some(fingerprint) => fingerprint != target_worker_fingerprint,
+                    None => match self.worker_service.get(&owned_agent_id).await {
+                        Some(meta) => {
+                            meta.initial_worker_metadata.fingerprint != target_worker_fingerprint
+                        }
+                        None => true,
+                    },
                 };
 
                 if stale {
@@ -516,19 +537,21 @@ mod tests {
     use chrono::DateTime;
     use golem_common::model::AgentStatusRecord;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::AgentMode;
+    use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue};
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId, ScheduleId,
-        ScheduledAction, ShardAssignment, ShardId,
+        AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
+        ScheduleId, ScheduledAction, ShardAssignment, ShardId,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use std::collections::HashSet;
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use test_r::test;
     use tokio_util::sync::CancellationToken;
@@ -538,6 +561,13 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
+        async fn active_worker_fingerprint(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Option<AgentFingerprint> {
+            None
+        }
+
         async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
 
         async fn open_oplog(
@@ -553,6 +583,39 @@ mod tests {
             _invocation: AgentInvocation,
         ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
+        }
+    }
+
+    struct ActiveWorkerAccessMock {
+        fingerprint: AgentFingerprint,
+        enqueue_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
+        async fn active_worker_fingerprint(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Option<AgentFingerprint> {
+            Some(self.fingerprint)
+        }
+
+        async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
+
+        async fn open_oplog(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_invocation(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+        ) -> Result<(), WorkerExecutorError> {
+            self.enqueue_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
     }
 
@@ -654,6 +717,16 @@ mod tests {
             account_id: AccountId::new(),
             environment_id: EnvironmentId::new(),
             promise_id,
+        }
+    }
+
+    fn agent_method_invocation() -> AgentInvocation {
+        AgentInvocation::AgentMethod {
+            idempotency_key: IdempotencyKey::fresh(),
+            method_name: "run".to_string(),
+            input: UntypedDataValue::Tuple(vec![]),
+            invocation_context: InvocationContextStack::fresh(),
+            principal: Principal::anonymous(),
         }
     }
 
@@ -767,6 +840,50 @@ mod tests {
 
         let completed_promises = promise_service.all_completed().await;
         assert!(completed_promises.contains(&promise_id));
+    }
+
+    #[test]
+    async fn scheduled_invoke_uses_active_worker_fingerprint_before_worker_service_lookup() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let promise_service = create_promise_service_mock();
+        let fingerprint = AgentFingerprint::new();
+        let enqueue_count = Arc::new(AtomicUsize::new(0));
+        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+            Arc::new(ActiveWorkerAccessMock {
+                fingerprint,
+                enqueue_count: enqueue_count.clone(),
+            });
+        let svc = SchedulerServiceDefault::new(
+            storage,
+            create_shard_service_mock(),
+            promise_service,
+            worker_access,
+            create_oplog_service_mock().await,
+            create_worker_service_mock(),
+            Duration::from_secs(1000),
+            100,
+            Duration::from_secs(30),
+            10,
+            CancellationToken::new(),
+        );
+
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("inst1"));
+        svc.schedule(
+            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            ScheduledAction::Invoke {
+                account_id: AccountId::new(),
+                owned_agent_id,
+                invocation: Box::new(agent_method_invocation()),
+                target_worker_fingerprint: fingerprint,
+            },
+        )
+        .await;
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(enqueue_count.load(Ordering::SeqCst), 1);
     }
 
     #[test]
