@@ -246,22 +246,6 @@ struct LoggingDemand {
     fingerprint: AgentFingerprint,
 }
 
-pub struct ReplayedDemand {
-    fingerprint: AgentFingerprint,
-}
-
-impl ReplayedDemand {
-    pub fn new(fingerprint: AgentFingerprint) -> Self {
-        Self { fingerprint }
-    }
-}
-
-impl RpcDemand for ReplayedDemand {
-    fn fingerprint(&self) -> AgentFingerprint {
-        self.fingerprint
-    }
-}
-
 impl LoggingDemand {
     pub fn new(agent_id: AgentId, fingerprint: AgentFingerprint) -> Self {
         log::debug!("Initializing RPC connection for worker {agent_id}");

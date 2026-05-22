@@ -19,7 +19,6 @@ mod tests;
 
 use crate::model::agent::{AgentTypeName, DataValue, RegisteredAgentType, UntypedDataValue};
 use crate::model::component::ComponentRevision;
-use crate::model::environment::EnvironmentId;
 use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
@@ -34,9 +33,7 @@ use crate::model::oplog::types::{
 };
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::worker::RevertWorkerTarget;
-use crate::model::{
-    AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
-};
+use crate::model::{AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId};
 use crate::oplog_payload;
 use crate::serialization::serialize;
 use desert_rust::{
@@ -220,9 +217,6 @@ oplog_payload! {
             verb: String,
             noun_uri: String,
             properties: Vec<(String, PredicateValue)>
-        },
-        GolemRpcCreate {
-            remote_agent_id: AgentId
         },
     }
 }
@@ -433,10 +427,6 @@ oplog_payload! {
         GolemRetryResolvedPolicy {
             policy: Option<RetryPolicy>
         },
-        GolemRpcCreate {
-            target_fingerprint: AgentFingerprint,
-            target_environment_id: EnvironmentId
-        }
     }
 }
 
@@ -561,8 +551,7 @@ pub mod host_functions {
         (GolemQuotaReservationCommit => "golem::quota::reservation", "commit", QuotaCommitRequest, QuotaCommitResult),
         (GolemApiRetryGetRetryPolicies => "golem::api::retry", "get_retry_policies", NoInput, GolemRetryPolicies),
         (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
-        (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
-        (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate)
+        (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy)
     }
 }
 
