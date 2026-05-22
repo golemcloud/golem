@@ -132,11 +132,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let span = create_rpc_connection_span(self, &remote_agent_id).await?;
+
         let durability =
             Durability::<GolemRpcWasmRpcNew>::new(self, DurableFunctionType::WriteRemote).await?;
 
         if durability.is_live() {
-            construct_wasm_rpc_resource(self, remote_agent_id, &env, config, &durability).await
+            construct_wasm_rpc_resource(self, remote_agent_id, &env, config, &durability, span)
+                .await
         } else {
             let response = durability.replay(self).await?;
             reconstruct_wasm_rpc_resource(
@@ -1168,9 +1171,8 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     env: &[(String, String)],
     config: Vec<AgentConfigEntryDto>,
     durability: &Durability<GolemRpcWasmRpcNew>,
+    span: Arc<InvocationContextSpan>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-    let span = create_rpc_connection_span(ctx, &remote_agent_id).await?;
-
     let stack = ctx.clone_as_inherited_stack(span.span_id());
 
     let target_component = ctx
