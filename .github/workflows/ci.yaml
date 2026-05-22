@@ -249,7 +249,7 @@ jobs:
 
       - name: Setup MoonBit
         if: matrix.group.name == 'cli-integration-tests-group2'
-        uses: mschuwalow/setup-moonbit@334f339f9b34345d8d594c414cc0e07cbc051582
+        uses: hustcer/setup-moonbit@v1
         with:
           version: ${{ env.MOONBIT_INSTALL_VERSION }}
           core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
@@ -482,7 +482,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Setup MoonBit
-        uses: mschuwalow/setup-moonbit@334f339f9b34345d8d594c414cc0e07cbc051582
+        uses: hustcer/setup-moonbit@v1
         with:
           version: ${{ env.MOONBIT_INSTALL_VERSION }}
           core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
