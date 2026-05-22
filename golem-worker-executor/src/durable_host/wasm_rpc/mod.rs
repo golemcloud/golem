@@ -1176,6 +1176,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         )
         .await?;
     let target_fingerprint = demand.fingerprint();
+
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
             demand,
