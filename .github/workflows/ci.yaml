@@ -252,6 +252,7 @@ jobs:
         uses: hustcer/setup-moonbit@v1
         with:
           version: ${{ env.MOONBIT_INSTALL_VERSION }}
+          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
 
       - name: Install MoonBit SDK tools dependencies
         if: matrix.group.name == 'cli-integration-tests-group2'
@@ -484,6 +485,7 @@ jobs:
         uses: hustcer/setup-moonbit@v1
         with:
           version: ${{ env.MOONBIT_INSTALL_VERSION }}
+          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Check SDK
