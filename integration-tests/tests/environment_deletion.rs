@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Tracing;
 use tracing::info;
 use anyhow::anyhow;
 use axum::Router;
@@ -31,9 +30,46 @@ use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout, test_dep};
 use tracing::Instrument;
 use tracing::debug;
+use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 
-inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+test_r::enable!();
+
+#[derive(Debug)]
+pub struct Tracing;
+
+
+impl Tracing {
+    pub fn init() -> Self {
+        #[cfg(unix)]
+        unsafe {
+            backtrace_on_stack_overflow::enable()
+        };
+        init_tracing_with_default_debug_env_filter(
+            &TracingConfig::test_pretty_without_time("integration-tests").with_env_overrides(),
+        );
+        Self
+    }
+}
+
+#[test_dep]
+pub fn tracing() -> Tracing {
+    Tracing::init()
+}
+
+#[test_dep]
+pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 1,
+        oplog_archive_interval: Some(Duration::from_secs(2)),
+        ..EnvBasedTestDependenciesConfig::new()
+    })
+    .await
+    .expect("Failed constructing test dependencies");
+
+    deps.redis_monitor().assert_valid();
+
+    deps
+}
 
 /// Verify that deleting an environment stops a self-scheduling agent.
 ///
@@ -189,6 +225,30 @@ async fn oplog_archive_in_deleted_environment_does_not_panic(
 
     // Verify the executor is still alive
     assert!(deps.worker_executor_cluster().is_running().await);
+
+    // Verify the executor is still alive by making an unrelated call on a
+    // fresh environment. If the scheduler task panicked the executor would
+    // be unresponsive. Only having a single executor guarantees we are hitting the instance.
+    let liveness_user = deps.user().await?;
+    let (_, liveness_env) = liveness_user.app_and_env().await?;
+
+    let liveness_component = liveness_user
+        .component(&liveness_env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+
+    liveness_user
+        .invoke_and_await_agent(
+            &liveness_component,
+            &agent_id!("Counter", "liveness-check"),
+            "increment",
+            data_value!(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(
+            "executor is no longer responsive after ArchiveOplog fired on deleted environment: {e}"
+        ))?;
 
     Ok(())
 }

@@ -400,6 +400,7 @@ impl BenchmarkTestDependencies {
                 Level::ERROR,
                 registry_service.clone(),
                 environment_state_cache_capacity,
+                None,
                 otlp,
             )
             .await,

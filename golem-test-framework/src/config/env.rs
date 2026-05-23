@@ -41,12 +41,14 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::Level;
 use uuid::Uuid;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
     pub environment_state_cache_capacity: Option<usize>,
     pub number_of_shards_override: Option<usize>,
+    pub oplog_archive_interval: Option<Duration>,
     pub shared_client: bool,
     pub db_type: DbType,
     pub quiet: bool,
@@ -133,6 +135,7 @@ impl Default for EnvBasedTestDependenciesConfig {
             worker_executor_cluster_size: 4,
             environment_state_cache_capacity: None,
             number_of_shards_override: None,
+            oplog_archive_interval: None,
             shared_client: false,
             db_type: DbType::Postgres,
             quiet: false,
@@ -327,6 +330,7 @@ impl EnvBasedTestDependencies {
                 config.default_stderr_level(),
                 registry_service,
                 config.environment_state_cache_capacity,
+                config.oplog_archive_interval,
                 false,
             )
             .await,
