@@ -1,6 +1,6 @@
 // Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source Available License v1.1 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -30,7 +30,7 @@ pub(crate) struct WorkerExecutorRegistryInvalidationHandler<Ctx: WorkerCtx> {
     agent_types_service: Arc<dyn AgentTypesService>,
 }
 
-impl<Ctx: WorkerCtx + 'static> WorkerExecutorRegistryInvalidationHandler<Ctx> {
+impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
     pub async fn run(
         registry_service: Arc<dyn RegistryService>,
         active_workers: Arc<ActiveWorkers<Ctx>>,
@@ -55,7 +55,7 @@ impl<Ctx: WorkerCtx + 'static> WorkerExecutorRegistryInvalidationHandler<Ctx> {
 }
 
 #[async_trait::async_trait]
-impl<Ctx: WorkerCtx + 'static> RegistryInvalidationHandler
+impl<Ctx: WorkerCtx> RegistryInvalidationHandler
     for WorkerExecutorRegistryInvalidationHandler<Ctx>
 {
     async fn on_event(&self, event: RegistryInvalidationEvent) {
@@ -155,6 +155,8 @@ impl<Ctx: WorkerCtx + 'static> RegistryInvalidationHandler
                     environment_count = environment_ids.len(),
                     "Received application deleted event, invalidating per-environment caches"
                 );
+                // Invalidate each environment individually using the provided UUIDs
+                // rather than flushing all caches.
                 for env_id in environment_ids {
                     self.active_workers.unload_environment(*env_id).await;
                     self.component_service
