@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-
+use tracing::info;
 use anyhow::anyhow;
 use axum::Router;
 use axum::routing::post;
@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tracing::Instrument;
+use tracing::debug;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -131,8 +132,88 @@ async fn environment_deletion_stops_self_scheduling_agent(
     Ok(())
 }
 
-/// Invoking a method on an already-running agent whose environment has been
-/// deleted should return a 404 error.
+/// Regression test for executor panic when the oplog archiver fires for a
+/// worker whose environment has been deleted.
+///
+/// Panic path (stack frames from production trace):
+///   SchedulerServiceDefault background loop
+///     → ScheduledAction::ArchiveOplog handler
+///     → SchedulerWorkerAccess::open_oplog
+///     → Worker::get_or_create_suspended
+///     → Worker::new
+///     → DefaultWorkerService::get
+///     → component_service.get_metadata(revision)   ← returns ComponentNotFound
+///     → unwrap_or_else(|err| panic!(...))           ← BOOM
+///
+/// The archiver is scheduled when a worker transitions to Idle/Failed/Exited.
+/// With GOLEM__OPLOG__ARCHIVE_INTERVAL=2s (set in the test framework env) the
+/// archive action fires within a few seconds after the worker goes idle.
+/// Deleting the environment before that window expires reproduces the panic.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn oplog_archive_in_deleted_environment_does_not_panic(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let registry_client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+
+    // Invoke a method so the worker completes and transitions to Idle, which
+    // schedules an ArchiveOplog action 2 s from now (archive_interval=2s in tests).
+    user.invoke_and_await_agent(
+        &component,
+        &agent_id!("Counter", "archive-panic-test"),
+        "increment",
+        data_value!(),
+    )
+    .await?;
+
+    // Delete the environment while the ArchiveOplog action is pending.
+    registry_client
+        .delete_environment(&env.id.0, env.revision.into())
+        .await?;
+
+    debug!("deleted environment {}", env.id);
+
+    // Wait long enough for the archive action to fire (archive_interval=2s +
+    // scheduler process_interval≤2s → up to 4s; 8s is a comfortable margin).
+    tokio::time::sleep(Duration::from_secs(8)).await;
+
+    // Verify the executor is still alive by making an unrelated call on a
+    // fresh environment.  If the scheduler task panicked the executor would
+    // be unresponsive.
+    let liveness_user = deps.user().await?;
+    let (_, liveness_env) = liveness_user.app_and_env().await?;
+
+    let liveness_component = liveness_user
+        .component(&liveness_env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+
+    liveness_user
+        .invoke_and_await_agent(
+            &liveness_component,
+            &agent_id!("Counter", "liveness-check"),
+            "increment",
+            data_value!(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(
+            "executor is no longer responsive after ArchiveOplog fired on deleted environment: {e}"
+        ))?;
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -227,18 +308,10 @@ async fn invoke_new_agent_in_deleted_environment_fails(
     Ok(())
 }
 
-/// Completing a promise whose owning agent lives in a deleted environment should
-/// not panic the executor.  This is a regression test: the panic occurs because
-/// `WorkerService::get` inside the promise-completion path calls `get_metadata`
-/// which now returns `Err` (ComponentNotFound) for a deleted environment, and
-/// the existing code uses `unwrap_or_else(|err| panic!(...))`.
-///
-/// The test intentionally does NOT assert on the promise-completion result —
-/// it just verifies that the executor process survives the call.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn complete_promise_in_deleted_environment_does_not_panic(
+async fn complete_promise_in_deleted_environment_results_in_404(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
@@ -278,9 +351,8 @@ async fn complete_promise_in_deleted_environment_does_not_panic(
         .delete_environment(&env.id.0, env.revision.into())
         .await?;
 
-    // Completing the promise must not panic the executor.
-    // We ignore the result — the interesting property is that we reach this
-    // line without the executor crashing.
+    info!("Completing pending promise");
+
     let error = user.complete_promise(&promise_id, b"ignored".to_vec()).await.unwrap_err();
 
     let downcasted = error

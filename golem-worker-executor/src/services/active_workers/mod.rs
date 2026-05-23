@@ -43,8 +43,10 @@ use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, OwnedAgentId};
+use golem_common::model::{AgentId, OwnedAgentId, Timestamp};
+use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::InterruptKind;
 
 /// Capability proving that per-account concurrent-agent state has been registered
 /// in this executor and can be used for subsequent permit acquires.
@@ -181,6 +183,23 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     pub async fn snapshot(&self) -> Vec<(AgentId, Arc<Worker<Ctx>>)> {
         self.workers.iter().await
+    }
+
+    /// Interrupts and unloads all in-memory workers whose environment matches
+    /// `environment_id`.  Called when the environment is deleted so that
+    /// running workers stop promptly.
+    pub async fn unload_environment(&self, environment_id: EnvironmentId) {
+        for (_agent_id, worker) in self.snapshot().await {
+            if worker.get_initial_worker_metadata().environment_id == environment_id {
+                if let Some(mut await_interrupted) = worker
+                    .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+                    .await
+                {
+                    await_interrupted.recv().await.unwrap();
+                }
+                self.remove(&worker.agent_id()).await;
+            }
+        }
     }
 
     pub async fn acquire(&self, memory: u64) -> WorkerMemoryPermit {

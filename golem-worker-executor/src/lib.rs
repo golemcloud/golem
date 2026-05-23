@@ -1026,6 +1026,7 @@ pub async fn bootstrap_and_run_worker_executor<
 
     if start_registry_invalidation_handler {
         let registry_service = registry_service.clone();
+        let active_workers = worker_executor_impl.active_workers();
         let component_service = worker_executor_impl.component_service();
         let environment_state_service = worker_executor_impl.environment_state_service();
         let agent_types_service = worker_executor_impl.agent_types();
@@ -1033,6 +1034,7 @@ pub async fn bootstrap_and_run_worker_executor<
         join_set.spawn(async move {
             WorkerExecutorRegistryInvalidationHandler::run(
                 registry_service,
+                active_workers,
                 component_service,
                 environment_state_service,
                 agent_types_service,

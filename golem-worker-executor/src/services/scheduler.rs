@@ -38,7 +38,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, error, info, span, warn};
+use tracing::{Instrument, Level, error, info, span, warn, debug};
 
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
@@ -350,6 +350,8 @@ impl SchedulerServiceDefault {
                 last_oplog_index,
                 next_after,
             } => {
+                debug!("Running scheduled archive oplog for {account_id}/{owned_agent_id}");
+
                 if self.oplog_service.exists(&owned_agent_id, agent_mode).await {
                     let current_last_index = self
                         .oplog_service

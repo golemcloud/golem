@@ -102,6 +102,7 @@ async fn env_vars(
         .with_str("GOLEM__QUOTA_SERVICE__INLINE_WAIT_THRESHOLD", "30s")
         .with_str("GOLEM__QUOTA_SERVICE__RENEWAL_INTERVAL", "3s")
         .with_str("GOLEM__QUOTA_SERVICE__RENEWAL_THRESHOLD", "55s") // shard manager sets 60s lease duration -> renew every 5s
+        .with_str("GOLEM__OPLOG__ARCHIVE_INTERVAL", "2s") // short interval so integration tests can trigger ArchiveOplog reliably
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_optional_otlp("worker_executor", otlp)
