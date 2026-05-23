@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tracing::info;
 use anyhow::anyhow;
 use axum::Router;
 use axum::routing::post;
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::{AgentStatus, PromiseId};
+use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_common::{agent_id, data_value};
-use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::FromValue;
 use pretty_assertions::assert_matches;
@@ -27,16 +29,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use test_r::{inherit_test_dep, test, timeout, test_dep};
+use test_r::{test, test_dep, timeout};
 use tracing::Instrument;
 use tracing::debug;
-use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
+use tracing::info;
 
 test_r::enable!();
 
 #[derive(Debug)]
 pub struct Tracing;
-
 
 impl Tracing {
     pub fn init() -> Self {
@@ -378,9 +379,13 @@ async fn complete_promise_in_deleted_environment_results_in_404(
         PromiseId::from_value(promise_id_vat.value.clone()).map_err(|e| anyhow!("{e}"))?;
 
     // Suspend the agent on the promise.
-    user
-        .invoke_agent(&component, &agent_id, "awaitPromise", data_value!(promise_id_vat))
-        .await?;
+    user.invoke_agent(
+        &component,
+        &agent_id,
+        "awaitPromise",
+        data_value!(promise_id_vat),
+    )
+    .await?;
 
     user.wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(10))
         .await?;
@@ -392,7 +397,10 @@ async fn complete_promise_in_deleted_environment_results_in_404(
 
     info!("Completing pending promise");
 
-    let error = user.complete_promise(&promise_id, b"ignored".to_vec()).await.unwrap_err();
+    let error = user
+        .complete_promise(&promise_id, b"ignored".to_vec())
+        .await
+        .unwrap_err();
 
     let downcasted = error
         .downcast_ref::<golem_client::Error<golem_client::api::WorkerError>>()

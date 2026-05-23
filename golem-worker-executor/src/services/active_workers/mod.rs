@@ -41,12 +41,12 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, OwnedAgentId, Timestamp};
-use golem_common::model::environment::EnvironmentId;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::error::worker_executor::InterruptKind;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 /// Capability proving that per-account concurrent-agent state has been registered
 /// in this executor and can be used for subsequent permit acquires.

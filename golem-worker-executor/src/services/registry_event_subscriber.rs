@@ -180,7 +180,9 @@ impl<Ctx: WorkerCtx + 'static> RegistryInvalidationHandler
                     env_name,
                     "Received environment deleted event, invalidating environment caches"
                 );
-                self.active_workers.unload_environment(*environment_id).await;
+                self.active_workers
+                    .unload_environment(*environment_id)
+                    .await;
                 self.component_service
                     .invalidate_all_metadata_for_environment(*environment_id)
                     .await;

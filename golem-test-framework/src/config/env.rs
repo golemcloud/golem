@@ -38,10 +38,10 @@ use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Level;
 use uuid::Uuid;
-use std::time::Duration;
 
 #[derive(Clone)]
 pub struct EnvBasedTestDependenciesConfig {

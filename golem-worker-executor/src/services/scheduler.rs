@@ -38,7 +38,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, error, info, span, warn, debug};
+use tracing::{Instrument, Level, debug, error, info, span, warn};
 
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
