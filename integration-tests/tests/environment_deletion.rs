@@ -14,12 +14,15 @@
 
 use crate::Tracing;
 
+use anyhow::anyhow;
 use axum::Router;
 use axum::routing::post;
 use golem_client::api::RegistryServiceClient;
+use golem_common::model::{AgentStatus, PromiseId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_wasm::FromValue;
 use pretty_assertions::assert_matches;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -219,6 +222,74 @@ async fn invoke_new_agent_in_deleted_environment_fails(
     assert_matches!(
         downcasted,
         golem_client::Error::Item(golem_client::api::AgentError::Error404(_))
+    );
+
+    Ok(())
+}
+
+/// Completing a promise whose owning agent lives in a deleted environment should
+/// not panic the executor.  This is a regression test: the panic occurs because
+/// `WorkerService::get` inside the promise-completion path calls `get_metadata`
+/// which now returns `Err` (ComponentNotFound) for a deleted environment, and
+/// the existing code uses `unwrap_or_else(|err| panic!(...))`.
+///
+/// The test intentionally does NOT assert on the promise-completion result —
+/// it just verifies that the executor process survives the call.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn complete_promise_in_deleted_environment_does_not_panic(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let registry_client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "golem_it_agent_promise")
+        .name("golem-it:agent-promise")
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("PromiseAgent", "promise-env-delete-test");
+    let worker = user.start_agent(&component.id, agent_id.clone()).await?;
+
+    let result = user
+        .invoke_and_await_agent(&component, &agent_id, "getPromise", data_value!())
+        .await?;
+
+    let promise_id_vat = result
+        .into_return_value_and_type()
+        .ok_or_else(|| anyhow!("expected promise id return value"))?;
+    let promise_id =
+        PromiseId::from_value(promise_id_vat.value.clone()).map_err(|e| anyhow!("{e}"))?;
+
+    // Suspend the agent on the promise.
+    user
+        .invoke_agent(&component, &agent_id, "awaitPromise", data_value!(promise_id_vat))
+        .await?;
+
+    user.wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    // Delete the environment while the agent is suspended.
+    registry_client
+        .delete_environment(&env.id.0, env.revision.into())
+        .await?;
+
+    // Completing the promise must not panic the executor.
+    // We ignore the result — the interesting property is that we reach this
+    // line without the executor crashing.
+    let error = user.complete_promise(&promise_id, b"ignored".to_vec()).await.unwrap_err();
+
+    let downcasted = error
+        .downcast_ref::<golem_client::Error<golem_client::api::WorkerError>>()
+        .unwrap();
+
+    assert_matches!(
+        downcasted,
+        golem_client::Error::Item(golem_client::api::WorkerError::Error404(_))
     );
 
     Ok(())
