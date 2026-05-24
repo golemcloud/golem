@@ -57,6 +57,7 @@ async fn env_vars(
     rdb: &Arc<dyn Rdb>,
     registry_service: &Arc<dyn RegistryService>,
     environment_state_cache_capacity: Option<usize>,
+    oplog_archive_interval: Option<Duration>,
     verbosity: Level,
     otlp: bool,
 ) -> HashMap<String, String> {
@@ -111,6 +112,13 @@ async fn env_vars(
         env.insert(
             "GOLEM__ENVIRONMENT_STATE_SERVICE__CACHE_CAPACITY".to_string(),
             environment_state_cache_capacity.to_string(),
+        );
+    }
+
+    if let Some(oplog_archive_interval) = oplog_archive_interval {
+        env.insert(
+            "GOLEM__OPLOG__ARCHIVE_INTERVAL".to_string(),
+            serde_json::to_string(&humantime_serde::Serde::from(oplog_archive_interval)).unwrap(),
         );
     }
 
