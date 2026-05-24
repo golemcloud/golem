@@ -25,19 +25,17 @@ export const Counter = defineAgent({
       http: [Http.post("/add"), Http.get("/add?by={by}")],
     }),
   },
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      const state = yield* snap.init({ count: 0 })
-      yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ name }))
-      return {
-        value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-      }
-    }),
-})
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    const state = yield* snap.init({ count: 0 })
+    yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ name }))
+    return {
+      value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
+      add: ({ by }) =>
+        Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(Effect.map((s) => s.count)),
+    }
+  }),
+)
 ```
 
 ## Table of contents
@@ -100,20 +98,21 @@ A typical `effect-golem` component looks like this:
 ```
 my-agent/
 ├── src/
-│   ├── main.ts            ← imports each agent module to register it
-│   ├── counter-agent.ts   ← defineAgent(...)
-│   └── caller-agent.ts    ← defineAgent(...)
+│   ├── main.ts            ← imports each implementation module to register it
+│   ├── counter-agent.ts   ← defineAgent(...).implement(...)
+│   └── caller-agent.ts    ← defineAgent(...).implement(...)
 ├── tsconfig.json
 └── package.json           ← depends on `effect-golem` and `effect`
 ```
 
-Each top-level `defineAgent({...})` call auto-registers the agent with the dispatcher; `main.ts` only needs to side-effect-import each file. Components can host one agent or many.
+Each top-level `defineAgent({...}).implement(...)` call registers the agent with the dispatcher; `main.ts` only needs to side-effect-import each implementation file. Components can host one agent or many.
 
 ## Agents, methods, and config
 
 ### defineAgent
 
 ```ts
+import { Effect } from "effect"
 import { defineAgent, method, Schema } from "effect-golem"
 
 defineAgent({
@@ -124,14 +123,14 @@ defineAgent({
   methods: {
     /* ... */
   },
-  impl: ({ name }) =>
-    Effect.succeed({
-      /* method handlers */
-    }),
-})
+}).implement(({ name }) =>
+  Effect.succeed({
+    /* method handlers */
+  }),
+)
 ```
 
-`impl` returns an `Effect` that produces an object whose keys match `methods`. Each handler is itself an Effect. Inside `impl` you can `yield*` any Effect service tag — the dispatcher provides the full host-binding bundle (config, principal, oplog, durability, …) plus the auto-snapshot binder.
+`.implement(...)` takes a function that returns an `Effect` producing an object whose keys match `methods`. Each handler is itself an Effect. Inside the implementation you can `yield*` any Effect service tag — the dispatcher provides the full host-binding bundle (config, principal, oplog, durability, …) plus the auto-snapshot binder.
 
 ### method
 
@@ -186,18 +185,18 @@ defineAgent({
   name: "Counter",
   config: CounterConfig,
   // ...
-  impl: ({ name }) =>
-    Effect.gen(function* () {
-      const cfg = yield* CounterConfig
-      const greeting = yield* cfg.greeting // Effect<string, ConfigError>
-      const apiKey = yield* cfg.apiKey.get // Effect<Redacted<string>, ConfigError>
-      const dbHost = yield* cfg.database.host // recurses into nested struct
+}).implement(({ name }) =>
+  Effect.gen(function* () {
+    const cfg = yield* CounterConfig
+    const greeting = yield* cfg.greeting // Effect<string, ConfigError>
+    const apiKey = yield* cfg.apiKey.get // Effect<Redacted<string>, ConfigError>
+    const dbHost = yield* cfg.database.host // recurses into nested struct
 
-      return {
-        greet: () => Effect.succeed(`${greeting}, ${name}`),
-      }
-    }),
-})
+    return {
+      greet: () => Effect.succeed(`${greeting}, ${name}`),
+    }
+  }),
+)
 ```
 
 - Plain leaves are memoised per host invocation.
@@ -343,9 +342,12 @@ Mount and endpoint options also accept `auth?: boolean`, `cors?: string[]`, and 
 When the `auth: true` option is set on a mount or endpoint, the host authenticates the caller and surfaces them as a `Principal` value. Both the principal that issued the current invocation and the principal that originally created the agent are accessible via `Context.Service` tags:
 
 ```ts
-import { Principal, SelfAgentId } from "effect-golem"
+import { Effect } from "effect"
+import { defineAgent, Principal, SelfAgentId } from "effect-golem"
 
-impl: ({ name }) =>
+defineAgent({
+  // ...
+}).implement(({ name }) =>
   Effect.gen(function* () {
     const owner = yield* Principal.Principal // who created me
     const self = yield* SelfAgentId.SelfAgentId // my own AgentId
@@ -357,7 +359,8 @@ impl: ({ name }) =>
           return p.tag === "oidc" ? `oidc:${p.val.sub}` : p.tag
         }),
     }
-  })
+  }),
+)
 ```
 
 ## Snapshotting
@@ -378,22 +381,23 @@ defineAgent({
     policy: Snapshot.policy.everyN(10), // also: default / periodic("5 minutes")
   }),
   // ...
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      const state = yield* snap.init({ count: 0 })
-      return {
-        /* handlers reading/writing `state` */
-      }
-    }),
-})
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    const state = yield* snap.init({ count: 0 })
+    return {
+      /* handlers reading/writing `state` */
+    }
+  }),
+)
 ```
 
 ### Custom (user-managed)
 
 ```ts
-snapshot: Snapshot.custom({ policy: Snapshot.policy.periodic("1 minute") })
-
-impl: (_p, snap) =>
+defineAgent({
+  // ...
+  snapshot: Snapshot.custom({ policy: Snapshot.policy.periodic("1 minute") }),
+}).implement((_p, snap) =>
   Effect.gen(function* () {
     const state = yield* Ref.make({ ... })
     snap.register({
@@ -401,7 +405,8 @@ impl: (_p, snap) =>
       load: (bytes) => Ref.set(state, deserialise(bytes)),
     })
     return { /* ... */ }
-  })
+  }),
+)
 ```
 
 ### SQLite databases inside snapshots
@@ -409,13 +414,14 @@ impl: (_p, snap) =>
 Auto-snapshot agents can attach one or more `node:sqlite` `DatabaseSync` handles. The envelope becomes `multipart/mixed` carrying the JSON state plus one `db:<name>` part per declared database (raw SQLite bytes).
 
 ```ts
-snapshot: Snapshot.define({
-  schema: Schema.Struct({}),
-  databases: ["counters"] as const,
-  policy: Snapshot.policy.everyN(10),
-})
-
-impl: ({ name }, snap) =>
+defineAgent({
+  // ...
+  snapshot: Snapshot.define({
+    schema: Schema.Struct({}),
+    databases: ["counters"] as const,
+    policy: Snapshot.policy.everyN(10),
+  }),
+}).implement(({ name }, snap) =>
   Effect.gen(function* () {
     yield* snap.init({})
     const sql = yield* SqliteClient.make({ filename: ":memory:" })
@@ -425,10 +431,11 @@ impl: ({ name }, snap) =>
     return {
       /* ... */
     }
-  })
+  }),
+)
 ```
 
-`load` replaces `initialize` on restore: `impl` runs first (DDL must be idempotent), then the SDK overwrites each in-memory database with `restoreDatabaseSync(handle, bytes)`, then the auto state Ref is restored from JSON.
+`load` replaces `initialize` on restore: the implementation runs first (DDL must be idempotent), then the SDK overwrites each in-memory database with `restoreDatabaseSync(handle, bytes)`, then the auto state Ref is restored from JSON.
 
 Strict constraints (enforced at save and load time, surfaced as typed errors):
 
@@ -454,24 +461,24 @@ defineAgent({
       success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
     }),
   },
-  impl: () =>
-    Effect.succeed({
-      fetchQuote: ({ symbol }) =>
-        Durability.wrap(
-          {
-            iface: "myapp",
-            function: "fetchQuote",
-            functionType: Durability.FunctionType.writeRemote,
-            requestSchema: Schema.Struct({ symbol: Schema.String }),
-            success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
-            // optional:
-            // error: SomeErrorSchema,
-          },
-          { symbol },
-          Effect.sync(() => fetchFromRemote(symbol)), // body — runs once, replays from oplog
-        ),
-    }),
-})
+}).implement(() =>
+  Effect.succeed({
+    fetchQuote: ({ symbol }) =>
+      Durability.wrap(
+        {
+          iface: "myapp",
+          function: "fetchQuote",
+          functionType: Durability.FunctionType.writeRemote,
+          requestSchema: Schema.Struct({ symbol: Schema.String }),
+          success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
+          // optional:
+          // error: SomeErrorSchema,
+        },
+        { symbol },
+        Effect.sync(() => fetchFromRemote(symbol)), // body — runs once, replays from oplog
+      ),
+  }),
+)
 ```
 
 Lower-level escape hatches are also exposed:
@@ -581,17 +588,17 @@ defineAgent({
       success: Schema.Struct({ id: Schema.String, status: Schema.String }),
     }),
   },
-  impl: () =>
-    Effect.succeed({
-      waitForPayment: () =>
-        Effect.gen(function* () {
-          const hook = yield* Webhook.create
-          // share `hook.url` with the payment provider...
-          const payload = yield* hook.await
-          return yield* payload.decode(PaymentEvent)
-        }),
-    }),
-})
+}).implement(() =>
+  Effect.succeed({
+    waitForPayment: () =>
+      Effect.gen(function* () {
+        const hook = yield* Webhook.create
+        // share `hook.url` with the payment provider...
+        const payload = yield* hook.await
+        return yield* payload.decode(PaymentEvent)
+      }),
+  }),
+)
 ```
 
 The `WebhookHandle` also exposes a non-blocking `poll`:
@@ -648,17 +655,17 @@ defineAgent({
     put: method({ params: { id: Schema.String, name: Schema.String }, success: Schema.Void }),
     get: method({ params: { id: Schema.String }, success: Schema.Option(User) }),
   },
-  impl: ({ name }) =>
-    Effect.gen(function* () {
-      const bucket = yield* KeyValue.openBucket(name)
-      const users = bucket.forSchema(User) // typed view
-      return {
-        put: ({ id, name }) => users.set(id, { id, name }),
-        get: ({ id }) => users.get(id),
-        // batch ops, raw bytes, etc. also available
-      }
-    }),
-})
+}).implement(({ name }) =>
+  Effect.gen(function* () {
+    const bucket = yield* KeyValue.openBucket(name)
+    const users = bucket.forSchema(User) // typed view
+    return {
+      put: ({ id, name }) => users.set(id, { id, name }),
+      get: ({ id }) => users.get(id),
+      // batch ops, raw bytes, etc. also available
+    }
+  }),
+)
 ```
 
 ## Blob store
@@ -706,34 +713,34 @@ defineAgent({
       success: Schema.Number,
     }),
   },
-  impl: ({ name }, snap) =>
-    Effect.gen(function* () {
-      yield* snap.init({})
-      const cfg = yield* PgCounterConfig
-      const dsn = Redacted.value(yield* cfg.connectionAddress.get)
-      const sql = yield* PgClient.make({ connectionAddress: dsn })
+}).implement(({ name }, snap) =>
+  Effect.gen(function* () {
+    yield* snap.init({})
+    const cfg = yield* PgCounterConfig
+    const dsn = Redacted.value(yield* cfg.connectionAddress.get)
+    const sql = yield* PgClient.make({ connectionAddress: dsn })
 
-      yield* sql`CREATE TABLE IF NOT EXISTS counters (id text PRIMARY KEY, count int NOT NULL DEFAULT 0)`
-      yield* sql`INSERT INTO counters (id, count) VALUES (${name}, 0) ON CONFLICT (id) DO NOTHING`
+    yield* sql`CREATE TABLE IF NOT EXISTS counters (id text PRIMARY KEY, count int NOT NULL DEFAULT 0)`
+    yield* sql`INSERT INTO counters (id, count) VALUES (${name}, 0) ON CONFLICT (id) DO NOTHING`
 
-      return {
-        add: ({ by }) =>
-          sql`UPDATE counters SET count = count + ${by} WHERE id = ${name} RETURNING count`.pipe(
-            Effect.map((rows) => Number((rows[0] as { count: number }).count)),
-          ),
-        transferAdd: ({ from, by }) =>
-          sql.withTransaction(
-            Effect.gen(function* () {
-              yield* sql`UPDATE counters SET count = count - ${by} WHERE id = ${from}`
-              yield* sql`UPDATE counters SET count = count + ${by} WHERE id = ${name}`
-              return yield* sql`SELECT count FROM counters WHERE id = ${name}`.pipe(
-                Effect.map((rows) => Number((rows[0] as { count: number }).count)),
-              )
-            }),
-          ),
-      }
-    }),
-})
+    return {
+      add: ({ by }) =>
+        sql`UPDATE counters SET count = count + ${by} WHERE id = ${name} RETURNING count`.pipe(
+          Effect.map((rows) => Number((rows[0] as { count: number }).count)),
+        ),
+      transferAdd: ({ from, by }) =>
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`UPDATE counters SET count = count - ${by} WHERE id = ${from}`
+            yield* sql`UPDATE counters SET count = count + ${by} WHERE id = ${name}`
+            return yield* sql`SELECT count FROM counters WHERE id = ${name}`.pipe(
+              Effect.map((rows) => Number((rows[0] as { count: number }).count)),
+            )
+          }),
+        ),
+    }
+  }),
+)
 ```
 
 Each adapter has a dialect helper namespace (`Pg.jsonb(...)`, `Pg.numeric(...)`, `Pg.uuid(...)`, `MySql.json(...)`, `Ignite.timestamp(...)`, …) for the rich types that don't fit into JS primitives. Decoded temporal columns default to the host's raw struct (no precision loss); set `decodeTemporal: "date"` on the client config to opt into JS `Date` decoding.
