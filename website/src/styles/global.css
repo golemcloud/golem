@@ -1,0 +1,257 @@
+/* Golem homepage — design tokens + base */
+
+:root {
+  /* Background scale */
+  --bg: #0a0a0d;
+  --bg-elevated: #14141b;
+  --bg-card: #1a1a22;
+  --bg-card-hover: #20202a;
+
+  /* Border + line */
+  --border: #2a2a35;
+  --border-strong: #3a3a48;
+
+  /* Text scale */
+  --text: #ededf0;
+  --text-secondary: #a8a8b4;
+  --text-muted: #6e6e7e;
+  --text-faint: #4a4a55;
+
+  /* Accent — amber warmth, distinct from typical AI-infra blue */
+  --accent: #f5b03e;
+  --accent-hover: #ffc560;
+  --accent-dim: rgba(245, 176, 62, 0.12);
+  --accent-border: rgba(245, 176, 62, 0.35);
+
+  /* Secondary accent — 1.6 maturity-marker. Warm red-orange (hue ~24°),
+     analogous to the amber primary (hue ~40°). Distinct enough to signal
+     "secondary / in-progress" without clashing the way the previous
+     rose-pink did. */
+  --marker: #e07a3d;
+  --marker-dim: rgba(224, 122, 61, 0.18);
+
+  /* Success / code green */
+  --green: #86efac;
+  --code-bg: #0d0d12;
+
+  /* Type */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, "Apple Color Emoji", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Spacing rhythm */
+  --section-y: 5.5rem;
+  --section-y-tight: 3rem;
+  --container: 1180px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg);
+  background-image:
+    radial-gradient(ellipse 1200px 600px at 50% -200px, rgba(245, 176, 62, 0.07), transparent 70%),
+    radial-gradient(ellipse 800px 500px at 90% 30%, rgba(251, 113, 133, 0.04), transparent 70%);
+  background-attachment: fixed;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+a:hover {
+  color: var(--accent-hover);
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+  font-feature-settings: "calt" 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text);
+}
+
+p {
+  color: var(--text-secondary);
+}
+
+/* Layout helpers */
+.container {
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+section {
+  padding: var(--section-y) 0;
+}
+section.tight {
+  padding: var(--section-y-tight) 0;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.15rem;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 0.95rem;
+  border: 1px solid transparent;
+  transition: all 120ms ease;
+  white-space: nowrap;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #0a0a0d;
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+  color: #0a0a0d;
+  transform: translateY(-1px);
+}
+.btn-secondary {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.btn-secondary:hover {
+  background: var(--bg-elevated);
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0.35rem 0;
+}
+.btn-ghost:hover {
+  color: var(--accent);
+}
+
+/* 1.6 maturity marker */
+.marker {
+  color: var(--marker);
+  font-weight: 700;
+  font-size: 0.85em;
+  vertical-align: super;
+  margin-left: 1px;
+}
+.marker-text {
+  color: var(--marker);
+  font-style: normal;
+}
+
+/* Eyebrow */
+.eyebrow {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 1.2rem;
+}
+
+/* Section heading */
+.section-heading {
+  font-size: clamp(1.6rem, 2.6vw, 2.1rem);
+  margin-bottom: 1rem;
+  max-width: 36ch;
+}
+.section-lead {
+  color: var(--text-secondary);
+  font-size: 1.05rem;
+  max-width: 60ch;
+  margin-bottom: 2.5rem;
+}
+
+/* Card */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.5rem;
+  transition:
+    border-color 150ms ease,
+    transform 150ms ease;
+}
+.card:hover {
+  border-color: var(--border-strong);
+}
+
+/* Code blocks (Astro Shiki output gets these too via the .astro-code class) */
+pre,
+pre.astro-code {
+  background: var(--code-bg) !important;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.1rem 1.3rem;
+  overflow-x: auto;
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+:not(pre) > code {
+  font-size: 0.88em;
+  background: var(--bg-elevated);
+  color: var(--accent);
+  padding: 0.12em 0.4em;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+/* Section divider */
+.divider {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--border), transparent);
+  margin: 0;
+}
+
+/* Utility */
+.muted {
+  color: var(--text-muted);
+}
+.faint {
+  color: var(--text-faint);
+}
+.mono {
+  font-family: var(--font-mono);
+}

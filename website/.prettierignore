@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.astro/
+.vscode/
+package-lock.json
+src/content/blog/**/.bak/
+research/
+public/

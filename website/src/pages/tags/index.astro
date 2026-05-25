@@ -1,0 +1,98 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Nav from "../../components/Nav.astro";
+import Footer from "../../components/Footer.astro";
+
+const allPosts = await getCollection("blog", ({ data }) =>
+  import.meta.env.PROD ? !data.draft : true
+);
+const tagCounts: Record<string, number> = {};
+for (const p of allPosts) {
+  for (const t of p.data.tags) {
+    tagCounts[t] = (tagCounts[t] ?? 0) + 1;
+  }
+}
+const tags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+const tagSlug = (t: string) => encodeURIComponent(t.toLowerCase().replace(/\s+/g, "-"));
+---
+
+<BaseLayout title="Tags — Golem" description="Browse Golem blog posts by tag.">
+  <Nav />
+  <main class="tags-main">
+    <div class="container tags-container">
+      <header class="tags-header">
+        <span class="eyebrow">Tags</span>
+        <h1 class="tags-title">Browse by tag.</h1>
+      </header>
+      <ul class="tag-list">
+        {
+          tags.map(([t, count]) => (
+            <li>
+              <a href={`/tags/${tagSlug(t)}`} class="tag-pill">
+                {t} <span class="count">{count}</span>
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+      <p class="back"><a href="/blog">← Back to all posts</a></p>
+    </div>
+  </main>
+  <Footer />
+</BaseLayout>
+
+<style>
+  .tags-main {
+    padding: clamp(3rem, 6vw, 5rem) 0 clamp(4rem, 7vw, 6rem);
+  }
+  .tags-container {
+    max-width: 760px;
+  }
+  .tags-header {
+    margin-bottom: 2.5rem;
+  }
+  .tags-title {
+    font-size: clamp(2rem, 4vw, 2.6rem);
+    font-weight: 600;
+    color: var(--text);
+    margin: 0.5rem 0 0;
+  }
+  .tag-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+  .tag-pill {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.85rem;
+    border-radius: 6px;
+    text-decoration: none;
+  }
+  .tag-pill:hover {
+    border-color: var(--accent-border);
+    color: var(--accent);
+  }
+  .count {
+    color: var(--text-muted);
+    margin-left: 0.35rem;
+  }
+  .back {
+    margin-top: 2.5rem;
+    font-size: 0.92rem;
+  }
+  .back a {
+    color: var(--text-secondary);
+    text-decoration: none;
+  }
+  .back a:hover {
+    color: var(--accent);
+  }
+</style>

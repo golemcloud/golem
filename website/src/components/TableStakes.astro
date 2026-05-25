@@ -1,0 +1,86 @@
+---
+import { tableStakes } from "../data/homepage";
+---
+
+<section class="table-stakes">
+  <div class="container">
+    <header class="ts-header">
+      <span class="eyebrow">{tableStakes.eyebrow}</span>
+      <h2 class="section-heading">{tableStakes.heading}</h2>
+    </header>
+    <div class="ts-grid">
+      {
+        tableStakes.items.map((it) => (
+          <div class="ts-item">
+            <span class="ts-icon" aria-hidden="true">
+              {it.icon}
+            </span>
+            <div class="ts-body">
+              <div class="ts-label">
+                {it.label}
+                {it.future && <span class="marker">*</span>}
+              </div>
+              <div class="ts-note muted">{it.note}</div>
+            </div>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .table-stakes {
+    padding: 5rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .ts-header {
+    margin-bottom: 2.5rem;
+    max-width: 600px;
+  }
+  .ts-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem 1.25rem;
+  }
+  @media (min-width: 640px) {
+    .ts-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  @media (min-width: 1000px) {
+    .ts-grid {
+      grid-template-columns: repeat(2, 1fr);
+      column-gap: 2.5rem;
+    }
+  }
+  .ts-item {
+    display: flex;
+    gap: 0.85rem;
+    align-items: flex-start;
+    padding: 0.65rem 0;
+  }
+  .ts-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 1rem;
+  }
+  .ts-label {
+    color: var(--text);
+    font-weight: 500;
+    font-size: 0.94rem;
+    margin-bottom: 0.1rem;
+  }
+  .ts-note {
+    font-size: 0.83rem;
+    line-height: 1.45;
+  }
+</style>

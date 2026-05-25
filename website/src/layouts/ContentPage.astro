@@ -1,0 +1,137 @@
+---
+import BaseLayout from "./BaseLayout.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+
+interface Props {
+  title: string;
+  description?: string;
+  eyebrow?: string;
+  lead?: string;
+}
+
+const { title, description, eyebrow, lead } = Astro.props;
+---
+
+<BaseLayout title={`${title} — Golem`} description={description}>
+  <Nav />
+  <main class="content-main">
+    <div class="container content-container">
+      <header class="content-header">
+        {eyebrow && <span class="eyebrow">{eyebrow}</span>}
+        <h1 class="content-title">{title}</h1>
+        {lead && <p class="content-lead">{lead}</p>}
+      </header>
+      <article class="content-body">
+        <slot />
+      </article>
+    </div>
+  </main>
+  <Footer />
+</BaseLayout>
+
+<style>
+  .content-main {
+    padding: clamp(3rem, 6vw, 5rem) 0 clamp(4rem, 7vw, 6rem);
+  }
+  .content-container {
+    max-width: 760px;
+  }
+  .content-header {
+    margin-bottom: 2.5rem;
+  }
+  .content-title {
+    font-size: clamp(2rem, 4vw, 2.8rem);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.15;
+    color: var(--text);
+    margin: 0.5rem 0 1rem;
+  }
+  .content-lead {
+    font-size: 1.1rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin: 0;
+    max-width: 640px;
+  }
+
+  /* Content typography — applies to slot content */
+  .content-body :global(h2) {
+    font-size: 1.45rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 2.5rem 0 0.85rem;
+    letter-spacing: -0.015em;
+    scroll-margin-top: 80px;
+  }
+  .content-body :global(h2:first-child) {
+    margin-top: 0;
+  }
+  .content-body :global(h3) {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 1.75rem 0 0.6rem;
+  }
+  .content-body :global(p) {
+    font-size: 1rem;
+    line-height: 1.65;
+    color: var(--text-secondary);
+    margin: 0 0 1rem;
+  }
+  .content-body :global(p strong),
+  .content-body :global(li strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .content-body :global(a) {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .content-body :global(a:hover) {
+    color: var(--accent-hover);
+    text-decoration: underline;
+  }
+  .content-body :global(ul),
+  .content-body :global(ol) {
+    margin: 0 0 1rem 1.25rem;
+    color: var(--text-secondary);
+    line-height: 1.65;
+  }
+  .content-body :global(li) {
+    margin-bottom: 0.4rem;
+  }
+  .content-body :global(code) {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: var(--bg-card);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    color: var(--text);
+  }
+  .content-body :global(.callout) {
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-border);
+    border-radius: 8px;
+    padding: 1.1rem 1.3rem;
+    margin: 1.25rem 0 1.75rem;
+    font-size: 0.98rem;
+    line-height: 1.6;
+    color: var(--text);
+  }
+  .content-body :global(.callout strong) {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .content-body :global(hr) {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+  .content-body :global(.meta) {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+</style>

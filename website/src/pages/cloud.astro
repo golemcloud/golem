@@ -1,0 +1,912 @@
+---
+// Markup only — all copy lives in src/data/cloud.ts.
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+import Quickstart from "../components/Quickstart.astro";
+import {
+  meta,
+  hero,
+  paths,
+  cloudSection,
+  previewBanner,
+  agentSecondCallout,
+  pricingPreludeHtml,
+  pricingCards,
+  supportRow,
+  retentionNote,
+  onPrem,
+  comparisonTable,
+  ziverge,
+  faq,
+} from "../data/cloud";
+---
+
+<BaseLayout title={meta.title} description={meta.description}>
+  <Nav />
+  <main>
+    <!-- ============================================================
+         Section 1 — Hero
+    ============================================================ -->
+    <section class="hero">
+      <div class="container">
+        <span class="eyebrow">{hero.eyebrow}</span>
+        <h1 class="hero-title">{hero.heading}</h1>
+        <p class="hero-lede" set:html={hero.ledeHtml} />
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Section 2 — Decision diagram
+    ============================================================ -->
+    <section class="paths">
+      <div class="container">
+        <h2 class="section-heading">{paths.heading}</h2>
+        <div class="paths-grid">
+          {
+            paths.cards.map((card) => (
+              <article class:list={["path-card", card.emphasized && "path-card-emphasized"]}>
+                {card.pill && <span class="path-pill">{card.pill}</span>}
+                <span class="path-eyebrow">{card.eyebrow}</span>
+                <h3>{card.heading}</h3>
+                <p>{card.body}</p>
+                <a href={card.ctaHref} class="path-cta">
+                  {card.ctaLabel}
+                </a>
+              </article>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Section 3 — Golem Cloud (managed)
+    ============================================================ -->
+    <section class="cloud-section">
+      <div class="container">
+        <header class="section-header">
+          <span class="eyebrow">{cloudSection.eyebrow}</span>
+          <h2 class="section-heading">{cloudSection.heading}</h2>
+        </header>
+
+        <!-- 3A. Developer Preview banner -->
+        <aside class="preview-banner">
+          <span class="preview-pill">{previewBanner.pill}</span>
+          <p set:html={previewBanner.bodyHtml} />
+        </aside>
+
+        <!-- 3B. What's an agent-second? -->
+        <aside class="agent-second-callout">
+          <h3>{agentSecondCallout.heading}</h3>
+          <p set:html={agentSecondCallout.leadHtml} />
+          <ul>
+            {agentSecondCallout.tiers.map((tier) => <li set:html={tier.html} />)}
+          </ul>
+          <p set:html={agentSecondCallout.footerHtml} />
+        </aside>
+
+        <!-- 3C. Pricing cards -->
+        <p class="pricing-prelude" set:html={pricingPreludeHtml} />
+
+        <div class="pricing-grid">
+          {
+            pricingCards.map((card) => (
+              <article class:list={["pricing-card", card.emphasized && "pricing-card-emphasized"]}>
+                {card.pill && <span class="path-pill">{card.pill}</span>}
+                <header class="pricing-header">
+                  <h3>{card.name}</h3>
+                  <div class="pricing-price">
+                    <span class:list={["price-amount", card.priceTalk && "price-talk"]}>
+                      {card.priceAmount}
+                    </span>
+                    {card.priceUnit && <span class="price-unit">{card.priceUnit}</span>}
+                  </div>
+                </header>
+                <dl class="pricing-specs">
+                  {card.specs.map((spec) => (
+                    <div>
+                      <dt>{spec.label}</dt>
+                      <dd set:html={spec.valueHtml} />
+                    </div>
+                  ))}
+                  <div class="overage-row">
+                    <dt>Overages</dt>
+                    <dd set:html={card.overagesHtml} />
+                  </div>
+                  <div>
+                    <dt>Support</dt>
+                    <dd>{supportRow[card.name]}</dd>
+                  </div>
+                </dl>
+                <footer class="pricing-footer">
+                  <span class="availability">{card.availability}</span>
+                  <a
+                    href={card.cta.href}
+                    class:list={[
+                      "btn",
+                      card.cta.variant === "primary" ? "btn-primary" : "btn-secondary",
+                      "pricing-cta",
+                    ]}
+                  >
+                    {card.cta.label}
+                  </a>
+                </footer>
+              </article>
+            ))
+          }
+        </div>
+
+        <p class="retention-note">{retentionNote}</p>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Section 4 — Golem Cloud On-Prem
+    ============================================================ -->
+    <section class="onprem-section">
+      <div class="container">
+        <header class="section-header">
+          <span class="eyebrow">{onPrem.eyebrow}</span>
+          <h2 class="section-heading">{onPrem.heading}</h2>
+        </header>
+        <p class="onprem-lede" set:html={onPrem.ledeHtml} />
+
+        <h3 class="onprem-subhead">{onPrem.includedSubhead}</h3>
+        <ul class="onprem-list">
+          {onPrem.included.map((item) => <li set:html={item.html} />)}
+        </ul>
+
+        <p class="onprem-frame">{onPrem.frameText}</p>
+
+        <p class="onprem-audience" set:html={onPrem.audienceHtml} />
+
+        <div class="onprem-meta">
+          {
+            onPrem.meta.map((m) => (
+              <span>
+                <strong>{m.label}:</strong> {m.value}
+              </span>
+            ))
+          }
+        </div>
+
+        <div class="onprem-cta">
+          <a href={onPrem.cta.href} class="btn btn-primary">{onPrem.cta.label}</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Section 5 — Comparison table
+    ============================================================ -->
+    <section class="compare-section">
+      <div class="container">
+        <header class="section-header">
+          <h2 class="section-heading">{comparisonTable.heading}</h2>
+        </header>
+        <div class="compare-table-wrap">
+          <table class="compare-table">
+            <thead>
+              <tr>
+                <th></th>
+                {comparisonTable.columns.map((c) => <th set:html={c} />)}
+              </tr>
+            </thead>
+            <tbody>
+              {
+                comparisonTable.rows.map((row) => (
+                  <tr>
+                    <th>{row.label}</th>
+                    {row.cells.map((cell) => {
+                      if (cell.kind === "check") return <td class="check">✓</td>;
+                      if (cell.kind === "x") return <td class="x">✗</td>;
+                      if (cell.html) return <td set:html={cell.html} />;
+                      return <td>{cell.text}</td>;
+                    })}
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Section 6 — Ziverge partner callout
+    ============================================================ -->
+    <section class="partner-section">
+      <div class="container">
+        <aside class="partner-box">
+          <span class="partner-label">{ziverge.label}</span>
+          <h3>{ziverge.heading}</h3>
+          <p set:html={ziverge.bodyHtml} />
+          <a href={ziverge.ctaHref} target="_blank" rel="noopener" class="partner-link">
+            {ziverge.ctaLabel}
+          </a>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Section 7 — FAQ
+    ============================================================ -->
+    <section class="faq-section">
+      <div class="container">
+        <header class="section-header">
+          <h2 class="section-heading">{faq.heading}</h2>
+        </header>
+        <dl class="faq-list">
+          {
+            faq.items.map((item) => (
+              <div class="faq-item">
+                <dt>{item.q}</dt>
+                <dd set:html={item.aHtml} />
+              </div>
+            ))
+          }
+        </dl>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Section 8 — Closing CTA (shared Quickstart component)
+    ============================================================ -->
+    <Quickstart />
+  </main>
+  <Footer />
+</BaseLayout>
+
+<style>
+  main {
+    overflow-x: hidden;
+  }
+
+  /* ============================================================
+     Section 1 — Hero
+  ============================================================ */
+  .hero {
+    padding: clamp(3.5rem, 7vw, 5.5rem) 0 clamp(2.5rem, 5vw, 4rem);
+    position: relative;
+  }
+  .hero::before {
+    content: "";
+    position: absolute;
+    top: -20%;
+    left: 60%;
+    width: 700px;
+    height: 500px;
+    background: radial-gradient(ellipse, rgba(245, 176, 62, 0.08), transparent 65%);
+    pointer-events: none;
+    z-index: -1;
+  }
+  .hero-title {
+    font-size: clamp(2.3rem, 4.8vw, 3.4rem);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    margin: 0.5rem 0 1.25rem;
+    background: linear-gradient(to bottom, #ffffff 30%, #b0b0bc 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .hero-lede {
+    font-size: clamp(1rem, 1.4vw, 1.15rem);
+    line-height: 1.6;
+    color: var(--text-secondary);
+    max-width: 640px;
+    margin: 0;
+  }
+  .hero-lede :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* ============================================================
+     Section 2 — Decision paths
+  ============================================================ */
+  .paths {
+    padding: 2.5rem 0 3.5rem;
+  }
+  .paths-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.1rem;
+    margin-top: 1.5rem;
+  }
+  @media (min-width: 880px) {
+    .paths-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+  .path-card {
+    position: relative;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.6rem 1.5rem 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    transition:
+      border-color 200ms,
+      transform 200ms;
+  }
+  .path-card:hover {
+    border-color: var(--border-strong);
+    transform: translateY(-2px);
+  }
+  .path-card-emphasized {
+    border-color: var(--accent-border);
+    background: linear-gradient(180deg, rgba(245, 176, 62, 0.06), var(--bg-card) 60%);
+  }
+  .path-card-emphasized:hover {
+    border-color: var(--accent);
+  }
+  .path-eyebrow {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 0.1rem;
+  }
+  .path-card-emphasized .path-eyebrow {
+    color: var(--accent);
+  }
+  .path-card h3 {
+    font-size: 1.18rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 0.1rem;
+    letter-spacing: -0.01em;
+  }
+  .path-card p {
+    font-size: 0.93rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    margin: 0 0 0.85rem;
+    flex-grow: 1;
+  }
+  .path-cta {
+    font-size: 0.92rem;
+    color: var(--accent);
+    margin-top: auto;
+    font-weight: 500;
+  }
+  .path-cta:hover {
+    color: var(--accent-hover);
+  }
+  .path-pill {
+    position: absolute;
+    top: -0.65rem;
+    right: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--marker);
+    background: var(--bg);
+    border: 1px solid var(--marker-dim);
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+
+  /* ============================================================
+     Section 3 — Managed Cloud
+  ============================================================ */
+  .cloud-section {
+    padding: 4rem 0 4.5rem;
+    border-top: 1px solid var(--border);
+  }
+  .section-header {
+    margin-bottom: 1.75rem;
+  }
+  .section-header .eyebrow {
+    margin-bottom: 0.5rem;
+  }
+  .section-heading {
+    font-size: clamp(1.55rem, 2.8vw, 2.05rem);
+    font-weight: 600;
+    color: var(--text);
+    margin: 0;
+    letter-spacing: -0.02em;
+  }
+
+  /* Developer Preview banner */
+  .preview-banner {
+    background: var(--bg-card);
+    border-left: 3px solid var(--marker);
+    border-radius: 4px;
+    padding: 1.1rem 1.4rem;
+    margin: 0.5rem 0 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .preview-pill {
+    display: inline-block;
+    width: fit-content;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--marker);
+    background: var(--marker-dim);
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .preview-banner p {
+    margin: 0;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .preview-banner :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .preview-banner :global(a) {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  /* Agent-second callout */
+  .agent-second-callout {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.7rem;
+    margin: 0 0 2.5rem;
+  }
+  .agent-second-callout h3 {
+    font-size: 1.1rem;
+    color: var(--accent);
+    margin: 0 0 0.7rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .agent-second-callout p {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin: 0 0 0.8rem;
+  }
+  .agent-second-callout p:last-child {
+    margin-bottom: 0;
+  }
+  .agent-second-callout ul {
+    margin: 0 0 0.85rem 0;
+    padding-left: 1.2rem;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.65;
+  }
+  .agent-second-callout li {
+    margin-bottom: 0.2rem;
+  }
+  .agent-second-callout :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .agent-second-callout :global(em) {
+    color: var(--accent);
+    font-style: normal;
+  }
+
+  .pricing-prelude {
+    font-size: 0.92rem;
+    color: var(--text-muted);
+    margin-bottom: 1.5rem;
+    line-height: 1.55;
+  }
+  .pricing-prelude :global(strong) {
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  /* Pricing cards */
+  .pricing-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+  @media (min-width: 900px) {
+    .pricing-grid {
+      grid-template-columns: repeat(3, 1fr);
+      align-items: stretch;
+    }
+  }
+  .pricing-card {
+    position: relative;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.6rem 1.5rem 1.4rem;
+    display: flex;
+    flex-direction: column;
+  }
+  .pricing-card-emphasized {
+    border-color: var(--accent);
+    background: linear-gradient(180deg, rgba(245, 176, 62, 0.08), var(--bg-card) 50%);
+    box-shadow: 0 0 0 1px var(--accent-border);
+  }
+  .pricing-header {
+    margin-bottom: 1.1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .pricing-card-emphasized .pricing-header {
+    border-bottom-color: var(--accent-border);
+  }
+  .pricing-card h3 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    margin: 0 0 0.5rem;
+    font-weight: 500;
+  }
+  .pricing-card-emphasized h3 {
+    color: var(--accent);
+  }
+  .pricing-price {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    font-family: var(--font-mono);
+  }
+  .price-amount {
+    font-size: 2rem;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+  .price-unit {
+    font-size: 0.92rem;
+    color: var(--text-muted);
+  }
+  .price-talk {
+    font-size: 1.5rem;
+  }
+
+  .pricing-specs {
+    margin: 0;
+    flex-grow: 1;
+  }
+  .pricing-specs > div {
+    display: grid;
+    grid-template-columns: 40% 60%;
+    gap: 0.5rem;
+    padding: 0.55rem 0;
+    border-bottom: 1px dashed var(--border);
+    font-size: 0.9rem;
+  }
+  .pricing-specs > div:last-child {
+    border-bottom: 0;
+  }
+  .pricing-specs dt {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    align-self: center;
+  }
+  .pricing-specs dd {
+    color: var(--text);
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.45;
+  }
+  .pricing-specs dd :global(em) {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 0.85rem;
+  }
+  .pricing-specs dd :global(code) {
+    font-family: var(--font-mono);
+    color: var(--accent);
+    background: transparent;
+    padding: 0;
+    font-size: 0.9em;
+    font-weight: 600;
+  }
+  .overage-row dd {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .overage-line {
+    font-size: 0.86rem;
+    color: var(--text-secondary);
+  }
+
+  .pricing-footer {
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+  .pricing-card-emphasized .pricing-footer {
+    border-top-color: var(--accent-border);
+  }
+  .availability {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+  }
+  .pricing-card-emphasized .availability {
+    color: var(--marker);
+  }
+  .pricing-cta {
+    width: 100%;
+    justify-content: center;
+    font-size: 0.9rem;
+  }
+
+  .retention-note {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    margin-top: 1.5rem;
+    line-height: 1.55;
+    max-width: 720px;
+  }
+
+  /* ============================================================
+     Section 4 — On-Prem
+  ============================================================ */
+  .onprem-section {
+    padding: 4rem 0 4.5rem;
+    border-top: 1px solid var(--border);
+  }
+  .onprem-lede {
+    font-size: 1.08rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin: 0 0 2rem;
+    max-width: 720px;
+  }
+  .onprem-lede :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .onprem-subhead {
+    font-size: 1.05rem;
+    color: var(--text);
+    font-weight: 600;
+    margin: 0 0 0.85rem;
+  }
+  .onprem-list {
+    margin: 0 0 2rem 1.2rem;
+    color: var(--text-secondary);
+    line-height: 1.7;
+    max-width: 720px;
+  }
+  .onprem-list li {
+    margin-bottom: 0.4rem;
+  }
+  .onprem-list :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .onprem-list :global(em) {
+    color: var(--accent);
+    font-style: normal;
+  }
+  .onprem-frame {
+    font-size: 0.98rem;
+    line-height: 1.6;
+    color: var(--text);
+    border-left: 2px solid var(--accent);
+    padding-left: 1rem;
+    margin: 0 0 1.5rem;
+    max-width: 720px;
+    font-style: italic;
+  }
+  .onprem-audience {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin: 0 0 2rem;
+    max-width: 720px;
+  }
+  .onprem-audience :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .onprem-meta {
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+    padding: 1rem 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.8rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+  }
+  .onprem-meta strong {
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-right: 0.4rem;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .onprem-cta .btn {
+    padding: 0.7rem 1.4rem;
+  }
+
+  /* ============================================================
+     Section 5 — Comparison table
+  ============================================================ */
+  .compare-section {
+    padding: 4rem 0 4rem;
+    border-top: 1px solid var(--border);
+  }
+  .compare-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+  }
+  .compare-table thead {
+    background: var(--bg-elevated);
+  }
+  .compare-table th,
+  .compare-table td {
+    padding: 0.9rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .compare-table tr:last-child th,
+  .compare-table tr:last-child td {
+    border-bottom: 0;
+  }
+  .compare-table thead th {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 0.88rem;
+    letter-spacing: -0.01em;
+  }
+  .compare-table tbody th {
+    font-weight: 500;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .compare-table tbody td {
+    color: var(--text-secondary);
+  }
+  .compare-table td :global(em) {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 0.85rem;
+  }
+  .compare-table :global(.th-sub) {
+    font-weight: 400;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+  .compare-table .check {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .compare-table .x {
+    color: var(--text-faint);
+  }
+
+  /* ============================================================
+     Section 6 — Ziverge partner
+  ============================================================ */
+  .partner-section {
+    padding: 3rem 0;
+  }
+  .partner-box {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.75rem 2rem;
+    max-width: 800px;
+    margin: 0 auto;
+    position: relative;
+  }
+  .partner-label {
+    position: absolute;
+    top: -0.65rem;
+    left: 1.5rem;
+    background: var(--bg);
+    padding: 0.2rem 0.6rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+  }
+  .partner-box h3 {
+    font-size: 1.15rem;
+    color: var(--text);
+    margin: 0 0 0.75rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .partner-box p {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin: 0 0 1rem;
+  }
+  .partner-box :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .partner-link {
+    color: var(--accent);
+    font-weight: 500;
+    font-size: 0.95rem;
+  }
+  .partner-link:hover {
+    color: var(--accent-hover);
+  }
+
+  /* ============================================================
+     Section 7 — FAQ
+  ============================================================ */
+  .faq-section {
+    padding: 4rem 0 4rem;
+    border-top: 1px solid var(--border);
+  }
+  .faq-list {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 820px;
+  }
+  .faq-item {
+    border-bottom: 1px solid var(--border);
+    padding: 1.1rem 0;
+  }
+  .faq-item:first-child {
+    border-top: 1px solid var(--border);
+  }
+  .faq-item dt {
+    font-family: var(--font-mono);
+    font-size: 0.93rem;
+    color: var(--text);
+    margin-bottom: 0.45rem;
+    font-weight: 500;
+  }
+  .faq-item dd {
+    margin: 0;
+    font-size: 0.93rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .faq-item dd :global(em) {
+    color: var(--text);
+    font-style: italic;
+  }
+  .faq-item dd :global(a) {
+    color: var(--accent);
+  }
+</style>
