@@ -15,7 +15,6 @@
 mod agent_config;
 mod api;
 mod custom_api;
-mod environment_deletion;
 mod fork;
 mod otlp_plugin;
 mod plugins;
@@ -35,7 +34,6 @@ test_r::enable!();
 
 tag_suite!(worker, group1);
 tag_suite!(fork, group1);
-tag_suite!(environment_deletion, group1);
 
 tag_suite!(agent_config, group12);
 tag_suite!(api, group2);

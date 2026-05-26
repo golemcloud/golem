@@ -41,6 +41,7 @@ pub struct SpawnedWorkerExecutor {
     err_level: Level,
     registry_service: Arc<dyn RegistryService>,
     environment_state_cache_capacity: Option<usize>,
+    oplog_archive_interval: Option<Duration>,
     otlp: bool,
 }
 
@@ -58,6 +59,7 @@ impl SpawnedWorkerExecutor {
         err_level: Level,
         registry_service: Arc<dyn RegistryService>,
         environment_state_cache_capacity: Option<usize>,
+        oplog_archive_interval: Option<Duration>,
         otlp: bool,
     ) -> Self {
         info!("Starting golem-worker-executor process");
@@ -79,6 +81,7 @@ impl SpawnedWorkerExecutor {
             err_level,
             &registry_service,
             environment_state_cache_capacity,
+            oplog_archive_interval,
             otlp,
             &[],
         )
@@ -99,6 +102,7 @@ impl SpawnedWorkerExecutor {
             err_level,
             registry_service,
             environment_state_cache_capacity,
+            oplog_archive_interval,
             otlp,
         }
     }
@@ -117,6 +121,7 @@ impl SpawnedWorkerExecutor {
         err_level: Level,
         registry_service: &Arc<dyn RegistryService>,
         environment_state_cache_capacity: Option<usize>,
+        oplog_archive_interval: Option<Duration>,
         otlp: bool,
         extra_env_vars: &[(String, String)],
     ) -> (Child, ChildProcessLogger) {
@@ -128,6 +133,7 @@ impl SpawnedWorkerExecutor {
             rdb,
             registry_service,
             environment_state_cache_capacity,
+            oplog_archive_interval,
             verbosity,
             otlp,
         )
@@ -216,6 +222,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             self.err_level,
             &self.registry_service,
             self.environment_state_cache_capacity,
+            self.oplog_archive_interval,
             self.otlp,
             &extra_env_vars,
         )

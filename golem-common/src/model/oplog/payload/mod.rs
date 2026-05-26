@@ -426,7 +426,7 @@ oplog_payload! {
         },
         GolemRetryResolvedPolicy {
             policy: Option<RetryPolicy>
-        }
+        },
     }
 }
 

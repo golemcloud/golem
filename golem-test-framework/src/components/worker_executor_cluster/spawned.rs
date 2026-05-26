@@ -47,6 +47,7 @@ impl SpawnedWorkerExecutorCluster {
         err_level: Level,
         registry_service: Arc<dyn RegistryService>,
         environment_state_cache_capacity: Option<usize>,
+        oplog_archive_interval: Option<Duration>,
         otlp: bool,
     ) -> Arc<dyn WorkerExecutor> {
         Arc::new(
@@ -63,6 +64,7 @@ impl SpawnedWorkerExecutorCluster {
                 err_level,
                 registry_service,
                 environment_state_cache_capacity,
+                oplog_archive_interval,
                 otlp,
             )
             .await,
@@ -83,6 +85,7 @@ impl SpawnedWorkerExecutorCluster {
         err_level: Level,
         registry_service: Arc<dyn RegistryService>,
         environment_state_cache_capacity: Option<usize>,
+        oplog_archive_interval: Option<Duration>,
         otlp: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
@@ -106,6 +109,7 @@ impl SpawnedWorkerExecutorCluster {
                     err_level,
                     registry_service.clone(),
                     environment_state_cache_capacity,
+                    oplog_archive_interval,
                     otlp,
                 )
                 .in_current_span()

@@ -77,6 +77,11 @@ name = "agent-config-live-mutation"
 path = "tests/agent_config_live_mutation.rs"
 harness = false
 
+[[test]]
+name = "environment-deletion"
+path = "tests/environment_deletion.rs"
+harness = false
+
 [[bin]]
 name = "benchmarks"
 path = "src/benchmarks/all.rs"

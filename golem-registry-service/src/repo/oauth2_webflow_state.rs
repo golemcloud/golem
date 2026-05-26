@@ -255,7 +255,7 @@ impl OAuth2WebflowStateRepoInternal for DbOAuth2WebflowStateRepo<PostgresPool> {
         self.with_ro("get_token_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT token_id, secret, account_id, created_at, expires_at
+                    SELECT token_id, secret, account_id, created_at, expires_at, impersonated_by
                     FROM tokens
                     WHERE token_id = $1
                 "#})

@@ -1,0 +1,154 @@
+---
+import { commitments } from "../data/homepage";
+
+const icons: Record<string, string> = {
+  journal: `<path d="M3 7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+    <path d="M7 9h10M7 12h10M7 15h6" stroke-linecap="round" />`,
+  exchange: `<path d="M4 8h11l-2-2M20 16H9l2 2" stroke-linecap="round" stroke-linejoin="round" />
+    <circle cx="17" cy="8" r="2" />
+    <circle cx="7" cy="16" r="2" />`,
+  shield: `<path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6l-8-4z" stroke-linejoin="round" />
+    <path d="m9 12 2 2 4-4" stroke-linecap="round" stroke-linejoin="round" />`,
+};
+---
+
+<section class="commitments">
+  <div class="container">
+    <div class="commitments-grid">
+      {
+        commitments.map((c) => (
+          <article class="commitment-card">
+            <div class="card-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                set:html={icons[c.icon]}
+              />
+            </div>
+            <h3>{c.title}</h3>
+            {c.paragraphsHtml.map((p) => (
+              <p set:html={p} />
+            ))}
+            {c.closer && <p class="card-closer">{c.closer}</p>}
+          </article>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .commitments {
+    padding: 3rem 0 5rem;
+    position: relative;
+  }
+  .commitments-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+  @media (min-width: 900px) {
+    .commitments-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  .commitment-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.75rem 1.6rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    transition:
+      border-color 200ms,
+      transform 200ms;
+  }
+  .commitment-card:hover {
+    border-color: var(--border-strong);
+    transform: translateY(-2px);
+  }
+
+  .card-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: var(--accent-dim);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 0.3rem;
+  }
+  .card-icon svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .commitment-card h3 {
+    font-size: 1.18rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.25rem;
+    letter-spacing: -0.01em;
+  }
+  .commitment-card p {
+    font-size: 0.93rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+  }
+  .commitment-card p :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .commitment-card :global(code) {
+    font-size: 0.85em;
+  }
+  .card-closer {
+    color: var(--text) !important;
+    font-weight: 500;
+    margin-top: auto;
+    padding-top: 0.4rem;
+  }
+
+  .w3-sidebar {
+    margin-top: 1.5rem;
+    padding: 1.5rem 1.75rem;
+    border: 1px solid var(--accent-border);
+    background: var(--accent-dim);
+    border-radius: 10px;
+    display: flex;
+    gap: 1.25rem;
+    align-items: flex-start;
+  }
+  .w3-icon {
+    color: var(--accent);
+    flex-shrink: 0;
+    width: 44px;
+    height: 32px;
+    margin-top: 0.15rem;
+  }
+  .w3-icon svg {
+    width: 100%;
+    height: 100%;
+  }
+  .w3-sidebar p {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .w3-sidebar :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .w3-tagline {
+    margin-top: 0.5rem;
+  }
+  .w3-tagline strong {
+    color: var(--accent) !important;
+    font-weight: 600 !important;
+  }
+</style>

@@ -1,0 +1,236 @@
+---
+import BaseLayout from "./BaseLayout.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+
+interface Props {
+  title: string;
+  date?: Date;
+  author?: string;
+  tags?: string[];
+  description?: string;
+}
+
+const { title, date, author, tags = [], description } = Astro.props;
+
+const formattedDate = date
+  ? new Intl.DateTimeFormat("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }).format(date)
+  : null;
+---
+
+<BaseLayout title={`${title} — Golem`} description={description ?? title}>
+  <Nav />
+  <main class="post-main">
+    <div class="container post-container">
+      <header class="post-header">
+        <p class="post-meta mono">
+          {formattedDate && <span>{formattedDate}</span>}
+          {
+            author && (
+              <>
+                <>
+                  <span class="dot">·</span>
+                  <span>{author}</span>
+                </>
+              </>
+            )
+          }
+        </p>
+        <h1 class="post-title">{title}</h1>
+        {
+          tags.length > 0 && (
+            <div class="post-tags">
+              {tags.map((t) => (
+                <a
+                  class="tag"
+                  href={`/tags/${encodeURIComponent(t.toLowerCase().replace(/\s+/g, "-"))}`}
+                >
+                  {t}
+                </a>
+              ))}
+            </div>
+          )
+        }
+      </header>
+      <article class="post-body" data-pagefind-body>
+        <slot />
+      </article>
+      <footer class="post-footer">
+        <a class="back-link" href="/blog">← All posts</a>
+      </footer>
+    </div>
+  </main>
+  <Footer />
+</BaseLayout>
+
+<style>
+  .post-main {
+    padding: clamp(3rem, 6vw, 5rem) 0 clamp(4rem, 7vw, 6rem);
+  }
+  .post-container {
+    max-width: 760px;
+  }
+  .post-header {
+    margin-bottom: 2.5rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 1.5rem;
+  }
+  .post-meta {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    display: flex;
+    gap: 0.5rem;
+    margin: 0 0 0.85rem;
+  }
+  .dot {
+    opacity: 0.6;
+  }
+  .post-title {
+    font-size: clamp(1.85rem, 3.5vw, 2.5rem);
+    font-weight: 600;
+    letter-spacing: -0.022em;
+    line-height: 1.18;
+    color: var(--text);
+    margin: 0 0 1.1rem;
+  }
+  .post-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+  .tag {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    text-decoration: none;
+  }
+  .tag:hover {
+    color: var(--accent);
+    border-color: var(--accent-border);
+  }
+  .post-body :global(h2) {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 2.5rem 0 0.85rem;
+    letter-spacing: -0.015em;
+  }
+  .post-body :global(h3) {
+    font-size: 1.18rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 1.75rem 0 0.6rem;
+  }
+  .post-body :global(p) {
+    font-size: 1.02rem;
+    line-height: 1.7;
+    color: var(--text-secondary);
+    margin: 0 0 1.1rem;
+  }
+  .post-body :global(strong) {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .post-body :global(a) {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .post-body :global(a:hover) {
+    color: var(--accent-hover);
+    text-decoration: underline;
+  }
+  .post-body :global(ul),
+  .post-body :global(ol) {
+    margin: 0 0 1.1rem 1.4rem;
+    color: var(--text-secondary);
+    line-height: 1.7;
+  }
+  .post-body :global(li) {
+    margin-bottom: 0.4rem;
+  }
+  .post-body :global(blockquote) {
+    border-left: 3px solid var(--accent);
+    padding: 0.3rem 0 0.3rem 1.1rem;
+    margin: 1.25rem 0;
+    color: var(--text);
+    font-style: italic;
+  }
+  .post-body :global(code) {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    background: var(--bg-card);
+    padding: 0.12em 0.4em;
+    border-radius: 4px;
+    color: var(--text);
+  }
+  .post-body :global(pre) {
+    background: var(--code-bg) !important;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.1rem 1.3rem !important;
+    overflow-x: auto;
+    margin: 1.2rem 0;
+    font-size: 0.86rem;
+    line-height: 1.5;
+  }
+  .post-body :global(pre code) {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+  }
+  .post-body :global(img) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    margin: 1.25rem 0;
+  }
+  .post-body :global(hr) {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+  .post-body :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.25rem 0;
+    font-size: 0.92rem;
+  }
+  .post-body :global(th),
+  .post-body :global(td) {
+    border: 1px solid var(--border);
+    padding: 0.6rem 0.85rem;
+    text-align: left;
+    color: var(--text-secondary);
+  }
+  .post-body :global(th) {
+    background: var(--bg-card);
+    color: var(--text);
+    font-weight: 600;
+  }
+  .post-footer {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+  }
+  .back-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.92rem;
+  }
+  .back-link:hover {
+    color: var(--accent);
+  }
+</style>
