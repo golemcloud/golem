@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::card::{CardBinaryCodec, Subsumes};
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -141,6 +143,20 @@ impl RecipientPathTemplate {
         }
         segments.join("/")
     }
+}
+
+pub trait RecipientPattern:
+    Subsumes + Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
+{
+    type Polymorphic: Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + CardBinaryCodec;
+
+    fn matches_holder(&self, holder: &RecipientPathPattern) -> bool;
 }
 
 impl RecipientPathPattern {

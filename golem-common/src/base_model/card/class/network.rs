@@ -6,6 +6,51 @@ use crate::base_model::card::parsing::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PortPattern {
+    Any,
+    Single(u16),
+    Range { start: u16, end: u16 },
+}
+
+impl PortPattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn single(port: u16) -> Self {
+        Self::Single(port)
+    }
+
+    pub fn range(start: u16, end: u16) -> Self {
+        Self::Range { start, end }
+    }
+
+    pub fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Single(a), Self::Single(b)) => a == b,
+            (
+                Self::Range {
+                    start: as_,
+                    end: ae,
+                },
+                Self::Single(b),
+            ) => as_ <= b && b <= ae,
+            (
+                Self::Range {
+                    start: as_,
+                    end: ae,
+                },
+                Self::Range { start: bs, end: be },
+            ) => as_ <= bs && be <= ae,
+            (Self::Single(_), Self::Any | Self::Range { .. }) => false,
+            (Self::Range { .. }, Self::Any) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum NetworkResourcePattern {
     Any,
     HostPort { host: String, ports: PortPattern },

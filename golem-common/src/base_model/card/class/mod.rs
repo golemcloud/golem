@@ -13,10 +13,13 @@
 // limitations under the License.
 
 use crate::base_model::card::{
-    CardParseError, RecipientPathPattern, RecipientPathSlot, RecipientPathTemplate, SlotVariable,
+    CardParseError, RecipientPathPattern, RecipientPathSlot, RecipientPathTemplate,
+    RecipientPattern,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+
+pub use super::owner::*;
 
 #[cfg(feature = "full")]
 pub trait CardBinaryCodec: desert_rust::BinarySerializer + desert_rust::BinaryDeserializer {}
@@ -167,32 +170,6 @@ fn resource_segments_subsume(
             }
             _ => false,
         })
-}
-
-pub trait OwnerPattern:
-    Subsumes + Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
-{
-    type Polymorphic: Debug
-        + Clone
-        + PartialEq
-        + Eq
-        + Serialize
-        + for<'de> Deserialize<'de>
-        + CardBinaryCodec;
-}
-
-pub trait RecipientPattern:
-    Subsumes + Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
-{
-    type Polymorphic: Debug
-        + Clone
-        + PartialEq
-        + Eq
-        + Serialize
-        + for<'de> Deserialize<'de>
-        + CardBinaryCodec;
-
-    fn matches_holder(&self, holder: &RecipientPathPattern) -> bool;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -625,169 +602,6 @@ define_polymorphic_recipient_pattern!(
     EnvironmentRecipientPattern
 );
 define_polymorphic_recipient_pattern!(PolymorphicAgentRecipientPattern, AgentRecipientPattern);
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct EmptyOwnerPattern;
-
-impl EmptyOwnerPattern {
-    pub fn parse(value: &str) -> Result<Self, String> {
-        if value.is_empty() {
-            Ok(Self)
-        } else {
-            Err(value.to_string())
-        }
-    }
-}
-
-impl Subsumes for EmptyOwnerPattern {
-    fn subsumes(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-macro_rules! define_owner_pattern {
-    ($name:ident, $depth:literal) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-        #[cfg_attr(feature = "full", desert(transparent))]
-        pub struct $name(pub String);
-
-        impl $name {
-            pub fn new(path: impl Into<String>) -> Self {
-                Self(path.into())
-            }
-
-            pub fn parse(value: &str) -> Result<Self, String> {
-                parse_owner_path(value, $depth).map(|_| Self(value.to_string()))
-            }
-        }
-
-        impl From<String> for $name {
-            fn from(value: String) -> Self {
-                Self(value)
-            }
-        }
-
-        impl From<&str> for $name {
-            fn from(value: &str) -> Self {
-                Self(value.to_string())
-            }
-        }
-
-        impl Subsumes for $name {
-            fn subsumes(&self, other: &Self) -> bool {
-                let Ok(left) = parse_owner_path(&self.0, $depth) else {
-                    return false;
-                };
-                let Ok(right) = parse_owner_path(&other.0, $depth) else {
-                    return false;
-                };
-                owner_path_subsumes(&left, &right)
-            }
-        }
-    };
-}
-
-define_owner_pattern!(AccountOwnerPattern, 1);
-define_owner_pattern!(ApplicationOwnerPattern, 2);
-define_owner_pattern!(EnvironmentOwnerPattern, 3);
-define_owner_pattern!(ComponentOwnerPattern, 4);
-define_owner_pattern!(AgentOwnerPattern, 5);
-define_owner_pattern!(ToolOwnerPattern, 5);
-
-macro_rules! define_polymorphic_owner_pattern {
-    ($name:ident, $concrete:ty) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-        pub enum $name {
-            Concrete($concrete),
-            Slot(SlotVariable),
-            Template(String),
-        }
-    };
-}
-
-define_polymorphic_owner_pattern!(PolymorphicEmptyOwnerPattern, EmptyOwnerPattern);
-define_polymorphic_owner_pattern!(PolymorphicAccountOwnerPattern, AccountOwnerPattern);
-define_polymorphic_owner_pattern!(PolymorphicApplicationOwnerPattern, ApplicationOwnerPattern);
-define_polymorphic_owner_pattern!(PolymorphicEnvironmentOwnerPattern, EnvironmentOwnerPattern);
-define_polymorphic_owner_pattern!(PolymorphicComponentOwnerPattern, ComponentOwnerPattern);
-define_polymorphic_owner_pattern!(PolymorphicAgentOwnerPattern, AgentOwnerPattern);
-define_polymorphic_owner_pattern!(PolymorphicToolOwnerPattern, ToolOwnerPattern);
-
-impl OwnerPattern for EmptyOwnerPattern {
-    type Polymorphic = PolymorphicEmptyOwnerPattern;
-}
-
-impl OwnerPattern for AccountOwnerPattern {
-    type Polymorphic = PolymorphicAccountOwnerPattern;
-}
-
-impl OwnerPattern for ApplicationOwnerPattern {
-    type Polymorphic = PolymorphicApplicationOwnerPattern;
-}
-
-impl OwnerPattern for EnvironmentOwnerPattern {
-    type Polymorphic = PolymorphicEnvironmentOwnerPattern;
-}
-
-impl OwnerPattern for ComponentOwnerPattern {
-    type Polymorphic = PolymorphicComponentOwnerPattern;
-}
-
-impl OwnerPattern for AgentOwnerPattern {
-    type Polymorphic = PolymorphicAgentOwnerPattern;
-}
-
-impl OwnerPattern for ToolOwnerPattern {
-    type Polymorphic = PolymorphicToolOwnerPattern;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PortPattern {
-    Any,
-    Single(u16),
-    Range { start: u16, end: u16 },
-}
-
-impl PortPattern {
-    pub fn any() -> Self {
-        Self::Any
-    }
-
-    pub fn single(port: u16) -> Self {
-        Self::Single(port)
-    }
-
-    pub fn range(start: u16, end: u16) -> Self {
-        Self::Range { start, end }
-    }
-
-    pub fn subsumes(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Any, _) => true,
-            (Self::Single(a), Self::Single(b)) => a == b,
-            (
-                Self::Range {
-                    start: as_,
-                    end: ae,
-                },
-                Self::Single(b),
-            ) => as_ <= b && b <= ae,
-            (
-                Self::Range {
-                    start: as_,
-                    end: ae,
-                },
-                Self::Range { start: bs, end: be },
-            ) => as_ <= bs && be <= ae,
-            (Self::Single(_), Self::Any | Self::Range { .. }) => false,
-            (Self::Range { .. }, Self::Any) => false,
-        }
-    }
-}
 
 pub trait PermissionClass {
     type Verb: Debug
@@ -1269,32 +1083,4 @@ fn range_subsumes(
 ) -> bool {
     left_start.unwrap_or(0) <= right_start.unwrap_or(0)
         && right_end.unwrap_or(u64::MAX) <= left_end.unwrap_or(u64::MAX)
-}
-
-fn parse_owner_path(path: &str, depth: usize) -> Result<Vec<&str>, String> {
-    let segments = path.split('/').collect::<Vec<_>>();
-    if segments.len() != depth || segments.iter().any(|segment| segment.is_empty()) {
-        Err(path.to_string())
-    } else {
-        Ok(segments)
-    }
-}
-
-fn owner_path_subsumes(left: &[&str], right: &[&str]) -> bool {
-    left.iter()
-        .zip(right.iter())
-        .all(|(left, right)| owner_segment_subsumes(left, right))
-}
-
-fn owner_segment_subsumes(left: &str, right: &str) -> bool {
-    left == "*" || left == right || agent_id_type_wildcard_subsumes(left, right)
-}
-
-fn agent_id_type_wildcard_subsumes(left: &str, right: &str) -> bool {
-    let Some(agent_type) = left.strip_suffix("(*)") else {
-        return false;
-    };
-    right
-        .strip_prefix(agent_type)
-        .is_some_and(|suffix| suffix.starts_with('(') && suffix.ends_with(')'))
 }
