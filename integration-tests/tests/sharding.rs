@@ -639,9 +639,10 @@ mod tests {
             number_of_shards: Option<usize>,
         ) {
             cluster_control
-                .start_shard_manager(number_of_shards.map(|n| {
-                    u16::try_from(n).expect("number_of_shards does not fit into u16")
-                }))
+                .start_shard_manager(
+                    number_of_shards
+                        .map(|n| u16::try_from(n).expect("number_of_shards does not fit into u16")),
+                )
                 .await;
         }
 

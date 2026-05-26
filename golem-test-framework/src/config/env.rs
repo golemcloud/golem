@@ -759,6 +759,16 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
 /// control surface to ride alongside the descriptor path. Bulk-data
 /// access (worker startup, gRPC streaming, etc.) keeps going through
 /// the descriptor as before.
+// `#[async_trait]` is intentionally NOT used here: test-r's
+// `#[hosted_rpc]` macro auto-detects async-mode by inspecting
+// `sig.asyncness` on the trait methods. `#[async_trait]` would desugar
+// every method to `fn ... -> Pin<Box<dyn Future + Send>>` before the
+// `hosted_rpc` macro runs, defeating the detection and silently falling
+// back to sync-mode dispatch. The `async_fn_in_trait` lint only warns
+// that the returned future isn't pinned to `Send`; that is fine here
+// because the hosted-rpc dispatcher runs on the parent's tokio
+// multi-thread runtime and the future bodies only `.await` `Send` futures.
+#[allow(async_fn_in_trait)]
 #[test_r::hosted_rpc]
 pub trait RedisControl {
     /// Returns `true` if the parent-owned Redis instance currently
@@ -825,6 +835,10 @@ impl RedisControl for EnvBasedTestDependencies {
 /// The Redis helpers are repeated here because today's test-r HostedRpc owner
 /// type has a single worker stub. Suites that need cluster lifecycle control
 /// use this aggregate control surface instead of `RedisControl`.
+// See the `RedisControl` definition above for why `#[async_trait]` is
+// not used here (it would break `#[test_r::hosted_rpc]` async-mode
+// detection). Same reasoning applies.
+#[allow(async_fn_in_trait)]
 #[test_r::hosted_rpc]
 pub trait WorkerExecutorClusterControl {
     async fn kill_all(&self);
