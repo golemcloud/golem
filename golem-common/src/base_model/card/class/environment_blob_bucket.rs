@@ -99,7 +99,6 @@ impl PermissionClass for EnvironmentBlobBucketClass {
     }
 }
 
-
 fn parse_environment_blob_bucket_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
     if chars

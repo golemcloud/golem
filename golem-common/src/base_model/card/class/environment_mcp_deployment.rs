@@ -103,7 +103,6 @@ impl PermissionClass for EnvironmentMcpDeploymentClass {
     }
 }
 
-
 fn parse_environment_mcp_deployment_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
     if chars

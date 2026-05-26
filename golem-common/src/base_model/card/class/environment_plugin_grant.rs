@@ -95,7 +95,6 @@ impl PermissionClass for EnvironmentPluginGrantClass {
     }
 }
 
-
 fn parse_environment_plugin_grant_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
     if chars

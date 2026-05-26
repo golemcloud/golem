@@ -121,7 +121,6 @@ impl PermissionClass for FilesystemClass {
     }
 }
 
-
 fn parse_filesystem_path_segment(value: &str) -> Result<FilesystemPathSegmentPattern, String> {
     if value.is_empty() {
         Err(value.to_string())

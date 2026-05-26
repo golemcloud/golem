@@ -149,7 +149,6 @@ impl PermissionClass for NetworkClass {
     }
 }
 
-
 fn parse_port_pattern(port: &str) -> Result<PortPattern, CardParseError> {
     if let Some((start, end)) = port.split_once('-') {
         let start = start.parse().map_err(|_| invalid_network_resource(port))?;

@@ -37,7 +37,9 @@ fn fs_permission(permission: ClassPermissionPattern<FilesystemClass>) -> Pattern
 }
 
 fn network(recipient: &str, resource: NetworkResourcePattern) -> PatternGrant {
-    PatternGrant::new(PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
+    PatternGrant::new(PermissionPattern::Network(ClassPermissionPattern::<
+        NetworkClass,
+    >::Verb {
         verb: NetworkVerb::Connect,
         owner: EmptyOwnerPattern,
         recipient: AgentRecipientPattern::parse(recipient).unwrap(),

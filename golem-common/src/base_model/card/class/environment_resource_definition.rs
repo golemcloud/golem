@@ -103,7 +103,6 @@ impl PermissionClass for EnvironmentResourceDefinitionClass {
     }
 }
 
-
 fn parse_environment_resource_definition_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
     if chars

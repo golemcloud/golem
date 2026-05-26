@@ -113,7 +113,6 @@ impl PermissionClass for PlanClass {
     }
 }
 
-
 fn parse_plan_id(value: &str) -> Result<PlanIdPattern, String> {
     if let Ok(uuid) = Uuid::parse_str(value) {
         Ok(PlanIdPattern::Uuid(uuid))

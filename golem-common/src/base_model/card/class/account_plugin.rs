@@ -97,7 +97,6 @@ impl PermissionClass for AccountPluginClass {
     }
 }
 
-
 fn parse_account_plugin_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
     if chars

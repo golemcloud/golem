@@ -141,7 +141,6 @@ impl PermissionClass for ToolClass {
     }
 }
 
-
 fn parse_tool_invocation_pattern(value: &str) -> Result<ToolInvocationPattern, String> {
     let mut tokens = value.split_whitespace().peekable();
     let command_path = match tokens.peek().copied() {

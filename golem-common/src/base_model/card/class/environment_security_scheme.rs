@@ -102,7 +102,6 @@ impl PermissionClass for EnvironmentSecuritySchemeClass {
     }
 }
 
-
 fn parse_environment_security_scheme_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
     if chars

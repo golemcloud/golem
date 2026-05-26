@@ -99,7 +99,6 @@ impl PermissionClass for ComponentClass {
     }
 }
 
-
 fn parse_component_resource(resource: &str) -> Result<ComponentResourcePattern, String> {
     all_consuming(component_resource)(resource)
         .map(|(_, resource)| resource)

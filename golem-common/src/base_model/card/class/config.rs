@@ -116,7 +116,6 @@ impl PermissionClass for ConfigClass {
     }
 }
 
-
 fn parse_config_key_segment(value: &str) -> Result<ConfigKeySegmentPattern, String> {
     if value.is_empty() {
         Err(value.to_string())

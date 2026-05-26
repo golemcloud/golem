@@ -116,7 +116,6 @@ impl PermissionClass for RdbmsClass {
     }
 }
 
-
 fn component_subsumes(left: &str, right: &str) -> bool {
     left == "*" || left == right
 }

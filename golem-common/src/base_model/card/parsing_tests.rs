@@ -701,128 +701,128 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "environment_share",
             "environment.share(acme/shop/prod) @ acme/shop/prod : view : 550e8400-e29b-41d4-a716-446655440000",
-            PermissionPattern::EnvironmentShare(ClassPermissionPattern::<EnvironmentShareClass>::Verb {
-                verb: EnvironmentShareVerb::View,
-                owner: environment_owner("acme", "shop", "prod"),
-                recipient: environment_recipient("acme", "shop", "prod"),
-                resource: EnvironmentShareResourcePattern::Share(token_id()),
-            }),
+            PermissionPattern::EnvironmentShare(
+                ClassPermissionPattern::<EnvironmentShareClass>::Verb {
+                    verb: EnvironmentShareVerb::View,
+                    owner: environment_owner("acme", "shop", "prod"),
+                    recipient: environment_recipient("acme", "shop", "prod"),
+                    resource: EnvironmentShareResourcePattern::Share(token_id()),
+                },
+            ),
         ),
         (
             "environment_plugin_grant",
             "environment.plugin-grant(acme/shop/prod) @ acme/shop/prod : view : plugin-a",
-            PermissionPattern::EnvironmentPluginGrant(
-                ClassPermissionPattern::<EnvironmentPluginGrantClass>::Verb {
-                    verb: EnvironmentPluginGrantVerb::View,
-                    owner: environment_owner("acme", "shop", "prod"),
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: EnvironmentPluginGrantResourcePattern::Name(
-                        EnvironmentPluginGrantName("plugin-a".to_string()),
-                    ),
-                },
-            ),
+            PermissionPattern::EnvironmentPluginGrant(ClassPermissionPattern::<
+                EnvironmentPluginGrantClass,
+            >::Verb {
+                verb: EnvironmentPluginGrantVerb::View,
+                owner: environment_owner("acme", "shop", "prod"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(
+                    "plugin-a".to_string(),
+                )),
+            }),
         ),
         (
             "environment_domain_registration",
             "environment.domain-registration(acme/shop/prod) @ acme/shop/prod : view : domain-a",
-            PermissionPattern::EnvironmentDomainRegistration(
-                ClassPermissionPattern::<EnvironmentDomainRegistrationClass>::Verb {
-                    verb: EnvironmentDomainRegistrationVerb::View,
-                    owner: environment_owner("acme", "shop", "prod"),
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: EnvironmentDomainRegistrationResourcePattern::Domain(
-                        DomainNamePattern {
-                            labels: vec![DomainLabel("domain-a".to_string())],
-                        },
-                    ),
-                },
-            ),
+            PermissionPattern::EnvironmentDomainRegistration(ClassPermissionPattern::<
+                EnvironmentDomainRegistrationClass,
+            >::Verb {
+                verb: EnvironmentDomainRegistrationVerb::View,
+                owner: environment_owner("acme", "shop", "prod"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentDomainRegistrationResourcePattern::Domain(DomainNamePattern {
+                    labels: vec![DomainLabel("domain-a".to_string())],
+                }),
+            }),
         ),
         (
             "environment_security_scheme",
             "environment.security-scheme(acme/shop/prod) @ acme/shop/prod : view : scheme-a",
-            PermissionPattern::EnvironmentSecurityScheme(
-                ClassPermissionPattern::<EnvironmentSecuritySchemeClass>::Verb {
-                    verb: EnvironmentSecuritySchemeVerb::View,
-                    owner: environment_owner("acme", "shop", "prod"),
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: EnvironmentSecuritySchemeResourcePattern::Name(
-                        EnvironmentSecuritySchemeName("scheme-a".to_string()),
-                    ),
-                },
-            ),
+            PermissionPattern::EnvironmentSecurityScheme(ClassPermissionPattern::<
+                EnvironmentSecuritySchemeClass,
+            >::Verb {
+                verb: EnvironmentSecuritySchemeVerb::View,
+                owner: environment_owner("acme", "shop", "prod"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentSecuritySchemeResourcePattern::Name(
+                    EnvironmentSecuritySchemeName("scheme-a".to_string()),
+                ),
+            }),
         ),
         (
             "environment_http_api_deployment",
             "environment.http-api-deployment(acme/shop/prod) @ acme/shop/prod : view : api./v1/**",
-            PermissionPattern::EnvironmentHttpApiDeployment(
-                ClassPermissionPattern::<EnvironmentHttpApiDeploymentClass>::Verb {
-                    verb: EnvironmentHttpApiDeploymentVerb::View,
-                    owner: environment_owner("acme", "shop", "prod"),
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: EnvironmentHttpApiDeploymentResourcePattern::DomainPath {
-                        domain: "api".to_string(),
-                        path_glob: "/v1/**".to_string(),
-                    },
+            PermissionPattern::EnvironmentHttpApiDeployment(ClassPermissionPattern::<
+                EnvironmentHttpApiDeploymentClass,
+            >::Verb {
+                verb: EnvironmentHttpApiDeploymentVerb::View,
+                owner: environment_owner("acme", "shop", "prod"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentHttpApiDeploymentResourcePattern::DomainPath {
+                    domain: "api".to_string(),
+                    path_glob: "/v1/**".to_string(),
                 },
-            ),
+            }),
         ),
         (
             "environment_mcp_deployment",
             "environment.mcp-deployment(acme/shop/prod) @ acme/shop/prod : view : mcp-a",
-            PermissionPattern::EnvironmentMcpDeployment(
-                ClassPermissionPattern::<EnvironmentMcpDeploymentClass>::Verb {
-                    verb: EnvironmentMcpDeploymentVerb::View,
-                    owner: environment_owner("acme", "shop", "prod"),
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: EnvironmentMcpDeploymentResourcePattern::Name(
-                        EnvironmentMcpDeploymentName("mcp-a".to_string()),
-                    ),
-                },
-            ),
+            PermissionPattern::EnvironmentMcpDeployment(ClassPermissionPattern::<
+                EnvironmentMcpDeploymentClass,
+            >::Verb {
+                verb: EnvironmentMcpDeploymentVerb::View,
+                owner: environment_owner("acme", "shop", "prod"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentMcpDeploymentResourcePattern::Name(
+                    EnvironmentMcpDeploymentName("mcp-a".to_string()),
+                ),
+            }),
         ),
         (
             "environment_agent_secret",
             "environment.agent-secret(acme/shop/prod) @ acme/shop/prod : update : cart.*",
-            PermissionPattern::EnvironmentAgentSecret(
-                ClassPermissionPattern::<EnvironmentAgentSecretClass>::Verb {
-                    verb: EnvironmentAgentSecretVerb::Update,
-                    owner: environment_owner("acme", "shop", "prod"),
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: environment_agent_secret_key(vec![
-                        EnvironmentAgentSecretKeySegmentPattern::Literal("cart".to_string()),
-                        EnvironmentAgentSecretKeySegmentPattern::Star,
-                    ]),
-                },
-            ),
+            PermissionPattern::EnvironmentAgentSecret(ClassPermissionPattern::<
+                EnvironmentAgentSecretClass,
+            >::Verb {
+                verb: EnvironmentAgentSecretVerb::Update,
+                owner: environment_owner("acme", "shop", "prod"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: environment_agent_secret_key(vec![
+                    EnvironmentAgentSecretKeySegmentPattern::Literal("cart".to_string()),
+                    EnvironmentAgentSecretKeySegmentPattern::Star,
+                ]),
+            }),
         ),
         (
             "environment_resource_definition",
             "environment.resource-definition(acme/shop/prod) @ acme/shop/prod : view : resource-a",
-            PermissionPattern::EnvironmentResourceDefinition(
-                ClassPermissionPattern::<EnvironmentResourceDefinitionClass>::Verb {
-                    verb: EnvironmentResourceDefinitionVerb::View,
-                    owner: environment_owner("acme", "shop", "prod"),
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: EnvironmentResourceDefinitionResourcePattern::Name(
-                        EnvironmentResourceDefinitionName("resource-a".to_string()),
-                    ),
-                },
-            ),
+            PermissionPattern::EnvironmentResourceDefinition(ClassPermissionPattern::<
+                EnvironmentResourceDefinitionClass,
+            >::Verb {
+                verb: EnvironmentResourceDefinitionVerb::View,
+                owner: environment_owner("acme", "shop", "prod"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentResourceDefinitionResourcePattern::Name(
+                    EnvironmentResourceDefinitionName("resource-a".to_string()),
+                ),
+            }),
         ),
         (
             "environment_retry_policy",
             "environment.retry-policy(acme/shop/prod) @ acme/shop/prod : view : retry-a",
-            PermissionPattern::EnvironmentRetryPolicy(
-                ClassPermissionPattern::<EnvironmentRetryPolicyClass>::Verb {
-                    verb: EnvironmentRetryPolicyVerb::View,
-                    owner: environment_owner("acme", "shop", "prod"),
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: EnvironmentRetryPolicyResourcePattern::Name(
-                        EnvironmentRetryPolicyName("retry-a".to_string()),
-                    ),
-                },
-            ),
+            PermissionPattern::EnvironmentRetryPolicy(ClassPermissionPattern::<
+                EnvironmentRetryPolicyClass,
+            >::Verb {
+                verb: EnvironmentRetryPolicyVerb::View,
+                owner: environment_owner("acme", "shop", "prod"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentRetryPolicyResourcePattern::Name(EnvironmentRetryPolicyName(
+                    "retry-a".to_string(),
+                )),
+            }),
         ),
         (
             "component",
@@ -862,48 +862,48 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "account_oauth2_identity",
             "account.oauth2-identity(acme) @ acme : view : google/12345",
-            PermissionPattern::AccountOauth2Identity(
-                ClassPermissionPattern::<AccountOauth2IdentityClass>::Verb {
-                    verb: AccountOauth2IdentityVerb::View,
-                    owner: account_owner("acme"),
-                    recipient: account_recipient("acme"),
-                    resource: AccountOauth2IdentityResourcePattern::Identity {
-                        provider: "google".to_string(),
-                        external_id: "12345".to_string(),
-                    },
+            PermissionPattern::AccountOauth2Identity(ClassPermissionPattern::<
+                AccountOauth2IdentityClass,
+            >::Verb {
+                verb: AccountOauth2IdentityVerb::View,
+                owner: account_owner("acme"),
+                recipient: account_recipient("acme"),
+                resource: AccountOauth2IdentityResourcePattern::Identity {
+                    provider: "google".to_string(),
+                    external_id: "12345".to_string(),
                 },
-            ),
+            }),
         ),
         (
             "environment_initial_files",
             "environment.initial-files(acme/shop/prod/cart-svc) @ acme/shop/prod : view : /etc/*",
-            PermissionPattern::EnvironmentInitialFiles(
-                ClassPermissionPattern::<EnvironmentInitialFilesClass>::Verb {
-                    verb: EnvironmentInitialFilesVerb::View,
-                    owner: ComponentOwnerPattern::Component {
-                        account: "acme".to_string(),
-                        application: "shop".to_string(),
-                        environment: "prod".to_string(),
-                        component: "cart-svc".to_string(),
-                    },
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: EnvironmentInitialFilesResourcePattern::Path(
-                        EnvironmentInitialFilesPathPattern {
-                            segments: vec![
-                                EnvironmentInitialFilesPathSegmentPattern::Literal(
-                                    "etc".to_string(),
-                                ),
-                                EnvironmentInitialFilesPathSegmentPattern::Star,
-                            ],
-                        },
-                    ),
+            PermissionPattern::EnvironmentInitialFiles(ClassPermissionPattern::<
+                EnvironmentInitialFilesClass,
+            >::Verb {
+                verb: EnvironmentInitialFilesVerb::View,
+                owner: ComponentOwnerPattern::Component {
+                    account: "acme".to_string(),
+                    application: "shop".to_string(),
+                    environment: "prod".to_string(),
+                    component: "cart-svc".to_string(),
                 },
-            ),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentInitialFilesResourcePattern::Path(
+                    EnvironmentInitialFilesPathPattern {
+                        segments: vec![
+                            EnvironmentInitialFilesPathSegmentPattern::Literal("etc".to_string()),
+                            EnvironmentInitialFilesPathSegmentPattern::Star,
+                        ],
+                    },
+                ),
+            }),
         ),
         (
             "environment_kv_bucket",
             "environment.kv-bucket(acme/shop/prod) @ acme/shop/prod : view : bucket-a",
-            PermissionPattern::EnvironmentKvBucket(ClassPermissionPattern::<EnvironmentKvBucketClass>::Verb {
+            PermissionPattern::EnvironmentKvBucket(ClassPermissionPattern::<
+                EnvironmentKvBucketClass,
+            >::Verb {
                 verb: EnvironmentKvBucketVerb::View,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -915,16 +915,16 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "environment_blob_bucket",
             "environment.blob-bucket(acme/shop/prod) @ acme/shop/prod : view : bucket-a",
-            PermissionPattern::EnvironmentBlobBucket(
-                ClassPermissionPattern::<EnvironmentBlobBucketClass>::Verb {
-                    verb: EnvironmentBlobBucketVerb::View,
-                    owner: environment_owner("acme", "shop", "prod"),
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: EnvironmentBlobBucketResourcePattern::Name(
-                        EnvironmentBlobBucketName("bucket-a".to_string()),
-                    ),
-                },
-            ),
+            PermissionPattern::EnvironmentBlobBucket(ClassPermissionPattern::<
+                EnvironmentBlobBucketClass,
+            >::Verb {
+                verb: EnvironmentBlobBucketVerb::View,
+                owner: environment_owner("acme", "shop", "prod"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentBlobBucketResourcePattern::Name(EnvironmentBlobBucketName(
+                    "bucket-a".to_string(),
+                )),
+            }),
         ),
     ];
 
@@ -1104,21 +1104,23 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
         (
             "environment_polymorphic_owner_concrete_environment_recipient",
             "environment(?env) @ acme/shop/prod : view : prod",
-            PolymorphicPermissionPattern::Environment(
-                PolymorphicClassPermissionPattern::<EnvironmentClass>::Verb {
-                    verb: EnvironmentVerb::View,
-                    owner: PolymorphicApplicationOwnerPattern::Env,
-                    recipient: environment_recipient("acme", "shop", "prod"),
-                    resource: EnvironmentResourcePattern::Environment(EnvironmentName(
-                        "prod".to_string(),
-                    )),
-                },
-            ),
+            PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern::<
+                EnvironmentClass,
+            >::Verb {
+                verb: EnvironmentVerb::View,
+                owner: PolymorphicApplicationOwnerPattern::Env,
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentResourcePattern::Environment(EnvironmentName(
+                    "prod".to_string(),
+                )),
+            }),
         ),
         (
             "component_polymorphic_owner_concrete_environment_recipient",
             "component(?env) @ acme/shop/prod : view : cart-svc@rev=42",
-            PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern::<ComponentClass>::Verb {
+            PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern::<
+                ComponentClass,
+            >::Verb {
                 verb: ComponentVerb::View,
                 owner: PolymorphicEnvironmentOwnerPattern::Env,
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -1131,44 +1133,62 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
         (
             "env_self_owner_concrete_agent_recipient",
             "env(?self) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : HOME",
-            PolymorphicPermissionPattern::Env(PolymorphicClassPermissionPattern::<EnvClass>::Verb {
-                verb: EnvVerb::Read,
-                owner: PolymorphicAgentOwnerPattern::Self_,
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
-                resource: EnvResourcePattern::VarName(EnvVarName("HOME".to_string())),
-            }),
+            PolymorphicPermissionPattern::Env(
+                PolymorphicClassPermissionPattern::<EnvClass>::Verb {
+                    verb: EnvVerb::Read,
+                    owner: PolymorphicAgentOwnerPattern::Self_,
+                    recipient: agent_recipient(
+                        "acme",
+                        "shop",
+                        "prod",
+                        "cart-svc",
+                        "ShoppingCart(*)",
+                    ),
+                    resource: EnvResourcePattern::VarName(EnvVarName("HOME".to_string())),
+                },
+            ),
         ),
         (
             "secret_polymorphic_owner_concrete_agent_recipient",
             "secret(?env) @ acme/shop/prod/cart-svc/ShoppingCart(*) : reveal : billing.account",
-            PolymorphicPermissionPattern::Secret(PolymorphicClassPermissionPattern::<SecretClass>::Verb {
-                verb: SecretVerb::Reveal,
-                owner: PolymorphicEnvironmentOwnerPattern::Env,
-                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
-                resource: secret_key(vec![
-                    SecretKeySegmentPattern::Literal("billing".to_string()),
-                    SecretKeySegmentPattern::Literal("account".to_string()),
-                ]),
-            }),
+            PolymorphicPermissionPattern::Secret(
+                PolymorphicClassPermissionPattern::<SecretClass>::Verb {
+                    verb: SecretVerb::Reveal,
+                    owner: PolymorphicEnvironmentOwnerPattern::Env,
+                    recipient: agent_recipient(
+                        "acme",
+                        "shop",
+                        "prod",
+                        "cart-svc",
+                        "ShoppingCart(*)",
+                    ),
+                    resource: secret_key(vec![
+                        SecretKeySegmentPattern::Literal("billing".to_string()),
+                        SecretKeySegmentPattern::Literal("account".to_string()),
+                    ]),
+                },
+            ),
         ),
         (
             "agent_env_owner_template_concrete_agent_recipient",
             "agent(?env/payment-svc/PaymentAgent(*)) @ acme/shop/prod/payment-svc/PaymentAgent(*) : invoke : charge",
-            PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern::<AgentClass>::Verb {
-                verb: AgentVerb::Invoke,
-                owner: PolymorphicAgentOwnerPattern::EnvAgent {
-                    component: "payment-svc".to_string(),
-                    agent: AgentOwnerLeafPattern::AgentTypeWildcard("PaymentAgent".to_string()),
+            PolymorphicPermissionPattern::Agent(
+                PolymorphicClassPermissionPattern::<AgentClass>::Verb {
+                    verb: AgentVerb::Invoke,
+                    owner: PolymorphicAgentOwnerPattern::EnvAgent {
+                        component: "payment-svc".to_string(),
+                        agent: AgentOwnerLeafPattern::AgentTypeWildcard("PaymentAgent".to_string()),
+                    },
+                    recipient: agent_recipient(
+                        "acme",
+                        "shop",
+                        "prod",
+                        "payment-svc",
+                        "PaymentAgent(*)",
+                    ),
+                    resource: AgentResourcePattern::Method(AgentMethodName("charge".to_string())),
                 },
-                recipient: agent_recipient(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "payment-svc",
-                    "PaymentAgent(*)",
-                ),
-                resource: AgentResourcePattern::Method(AgentMethodName("charge".to_string())),
-            }),
+            ),
         ),
     ];
 

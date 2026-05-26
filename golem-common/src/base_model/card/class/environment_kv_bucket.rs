@@ -97,7 +97,6 @@ impl PermissionClass for EnvironmentKvBucketClass {
     }
 }
 
-
 fn parse_environment_kv_bucket_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
     if chars

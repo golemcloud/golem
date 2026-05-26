@@ -84,7 +84,6 @@ impl PermissionClass for ApplicationClass {
     }
 }
 
-
 fn parse_application_resource(resource: &str) -> Result<ApplicationResourcePattern, String> {
     all_consuming(application_resource)(resource)
         .map(|(_, resource)| resource)

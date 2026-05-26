@@ -127,7 +127,6 @@ impl PermissionClass for EnvironmentAgentSecretClass {
     }
 }
 
-
 fn parse_environment_agent_secret_key_segment(
     value: &str,
 ) -> Result<EnvironmentAgentSecretKeySegmentPattern, String> {

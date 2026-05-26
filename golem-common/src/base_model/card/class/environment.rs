@@ -111,7 +111,6 @@ impl PermissionClass for EnvironmentClass {
     }
 }
 
-
 fn parse_environment_resource(resource: &str) -> Result<EnvironmentResourcePattern, String> {
     all_consuming(environment_resource)(resource)
         .map(|(_, resource)| resource)

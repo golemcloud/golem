@@ -101,7 +101,6 @@ impl PermissionClass for EnvironmentRetryPolicyClass {
     }
 }
 
-
 fn parse_environment_retry_policy_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
     if chars

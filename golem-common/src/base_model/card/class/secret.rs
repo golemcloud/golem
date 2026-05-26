@@ -120,7 +120,6 @@ impl PermissionClass for SecretClass {
     }
 }
 
-
 fn parse_secret_key_segment(value: &str) -> Result<SecretKeySegmentPattern, String> {
     if value.is_empty() {
         Err(value.to_string())
