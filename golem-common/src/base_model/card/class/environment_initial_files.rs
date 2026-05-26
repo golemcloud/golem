@@ -43,9 +43,23 @@ impl Subsumes for EnvironmentInitialFilesResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicEnvironmentInitialFilesResourcePattern {
-    Concrete(EnvironmentInitialFilesResourcePattern),
+    Any,
+    Exact(String),
+    Glob(String),
     Slot(SlotVariable),
     Template(ResourceTemplate),
+}
+
+impl From<EnvironmentInitialFilesResourcePattern>
+    for PolymorphicEnvironmentInitialFilesResourcePattern
+{
+    fn from(value: EnvironmentInitialFilesResourcePattern) -> Self {
+        match value {
+            EnvironmentInitialFilesResourcePattern::Any => Self::Any,
+            EnvironmentInitialFilesResourcePattern::Exact(value) => Self::Exact(value),
+            EnvironmentInitialFilesResourcePattern::Glob(value) => Self::Glob(value),
+        }
+    }
 }
 
 impl ResourcePattern for EnvironmentInitialFilesResourcePattern {
@@ -154,7 +168,7 @@ impl EnvironmentInitialFilesClass {
             class,
             resource,
             Self::parse_resource,
-            PolymorphicEnvironmentInitialFilesResourcePattern::Concrete,
+            PolymorphicEnvironmentInitialFilesResourcePattern::from,
             PolymorphicEnvironmentInitialFilesResourcePattern::Slot,
             PolymorphicEnvironmentInitialFilesResourcePattern::Template,
         )

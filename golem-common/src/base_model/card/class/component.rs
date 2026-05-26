@@ -2,7 +2,6 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_component_owner, parse_environment_recipient,
     parse_polymorphic_component_owner, parse_polymorphic_environment_recipient,
-    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,13 +23,7 @@ impl Subsumes for ComponentResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicComponentResourcePattern {
-    Concrete(ComponentResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicComponentResourcePattern = ComponentResourcePattern;
 
 impl ResourcePattern for ComponentResourcePattern {
     type Polymorphic = PolymorphicComponentResourcePattern;
@@ -139,13 +132,6 @@ impl ComponentClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicComponentResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicComponentResourcePattern::Concrete,
-            PolymorphicComponentResourcePattern::Slot,
-            PolymorphicComponentResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

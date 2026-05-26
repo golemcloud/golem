@@ -8,34 +8,64 @@ use crate::base_model::card::parsing::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum RdbmsResourcePattern {
-    Any,
-    Exact(String),
-    Glob(String),
+    Table {
+        database: String,
+        schema: String,
+        table: String,
+    },
 }
 
 impl RdbmsResourcePattern {
     pub fn any() -> Self {
-        Self::Any
+        Self::Table {
+            database: "*".to_string(),
+            schema: "*".to_string(),
+            table: "*".to_string(),
+        }
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::parse_value(&value.into()).unwrap_or_else(|value| Self::Table {
+            database: value,
+            schema: String::new(),
+            table: String::new(),
+        })
     }
 
     pub fn glob(value: impl Into<String>) -> Self {
-        Self::Glob(value.into())
+        Self::exact(value)
+    }
+
+    fn parse_value(value: &str) -> Result<Self, String> {
+        let parts = value.split('.').collect::<Vec<_>>();
+        if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
+            return Err(value.to_string());
+        }
+        Ok(Self::Table {
+            database: parts[0].to_string(),
+            schema: parts[1].to_string(),
+            table: parts[2].to_string(),
+        })
     }
 }
 
 impl Subsumes for RdbmsResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Glob(a), Self::Glob(b)) => glob_subsumes(a, b),
-            (Self::Glob(a), Self::Exact(b)) => glob_matches(a, b),
-            (Self::Glob(_), Self::Any) => false,
-            (Self::Exact(_), Self::Any | Self::Glob(_)) => false,
+            (
+                Self::Table {
+                    database: a_database,
+                    schema: a_schema,
+                    table: a_table,
+                },
+                Self::Table {
+                    database: b_database,
+                    schema: b_schema,
+                    table: b_table,
+                },
+            ) => component_subsumes(a_database, b_database)
+                && component_subsumes(a_schema, b_schema)
+                && component_subsumes(a_table, b_table),
         }
     }
 }
@@ -43,9 +73,29 @@ impl Subsumes for RdbmsResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicRdbmsResourcePattern {
-    Concrete(RdbmsResourcePattern),
+    Table {
+        database: String,
+        schema: String,
+        table: String,
+    },
     Slot(SlotVariable),
     Template(ResourceTemplate),
+}
+
+impl From<RdbmsResourcePattern> for PolymorphicRdbmsResourcePattern {
+    fn from(value: RdbmsResourcePattern) -> Self {
+        match value {
+            RdbmsResourcePattern::Table {
+                database,
+                schema,
+                table,
+            } => Self::Table {
+                database,
+                schema,
+                table,
+            },
+        }
+    }
 }
 
 impl ResourcePattern for RdbmsResourcePattern {
@@ -127,13 +177,10 @@ impl RdbmsClass {
         _class: &str,
         resource: &str,
     ) -> Result<RdbmsResourcePattern, CardParseError> {
-        if resource == "*" || resource == "**" {
-            Ok(RdbmsResourcePattern::Any)
-        } else if resource.contains('*') {
-            Ok(RdbmsResourcePattern::Glob(resource.to_string()))
-        } else {
-            Ok(RdbmsResourcePattern::Exact(resource.to_string()))
-        }
+        RdbmsResourcePattern::parse_value(resource).map_err(|_| CardParseError::InvalidResource {
+            class: RdbmsClass::NAME.to_string(),
+            resource: resource.to_string(),
+        })
     }
 
     fn parse_polymorphic_resource(
@@ -144,9 +191,13 @@ impl RdbmsClass {
             class,
             resource,
             Self::parse_resource,
-            PolymorphicRdbmsResourcePattern::Concrete,
+            PolymorphicRdbmsResourcePattern::from,
             PolymorphicRdbmsResourcePattern::Slot,
             PolymorphicRdbmsResourcePattern::Template,
         )
     }
+}
+
+fn component_subsumes(left: &str, right: &str) -> bool {
+    left == "*" || left == right
 }

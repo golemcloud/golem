@@ -9,7 +9,7 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentHttpApiDeploymentResourcePattern {
     Any,
-    Exact(String),
+    DomainPath { domain: String, path_glob: String },
 }
 
 impl EnvironmentHttpApiDeploymentResourcePattern {
@@ -18,7 +18,24 @@ impl EnvironmentHttpApiDeploymentResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        let value = value.into();
+        Self::parse_value(&value).unwrap_or(Self::DomainPath {
+            domain: value,
+            path_glob: String::new(),
+        })
+    }
+
+    fn parse_value(value: &str) -> Result<Self, String> {
+        let Some((domain, path_glob)) = value.split_once('.') else {
+            return Err(value.to_string());
+        };
+        if domain.is_empty() || !path_glob.starts_with('/') {
+            return Err(value.to_string());
+        }
+        Ok(Self::DomainPath {
+            domain: domain.to_string(),
+            path_glob: path_glob.to_string(),
+        })
     }
 }
 
@@ -26,8 +43,17 @@ impl Subsumes for EnvironmentHttpApiDeploymentResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (
+                Self::DomainPath {
+                    domain: a_domain,
+                    path_glob: a_path,
+                },
+                Self::DomainPath {
+                    domain: b_domain,
+                    path_glob: b_path,
+                },
+            ) => (a_domain == "*" || a_domain == b_domain) && glob_subsumes(a_path, b_path),
+            (Self::DomainPath { .. }, Self::Any) => false,
         }
     }
 }
@@ -35,9 +61,23 @@ impl Subsumes for EnvironmentHttpApiDeploymentResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicEnvironmentHttpApiDeploymentResourcePattern {
-    Concrete(EnvironmentHttpApiDeploymentResourcePattern),
+    Any,
+    DomainPath { domain: String, path_glob: String },
     Slot(SlotVariable),
     Template(ResourceTemplate),
+}
+
+impl From<EnvironmentHttpApiDeploymentResourcePattern>
+    for PolymorphicEnvironmentHttpApiDeploymentResourcePattern
+{
+    fn from(value: EnvironmentHttpApiDeploymentResourcePattern) -> Self {
+        match value {
+            EnvironmentHttpApiDeploymentResourcePattern::Any => Self::Any,
+            EnvironmentHttpApiDeploymentResourcePattern::DomainPath { domain, path_glob } => {
+                Self::DomainPath { domain, path_glob }
+            }
+        }
+    }
 }
 
 impl ResourcePattern for EnvironmentHttpApiDeploymentResourcePattern {
@@ -130,9 +170,12 @@ impl EnvironmentHttpApiDeploymentClass {
         if resource == "*" {
             Ok(EnvironmentHttpApiDeploymentResourcePattern::Any)
         } else {
-            Ok(EnvironmentHttpApiDeploymentResourcePattern::Exact(
-                resource.to_string(),
-            ))
+            EnvironmentHttpApiDeploymentResourcePattern::parse_value(resource).map_err(|_| {
+                CardParseError::InvalidResource {
+                    class: EnvironmentHttpApiDeploymentClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                }
+            })
         }
     }
 
@@ -144,7 +187,7 @@ impl EnvironmentHttpApiDeploymentClass {
             class,
             resource,
             Self::parse_resource,
-            PolymorphicEnvironmentHttpApiDeploymentResourcePattern::Concrete,
+            PolymorphicEnvironmentHttpApiDeploymentResourcePattern::from,
             PolymorphicEnvironmentHttpApiDeploymentResourcePattern::Slot,
             PolymorphicEnvironmentHttpApiDeploymentResourcePattern::Template,
         )

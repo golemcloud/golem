@@ -2,7 +2,6 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_environment_owner, parse_environment_recipient,
     parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient,
-    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,13 +23,7 @@ impl Subsumes for EnvironmentResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicEnvironmentResourcePattern {
-    Concrete(EnvironmentResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicEnvironmentResourcePattern = EnvironmentResourcePattern;
 
 impl ResourcePattern for EnvironmentResourcePattern {
     type Polymorphic = PolymorphicEnvironmentResourcePattern;
@@ -154,13 +147,6 @@ impl EnvironmentClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicEnvironmentResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicEnvironmentResourcePattern::Concrete,
-            PolymorphicEnvironmentResourcePattern::Slot,
-            PolymorphicEnvironmentResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

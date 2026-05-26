@@ -43,9 +43,21 @@ impl Subsumes for SecretResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicSecretResourcePattern {
-    Concrete(SecretResourcePattern),
+    Any,
+    Exact(String),
+    Glob(String),
     Slot(SlotVariable),
     Template(ResourceTemplate),
+}
+
+impl From<SecretResourcePattern> for PolymorphicSecretResourcePattern {
+    fn from(value: SecretResourcePattern) -> Self {
+        match value {
+            SecretResourcePattern::Any => Self::Any,
+            SecretResourcePattern::Exact(value) => Self::Exact(value),
+            SecretResourcePattern::Glob(value) => Self::Glob(value),
+        }
+    }
 }
 
 impl ResourcePattern for SecretResourcePattern {
@@ -146,7 +158,7 @@ impl SecretClass {
             class,
             resource,
             Self::parse_resource,
-            PolymorphicSecretResourcePattern::Concrete,
+            PolymorphicSecretResourcePattern::from,
             PolymorphicSecretResourcePattern::Slot,
             PolymorphicSecretResourcePattern::Template,
         )

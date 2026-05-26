@@ -1,14 +1,14 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_account_owner, parse_account_recipient, parse_polymorphic_account_owner,
-    parse_polymorphic_account_recipient, parse_polymorphic_resource,
+    parse_polymorphic_account_recipient,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountOauth2IdentityResourcePattern {
     Any,
-    Exact(String),
+    Identity { provider: String, external_id: String },
 }
 
 impl AccountOauth2IdentityResourcePattern {
@@ -17,7 +17,14 @@ impl AccountOauth2IdentityResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        let value = value.into();
+        let (provider, external_id) = value
+            .split_once('/')
+            .expect("oauth2 identity must be provider/external-id");
+        Self::Identity {
+            provider: provider.to_string(),
+            external_id: external_id.to_string(),
+        }
     }
 }
 
@@ -25,19 +32,22 @@ impl Subsumes for AccountOauth2IdentityResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (
+                Self::Identity {
+                    provider: a_provider,
+                    external_id: a_external_id,
+                },
+                Self::Identity {
+                    provider: b_provider,
+                    external_id: b_external_id,
+                },
+            ) => a_provider == b_provider && a_external_id == b_external_id,
+            (Self::Identity { .. }, Self::Any) => false,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicAccountOauth2IdentityResourcePattern {
-    Concrete(AccountOauth2IdentityResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicAccountOauth2IdentityResourcePattern = AccountOauth2IdentityResourcePattern;
 
 impl ResourcePattern for AccountOauth2IdentityResourcePattern {
     type Polymorphic = PolymorphicAccountOauth2IdentityResourcePattern;
@@ -124,10 +134,23 @@ impl AccountOauth2IdentityClass {
     ) -> Result<AccountOauth2IdentityResourcePattern, CardParseError> {
         if resource == "*" {
             Ok(AccountOauth2IdentityResourcePattern::Any)
+        } else if let Some((provider, external_id)) = resource.split_once('/') {
+            if provider.is_empty() || external_id.is_empty() {
+                Err(CardParseError::InvalidResource {
+                    class: AccountOauth2IdentityClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+            } else {
+                Ok(AccountOauth2IdentityResourcePattern::Identity {
+                    provider: provider.to_string(),
+                    external_id: external_id.to_string(),
+                })
+            }
         } else {
-            Ok(AccountOauth2IdentityResourcePattern::Exact(
-                resource.to_string(),
-            ))
+            Err(CardParseError::InvalidResource {
+                class: AccountOauth2IdentityClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
         }
     }
 
@@ -135,13 +158,6 @@ impl AccountOauth2IdentityClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicAccountOauth2IdentityResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicAccountOauth2IdentityResourcePattern::Concrete,
-            PolymorphicAccountOauth2IdentityResourcePattern::Slot,
-            PolymorphicAccountOauth2IdentityResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

@@ -42,9 +42,21 @@ impl Subsumes for ConfigResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicConfigResourcePattern {
-    Concrete(ConfigResourcePattern),
+    Any,
+    Exact(String),
+    Glob(String),
     Slot(SlotVariable),
     Template(ResourceTemplate),
+}
+
+impl From<ConfigResourcePattern> for PolymorphicConfigResourcePattern {
+    fn from(value: ConfigResourcePattern) -> Self {
+        match value {
+            ConfigResourcePattern::Any => Self::Any,
+            ConfigResourcePattern::Exact(value) => Self::Exact(value),
+            ConfigResourcePattern::Glob(value) => Self::Glob(value),
+        }
+    }
 }
 
 impl ResourcePattern for ConfigResourcePattern {
@@ -141,7 +153,7 @@ impl ConfigClass {
             class,
             resource,
             Self::parse_resource,
-            PolymorphicConfigResourcePattern::Concrete,
+            PolymorphicConfigResourcePattern::from,
             PolymorphicConfigResourcePattern::Slot,
             PolymorphicConfigResourcePattern::Template,
         )

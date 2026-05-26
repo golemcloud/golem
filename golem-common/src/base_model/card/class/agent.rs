@@ -1,7 +1,7 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_agent_owner, parse_agent_recipient, parse_polymorphic_agent_owner,
-    parse_polymorphic_agent_recipient, parse_polymorphic_resource,
+    parse_polymorphic_agent_recipient,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,13 +43,7 @@ impl Subsumes for AgentResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicAgentResourcePattern {
-    Concrete(AgentResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicAgentResourcePattern = AgentResourcePattern;
 
 impl ResourcePattern for AgentResourcePattern {
     type Polymorphic = PolymorphicAgentResourcePattern;
@@ -167,14 +161,7 @@ impl AgentClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicAgentResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicAgentResourcePattern::Concrete,
-            PolymorphicAgentResourcePattern::Slot,
-            PolymorphicAgentResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }
 

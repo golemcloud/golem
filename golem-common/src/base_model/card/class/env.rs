@@ -1,7 +1,7 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_agent_owner, parse_agent_recipient, parse_polymorphic_agent_owner,
-    parse_polymorphic_agent_recipient, parse_polymorphic_resource,
+    parse_polymorphic_agent_recipient,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,9 +34,18 @@ impl Subsumes for EnvResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicEnvResourcePattern {
-    Concrete(EnvResourcePattern),
+    Any,
+    VarName(String),
     Slot(SlotVariable),
-    Template(ResourceTemplate),
+}
+
+impl From<EnvResourcePattern> for PolymorphicEnvResourcePattern {
+    fn from(value: EnvResourcePattern) -> Self {
+        match value {
+            EnvResourcePattern::Any => Self::Any,
+            EnvResourcePattern::Exact(value) => Self::VarName(value),
+        }
+    }
 }
 
 impl ResourcePattern for EnvResourcePattern {
@@ -124,13 +133,15 @@ impl EnvClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicEnvResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicEnvResourcePattern::Concrete,
-            PolymorphicEnvResourcePattern::Slot,
-            PolymorphicEnvResourcePattern::Template,
-        )
+        if let Ok(slot) = SlotVariable::parse(resource) {
+            Ok(PolymorphicEnvResourcePattern::Slot(slot))
+        } else if crate::base_model::card::parsing::contains_slot_reference(resource) {
+            Err(CardParseError::InvalidResource {
+                class: class.to_string(),
+                resource: resource.to_string(),
+            })
+        } else {
+            Self::parse_resource(class, resource).map(PolymorphicEnvResourcePattern::from)
+        }
     }
 }

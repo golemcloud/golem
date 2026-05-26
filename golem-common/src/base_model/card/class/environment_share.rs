@@ -2,14 +2,14 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_environment_owner, parse_environment_recipient,
     parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient,
-    parse_polymorphic_resource,
 };
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentShareResourcePattern {
     Any,
-    Exact(String),
+    Share(Uuid),
 }
 
 impl EnvironmentShareResourcePattern {
@@ -18,7 +18,7 @@ impl EnvironmentShareResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Share(Uuid::parse_str(&value.into()).expect("invalid share id"))
     }
 }
 
@@ -26,19 +26,13 @@ impl Subsumes for EnvironmentShareResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (Self::Share(a), Self::Share(b)) => a == b,
+            (Self::Share(_), Self::Any) => false,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicEnvironmentShareResourcePattern {
-    Concrete(EnvironmentShareResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicEnvironmentShareResourcePattern = EnvironmentShareResourcePattern;
 
 impl ResourcePattern for EnvironmentShareResourcePattern {
     type Polymorphic = PolymorphicEnvironmentShareResourcePattern;
@@ -129,7 +123,12 @@ impl EnvironmentShareClass {
         if resource == "*" {
             Ok(EnvironmentShareResourcePattern::Any)
         } else {
-            Ok(EnvironmentShareResourcePattern::Exact(resource.to_string()))
+            Uuid::parse_str(resource)
+                .map(EnvironmentShareResourcePattern::Share)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentShareClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 
@@ -137,13 +136,6 @@ impl EnvironmentShareClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicEnvironmentShareResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicEnvironmentShareResourcePattern::Concrete,
-            PolymorphicEnvironmentShareResourcePattern::Slot,
-            PolymorphicEnvironmentShareResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

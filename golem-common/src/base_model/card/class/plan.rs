@@ -1,7 +1,7 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_account_recipient, parse_empty_owner,
-    parse_polymorphic_account_recipient, parse_polymorphic_empty_owner, parse_polymorphic_resource,
+    parse_polymorphic_account_recipient, parse_polymorphic_empty_owner,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,13 +31,7 @@ impl Subsumes for PlanResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicPlanResourcePattern {
-    Concrete(PlanResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicPlanResourcePattern = PlanResourcePattern;
 
 impl ResourcePattern for PlanResourcePattern {
     type Polymorphic = PolymorphicPlanResourcePattern;
@@ -128,13 +122,6 @@ impl PlanClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicPlanResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicPlanResourcePattern::Concrete,
-            PolymorphicPlanResourcePattern::Slot,
-            PolymorphicPlanResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

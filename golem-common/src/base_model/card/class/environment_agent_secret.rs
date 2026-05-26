@@ -43,9 +43,23 @@ impl Subsumes for EnvironmentAgentSecretResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicEnvironmentAgentSecretResourcePattern {
-    Concrete(EnvironmentAgentSecretResourcePattern),
+    Any,
+    Exact(String),
+    Glob(String),
     Slot(SlotVariable),
     Template(ResourceTemplate),
+}
+
+impl From<EnvironmentAgentSecretResourcePattern>
+    for PolymorphicEnvironmentAgentSecretResourcePattern
+{
+    fn from(value: EnvironmentAgentSecretResourcePattern) -> Self {
+        match value {
+            EnvironmentAgentSecretResourcePattern::Any => Self::Any,
+            EnvironmentAgentSecretResourcePattern::Exact(value) => Self::Exact(value),
+            EnvironmentAgentSecretResourcePattern::Glob(value) => Self::Glob(value),
+        }
+    }
 }
 
 impl ResourcePattern for EnvironmentAgentSecretResourcePattern {
@@ -156,7 +170,7 @@ impl EnvironmentAgentSecretClass {
             class,
             resource,
             Self::parse_resource,
-            PolymorphicEnvironmentAgentSecretResourcePattern::Concrete,
+            PolymorphicEnvironmentAgentSecretResourcePattern::from,
             PolymorphicEnvironmentAgentSecretResourcePattern::Slot,
             PolymorphicEnvironmentAgentSecretResourcePattern::Template,
         )

@@ -8,34 +8,55 @@ use crate::base_model::card::parsing::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum KvResourcePattern {
-    Any,
-    Exact(String),
-    Glob(String),
+    StoreKey { store: String, key_pattern: String },
 }
 
 impl KvResourcePattern {
     pub fn any() -> Self {
-        Self::Any
+        Self::StoreKey {
+            store: "*".to_string(),
+            key_pattern: "**".to_string(),
+        }
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::parse_value(&value.into()).unwrap_or_else(|value| Self::StoreKey {
+            store: value,
+            key_pattern: String::new(),
+        })
     }
 
     pub fn glob(value: impl Into<String>) -> Self {
-        Self::Glob(value.into())
+        Self::exact(value)
+    }
+
+    fn parse_value(value: &str) -> Result<Self, String> {
+        let Some((store, key_pattern)) = value.split_once('.') else {
+            return Err(value.to_string());
+        };
+        if store.is_empty() || key_pattern.is_empty() {
+            return Err(value.to_string());
+        }
+        Ok(Self::StoreKey {
+            store: store.to_string(),
+            key_pattern: key_pattern.to_string(),
+        })
     }
 }
 
 impl Subsumes for KvResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Glob(a), Self::Glob(b)) => glob_subsumes(a, b),
-            (Self::Glob(a), Self::Exact(b)) => glob_matches(a, b),
-            (Self::Glob(_), Self::Any) => false,
-            (Self::Exact(_), Self::Any | Self::Glob(_)) => false,
+            (
+                Self::StoreKey {
+                    store: a_store,
+                    key_pattern: a_key,
+                },
+                Self::StoreKey {
+                    store: b_store,
+                    key_pattern: b_key,
+                },
+            ) => (a_store == "*" || a_store == b_store) && glob_subsumes(a_key, b_key),
         }
     }
 }
@@ -43,9 +64,17 @@ impl Subsumes for KvResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicKvResourcePattern {
-    Concrete(KvResourcePattern),
+    StoreKey { store: String, key_pattern: String },
     Slot(SlotVariable),
     Template(ResourceTemplate),
+}
+
+impl From<KvResourcePattern> for PolymorphicKvResourcePattern {
+    fn from(value: KvResourcePattern) -> Self {
+        match value {
+            KvResourcePattern::StoreKey { store, key_pattern } => Self::StoreKey { store, key_pattern },
+        }
+    }
 }
 
 impl ResourcePattern for KvResourcePattern {
@@ -128,13 +157,10 @@ pub type PolymorphicKvPermissionPattern = PolymorphicClassPermissionPattern<KvCl
 
 impl KvClass {
     fn parse_resource(_class: &str, resource: &str) -> Result<KvResourcePattern, CardParseError> {
-        if resource == "*" || resource == "**" {
-            Ok(KvResourcePattern::Any)
-        } else if resource.contains('*') {
-            Ok(KvResourcePattern::Glob(resource.to_string()))
-        } else {
-            Ok(KvResourcePattern::Exact(resource.to_string()))
-        }
+        KvResourcePattern::parse_value(resource).map_err(|_| CardParseError::InvalidResource {
+            class: KvClass::NAME.to_string(),
+            resource: resource.to_string(),
+        })
     }
 
     fn parse_polymorphic_resource(
@@ -145,7 +171,7 @@ impl KvClass {
             class,
             resource,
             Self::parse_resource,
-            PolymorphicKvResourcePattern::Concrete,
+            PolymorphicKvResourcePattern::from,
             PolymorphicKvResourcePattern::Slot,
             PolymorphicKvResourcePattern::Template,
         )

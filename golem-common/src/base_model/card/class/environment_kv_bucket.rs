@@ -2,7 +2,6 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_environment_owner, parse_environment_recipient,
     parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient,
-    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,13 +31,7 @@ impl Subsumes for EnvironmentKvBucketResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicEnvironmentKvBucketResourcePattern {
-    Concrete(EnvironmentKvBucketResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicEnvironmentKvBucketResourcePattern = EnvironmentKvBucketResourcePattern;
 
 impl ResourcePattern for EnvironmentKvBucketResourcePattern {
     type Polymorphic = PolymorphicEnvironmentKvBucketResourcePattern;
@@ -137,13 +130,6 @@ impl EnvironmentKvBucketClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicEnvironmentKvBucketResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicEnvironmentKvBucketResourcePattern::Concrete,
-            PolymorphicEnvironmentKvBucketResourcePattern::Slot,
-            PolymorphicEnvironmentKvBucketResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

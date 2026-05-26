@@ -2,7 +2,6 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_environment_owner, parse_environment_recipient,
     parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient,
-    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,13 +31,7 @@ impl Subsumes for EnvironmentMcpDeploymentResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicEnvironmentMcpDeploymentResourcePattern {
-    Concrete(EnvironmentMcpDeploymentResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicEnvironmentMcpDeploymentResourcePattern = EnvironmentMcpDeploymentResourcePattern;
 
 impl ResourcePattern for EnvironmentMcpDeploymentResourcePattern {
     type Polymorphic = PolymorphicEnvironmentMcpDeploymentResourcePattern;
@@ -140,13 +133,6 @@ impl EnvironmentMcpDeploymentClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicEnvironmentMcpDeploymentResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicEnvironmentMcpDeploymentResourcePattern::Concrete,
-            PolymorphicEnvironmentMcpDeploymentResourcePattern::Slot,
-            PolymorphicEnvironmentMcpDeploymentResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

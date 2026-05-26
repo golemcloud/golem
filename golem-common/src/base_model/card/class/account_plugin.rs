@@ -1,7 +1,7 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_account_owner, parse_account_recipient, parse_polymorphic_account_owner,
-    parse_polymorphic_account_recipient, parse_polymorphic_resource,
+    parse_polymorphic_account_recipient,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,13 +31,7 @@ impl Subsumes for AccountPluginResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicAccountPluginResourcePattern {
-    Concrete(AccountPluginResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicAccountPluginResourcePattern = AccountPluginResourcePattern;
 
 impl ResourcePattern for AccountPluginResourcePattern {
     type Polymorphic = PolymorphicAccountPluginResourcePattern;
@@ -134,13 +128,6 @@ impl AccountPluginClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicAccountPluginResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicAccountPluginResourcePattern::Concrete,
-            PolymorphicAccountPluginResourcePattern::Slot,
-            PolymorphicAccountPluginResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

@@ -42,9 +42,21 @@ impl Subsumes for FilesystemResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicFilesystemResourcePattern {
-    Concrete(FilesystemResourcePattern),
+    Any,
+    Exact(String),
+    Glob(String),
     Slot(SlotVariable),
     Template(ResourceTemplate),
+}
+
+impl From<FilesystemResourcePattern> for PolymorphicFilesystemResourcePattern {
+    fn from(value: FilesystemResourcePattern) -> Self {
+        match value {
+            FilesystemResourcePattern::Any => Self::Any,
+            FilesystemResourcePattern::Exact(value) => Self::Exact(value),
+            FilesystemResourcePattern::Glob(value) => Self::Glob(value),
+        }
+    }
 }
 
 impl ResourcePattern for FilesystemResourcePattern {
@@ -150,7 +162,7 @@ impl FilesystemClass {
             class,
             resource,
             Self::parse_resource,
-            PolymorphicFilesystemResourcePattern::Concrete,
+            PolymorphicFilesystemResourcePattern::from,
             PolymorphicFilesystemResourcePattern::Slot,
             PolymorphicFilesystemResourcePattern::Template,
         )

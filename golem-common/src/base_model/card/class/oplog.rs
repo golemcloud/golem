@@ -1,7 +1,7 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_agent_owner, parse_agent_recipient, parse_polymorphic_agent_owner,
-    parse_polymorphic_agent_recipient, parse_polymorphic_resource,
+    parse_polymorphic_agent_recipient,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,13 +40,7 @@ impl Subsumes for OplogResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicOplogResourcePattern {
-    Concrete(OplogResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicOplogResourcePattern = OplogResourcePattern;
 
 impl ResourcePattern for OplogResourcePattern {
     type Polymorphic = PolymorphicOplogResourcePattern;
@@ -152,13 +146,6 @@ impl OplogClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicOplogResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicOplogResourcePattern::Concrete,
-            PolymorphicOplogResourcePattern::Slot,
-            PolymorphicOplogResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

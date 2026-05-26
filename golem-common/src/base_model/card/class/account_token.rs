@@ -1,7 +1,7 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_account_owner, parse_account_recipient, parse_polymorphic_account_owner,
-    parse_polymorphic_account_recipient, parse_polymorphic_resource,
+    parse_polymorphic_account_recipient,
 };
 use uuid::Uuid;
 
@@ -32,13 +32,7 @@ impl Subsumes for AccountTokenResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicAccountTokenResourcePattern {
-    Concrete(AccountTokenResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicAccountTokenResourcePattern = AccountTokenResourcePattern;
 
 impl ResourcePattern for AccountTokenResourcePattern {
     type Polymorphic = PolymorphicAccountTokenResourcePattern;
@@ -138,13 +132,6 @@ impl AccountTokenClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicAccountTokenResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicAccountTokenResourcePattern::Concrete,
-            PolymorphicAccountTokenResourcePattern::Slot,
-            PolymorphicAccountTokenResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

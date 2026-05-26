@@ -8,34 +8,55 @@ use crate::base_model::card::parsing::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum BlobResourcePattern {
-    Any,
-    Exact(String),
-    Glob(String),
+    BucketKey { bucket: String, key_pattern: String },
 }
 
 impl BlobResourcePattern {
     pub fn any() -> Self {
-        Self::Any
+        Self::BucketKey {
+            bucket: "*".to_string(),
+            key_pattern: "**".to_string(),
+        }
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::parse_value(&value.into()).unwrap_or_else(|value| Self::BucketKey {
+            bucket: value,
+            key_pattern: String::new(),
+        })
     }
 
     pub fn glob(value: impl Into<String>) -> Self {
-        Self::Glob(value.into())
+        Self::exact(value)
+    }
+
+    fn parse_value(value: &str) -> Result<Self, String> {
+        let Some((bucket, key_pattern)) = value.split_once('.') else {
+            return Err(value.to_string());
+        };
+        if bucket.is_empty() || key_pattern.is_empty() {
+            return Err(value.to_string());
+        }
+        Ok(Self::BucketKey {
+            bucket: bucket.to_string(),
+            key_pattern: key_pattern.to_string(),
+        })
     }
 }
 
 impl Subsumes for BlobResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Glob(a), Self::Glob(b)) => glob_subsumes(a, b),
-            (Self::Glob(a), Self::Exact(b)) => glob_matches(a, b),
-            (Self::Glob(_), Self::Any) => false,
-            (Self::Exact(_), Self::Any | Self::Glob(_)) => false,
+            (
+                Self::BucketKey {
+                    bucket: a_bucket,
+                    key_pattern: a_key,
+                },
+                Self::BucketKey {
+                    bucket: b_bucket,
+                    key_pattern: b_key,
+                },
+            ) => (a_bucket == "*" || a_bucket == b_bucket) && glob_subsumes(a_key, b_key),
         }
     }
 }
@@ -43,9 +64,17 @@ impl Subsumes for BlobResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicBlobResourcePattern {
-    Concrete(BlobResourcePattern),
+    BucketKey { bucket: String, key_pattern: String },
     Slot(SlotVariable),
     Template(ResourceTemplate),
+}
+
+impl From<BlobResourcePattern> for PolymorphicBlobResourcePattern {
+    fn from(value: BlobResourcePattern) -> Self {
+        match value {
+            BlobResourcePattern::BucketKey { bucket, key_pattern } => Self::BucketKey { bucket, key_pattern },
+        }
+    }
 }
 
 impl ResourcePattern for BlobResourcePattern {
@@ -128,13 +157,10 @@ pub type PolymorphicBlobPermissionPattern = PolymorphicClassPermissionPattern<Bl
 
 impl BlobClass {
     fn parse_resource(_class: &str, resource: &str) -> Result<BlobResourcePattern, CardParseError> {
-        if resource == "*" || resource == "**" {
-            Ok(BlobResourcePattern::Any)
-        } else if resource.contains('*') {
-            Ok(BlobResourcePattern::Glob(resource.to_string()))
-        } else {
-            Ok(BlobResourcePattern::Exact(resource.to_string()))
-        }
+        BlobResourcePattern::parse_value(resource).map_err(|_| CardParseError::InvalidResource {
+            class: BlobClass::NAME.to_string(),
+            resource: resource.to_string(),
+        })
     }
 
     fn parse_polymorphic_resource(
@@ -145,7 +171,7 @@ impl BlobClass {
             class,
             resource,
             Self::parse_resource,
-            PolymorphicBlobResourcePattern::Concrete,
+            PolymorphicBlobResourcePattern::from,
             PolymorphicBlobResourcePattern::Slot,
             PolymorphicBlobResourcePattern::Template,
         )

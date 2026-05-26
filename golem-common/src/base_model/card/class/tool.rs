@@ -1,7 +1,7 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_agent_recipient, parse_polymorphic_agent_recipient,
-    parse_polymorphic_resource, parse_polymorphic_tool_owner, parse_tool_owner,
+    parse_polymorphic_tool_owner, parse_tool_owner,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,13 +31,7 @@ impl Subsumes for ToolResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicToolResourcePattern {
-    Concrete(ToolResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicToolResourcePattern = ToolResourcePattern;
 
 impl ResourcePattern for ToolResourcePattern {
     type Polymorphic = PolymorphicToolResourcePattern;
@@ -124,13 +118,6 @@ impl ToolClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicToolResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicToolResourcePattern::Concrete,
-            PolymorphicToolResourcePattern::Slot,
-            PolymorphicToolResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

@@ -220,7 +220,7 @@ fn generate_declared_permission_class_parser_tests(r: &mut DynamicTestRegistrati
             "environment",
         ),
         (
-            "environment.share(acme/shop/prod) @ acme/shop/prod : view : share-a",
+            "environment.share(acme/shop/prod) @ acme/shop/prod : view : 550e8400-e29b-41d4-a716-446655440000",
             "environment.share",
         ),
         (
@@ -236,7 +236,7 @@ fn generate_declared_permission_class_parser_tests(r: &mut DynamicTestRegistrati
             "environment.security-scheme",
         ),
         (
-            "environment.http-api-deployment(acme/shop/prod) @ acme/shop/prod : view : api-a",
+            "environment.http-api-deployment(acme/shop/prod) @ acme/shop/prod : view : api./v1/**",
             "environment.http-api-deployment",
         ),
         (
@@ -260,7 +260,7 @@ fn generate_declared_permission_class_parser_tests(r: &mut DynamicTestRegistrati
             "component",
         ),
         (
-            "account.oauth2-identity(acme) @ acme : view : identity-a",
+            "account.oauth2-identity(acme) @ acme : view : google/12345",
             "account.oauth2-identity",
         ),
         (
@@ -332,9 +332,9 @@ fn parses_runtime_class_examples_from_spec() {
     assert_matches!(
         parsed_permission("kv(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : my-store.user-*"),
         PermissionPattern::Kv(KvPermissionPattern::Verb { verb: KvVerb::Read,
-            resource: KvResourcePattern::Glob(key),
+            resource: KvResourcePattern::StoreKey { store, key_pattern },
             ..
-        }) if key == "my-store.user-*"
+        }) if store == "my-store" && key_pattern == "user-*"
     );
 }
 

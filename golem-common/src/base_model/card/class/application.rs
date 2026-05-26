@@ -2,7 +2,6 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_account_recipient, parse_application_owner,
     parse_polymorphic_account_recipient, parse_polymorphic_application_owner,
-    parse_polymorphic_resource,
 };
 use uuid::Uuid;
 
@@ -25,13 +24,7 @@ impl Subsumes for ApplicationResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicApplicationResourcePattern {
-    Concrete(ApplicationResourcePattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
+pub type PolymorphicApplicationResourcePattern = ApplicationResourcePattern;
 
 impl ResourcePattern for ApplicationResourcePattern {
     type Polymorphic = PolymorphicApplicationResourcePattern;
@@ -152,13 +145,6 @@ impl ApplicationClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicApplicationResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicApplicationResourcePattern::Concrete,
-            PolymorphicApplicationResourcePattern::Slot,
-            PolymorphicApplicationResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

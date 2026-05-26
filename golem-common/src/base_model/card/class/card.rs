@@ -40,9 +40,21 @@ impl Subsumes for CardResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicCardResourcePattern {
-    Concrete(CardResourcePattern),
+    Any,
+    Empty,
+    InstallTarget(RecipientPathPattern),
     Slot(SlotVariable),
     Template(ResourceTemplate),
+}
+
+impl From<CardResourcePattern> for PolymorphicCardResourcePattern {
+    fn from(value: CardResourcePattern) -> Self {
+        match value {
+            CardResourcePattern::Any => Self::Any,
+            CardResourcePattern::Empty => Self::Empty,
+            CardResourcePattern::InstallTarget(value) => Self::InstallTarget(value),
+        }
+    }
 }
 
 impl ResourcePattern for CardResourcePattern {
@@ -145,7 +157,7 @@ impl CardClass {
             class,
             resource,
             Self::parse_resource,
-            PolymorphicCardResourcePattern::Concrete,
+            PolymorphicCardResourcePattern::from,
             PolymorphicCardResourcePattern::Slot,
             PolymorphicCardResourcePattern::Template,
         )
