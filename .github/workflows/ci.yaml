@@ -23,7 +23,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_BRANCH: "wasmtime-v45"
+  WASM_RQUICKJS_VERSION: "0.3.4"
   MOONBIT_INSTALL_VERSION: "0.9.2+bbe2b338f"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -235,7 +235,7 @@ jobs:
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         uses: ./.github/actions/setup-js-wasm-tools
         with:
-          wasm-rquickjs-branch: ${{ env.WASM_RQUICKJS_BRANCH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
           install-wasi-sdk: ${{ matrix.group.name == 'cli-integration-tests-group2' }}
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
@@ -350,7 +350,7 @@ jobs:
         with:
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-          wasm-rquickjs-branch: ${{ env.WASM_RQUICKJS_BRANCH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Sync WIT dependencies
         run: cargo make wit
@@ -457,7 +457,7 @@ jobs:
         with:
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-          wasm-rquickjs-branch: ${{ env.WASM_RQUICKJS_BRANCH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Sync WIT dependencies
         run: cargo make wit
@@ -547,7 +547,7 @@ jobs:
         with:
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-          wasm-rquickjs-branch: ${{ env.WASM_RQUICKJS_BRANCH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Install dependencies
         working-directory: sdks/ts
@@ -669,7 +669,7 @@ jobs:
         with:
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-          wasm-rquickjs-branch: ${{ env.WASM_RQUICKJS_BRANCH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Install TS SDK dependencies
         if: matrix.chunk.needs-node

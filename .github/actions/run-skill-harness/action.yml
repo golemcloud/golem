@@ -17,8 +17,8 @@ inputs:
   wasi-sdk-path:
     description: 'WASI SDK install path'
     required: true
-  wasm-rquickjs-branch:
-    description: 'wasm-rquickjs git branch'
+  wasm-rquickjs-version:
+    description: 'wasm-rquickjs version'
     required: true
   anthropic-api-key:
     description: 'Anthropic API key'
@@ -49,7 +49,7 @@ runs:
       with:
         wasi-sdk-version: ${{ inputs.wasi-sdk-version }}
         wasi-sdk-path: ${{ inputs.wasi-sdk-path }}
-        wasm-rquickjs-branch: ${{ inputs.wasm-rquickjs-branch }}
+        wasm-rquickjs-version: ${{ inputs.wasm-rquickjs-version }}
 
     - name: Restore release binaries
       uses: actions/cache/restore@v5

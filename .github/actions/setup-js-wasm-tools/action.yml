@@ -22,8 +22,8 @@ inputs:
   install-wasm-rquickjs:
     description: 'Whether to install wasm-rquickjs'
     default: 'true'
-  wasm-rquickjs-branch:
-    description: 'wasm-rquickjs git branch to install from github.com/golemcloud/wasm-rquickjs'
+  wasm-rquickjs-version:
+    description: 'wasm-rquickjs-cli version to install from crates.io'
     required: true
   install-cargo-component:
     description: 'Whether to install cargo-component'
@@ -59,6 +59,6 @@ runs:
         wasi-sdk-version: ${{ inputs.wasi-sdk-version }}
         wasi-sdk-path: ${{ inputs.wasi-sdk-path }}
         install-wasm-rquickjs: ${{ inputs.install-wasm-rquickjs }}
-        wasm-rquickjs-branch: ${{ inputs.wasm-rquickjs-branch }}
+        wasm-rquickjs-version: ${{ inputs.wasm-rquickjs-version }}
         install-cargo-component: ${{ inputs.install-cargo-component }}
         cargo-component-version: ${{ inputs.cargo-component-version }}
