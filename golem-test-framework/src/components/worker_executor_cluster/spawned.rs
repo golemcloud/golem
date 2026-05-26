@@ -159,6 +159,18 @@ impl WorkerExecutorCluster for SpawnedWorkerExecutorCluster {
         }
     }
 
+    async fn restart_all_with_extra_env_vars(&self, extra_env_vars: Vec<(String, String)>) {
+        info!(
+            "Restarting all worker executors with {} extra env var(s)",
+            extra_env_vars.len()
+        );
+        for worker_executor in &self.worker_executors {
+            worker_executor
+                .restart_with_extra_env_vars(extra_env_vars.clone())
+                .await;
+        }
+    }
+
     async fn stop(&self, index: usize) {
         let mut stopped = self.stopped_indices.lock().await;
         if !stopped.contains(&index) {

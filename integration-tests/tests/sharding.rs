@@ -35,6 +35,7 @@ mod tests {
     use golem_test_framework::components::rdb::DbInfo;
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+        WorkerExecutorClusterControl, WorkerExecutorClusterControlStub,
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 
@@ -65,8 +66,8 @@ mod tests {
         }
     }
 
-    #[test_dep]
-    pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
+    #[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl))]
+    pub async fn create_deps() -> EnvBasedTestDependencies {
         let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
             number_of_shards_override: Some(16),
             ..EnvBasedTestDependenciesConfig::new()
@@ -79,7 +80,7 @@ mod tests {
         deps
     }
 
-    #[test_dep]
+    #[test_dep(scope = PerWorker)]
     pub fn tracing() -> Tracing {
         Tracing::init()
     }
@@ -139,9 +140,14 @@ mod tests {
     #[test]
     #[timeout(240000)]
     #[flaky(5)]
-    async fn coordinated_scenario_01_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    async fn coordinated_scenario_01_01(
+        deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        _tracing: &Tracing,
+    ) {
         coordinated_scenario(
             deps,
+            cluster_control,
             5,
             4,
             vec![
@@ -159,9 +165,14 @@ mod tests {
     #[test]
     #[timeout(240000)]
     #[flaky(5)]
-    async fn coordinated_scenario_01_02(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    async fn coordinated_scenario_01_02(
+        deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        _tracing: &Tracing,
+    ) {
         coordinated_scenario(
             deps,
+            cluster_control,
             5,
             30,
             vec![
@@ -179,9 +190,14 @@ mod tests {
     #[test]
     #[timeout(240000)]
     #[flaky(5)]
-    async fn coordinated_scenario_02_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    async fn coordinated_scenario_02_01(
+        deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        _tracing: &Tracing,
+    ) {
         coordinated_scenario(
             deps,
+            cluster_control,
             5,
             10,
             vec![
@@ -199,9 +215,14 @@ mod tests {
     #[test]
     #[timeout(240000)]
     #[flaky(5)]
-    async fn coordinated_scenario_03_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    async fn coordinated_scenario_03_01(
+        deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        _tracing: &Tracing,
+    ) {
         coordinated_scenario(
             deps,
+            cluster_control,
             5,
             10,
             vec![
@@ -221,16 +242,18 @@ mod tests {
     #[flaky(5)]
     async fn service_is_responsive_to_shard_changes(
         deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
         _tracing: &Tracing,
     ) {
-        deps.reset(16).await;
+        deps.reset(cluster_control, 16).await;
         let (component, agent_ids) = deps.create_component_and_start_workers(4).await;
 
         let deps_clone = deps.clone();
+        let cluster_control_clone = cluster_control.clone();
         let (stop_tx, stop_rx) = mpsc::channel(128);
         let chaos = tokio::spawn(
             async move {
-                unstable_environment(&deps_clone, stop_rx).await;
+                unstable_environment(&deps_clone, &cluster_control_clone, stop_rx).await;
             }
             .in_current_span(),
         );
@@ -255,11 +278,12 @@ mod tests {
 
     async fn coordinated_scenario(
         deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
         number_of_shard: usize,
         number_of_workers: usize,
         steps: Vec<Step>,
     ) {
-        deps.reset(number_of_shard).await;
+        deps.reset(cluster_control, number_of_shard).await;
         let (component, agent_ids) = deps
             .create_component_and_start_workers(number_of_workers)
             .await;
@@ -270,9 +294,16 @@ mod tests {
         let (env_event_tx, env_event_rx) = mpsc::channel(128);
 
         let deps_clone = deps.clone();
+        let cluster_control_clone = cluster_control.clone();
         let chaos = tokio::spawn(
             async move {
-                coordinated_environment(&deps_clone, env_command_rx, env_event_tx).await;
+                coordinated_environment(
+                    &deps_clone,
+                    &cluster_control_clone,
+                    env_command_rx,
+                    env_event_tx,
+                )
+                .await;
             }
             .in_current_span(),
         );
@@ -349,7 +380,11 @@ mod tests {
     // Sharding test specific env functions
     #[async_trait]
     trait DepsOps {
-        async fn reset(&self, number_of_shards: usize);
+        async fn reset(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+            number_of_shards: usize,
+        );
         async fn create_component_and_start_workers(
             &self,
             n: usize,
@@ -359,17 +394,41 @@ mod tests {
             component: &ComponentDto,
             agent_ids: &[ParsedAgentId],
         ) -> Result<(), worker::v1::agent_error::Error>;
-        async fn start_all_worker_executors(&self);
-        async fn stop_random_worker_executor(&self);
-        async fn start_random_worker_executor(&self);
-        async fn start_random_worker_executors(&self, n: usize);
-        async fn stop_random_worker_executors(&self, n: usize);
-        async fn stop_all_worker_executors(&self);
-        async fn start_shard_manager(&self, number_of_shards: Option<usize>);
-        async fn stop_shard_manager(&self);
-        async fn restart_shard_manager(&self);
+        async fn start_all_worker_executors(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+        );
+        async fn stop_random_worker_executor(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+        );
+        async fn start_random_worker_executor(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+        );
+        async fn start_random_worker_executors(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+            n: usize,
+        );
+        async fn stop_random_worker_executors(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+            n: usize,
+        );
+        async fn stop_all_worker_executors(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+        );
+        async fn start_shard_manager(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+            number_of_shards: Option<usize>,
+        );
+        async fn stop_shard_manager(&self, cluster_control: &WorkerExecutorClusterControlStub);
+        async fn restart_shard_manager(&self, cluster_control: &WorkerExecutorClusterControlStub);
         async fn clean_shard_manager_state(&self);
-        fn flush_redis_db(&self);
+        async fn flush_redis_db(&self, cluster_control: &WorkerExecutorClusterControlStub);
     }
 
     fn randomize<T>(slice: &mut [T]) {
@@ -379,14 +438,18 @@ mod tests {
 
     #[async_trait]
     impl DepsOps for EnvBasedTestDependencies {
-        async fn reset(&self, number_of_shards: usize) {
+        async fn reset(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+            number_of_shards: usize,
+        ) {
             info!("Reset started");
-            self.stop_all_worker_executors().await;
-            self.stop_shard_manager().await;
+            self.stop_all_worker_executors(cluster_control).await;
+            DepsOps::stop_shard_manager(self, cluster_control).await;
             self.clean_shard_manager_state().await;
-            self.flush_redis_db();
-            self.start_shard_manager(Some(number_of_shards)).await;
-            self.start_all_worker_executors().await;
+            DepsOps::flush_redis_db(self, cluster_control).await;
+            DepsOps::start_shard_manager(self, cluster_control, Some(number_of_shards)).await;
+            self.start_all_worker_executors(cluster_control).await;
             info!("Reset done");
         }
 
@@ -500,33 +563,36 @@ mod tests {
             Ok(())
         }
 
-        async fn start_all_worker_executors(&self) {
-            let stopped = self.worker_executor_cluster().stopped_indices().await;
-            let mut tasks = JoinSet::new();
+        async fn start_all_worker_executors(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+        ) {
+            let stopped = cluster_control.stopped_indices().await;
             for idx in stopped {
-                let self_clone = self.clone();
-                tasks.spawn(
-                    async move {
-                        self_clone.worker_executor_cluster().start(idx).await;
-                    }
-                    .in_current_span(),
-                );
-            }
-            while let Some(result) = tasks.join_next().await {
-                result.unwrap()
+                cluster_control.start(idx).await;
             }
         }
 
-        async fn stop_random_worker_executor(&self) {
-            self.stop_random_worker_executors(1).await;
+        async fn stop_random_worker_executor(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+        ) {
+            self.stop_random_worker_executors(cluster_control, 1).await;
         }
 
-        async fn start_random_worker_executor(&self) {
-            self.start_random_worker_executors(1).await
+        async fn start_random_worker_executor(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+        ) {
+            self.start_random_worker_executors(cluster_control, 1).await
         }
 
-        async fn start_random_worker_executors(&self, n: usize) {
-            let mut stopped = self.worker_executor_cluster().stopped_indices().await;
+        async fn start_random_worker_executors(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+            n: usize,
+        ) {
+            let mut stopped = cluster_control.stopped_indices().await;
             if !stopped.is_empty() {
                 {
                     let mut rng = rng();
@@ -534,61 +600,68 @@ mod tests {
                 }
 
                 let to_start = &stopped[0..n];
-
-                let mut tasks = JoinSet::new();
                 for idx in to_start {
-                    let self_clone = self.clone();
-                    tasks.spawn(
-                        {
-                            let idx = idx.to_owned();
-                            async move {
-                                self_clone.worker_executor_cluster().start(idx).await;
-                            }
-                        }
-                        .in_current_span(),
-                    );
-                }
-                while let Some(result) = tasks.join_next().await {
-                    result.unwrap()
+                    cluster_control.start(*idx).await;
                 }
             }
         }
 
-        async fn stop_random_worker_executors(&self, n: usize) {
-            let mut started = self.worker_executor_cluster().started_indices().await;
+        async fn stop_random_worker_executors(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+            n: usize,
+        ) {
+            let mut started = cluster_control.started_indices().await;
             if !started.is_empty() {
                 randomize(&mut started);
 
                 let to_stop = &started[0..n];
 
                 for idx in to_stop {
-                    self.worker_executor_cluster().stop(*idx).await;
+                    cluster_control.stop(*idx).await;
                 }
             }
         }
 
-        async fn stop_all_worker_executors(&self) {
-            let started = self.worker_executor_cluster().started_indices().await;
+        async fn stop_all_worker_executors(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+        ) {
+            let started = cluster_control.started_indices().await;
             for idx in started {
-                self.worker_executor_cluster().stop(idx).await;
+                cluster_control.stop(idx).await;
             }
         }
 
-        async fn start_shard_manager(&self, number_of_shards: Option<usize>) {
-            self.shard_manager().restart(number_of_shards).await;
+        async fn start_shard_manager(
+            &self,
+            cluster_control: &WorkerExecutorClusterControlStub,
+            number_of_shards: Option<usize>,
+        ) {
+            cluster_control
+                .start_shard_manager(number_of_shards.map(|n| {
+                    u16::try_from(n).expect("number_of_shards does not fit into u16")
+                }))
+                .await;
         }
 
-        async fn stop_shard_manager(&self) {
-            self.shard_manager().kill().await;
+        async fn stop_shard_manager(&self, cluster_control: &WorkerExecutorClusterControlStub) {
+            cluster_control.stop_shard_manager().await;
         }
 
-        async fn restart_shard_manager(&self) {
-            self.shard_manager().kill().await;
-            self.shard_manager().restart(None).await;
+        async fn restart_shard_manager(&self, cluster_control: &WorkerExecutorClusterControlStub) {
+            cluster_control.restart_shard_manager().await;
         }
 
-        fn flush_redis_db(&self) {
-            self.redis().flush_db(0);
+        async fn flush_redis_db(&self, cluster_control: &WorkerExecutorClusterControlStub) {
+            // Route through the parent-owned Redis owner so reset/control
+            // operations all go through the single source of truth instead
+            // of opening a worker-local connection. Matches every other
+            // lifecycle call in `DepsOps::reset`.
+            cluster_control
+                .flush_redis_db(0)
+                .await
+                .expect("WorkerExecutorClusterControl::flush_redis_db(0) must succeed");
         }
 
         async fn clean_shard_manager_state(&self) {
@@ -759,6 +832,7 @@ mod tests {
 
     async fn coordinated_environment(
         deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
         mut command_rx: mpsc::Receiver<EnvCommand>,
         event_tx: mpsc::Sender<EnvEvent>,
     ) {
@@ -772,22 +846,22 @@ mod tests {
             info!("Command: {} - Started", formatted_command);
             match command {
                 EnvCommand::StartWorkerExecutors(n) => {
-                    deps.start_random_worker_executors(n).await;
+                    deps.start_random_worker_executors(cluster_control, n).await;
                 }
                 EnvCommand::StopWorkerExecutors(n) => {
-                    deps.stop_random_worker_executors(n).await;
+                    deps.stop_random_worker_executors(cluster_control, n).await;
                 }
                 EnvCommand::StopAllWorkerExecutor => {
-                    deps.stop_all_worker_executors().await;
+                    deps.stop_all_worker_executors(cluster_control).await;
                 }
                 EnvCommand::StartShardManager => {
-                    deps.start_shard_manager(None).await;
+                    DepsOps::start_shard_manager(deps, cluster_control, None).await;
                 }
                 EnvCommand::StopShardManager => {
-                    deps.stop_shard_manager().await;
+                    DepsOps::stop_shard_manager(deps, cluster_control).await;
                 }
                 EnvCommand::RestartShardManager => {
-                    deps.restart_shard_manager().await;
+                    DepsOps::restart_shard_manager(deps, cluster_control).await;
                 }
                 EnvCommand::Stop => break,
             }
@@ -823,11 +897,15 @@ mod tests {
 
     async fn unstable_environment(
         deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
         mut stop_rx: mpsc::Receiver<()>,
     ) {
         info!("Starting Golem Sharding Tester");
 
-        async fn worker(deps: &EnvBasedTestDependencies) {
+        async fn worker(
+            deps: &EnvBasedTestDependencies,
+            cluster_control: &WorkerExecutorClusterControlStub,
+        ) {
             let mut commands = [
                 Command::StartShard,
                 Command::StopShard,
@@ -842,13 +920,13 @@ mod tests {
             info!("Command: {} - Started", formatted_command);
             match command {
                 Command::StartShard => {
-                    deps.start_random_worker_executor().await;
+                    deps.start_random_worker_executor(cluster_control).await;
                 }
                 Command::StopShard => {
-                    deps.stop_random_worker_executor().await;
+                    deps.stop_random_worker_executor(cluster_control).await;
                 }
                 Command::RestartShardManager => {
-                    deps.restart_shard_manager().await;
+                    DepsOps::restart_shard_manager(deps, cluster_control).await;
                 }
             }
             info!("Command: {} - Done", formatted_command);
@@ -861,7 +939,7 @@ mod tests {
 
         while stop_rx.try_recv().is_err() {
             std::thread::sleep(Duration::from_secs(random_seconds()));
-            worker(deps).await;
+            worker(deps, cluster_control).await;
         }
     }
 
@@ -1023,9 +1101,10 @@ mod tests {
     #[flaky(3)]
     async fn oplog_processor_shard_reassignment_no_loss(
         deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
         _tracing: &Tracing,
     ) {
-        deps.reset(16).await;
+        deps.reset(cluster_control, 16).await;
 
         let user = deps.admin().await;
         let (_, env) = user.app_and_env().await.unwrap();
@@ -1098,10 +1177,10 @@ mod tests {
         let _ = wait_for_invocations(&received, 4, Duration::from_secs(120)).await;
 
         // Shard reassignment: stop 2 executors, allow reassignment, then start them back.
-        deps.stop_random_worker_executors(2).await;
+        deps.stop_random_worker_executors(cluster_control, 2).await;
         // Give the shard manager time to detect executor loss and reassign shards.
         tokio::time::sleep(Duration::from_secs(5)).await;
-        deps.start_random_worker_executors(2).await;
+        deps.start_random_worker_executors(cluster_control, 2).await;
 
         // Wait for the worker to become usable again after shard movement.
         user.wait_for_statuses(
@@ -1147,9 +1226,10 @@ mod tests {
     #[flaky(3)]
     async fn oplog_processor_shard_move_inflight(
         deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
         _tracing: &Tracing,
     ) {
-        deps.reset(16).await;
+        deps.reset(cluster_control, 16).await;
 
         let user = deps.admin().await;
         let (_, env) = user.app_and_env().await.unwrap();
@@ -1220,8 +1300,8 @@ mod tests {
         wait_for_oplog_completions(&user, &worker_id, 3, Duration::from_secs(120), &received).await;
 
         // Stop all executors immediately — before flush timer fires
-        deps.stop_all_worker_executors().await;
-        deps.start_all_worker_executors().await;
+        deps.stop_all_worker_executors(cluster_control).await;
+        deps.start_all_worker_executors(cluster_control).await;
         tokio::time::sleep(Duration::from_secs(5)).await;
 
         user.wait_for_statuses(
@@ -1268,9 +1348,10 @@ mod tests {
     #[flaky(5)]
     async fn oplog_processor_locality_recovery(
         deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
         _tracing: &Tracing,
     ) {
-        deps.reset(16).await;
+        deps.reset(cluster_control, 16).await;
 
         let user = deps.admin().await;
         let (_, env) = user.app_and_env().await.unwrap();
@@ -1342,10 +1423,10 @@ mod tests {
         wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received).await;
         let _ = wait_for_invocations(&received, 4, Duration::from_secs(120)).await;
 
-        deps.stop_random_worker_executors(2).await;
+        deps.stop_random_worker_executors(cluster_control, 2).await;
         // Give the shard manager time to detect executor loss and reassign shards
         tokio::time::sleep(Duration::from_secs(5)).await;
-        deps.start_random_worker_executors(2).await;
+        deps.start_random_worker_executors(cluster_control, 2).await;
 
         user.wait_for_statuses(
             &worker_id,
@@ -1390,9 +1471,10 @@ mod tests {
     #[flaky(5)]
     async fn oplog_processor_stress_with_crashes(
         deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
         _tracing: &Tracing,
     ) {
-        deps.reset(16).await;
+        deps.reset(cluster_control, 16).await;
 
         let user = deps.admin().await;
         let (_, env) = user.app_and_env().await.unwrap();
@@ -1475,9 +1557,9 @@ mod tests {
             // Stop/start executor at iteration 14
             if i == 14 {
                 info!("I4: Stopping/starting executor at iteration {i}");
-                deps.stop_random_worker_executors(1).await;
+                deps.stop_random_worker_executors(cluster_control, 1).await;
                 tokio::time::sleep(Duration::from_secs(3)).await;
-                deps.start_random_worker_executors(1).await;
+                deps.start_random_worker_executors(cluster_control, 1).await;
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 user.wait_for_statuses(
                     &worker_id,

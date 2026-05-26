@@ -80,6 +80,7 @@ impl SpawnedWorkerExecutor {
             &registry_service,
             environment_state_cache_capacity,
             otlp,
+            &[],
         )
         .await;
 
@@ -102,6 +103,7 @@ impl SpawnedWorkerExecutor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn start(
         executable: &Path,
         working_directory: &Path,
@@ -116,23 +118,30 @@ impl SpawnedWorkerExecutor {
         registry_service: &Arc<dyn RegistryService>,
         environment_state_cache_capacity: Option<usize>,
         otlp: bool,
+        extra_env_vars: &[(String, String)],
     ) -> (Child, ChildProcessLogger) {
+        let mut env = super::env_vars(
+            http_port,
+            grpc_port,
+            shard_manager,
+            worker_service,
+            rdb,
+            registry_service,
+            environment_state_cache_capacity,
+            verbosity,
+            otlp,
+        )
+        .await;
+        // Per-restart overrides win over the baseline configuration. Scoped to
+        // this child process only — we never touch the parent test runner's
+        // process-wide environment.
+        for (key, value) in extra_env_vars {
+            env.insert(key.clone(), value.clone());
+        }
+
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(
-                super::env_vars(
-                    http_port,
-                    grpc_port,
-                    shard_manager,
-                    worker_service,
-                    rdb,
-                    registry_service,
-                    environment_state_cache_capacity,
-                    verbosity,
-                    otlp,
-                )
-                .await,
-            )
+            .envs(env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -180,7 +189,19 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
     }
 
     async fn restart(&self) {
-        info!("Restarting golem-worker-executor {}", self.grpc_port);
+        self.restart_with_extra_env_vars(Vec::new()).await;
+    }
+
+    async fn restart_with_extra_env_vars(&self, extra_env_vars: Vec<(String, String)>) {
+        if extra_env_vars.is_empty() {
+            info!("Restarting golem-worker-executor {}", self.grpc_port);
+        } else {
+            info!(
+                "Restarting golem-worker-executor {} with {} extra env var(s)",
+                self.grpc_port,
+                extra_env_vars.len()
+            );
+        }
 
         let (child, logger) = Self::start(
             &self.executable,
@@ -196,6 +217,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             &self.registry_service,
             self.environment_state_cache_capacity,
             self.otlp,
+            &extra_env_vars,
         )
         .await;
 

@@ -150,22 +150,22 @@ impl GeneratedPackage {
     }
 }
 
-#[test_dep(tagged_as = "single_agent_wrapper_types_1")]
+#[test_dep(scope = PerWorker, tagged_as = "single_agent_wrapper_types_1")]
 fn ts_single_agent_wrapper_1() -> GeneratedPackage {
     GeneratedPackage::new(single_agent_wrapper_types()[0].clone())
 }
 
-#[test_dep(tagged_as = "multi_agent_wrapper_2_types_1")]
+#[test_dep(scope = PerWorker, tagged_as = "multi_agent_wrapper_2_types_1")]
 fn ts_multi_agent_wrapper_2_types_1() -> GeneratedPackage {
     GeneratedPackage::new(multi_agent_wrapper_2_types()[0].clone())
 }
 
-#[test_dep(tagged_as = "multi_agent_wrapper_2_types_2")]
+#[test_dep(scope = PerWorker, tagged_as = "multi_agent_wrapper_2_types_2")]
 fn ts_multi_agent_wrapper_2_types_2() -> GeneratedPackage {
     GeneratedPackage::new(multi_agent_wrapper_2_types()[1].clone())
 }
 
-#[test_dep(tagged_as = "counter_agent")]
+#[test_dep(scope = PerWorker, tagged_as = "counter_agent")]
 fn ts_counter_agent() -> GeneratedPackage {
     let agent_type = AgentType {
         type_name: AgentTypeName("CounterAgent".to_string()),
@@ -209,7 +209,7 @@ fn ts_counter_agent() -> GeneratedPackage {
     GeneratedPackage::new(agent_type)
 }
 
-#[test_dep(tagged_as = "ts_collision_parameter_names_agent")]
+#[test_dep(scope = PerWorker, tagged_as = "ts_collision_parameter_names_agent")]
 fn ts_collision_parameter_names_agent() -> GeneratedPackage {
     let agent_type = AgentType {
         type_name: AgentTypeName("CollisionParameterNamesAgent".to_string()),
@@ -267,7 +267,7 @@ fn ts_collision_parameter_names_agent() -> GeneratedPackage {
     GeneratedPackage::new(agent_type)
 }
 
-#[test_dep(tagged_as = "ts_config_nested_local_types_agent")]
+#[test_dep(scope = PerWorker, tagged_as = "ts_config_nested_local_types_agent")]
 fn ts_config_nested_local_types_agent() -> GeneratedPackage {
     GeneratedPackage::new(ts_config_nested_local_types_agent_type())
 }
@@ -319,7 +319,7 @@ fn ts_config_nested_local_types_agent_type() -> AgentType {
     }
 }
 
-#[test_dep(tagged_as = "ts_code_first_snippets_foo_agent")]
+#[test_dep(scope = PerWorker, tagged_as = "ts_code_first_snippets_foo_agent")]
 fn ts_code_first_snippets_foo_agent() -> GeneratedPackage {
     GeneratedPackage::new(code_first_snippets_agent_type(
         GuestLanguage::TypeScript,
@@ -327,7 +327,7 @@ fn ts_code_first_snippets_foo_agent() -> GeneratedPackage {
     ))
 }
 
-#[test_dep(tagged_as = "ts_code_first_snippets_bar_agent")]
+#[test_dep(scope = PerWorker, tagged_as = "ts_code_first_snippets_bar_agent")]
 fn ts_code_first_snippets_bar_agent() -> GeneratedPackage {
     GeneratedPackage::new(code_first_snippets_agent_type(
         GuestLanguage::TypeScript,
@@ -335,7 +335,7 @@ fn ts_code_first_snippets_bar_agent() -> GeneratedPackage {
     ))
 }
 
-#[test_dep(tagged_as = "rust_code_first_snippets_foo_agent")]
+#[test_dep(scope = PerWorker, tagged_as = "rust_code_first_snippets_foo_agent")]
 fn rust_code_first_snippets_foo_agent() -> GeneratedPackage {
     GeneratedPackage::new(code_first_snippets_agent_type(
         GuestLanguage::Rust,
@@ -343,7 +343,7 @@ fn rust_code_first_snippets_foo_agent() -> GeneratedPackage {
     ))
 }
 
-#[test_dep(tagged_as = "rust_code_first_snippets_bar_agent")]
+#[test_dep(scope = PerWorker, tagged_as = "rust_code_first_snippets_bar_agent")]
 fn rust_code_first_snippets_bar_agent() -> GeneratedPackage {
     GeneratedPackage::new(code_first_snippets_agent_type(
         GuestLanguage::Rust,

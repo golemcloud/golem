@@ -5275,6 +5275,7 @@ dependencies = [
  "opentelemetry_sdk 0.30.0",
  "pretty_assertions",
  "rand 0.9.2",
+ "redis",
  "reqwest 0.13.2",
  "rlimit",
  "serde",
@@ -9762,9 +9763,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "3.0.4"
+version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85c6250e70e3947965bec44d8586c4488dbb646d90f563af097dff204c89d663"
+checksum = "1bd28af90eeb19e1832c995af80cee036865ff97345e43c8a39a389ab0563155"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -9774,9 +9775,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "6.0.4"
+version = "8.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5eb8f308aa34162cda6d66401e4e237d406b1cac9d80a8a77d4314495e58496"
+checksum = "ddb35fbc73f2938e2d848d4dcc3c0ee7bb51f6c8b76d9bec9da004fcd4bdf80b"
 dependencies = [
  "anstream",
  "anstyle",
@@ -9800,9 +9801,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.4.4"
+version = "1.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36a468d0c15d54fdb963558e64c957500fca408284820b16c72b9e79abf5857f"
+checksum = "05878c6c4e8e20556f2fc5b2f9ade976727915e89faea2705efde330250784bc"
 dependencies = [
  "darling 0.21.3",
  "humantime",
