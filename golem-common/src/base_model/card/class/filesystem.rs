@@ -33,13 +33,6 @@ impl Subsumes for FilesystemResourcePattern {
         }
     }
 }
-
-pub type PolymorphicFilesystemResourcePattern = FilesystemResourcePattern;
-
-impl ResourcePattern for FilesystemResourcePattern {
-    type Polymorphic = PolymorphicFilesystemResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum FilesystemVerb {
@@ -96,12 +89,6 @@ impl PermissionClass for FilesystemClass {
         parse_polymorphic_agent_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Filesystem(pattern)
     }
@@ -128,12 +115,5 @@ impl FilesystemClass {
                 class: FilesystemClass::NAME.to_string(),
                 resource: resource.to_string(),
             })
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicFilesystemResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }

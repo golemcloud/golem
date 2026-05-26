@@ -458,7 +458,7 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
             resource: resource.to_string(),
         });
     }
-    let resource = C::parse_polymorphic_resource(resource)?;
+    let resource = C::parse_resource(resource)?;
     let pattern = if verb == "*" {
         PolymorphicClassPermissionPattern::<C>::Any {
             owner,

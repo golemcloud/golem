@@ -33,13 +33,6 @@ impl Subsumes for EnvironmentInitialFilesResourcePattern {
         }
     }
 }
-
-pub type PolymorphicEnvironmentInitialFilesResourcePattern = EnvironmentInitialFilesResourcePattern;
-
-impl ResourcePattern for EnvironmentInitialFilesResourcePattern {
-    type Polymorphic = PolymorphicEnvironmentInitialFilesResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentInitialFilesVerb {
@@ -94,12 +87,6 @@ impl PermissionClass for EnvironmentInitialFilesClass {
         parse_polymorphic_environment_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentInitialFiles(pattern)
     }
@@ -127,12 +114,5 @@ impl EnvironmentInitialFilesClass {
                 class: EnvironmentInitialFilesClass::NAME.to_string(),
                 resource: resource.to_string(),
             })
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicEnvironmentInitialFilesResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }

@@ -57,13 +57,6 @@ impl Subsumes for EnvironmentHttpApiDeploymentResourcePattern {
     }
 }
 
-pub type PolymorphicEnvironmentHttpApiDeploymentResourcePattern =
-    EnvironmentHttpApiDeploymentResourcePattern;
-
-impl ResourcePattern for EnvironmentHttpApiDeploymentResourcePattern {
-    type Polymorphic = PolymorphicEnvironmentHttpApiDeploymentResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentHttpApiDeploymentVerb {
@@ -120,12 +113,6 @@ impl PermissionClass for EnvironmentHttpApiDeploymentClass {
         parse_polymorphic_environment_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentHttpApiDeployment(pattern)
     }
@@ -157,12 +144,5 @@ impl EnvironmentHttpApiDeploymentClass {
                 }
             })
         }
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicEnvironmentHttpApiDeploymentResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }

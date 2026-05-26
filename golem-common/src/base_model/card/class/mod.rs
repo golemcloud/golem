@@ -103,66 +103,6 @@ impl SlashPathPattern {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicResourcePathSegmentPattern {
-    Literal(ResourceLiteral),
-    Star,
-    GlobStar,
-    Slot(SlotVariable),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct PolymorphicSlashPathPattern {
-    pub segments: Vec<PolymorphicResourcePathSegmentPattern>,
-}
-
-impl PolymorphicSlashPathPattern {
-    pub fn parse(value: &str) -> Result<Self, String> {
-        let Some(path) = value.strip_prefix('/') else {
-            return Err(value.to_string());
-        };
-
-        let segments = if path.is_empty() {
-            Vec::new()
-        } else {
-            path.split('/')
-                .map(parse_polymorphic_resource_path_segment)
-                .collect::<Result<Vec<_>, _>>()?
-        };
-
-        if segments
-            .iter()
-            .any(|segment| matches!(segment, PolymorphicResourcePathSegmentPattern::Slot(_)))
-        {
-            Ok(Self { segments })
-        } else {
-            Err(value.to_string())
-        }
-    }
-}
-
-impl From<SlashPathPattern> for PolymorphicSlashPathPattern {
-    fn from(value: SlashPathPattern) -> Self {
-        Self {
-            segments: value
-                .segments
-                .into_iter()
-                .map(|segment| match segment {
-                    ResourcePathSegmentPattern::Literal(value) => {
-                        PolymorphicResourcePathSegmentPattern::Literal(value)
-                    }
-                    ResourcePathSegmentPattern::Star => PolymorphicResourcePathSegmentPattern::Star,
-                    ResourcePathSegmentPattern::GlobStar => {
-                        PolymorphicResourcePathSegmentPattern::GlobStar
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct DotPathPattern {
     pub segments: Vec<ResourcePathSegmentPattern>,
 }
@@ -185,52 +125,6 @@ impl DotPathPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct PolymorphicDotPathPattern {
-    pub segments: Vec<PolymorphicResourcePathSegmentPattern>,
-}
-
-impl PolymorphicDotPathPattern {
-    pub fn parse(value: &str) -> Result<Self, String> {
-        if value.is_empty() {
-            return Err(value.to_string());
-        }
-        let segments = value
-            .split('.')
-            .map(parse_polymorphic_resource_path_segment)
-            .collect::<Result<Vec<_>, _>>()?;
-        if segments
-            .iter()
-            .any(|segment| matches!(segment, PolymorphicResourcePathSegmentPattern::Slot(_)))
-        {
-            Ok(Self { segments })
-        } else {
-            Err(value.to_string())
-        }
-    }
-}
-
-impl From<DotPathPattern> for PolymorphicDotPathPattern {
-    fn from(value: DotPathPattern) -> Self {
-        Self {
-            segments: value
-                .segments
-                .into_iter()
-                .map(|segment| match segment {
-                    ResourcePathSegmentPattern::Literal(value) => {
-                        PolymorphicResourcePathSegmentPattern::Literal(value)
-                    }
-                    ResourcePathSegmentPattern::Star => PolymorphicResourcePathSegmentPattern::Star,
-                    ResourcePathSegmentPattern::GlobStar => {
-                        PolymorphicResourcePathSegmentPattern::GlobStar
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
 fn parse_resource_path_segment(value: &str) -> Result<ResourcePathSegmentPattern, String> {
     if value.is_empty() {
         Err(value.to_string())
@@ -244,22 +138,6 @@ fn parse_resource_path_segment(value: &str) -> Result<ResourcePathSegmentPattern
         Ok(ResourcePathSegmentPattern::Literal(ResourceLiteral(
             value.to_string(),
         )))
-    }
-}
-
-fn parse_polymorphic_resource_path_segment(
-    value: &str,
-) -> Result<PolymorphicResourcePathSegmentPattern, String> {
-    if let Ok(slot) = SlotVariable::parse(value) {
-        Ok(PolymorphicResourcePathSegmentPattern::Slot(slot))
-    } else {
-        parse_resource_path_segment(value).map(|segment| match segment {
-            ResourcePathSegmentPattern::Literal(value) => {
-                PolymorphicResourcePathSegmentPattern::Literal(value)
-            }
-            ResourcePathSegmentPattern::Star => PolymorphicResourcePathSegmentPattern::Star,
-            ResourcePathSegmentPattern::GlobStar => PolymorphicResourcePathSegmentPattern::GlobStar,
-        })
     }
 }
 
@@ -315,18 +193,6 @@ pub trait RecipientPattern:
         + CardBinaryCodec;
 
     fn matches_holder(&self, holder: &RecipientPathPattern) -> bool;
-}
-
-pub trait ResourcePattern:
-    Subsumes + Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
-{
-    type Polymorphic: Debug
-        + Clone
-        + PartialEq
-        + Eq
-        + Serialize
-        + for<'de> Deserialize<'de>
-        + CardBinaryCodec;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -934,7 +800,14 @@ pub trait PermissionClass {
         + CardBinaryCodec;
     type Owner: OwnerPattern;
     type Recipient: RecipientPattern;
-    type Resource: ResourcePattern;
+    type Resource: Subsumes
+        + Debug
+        + Clone
+        + PartialEq
+        + Eq
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + CardBinaryCodec;
 
     const NAME: &'static str;
 
@@ -948,9 +821,6 @@ pub trait PermissionClass {
     fn parse_polymorphic_recipient(
         recipient: &str,
     ) -> Result<<Self::Recipient as RecipientPattern>::Polymorphic, CardParseError>;
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError>;
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern
     where
         Self: Sized;
@@ -1019,21 +889,21 @@ impl<C: PermissionClass> ClassPermissionPattern<C> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "C::Verb: Serialize, <C::Owner as OwnerPattern>::Polymorphic: Serialize, <C::Recipient as RecipientPattern>::Polymorphic: Serialize, <C::Resource as ResourcePattern>::Polymorphic: Serialize",
-    deserialize = "C::Verb: Deserialize<'de>, <C::Owner as OwnerPattern>::Polymorphic: Deserialize<'de>, <C::Recipient as RecipientPattern>::Polymorphic: Deserialize<'de>, <C::Resource as ResourcePattern>::Polymorphic: Deserialize<'de>"
+    serialize = "C::Verb: Serialize, <C::Owner as OwnerPattern>::Polymorphic: Serialize, <C::Recipient as RecipientPattern>::Polymorphic: Serialize, C::Resource: Serialize",
+    deserialize = "C::Verb: Deserialize<'de>, <C::Owner as OwnerPattern>::Polymorphic: Deserialize<'de>, <C::Recipient as RecipientPattern>::Polymorphic: Deserialize<'de>, C::Resource: Deserialize<'de>"
 ))]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicClassPermissionPattern<C: PermissionClass> {
     Any {
         owner: <C::Owner as OwnerPattern>::Polymorphic,
         recipient: <C::Recipient as RecipientPattern>::Polymorphic,
-        resource: <C::Resource as ResourcePattern>::Polymorphic,
+        resource: C::Resource,
     },
     Verb {
         verb: C::Verb,
         owner: <C::Owner as OwnerPattern>::Polymorphic,
         recipient: <C::Recipient as RecipientPattern>::Polymorphic,
-        resource: <C::Resource as ResourcePattern>::Polymorphic,
+        resource: C::Resource,
     },
 }
 

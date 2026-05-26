@@ -31,13 +31,6 @@ impl Subsumes for EnvironmentShareResourcePattern {
         }
     }
 }
-
-pub type PolymorphicEnvironmentShareResourcePattern = EnvironmentShareResourcePattern;
-
-impl ResourcePattern for EnvironmentShareResourcePattern {
-    type Polymorphic = PolymorphicEnvironmentShareResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentShareVerb {
@@ -94,12 +87,6 @@ impl PermissionClass for EnvironmentShareClass {
         parse_polymorphic_environment_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentShare(pattern)
     }
@@ -130,12 +117,5 @@ impl EnvironmentShareClass {
                     resource: resource.to_string(),
                 })
         }
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicEnvironmentShareResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }

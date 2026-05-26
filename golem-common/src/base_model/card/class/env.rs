@@ -30,13 +30,6 @@ impl Subsumes for EnvResourcePattern {
         }
     }
 }
-
-pub type PolymorphicEnvResourcePattern = EnvResourcePattern;
-
-impl ResourcePattern for EnvResourcePattern {
-    type Polymorphic = PolymorphicEnvResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvVerb {
@@ -85,12 +78,6 @@ impl PermissionClass for EnvClass {
         parse_polymorphic_agent_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Env(pattern)
     }
@@ -117,12 +104,5 @@ impl EnvClass {
                     resource: resource.to_string(),
                 })
         }
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicEnvResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }

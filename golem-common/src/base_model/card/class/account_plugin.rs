@@ -30,13 +30,6 @@ impl Subsumes for AccountPluginResourcePattern {
         }
     }
 }
-
-pub type PolymorphicAccountPluginResourcePattern = AccountPluginResourcePattern;
-
-impl ResourcePattern for AccountPluginResourcePattern {
-    type Polymorphic = PolymorphicAccountPluginResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountPluginVerb {
@@ -91,12 +84,6 @@ impl PermissionClass for AccountPluginClass {
         parse_polymorphic_account_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::AccountPlugin(pattern)
     }
@@ -127,12 +114,5 @@ impl AccountPluginClass {
                     resource: resource.to_string(),
                 })
         }
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicAccountPluginResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }

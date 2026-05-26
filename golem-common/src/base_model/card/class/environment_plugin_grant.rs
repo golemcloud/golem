@@ -30,13 +30,6 @@ impl Subsumes for EnvironmentPluginGrantResourcePattern {
         }
     }
 }
-
-pub type PolymorphicEnvironmentPluginGrantResourcePattern = EnvironmentPluginGrantResourcePattern;
-
-impl ResourcePattern for EnvironmentPluginGrantResourcePattern {
-    type Polymorphic = PolymorphicEnvironmentPluginGrantResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentPluginGrantVerb {
@@ -89,12 +82,6 @@ impl PermissionClass for EnvironmentPluginGrantClass {
         parse_polymorphic_environment_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentPluginGrant(pattern)
     }
@@ -126,12 +113,5 @@ impl EnvironmentPluginGrantClass {
                     resource: resource.to_string(),
                 })
         }
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicEnvironmentPluginGrantResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }

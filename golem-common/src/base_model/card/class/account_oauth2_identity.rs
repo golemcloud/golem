@@ -49,13 +49,6 @@ impl Subsumes for AccountOauth2IdentityResourcePattern {
         }
     }
 }
-
-pub type PolymorphicAccountOauth2IdentityResourcePattern = AccountOauth2IdentityResourcePattern;
-
-impl ResourcePattern for AccountOauth2IdentityResourcePattern {
-    type Polymorphic = PolymorphicAccountOauth2IdentityResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountOauth2IdentityVerb {
@@ -108,12 +101,6 @@ impl PermissionClass for AccountOauth2IdentityClass {
         parse_polymorphic_account_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::AccountOauth2Identity(pattern)
     }
@@ -155,12 +142,5 @@ impl AccountOauth2IdentityClass {
                 resource: resource.to_string(),
             })
         }
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicAccountOauth2IdentityResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }

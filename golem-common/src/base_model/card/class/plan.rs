@@ -39,13 +39,6 @@ impl Subsumes for PlanResourcePattern {
         }
     }
 }
-
-pub type PolymorphicPlanResourcePattern = PlanResourcePattern;
-
-impl ResourcePattern for PlanResourcePattern {
-    type Polymorphic = PolymorphicPlanResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PlanVerb {
@@ -98,12 +91,6 @@ impl PermissionClass for PlanClass {
         parse_polymorphic_account_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Plan(pattern)
     }
@@ -130,13 +117,6 @@ impl PlanClass {
                     resource: resource.to_string(),
                 })
         }
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicPlanResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }
 

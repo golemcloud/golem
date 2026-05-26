@@ -59,13 +59,6 @@ impl Subsumes for BlobResourcePattern {
         }
     }
 }
-
-pub type PolymorphicBlobResourcePattern = BlobResourcePattern;
-
-impl ResourcePattern for BlobResourcePattern {
-    type Polymorphic = PolymorphicBlobResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum BlobVerb {
@@ -120,12 +113,6 @@ impl PermissionClass for BlobClass {
         parse_polymorphic_agent_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Blob(pattern)
     }
@@ -146,12 +133,5 @@ impl BlobClass {
             class: BlobClass::NAME.to_string(),
             resource: resource.to_string(),
         })
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicBlobResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }

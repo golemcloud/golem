@@ -36,13 +36,6 @@ impl Subsumes for CardResourcePattern {
         }
     }
 }
-
-pub type PolymorphicCardResourcePattern = CardResourcePattern;
-
-impl ResourcePattern for CardResourcePattern {
-    type Polymorphic = PolymorphicCardResourcePattern;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum CardVerb {
@@ -97,12 +90,6 @@ impl PermissionClass for CardClass {
         parse_polymorphic_agent_recipient(recipient)
     }
 
-    fn parse_polymorphic_resource(
-        resource: &str,
-    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
-        Self::parse_polymorphic_resource(Self::NAME, resource)
-    }
-
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Card(pattern)
     }
@@ -129,12 +116,5 @@ impl CardClass {
                     .map_err(CardParseError::InvalidRecipientPath)?,
             ))
         }
-    }
-
-    fn parse_polymorphic_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<PolymorphicCardResourcePattern, CardParseError> {
-        Self::parse_resource(class, resource)
     }
 }
