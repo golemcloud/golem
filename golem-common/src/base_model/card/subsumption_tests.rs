@@ -19,7 +19,7 @@ use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
 use uuid::Uuid;
 
-fn fs(owner: &str, recipient: &str, resource: GlobResourcePattern) -> PatternGrant {
+fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PatternGrant {
     PatternGrant::filesystem_read_pattern(
         owner,
         AgentRecipientPattern::parse(recipient).unwrap(),
@@ -32,13 +32,12 @@ fn fs_permission(permission: FilesystemPermissionPattern) -> PatternGrant {
 }
 
 fn network(recipient: &str, resource: NetworkResourcePattern) -> PatternGrant {
-    PatternGrant::new(PermissionPattern::Network(
-        NetworkPermissionPattern::Connect {
-            owner: EmptyOwnerPattern,
-            recipient: AgentRecipientPattern::parse(recipient).unwrap(),
-            resource,
-        },
-    ))
+    PatternGrant::new(PermissionPattern::Network(NetworkPermissionPattern::Verb {
+        verb: NetworkVerb::Connect,
+        owner: EmptyOwnerPattern,
+        recipient: AgentRecipientPattern::parse(recipient).unwrap(),
+        resource,
+    }))
 }
 
 fn card(lower_positive: Vec<PatternGrant>, upper_positive: Vec<PatternGrant>) -> Card {
@@ -255,12 +254,12 @@ fn glob_resource_subsumes_concrete_resource() {
     let broad = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::glob("/data/**"),
+        FilesystemResourcePattern::glob("/data/**"),
     );
     let narrow = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::exact("/data/item.json"),
+        FilesystemResourcePattern::exact("/data/item.json"),
     );
 
     assert!(broad.subsumes(&narrow).unwrap());
@@ -272,38 +271,38 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
     let cases = [
         (
             "any_subsumes_exact",
-            GlobResourcePattern::any(),
-            GlobResourcePattern::exact("/data/file.txt"),
+            FilesystemResourcePattern::any(),
+            FilesystemResourcePattern::exact("/data/file.txt"),
             true,
         ),
         (
             "double_star_glob_subsumes_exact_prefix",
-            GlobResourcePattern::glob("/data/**"),
-            GlobResourcePattern::exact("/data/file.txt"),
+            FilesystemResourcePattern::glob("/data/**"),
+            FilesystemResourcePattern::exact("/data/file.txt"),
             true,
         ),
         (
             "star_glob_subsumes_exact_prefix",
-            GlobResourcePattern::glob("/data/*"),
-            GlobResourcePattern::exact("/data/file.txt"),
+            FilesystemResourcePattern::glob("/data/*"),
+            FilesystemResourcePattern::exact("/data/file.txt"),
             true,
         ),
         (
             "exact_subsumes_same_exact",
-            GlobResourcePattern::exact("/data/file.txt"),
-            GlobResourcePattern::exact("/data/file.txt"),
+            FilesystemResourcePattern::exact("/data/file.txt"),
+            FilesystemResourcePattern::exact("/data/file.txt"),
             true,
         ),
         (
             "exact_does_not_subsume_glob",
-            GlobResourcePattern::exact("/data/file.txt"),
-            GlobResourcePattern::glob("/data/**"),
+            FilesystemResourcePattern::exact("/data/file.txt"),
+            FilesystemResourcePattern::glob("/data/**"),
             false,
         ),
         (
             "wrong_glob_prefix_does_not_subsume_exact",
-            GlobResourcePattern::glob("/private/**"),
-            GlobResourcePattern::exact("/data/file.txt"),
+            FilesystemResourcePattern::glob("/private/**"),
+            FilesystemResourcePattern::exact("/data/file.txt"),
             false,
         ),
     ];
@@ -334,17 +333,19 @@ fn verb_wildcard_subsumes_class_verbs_only() {
     let any_filesystem = fs_permission(FilesystemPermissionPattern::Any {
         owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
-        resource: GlobResourcePattern::glob("/data/**"),
+        resource: FilesystemResourcePattern::glob("/data/**"),
     });
-    let read_file = fs_permission(FilesystemPermissionPattern::Read {
+    let read_file = fs_permission(FilesystemPermissionPattern::Verb {
+        verb: FilesystemVerb::Read,
         owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
-        resource: GlobResourcePattern::exact("/data/file.txt"),
+        resource: FilesystemResourcePattern::exact("/data/file.txt"),
     });
-    let write_file = fs_permission(FilesystemPermissionPattern::Write {
+    let write_file = fs_permission(FilesystemPermissionPattern::Verb {
+        verb: FilesystemVerb::Write,
         owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
-        resource: GlobResourcePattern::exact("/data/file.txt"),
+        resource: FilesystemResourcePattern::exact("/data/file.txt"),
     });
 
     assert!(any_filesystem.subsumes(&read_file).unwrap());
@@ -403,7 +404,7 @@ fn subsumption_requires_same_permission_class() {
     let filesystem = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::glob("/data/**"),
+        FilesystemResourcePattern::glob("/data/**"),
     );
     let network = network(
         "acme/shop/prod/cart/agent",
@@ -423,17 +424,17 @@ fn derivation_must_be_subsumed_by_parent_union() {
     let parent_grant = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::glob("/data/**"),
+        FilesystemResourcePattern::glob("/data/**"),
     );
     let child_grant = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::exact("/data/file.txt"),
+        FilesystemResourcePattern::exact("/data/file.txt"),
     );
     let denied_child = fs(
         "other/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::exact("/data/file.txt"),
+        FilesystemResourcePattern::exact("/data/file.txt"),
     );
 
     let parent = card(vec![parent_grant], Vec::new());
@@ -459,17 +460,17 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
     let parent_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::glob("/data/**"),
+        FilesystemResourcePattern::glob("/data/**"),
     );
     let child_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::exact("/data/file.txt"),
+        FilesystemResourcePattern::exact("/data/file.txt"),
     );
     let too_broad_child_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::exact("/other/file.txt"),
+        FilesystemResourcePattern::exact("/other/file.txt"),
     );
     let parent = card(Vec::new(), vec![parent_upper]);
 
@@ -493,22 +494,22 @@ fn negative_grants_override_positive_grants() {
     let allowed = fs(
         "acme/shop/prod/cart/agent",
         "acme/*/*/*/*",
-        GlobResourcePattern::glob("/data/**"),
+        FilesystemResourcePattern::glob("/data/**"),
     );
     let denied = fs(
         "acme/shop/prod/cart/agent",
         "acme/*/*/*/*",
-        GlobResourcePattern::exact("/data/secret.txt"),
+        FilesystemResourcePattern::exact("/data/secret.txt"),
     );
     let public = fs(
         "acme/shop/prod/cart/agent",
         "acme/*/*/*/*",
-        GlobResourcePattern::exact("/data/public.txt"),
+        FilesystemResourcePattern::exact("/data/public.txt"),
     );
     let secret = fs(
         "acme/shop/prod/cart/agent",
         "acme/*/*/*/*",
-        GlobResourcePattern::exact("/data/secret.txt"),
+        FilesystemResourcePattern::exact("/data/secret.txt"),
     );
     let surface = GrantSurface {
         positive: vec![allowed],

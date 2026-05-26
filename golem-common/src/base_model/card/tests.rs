@@ -17,7 +17,7 @@ use chrono::Utc;
 use test_r::test;
 use uuid::Uuid;
 
-fn fs(owner: &str, recipient: &str, resource: GlobResourcePattern) -> PatternGrant {
+fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PatternGrant {
     PatternGrant::filesystem_read_pattern(
         owner,
         AgentRecipientPattern::parse(recipient).unwrap(),
@@ -70,17 +70,17 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
     let read_all = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::glob("/data/**"),
+        FilesystemResourcePattern::glob("/data/**"),
     );
     let read_secret = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::exact("/data/secret.txt"),
+        FilesystemResourcePattern::exact("/data/secret.txt"),
     );
     let read_public = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        GlobResourcePattern::exact("/data/public.txt"),
+        FilesystemResourcePattern::exact("/data/public.txt"),
     );
 
     let lower = card(vec![read_all], Vec::new());

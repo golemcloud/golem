@@ -14,13 +14,16 @@
 
 use crate::base_model::card::{
     AccountOwnerPattern, AgentOwnerPattern, AgentPermissionPattern, AgentRecipientPattern,
-    AgentResourcePattern, BlobPermissionPattern, CardPermissionPattern, CardResourcePattern,
-    ConfigPermissionPattern, EmptyOwnerPattern, EnvPermissionPattern, EnvironmentOwnerPattern,
-    FilesystemPermissionPattern, GlobResourcePattern, IdentifierResourcePattern,
-    KvPermissionPattern, NetworkPermissionPattern, NetworkResourcePattern, OplogPermissionPattern,
-    OplogResourcePattern, PermissionPattern, PolymorphicPermissionPattern, PortPattern,
-    RdbmsPermissionPattern, RecipientPathPattern, RecipientPathSlot, RecipientPathTemplate,
-    SecretPermissionPattern, ToolOwnerPattern, ToolPermissionPattern, ToolResourcePattern,
+    AgentResourcePattern, AgentVerb, BlobPermissionPattern, BlobResourcePattern, BlobVerb,
+    CardPermissionPattern, CardResourcePattern, CardVerb, ConfigPermissionPattern,
+    ConfigResourcePattern, ConfigVerb, EmptyOwnerPattern, EnvPermissionPattern, EnvResourcePattern,
+    EnvVerb, EnvironmentOwnerPattern, FilesystemPermissionPattern, FilesystemResourcePattern,
+    FilesystemVerb, KvPermissionPattern, KvResourcePattern, KvVerb, NetworkPermissionPattern,
+    NetworkResourcePattern, NetworkVerb, OplogPermissionPattern, OplogResourcePattern, OplogVerb,
+    PermissionPattern, PolymorphicPermissionPattern, PortPattern, RdbmsPermissionPattern,
+    RdbmsResourcePattern, RdbmsVerb, RecipientPathPattern, RecipientPathSlot,
+    RecipientPathTemplate, SecretPermissionPattern, SecretResourcePattern, SecretVerb,
+    ToolOwnerPattern, ToolPermissionPattern, ToolResourcePattern, ToolVerb,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -75,16 +78,17 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         path: impl Into<String>,
     ) -> Self {
-        Self::filesystem_read_pattern(owner, recipient, GlobResourcePattern::exact(path))
+        Self::filesystem_read_pattern(owner, recipient, FilesystemResourcePattern::exact(path))
     }
 
     pub fn filesystem_read_pattern(
         owner: impl Into<AgentOwnerPattern>,
         recipient: impl Into<AgentRecipientPattern>,
-        resource: GlobResourcePattern,
+        resource: FilesystemResourcePattern,
     ) -> Self {
         Self::new(PermissionPattern::Filesystem(
-            FilesystemPermissionPattern::Read {
+            FilesystemPermissionPattern::Verb {
+                verb: FilesystemVerb::Read,
                 owner: owner.into(),
                 recipient: recipient.into(),
                 resource,
@@ -98,10 +102,11 @@ impl PatternGrant {
         path: impl Into<String>,
     ) -> Self {
         Self::new(PermissionPattern::Filesystem(
-            FilesystemPermissionPattern::Write {
+            FilesystemPermissionPattern::Verb {
+                verb: FilesystemVerb::Write,
                 owner: owner.into(),
                 recipient: recipient.into(),
-                resource: GlobResourcePattern::exact(path),
+                resource: FilesystemResourcePattern::exact(path),
             },
         ))
     }
@@ -111,13 +116,12 @@ impl PatternGrant {
         host: impl Into<String>,
         ports: PortPattern,
     ) -> Self {
-        Self::new(PermissionPattern::Network(
-            NetworkPermissionPattern::Connect {
-                owner: EmptyOwnerPattern,
-                recipient: recipient.into(),
-                resource: NetworkResourcePattern::host_port(host, ports),
-            },
-        ))
+        Self::new(PermissionPattern::Network(NetworkPermissionPattern::Verb {
+            verb: NetworkVerb::Connect,
+            owner: EmptyOwnerPattern,
+            recipient: recipient.into(),
+            resource: NetworkResourcePattern::host_port(host, ports),
+        }))
     }
 
     pub fn env_read(
@@ -125,10 +129,11 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         name: impl Into<String>,
     ) -> Self {
-        Self::new(PermissionPattern::Env(EnvPermissionPattern::Read {
+        Self::new(PermissionPattern::Env(EnvPermissionPattern::Verb {
+            verb: EnvVerb::Read,
             owner: owner.into(),
             recipient: recipient.into(),
-            resource: IdentifierResourcePattern::exact(name),
+            resource: EnvResourcePattern::exact(name),
         }))
     }
 
@@ -137,7 +142,8 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         resource: OplogResourcePattern,
     ) -> Self {
-        Self::new(PermissionPattern::Oplog(OplogPermissionPattern::Read {
+        Self::new(PermissionPattern::Oplog(OplogPermissionPattern::Verb {
+            verb: OplogVerb::Read,
             owner: owner.into(),
             recipient: recipient.into(),
             resource,
@@ -149,10 +155,11 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         key: impl Into<String>,
     ) -> Self {
-        Self::new(PermissionPattern::Config(ConfigPermissionPattern::Read {
+        Self::new(PermissionPattern::Config(ConfigPermissionPattern::Verb {
+            verb: ConfigVerb::Read,
             owner: owner.into(),
             recipient: recipient.into(),
-            resource: GlobResourcePattern::exact(key),
+            resource: ConfigResourcePattern::exact(key),
         }))
     }
 
@@ -161,10 +168,11 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         key: impl Into<String>,
     ) -> Self {
-        Self::new(PermissionPattern::Secret(SecretPermissionPattern::Reveal {
+        Self::new(PermissionPattern::Secret(SecretPermissionPattern::Verb {
+            verb: SecretVerb::Reveal,
             owner: owner.into(),
             recipient: recipient.into(),
-            resource: GlobResourcePattern::exact(key),
+            resource: SecretResourcePattern::exact(key),
         }))
     }
 
@@ -173,7 +181,8 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         method: impl Into<String>,
     ) -> Self {
-        Self::new(PermissionPattern::Agent(AgentPermissionPattern::Invoke {
+        Self::new(PermissionPattern::Agent(AgentPermissionPattern::Verb {
+            verb: AgentVerb::Invoke,
             owner: owner.into(),
             recipient: recipient.into(),
             resource: AgentResourcePattern::method(method),
@@ -185,7 +194,8 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         command: impl Into<String>,
     ) -> Self {
-        Self::new(PermissionPattern::Tool(ToolPermissionPattern::Invoke {
+        Self::new(PermissionPattern::Tool(ToolPermissionPattern::Verb {
+            verb: ToolVerb::Invoke,
             owner: owner.into(),
             recipient: recipient.into(),
             resource: ToolResourcePattern::command(command),
@@ -197,10 +207,11 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         key: impl Into<String>,
     ) -> Self {
-        Self::new(PermissionPattern::Kv(KvPermissionPattern::Read {
+        Self::new(PermissionPattern::Kv(KvPermissionPattern::Verb {
+            verb: KvVerb::Read,
             owner: owner.into(),
             recipient: recipient.into(),
-            resource: GlobResourcePattern::exact(key),
+            resource: KvResourcePattern::exact(key),
         }))
     }
 
@@ -209,10 +220,11 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         key: impl Into<String>,
     ) -> Self {
-        Self::new(PermissionPattern::Blob(BlobPermissionPattern::Read {
+        Self::new(PermissionPattern::Blob(BlobPermissionPattern::Verb {
+            verb: BlobVerb::Read,
             owner: owner.into(),
             recipient: recipient.into(),
-            resource: GlobResourcePattern::exact(key),
+            resource: BlobResourcePattern::exact(key),
         }))
     }
 
@@ -221,10 +233,11 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         query_target: impl Into<String>,
     ) -> Self {
-        Self::new(PermissionPattern::Rdbms(RdbmsPermissionPattern::Query {
+        Self::new(PermissionPattern::Rdbms(RdbmsPermissionPattern::Verb {
+            verb: RdbmsVerb::Query,
             owner: owner.into(),
             recipient: recipient.into(),
-            resource: GlobResourcePattern::exact(query_target),
+            resource: RdbmsResourcePattern::exact(query_target),
         }))
     }
 
@@ -233,7 +246,8 @@ impl PatternGrant {
         recipient: impl Into<AgentRecipientPattern>,
         target: RecipientPathPattern,
     ) -> Self {
-        Self::new(PermissionPattern::Card(CardPermissionPattern::Install {
+        Self::new(PermissionPattern::Card(CardPermissionPattern::Verb {
+            verb: CardVerb::Install,
             owner: owner.into(),
             recipient: recipient.into(),
             resource: CardResourcePattern::InstallTarget(target),

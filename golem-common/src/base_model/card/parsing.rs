@@ -206,14 +206,14 @@ fn reject_slot_variables(parts: &PatternGrantParts) -> Result<(), CardParseError
 }
 
 macro_rules! parse_permission {
-    ($class:expr, $owner:expr, $recipient:expr, $verb:expr, $resource:expr, $class_name:literal, $variant:ident, $pattern:ident, $owner_parser:ident, $recipient_parser:ident, $resource_parser:ident, [$($verb_name:literal => $verb_variant:ident),+ $(,)?]) => {
+    ($class:expr, $owner:expr, $recipient:expr, $verb:expr, $resource:expr, $class_name:literal, $variant:ident, $pattern:ident, $verb_ty:ident, $owner_parser:ident, $recipient_parser:ident, $resource_parser:ident, [$($verb_name:literal => $verb_variant:ident),+ $(,)?]) => {
         if $class == $class_name {
             let owner = $owner_parser($class, $owner)?;
             let recipient = $recipient_parser($recipient)?;
             let resource = $resource_parser($class, $resource)?;
             return Ok(PermissionPattern::$variant(match $verb {
                 "*" => $pattern::Any { owner, recipient, resource },
-                $($verb_name => $pattern::$verb_variant { owner, recipient, resource },)+
+                $($verb_name => $pattern::Verb { verb: $verb_ty::$verb_variant, owner, recipient, resource },)+
                 other => return Err(CardParseError::UnknownVerb {
                     class: $class.to_string(),
                     verb: other.to_string(),
@@ -230,53 +230,53 @@ fn parse_permission(
     verb: &str,
     resource: &str,
 ) -> Result<PermissionPattern, CardParseError> {
-    parse_permission!(class, owner, recipient, verb, resource, "filesystem", Filesystem, FilesystemPermissionPattern, parse_agent_owner, parse_agent_recipient, parse_glob_resource, ["read" => Read, "write" => Write, "list" => List, "stat" => Stat, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "network", Network, NetworkPermissionPattern, parse_empty_owner, parse_agent_recipient, parse_network_resource, ["connect" => Connect]);
-    parse_permission!(class, owner, recipient, verb, resource, "env", Env, EnvPermissionPattern, parse_agent_owner, parse_agent_recipient, parse_identifier_resource, ["read" => Read]);
-    parse_permission!(class, owner, recipient, verb, resource, "oplog", Oplog, OplogPermissionPattern, parse_agent_owner, parse_agent_recipient, parse_oplog_resource, ["read" => Read]);
-    parse_permission!(class, owner, recipient, verb, resource, "config", Config, ConfigPermissionPattern, parse_agent_owner, parse_agent_recipient, parse_glob_resource, ["read" => Read]);
-    parse_permission!(class, owner, recipient, verb, resource, "secret", Secret, SecretPermissionPattern, parse_environment_owner, parse_agent_recipient, parse_glob_resource, ["hold" => Hold, "mint" => Mint, "reveal" => Reveal]);
-    parse_permission!(class, owner, recipient, verb, resource, "agent", Agent, AgentPermissionPattern, parse_agent_owner, parse_agent_recipient, parse_agent_resource, ["invoke" => Invoke, "view" => View, "create" => Create, "delete" => Delete, "interrupt" => Interrupt, "resume" => Resume, "update-revision" => UpdateRevision, "fork" => Fork, "revert" => Revert, "cancel-invocation" => CancelInvocation, "activate-plugin" => ActivatePlugin, "deactivate-plugin" => DeactivatePlugin]);
-    parse_permission!(class, owner, recipient, verb, resource, "tool", Tool, ToolPermissionPattern, parse_tool_owner, parse_agent_recipient, parse_tool_resource, ["invoke" => Invoke]);
-    parse_permission!(class, owner, recipient, verb, resource, "kv", Kv, KvPermissionPattern, parse_environment_owner, parse_agent_recipient, parse_glob_resource, ["read" => Read, "write" => Write, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "blob", Blob, BlobPermissionPattern, parse_environment_owner, parse_agent_recipient, parse_glob_resource, ["read" => Read, "write" => Write, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "rdbms", Rdbms, RdbmsPermissionPattern, parse_environment_owner, parse_agent_recipient, parse_glob_resource, ["query" => Query, "execute" => Execute]);
-    parse_permission!(class, owner, recipient, verb, resource, "card", Card, CardPermissionPattern, parse_account_owner, parse_agent_recipient, parse_card_resource, ["derive" => Derive, "revoke" => Revoke, "inspect" => Inspect, "install" => Install]);
-    parse_permission!(class, owner, recipient, verb, resource, "system", System, SystemPermissionPattern, parse_empty_owner, parse_account_recipient, parse_empty_resource, ["create-account" => CreateAccount, "view-default-plan" => ViewDefaultPlan, "view-account-summaries-report" => ViewAccountSummariesReport, "view-account-counts-report" => ViewAccountCountsReport]);
-    parse_permission!(class, owner, recipient, verb, resource, "plan", Plan, PlanPermissionPattern, parse_empty_owner, parse_account_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "update" => Update]);
-    parse_permission!(class, owner, recipient, verb, resource, "account", Account, AccountPermissionPattern, parse_account_owner, parse_account_recipient, parse_empty_resource, ["view" => View, "update" => Update, "delete" => Delete, "set-roles" => SetRoles, "set-plan" => SetPlan, "restore" => Restore]);
-    parse_permission!(class, owner, recipient, verb, resource, "account.usage", AccountUsage, AccountUsagePermissionPattern, parse_account_owner, parse_account_recipient, parse_empty_resource, ["view" => View]);
-    parse_permission!(class, owner, recipient, verb, resource, "account.token", AccountToken, AccountTokenPermissionPattern, parse_account_owner, parse_account_recipient, parse_identifier_resource, ["create" => Create, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "account.plugin", AccountPlugin, AccountPluginPermissionPattern, parse_account_owner, parse_account_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "application", Application, ApplicationPermissionPattern, parse_application_owner, parse_account_recipient, parse_empty_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete, "restore" => Restore, "mint-credential" => MintCredential, "rotate-credential" => RotateCredential, "revoke-credential" => RevokeCredential, "view-credentials" => ViewCredentials]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment", Environment, EnvironmentPermissionPattern, parse_environment_owner, parse_environment_recipient, parse_empty_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete, "restore" => Restore, "deploy" => Deploy, "rollback" => Rollback, "view-deployment-plan" => ViewDeploymentPlan, "write-deployment-record" => WriteDeploymentRecord]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.share", EnvironmentShare, EnvironmentSharePermissionPattern, parse_environment_owner, parse_environment_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.plugin-grant", EnvironmentPluginGrant, EnvironmentPluginGrantPermissionPattern, parse_environment_owner, parse_environment_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.domain-registration", EnvironmentDomainRegistration, EnvironmentDomainRegistrationPermissionPattern, parse_environment_owner, parse_environment_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.security-scheme", EnvironmentSecurityScheme, EnvironmentSecuritySchemePermissionPattern, parse_environment_owner, parse_environment_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.http-api-deployment", EnvironmentHttpApiDeployment, EnvironmentHttpApiDeploymentPermissionPattern, parse_environment_owner, parse_environment_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.mcp-deployment", EnvironmentMcpDeployment, EnvironmentMcpDeploymentPermissionPattern, parse_environment_owner, parse_environment_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.agent-secret", EnvironmentAgentSecret, EnvironmentAgentSecretPermissionPattern, parse_environment_owner, parse_environment_recipient, parse_glob_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.resource-definition", EnvironmentResourceDefinition, EnvironmentResourceDefinitionPermissionPattern, parse_environment_owner, parse_environment_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.retry-policy", EnvironmentRetryPolicy, EnvironmentRetryPolicyPermissionPattern, parse_environment_owner, parse_environment_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "component", Component, ComponentPermissionPattern, parse_component_owner, parse_environment_recipient, parse_empty_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "account.oauth2-identity", AccountOauth2Identity, AccountOauth2IdentityPermissionPattern, parse_account_owner, parse_account_recipient, parse_identifier_resource, ["view" => View, "link" => Link, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.initial-files", EnvironmentInitialFiles, EnvironmentInitialFilesPermissionPattern, parse_component_owner, parse_environment_recipient, parse_glob_resource, ["view" => View, "update" => Update, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.kv-bucket", EnvironmentKvBucket, EnvironmentKvBucketPermissionPattern, parse_environment_owner, parse_environment_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
-    parse_permission!(class, owner, recipient, verb, resource, "environment.blob-bucket", EnvironmentBlobBucket, EnvironmentBlobBucketPermissionPattern, parse_environment_owner, parse_environment_recipient, parse_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "filesystem", Filesystem, FilesystemPermissionPattern, FilesystemVerb, parse_agent_owner, parse_agent_recipient, parse_filesystem_resource, ["read" => Read, "write" => Write, "list" => List, "stat" => Stat, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "network", Network, NetworkPermissionPattern, NetworkVerb, parse_empty_owner, parse_agent_recipient, parse_network_resource, ["connect" => Connect]);
+    parse_permission!(class, owner, recipient, verb, resource, "env", Env, EnvPermissionPattern, EnvVerb, parse_agent_owner, parse_agent_recipient, parse_env_resource, ["read" => Read]);
+    parse_permission!(class, owner, recipient, verb, resource, "oplog", Oplog, OplogPermissionPattern, OplogVerb, parse_agent_owner, parse_agent_recipient, parse_oplog_resource, ["read" => Read]);
+    parse_permission!(class, owner, recipient, verb, resource, "config", Config, ConfigPermissionPattern, ConfigVerb, parse_agent_owner, parse_agent_recipient, parse_config_resource, ["read" => Read]);
+    parse_permission!(class, owner, recipient, verb, resource, "secret", Secret, SecretPermissionPattern, SecretVerb, parse_environment_owner, parse_agent_recipient, parse_secret_resource, ["hold" => Hold, "mint" => Mint, "reveal" => Reveal]);
+    parse_permission!(class, owner, recipient, verb, resource, "agent", Agent, AgentPermissionPattern, AgentVerb, parse_agent_owner, parse_agent_recipient, parse_agent_resource, ["invoke" => Invoke, "view" => View, "create" => Create, "delete" => Delete, "interrupt" => Interrupt, "resume" => Resume, "update-revision" => UpdateRevision, "fork" => Fork, "revert" => Revert, "cancel-invocation" => CancelInvocation, "activate-plugin" => ActivatePlugin, "deactivate-plugin" => DeactivatePlugin]);
+    parse_permission!(class, owner, recipient, verb, resource, "tool", Tool, ToolPermissionPattern, ToolVerb, parse_tool_owner, parse_agent_recipient, parse_tool_resource, ["invoke" => Invoke]);
+    parse_permission!(class, owner, recipient, verb, resource, "kv", Kv, KvPermissionPattern, KvVerb, parse_environment_owner, parse_agent_recipient, parse_kv_resource, ["read" => Read, "write" => Write, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "blob", Blob, BlobPermissionPattern, BlobVerb, parse_environment_owner, parse_agent_recipient, parse_blob_resource, ["read" => Read, "write" => Write, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "rdbms", Rdbms, RdbmsPermissionPattern, RdbmsVerb, parse_environment_owner, parse_agent_recipient, parse_rdbms_resource, ["query" => Query, "execute" => Execute]);
+    parse_permission!(class, owner, recipient, verb, resource, "card", Card, CardPermissionPattern, CardVerb, parse_account_owner, parse_agent_recipient, parse_card_resource, ["derive" => Derive, "revoke" => Revoke, "inspect" => Inspect, "install" => Install]);
+    parse_permission!(class, owner, recipient, verb, resource, "system", System, SystemPermissionPattern, SystemVerb, parse_empty_owner, parse_account_recipient, parse_system_resource, ["create-account" => CreateAccount, "view-default-plan" => ViewDefaultPlan, "view-account-summaries-report" => ViewAccountSummariesReport, "view-account-counts-report" => ViewAccountCountsReport]);
+    parse_permission!(class, owner, recipient, verb, resource, "plan", Plan, PlanPermissionPattern, PlanVerb, parse_empty_owner, parse_account_recipient, parse_plan_resource, ["view" => View, "create" => Create, "update" => Update]);
+    parse_permission!(class, owner, recipient, verb, resource, "account", Account, AccountPermissionPattern, AccountVerb, parse_account_owner, parse_account_recipient, parse_account_resource, ["view" => View, "update" => Update, "delete" => Delete, "set-roles" => SetRoles, "set-plan" => SetPlan, "restore" => Restore]);
+    parse_permission!(class, owner, recipient, verb, resource, "account.usage", AccountUsage, AccountUsagePermissionPattern, AccountUsageVerb, parse_account_owner, parse_account_recipient, parse_account_usage_resource, ["view" => View]);
+    parse_permission!(class, owner, recipient, verb, resource, "account.token", AccountToken, AccountTokenPermissionPattern, AccountTokenVerb, parse_account_owner, parse_account_recipient, parse_account_token_resource, ["create" => Create, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "account.plugin", AccountPlugin, AccountPluginPermissionPattern, AccountPluginVerb, parse_account_owner, parse_account_recipient, parse_account_plugin_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "application", Application, ApplicationPermissionPattern, ApplicationVerb, parse_application_owner, parse_account_recipient, parse_application_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete, "restore" => Restore, "mint-credential" => MintCredential, "rotate-credential" => RotateCredential, "revoke-credential" => RevokeCredential, "view-credentials" => ViewCredentials]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment", Environment, EnvironmentPermissionPattern, EnvironmentVerb, parse_environment_owner, parse_environment_recipient, parse_environment_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete, "restore" => Restore, "deploy" => Deploy, "rollback" => Rollback, "view-deployment-plan" => ViewDeploymentPlan, "write-deployment-record" => WriteDeploymentRecord]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.share", EnvironmentShare, EnvironmentSharePermissionPattern, EnvironmentShareVerb, parse_environment_owner, parse_environment_recipient, parse_environment_share_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.plugin-grant", EnvironmentPluginGrant, EnvironmentPluginGrantPermissionPattern, EnvironmentPluginGrantVerb, parse_environment_owner, parse_environment_recipient, parse_environment_plugin_grant_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.domain-registration", EnvironmentDomainRegistration, EnvironmentDomainRegistrationPermissionPattern, EnvironmentDomainRegistrationVerb, parse_environment_owner, parse_environment_recipient, parse_environment_domain_registration_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.security-scheme", EnvironmentSecurityScheme, EnvironmentSecuritySchemePermissionPattern, EnvironmentSecuritySchemeVerb, parse_environment_owner, parse_environment_recipient, parse_environment_security_scheme_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.http-api-deployment", EnvironmentHttpApiDeployment, EnvironmentHttpApiDeploymentPermissionPattern, EnvironmentHttpApiDeploymentVerb, parse_environment_owner, parse_environment_recipient, parse_environment_http_api_deployment_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.mcp-deployment", EnvironmentMcpDeployment, EnvironmentMcpDeploymentPermissionPattern, EnvironmentMcpDeploymentVerb, parse_environment_owner, parse_environment_recipient, parse_environment_mcp_deployment_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.agent-secret", EnvironmentAgentSecret, EnvironmentAgentSecretPermissionPattern, EnvironmentAgentSecretVerb, parse_environment_owner, parse_environment_recipient, parse_environment_agent_secret_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.resource-definition", EnvironmentResourceDefinition, EnvironmentResourceDefinitionPermissionPattern, EnvironmentResourceDefinitionVerb, parse_environment_owner, parse_environment_recipient, parse_environment_resource_definition_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.retry-policy", EnvironmentRetryPolicy, EnvironmentRetryPolicyPermissionPattern, EnvironmentRetryPolicyVerb, parse_environment_owner, parse_environment_recipient, parse_environment_retry_policy_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "component", Component, ComponentPermissionPattern, ComponentVerb, parse_component_owner, parse_environment_recipient, parse_component_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "account.oauth2-identity", AccountOauth2Identity, AccountOauth2IdentityPermissionPattern, AccountOauth2IdentityVerb, parse_account_owner, parse_account_recipient, parse_account_oauth2_identity_resource, ["view" => View, "link" => Link, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.initial-files", EnvironmentInitialFiles, EnvironmentInitialFilesPermissionPattern, EnvironmentInitialFilesVerb, parse_component_owner, parse_environment_recipient, parse_environment_initial_files_resource, ["view" => View, "update" => Update, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.kv-bucket", EnvironmentKvBucket, EnvironmentKvBucketPermissionPattern, EnvironmentKvBucketVerb, parse_environment_owner, parse_environment_recipient, parse_environment_kv_bucket_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_permission!(class, owner, recipient, verb, resource, "environment.blob-bucket", EnvironmentBlobBucket, EnvironmentBlobBucketPermissionPattern, EnvironmentBlobBucketVerb, parse_environment_owner, parse_environment_recipient, parse_environment_blob_bucket_resource, ["view" => View, "create" => Create, "delete" => Delete]);
 
     Err(CardParseError::UnknownClass(class.to_string()))
 }
 
 macro_rules! parse_polymorphic_permission {
-    ($class:expr, $owner:expr, $recipient:expr, $verb:expr, $resource:expr, $class_name:literal, $variant:ident, $pattern:ident, $owner_parser:ident, $recipient_parser:ident, $resource_parser:ident, [$($verb_name:literal => $verb_variant:ident),+ $(,)?]) => {
+    ($class:expr, $owner:expr, $recipient:expr, $verb:expr, $resource:expr, $class_name:literal, $variant:ident, $pattern:ident, $verb_ty:ident, $owner_parser:ident, $recipient_parser:ident, $resource_parser:ident, [$($verb_name:literal => $verb_variant:ident),+ $(,)?]) => {
         if $class == $class_name {
             let owner = $owner_parser($class, $owner)?;
             let recipient = $recipient_parser($recipient)?;
             let resource = $resource_parser($class, $resource)?;
             return Ok(PolymorphicPermissionPattern::$variant(match $verb {
                 "*" => $pattern::Any { owner, recipient, resource },
-                $($verb_name => $pattern::$verb_variant { owner, recipient, resource },)+
+                $($verb_name => $pattern::Verb { verb: $verb_ty::$verb_variant, owner, recipient, resource },)+
                 other => return Err(CardParseError::UnknownVerb {
                     class: $class.to_string(),
                     verb: other.to_string(),
@@ -293,40 +293,40 @@ fn parse_polymorphic_permission(
     verb: &str,
     resource: &str,
 ) -> Result<PolymorphicPermissionPattern, CardParseError> {
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "filesystem", Filesystem, PolymorphicFilesystemPermissionPattern, parse_polymorphic_agent_owner, parse_polymorphic_agent_recipient, parse_polymorphic_glob_resource, ["read" => Read, "write" => Write, "list" => List, "stat" => Stat, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "network", Network, PolymorphicNetworkPermissionPattern, parse_polymorphic_empty_owner, parse_polymorphic_agent_recipient, parse_polymorphic_network_resource, ["connect" => Connect]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "env", Env, PolymorphicEnvPermissionPattern, parse_polymorphic_agent_owner, parse_polymorphic_agent_recipient, parse_polymorphic_identifier_resource, ["read" => Read]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "oplog", Oplog, PolymorphicOplogPermissionPattern, parse_polymorphic_agent_owner, parse_polymorphic_agent_recipient, parse_polymorphic_oplog_resource, ["read" => Read]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "config", Config, PolymorphicConfigPermissionPattern, parse_polymorphic_agent_owner, parse_polymorphic_agent_recipient, parse_polymorphic_glob_resource, ["read" => Read]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "secret", Secret, PolymorphicSecretPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_agent_recipient, parse_polymorphic_glob_resource, ["hold" => Hold, "mint" => Mint, "reveal" => Reveal]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "agent", Agent, PolymorphicAgentPermissionPattern, parse_polymorphic_agent_owner, parse_polymorphic_agent_recipient, parse_polymorphic_agent_resource, ["invoke" => Invoke, "view" => View, "create" => Create, "delete" => Delete, "interrupt" => Interrupt, "resume" => Resume, "update-revision" => UpdateRevision, "fork" => Fork, "revert" => Revert, "cancel-invocation" => CancelInvocation, "activate-plugin" => ActivatePlugin, "deactivate-plugin" => DeactivatePlugin]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "tool", Tool, PolymorphicToolPermissionPattern, parse_polymorphic_tool_owner, parse_polymorphic_agent_recipient, parse_polymorphic_tool_resource, ["invoke" => Invoke]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "kv", Kv, PolymorphicKvPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_agent_recipient, parse_polymorphic_glob_resource, ["read" => Read, "write" => Write, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "blob", Blob, PolymorphicBlobPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_agent_recipient, parse_polymorphic_glob_resource, ["read" => Read, "write" => Write, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "rdbms", Rdbms, PolymorphicRdbmsPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_agent_recipient, parse_polymorphic_glob_resource, ["query" => Query, "execute" => Execute]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "card", Card, PolymorphicCardPermissionPattern, parse_polymorphic_account_owner, parse_polymorphic_agent_recipient, parse_polymorphic_card_resource, ["derive" => Derive, "revoke" => Revoke, "inspect" => Inspect, "install" => Install]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "system", System, PolymorphicSystemPermissionPattern, parse_polymorphic_empty_owner, parse_polymorphic_account_recipient, parse_polymorphic_empty_resource, ["create-account" => CreateAccount, "view-default-plan" => ViewDefaultPlan, "view-account-summaries-report" => ViewAccountSummariesReport, "view-account-counts-report" => ViewAccountCountsReport]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "plan", Plan, PolymorphicPlanPermissionPattern, parse_polymorphic_empty_owner, parse_polymorphic_account_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "account", Account, PolymorphicAccountPermissionPattern, parse_polymorphic_account_owner, parse_polymorphic_account_recipient, parse_polymorphic_empty_resource, ["view" => View, "update" => Update, "delete" => Delete, "set-roles" => SetRoles, "set-plan" => SetPlan, "restore" => Restore]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "account.usage", AccountUsage, PolymorphicAccountUsagePermissionPattern, parse_polymorphic_account_owner, parse_polymorphic_account_recipient, parse_polymorphic_empty_resource, ["view" => View]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "account.token", AccountToken, PolymorphicAccountTokenPermissionPattern, parse_polymorphic_account_owner, parse_polymorphic_account_recipient, parse_polymorphic_identifier_resource, ["create" => Create, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "account.plugin", AccountPlugin, PolymorphicAccountPluginPermissionPattern, parse_polymorphic_account_owner, parse_polymorphic_account_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "application", Application, PolymorphicApplicationPermissionPattern, parse_polymorphic_application_owner, parse_polymorphic_account_recipient, parse_polymorphic_empty_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete, "restore" => Restore, "mint-credential" => MintCredential, "rotate-credential" => RotateCredential, "revoke-credential" => RevokeCredential, "view-credentials" => ViewCredentials]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment", Environment, PolymorphicEnvironmentPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_empty_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete, "restore" => Restore, "deploy" => Deploy, "rollback" => Rollback, "view-deployment-plan" => ViewDeploymentPlan, "write-deployment-record" => WriteDeploymentRecord]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.share", EnvironmentShare, PolymorphicEnvironmentSharePermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.plugin-grant", EnvironmentPluginGrant, PolymorphicEnvironmentPluginGrantPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.domain-registration", EnvironmentDomainRegistration, PolymorphicEnvironmentDomainRegistrationPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.security-scheme", EnvironmentSecurityScheme, PolymorphicEnvironmentSecuritySchemePermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.http-api-deployment", EnvironmentHttpApiDeployment, PolymorphicEnvironmentHttpApiDeploymentPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.mcp-deployment", EnvironmentMcpDeployment, PolymorphicEnvironmentMcpDeploymentPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.agent-secret", EnvironmentAgentSecret, PolymorphicEnvironmentAgentSecretPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_glob_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.resource-definition", EnvironmentResourceDefinition, PolymorphicEnvironmentResourceDefinitionPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.retry-policy", EnvironmentRetryPolicy, PolymorphicEnvironmentRetryPolicyPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "component", Component, PolymorphicComponentPermissionPattern, parse_polymorphic_component_owner, parse_polymorphic_environment_recipient, parse_polymorphic_empty_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "account.oauth2-identity", AccountOauth2Identity, PolymorphicAccountOauth2IdentityPermissionPattern, parse_polymorphic_account_owner, parse_polymorphic_account_recipient, parse_polymorphic_identifier_resource, ["view" => View, "link" => Link, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.initial-files", EnvironmentInitialFiles, PolymorphicEnvironmentInitialFilesPermissionPattern, parse_polymorphic_component_owner, parse_polymorphic_environment_recipient, parse_polymorphic_glob_resource, ["view" => View, "update" => Update, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.kv-bucket", EnvironmentKvBucket, PolymorphicEnvironmentKvBucketPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
-    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.blob-bucket", EnvironmentBlobBucket, PolymorphicEnvironmentBlobBucketPermissionPattern, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_identifier_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "filesystem", Filesystem, PolymorphicFilesystemPermissionPattern, FilesystemVerb, parse_polymorphic_agent_owner, parse_polymorphic_agent_recipient, parse_polymorphic_filesystem_resource, ["read" => Read, "write" => Write, "list" => List, "stat" => Stat, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "network", Network, PolymorphicNetworkPermissionPattern, NetworkVerb, parse_polymorphic_empty_owner, parse_polymorphic_agent_recipient, parse_polymorphic_network_resource, ["connect" => Connect]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "env", Env, PolymorphicEnvPermissionPattern, EnvVerb, parse_polymorphic_agent_owner, parse_polymorphic_agent_recipient, parse_polymorphic_env_resource, ["read" => Read]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "oplog", Oplog, PolymorphicOplogPermissionPattern, OplogVerb, parse_polymorphic_agent_owner, parse_polymorphic_agent_recipient, parse_polymorphic_oplog_resource, ["read" => Read]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "config", Config, PolymorphicConfigPermissionPattern, ConfigVerb, parse_polymorphic_agent_owner, parse_polymorphic_agent_recipient, parse_polymorphic_config_resource, ["read" => Read]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "secret", Secret, PolymorphicSecretPermissionPattern, SecretVerb, parse_polymorphic_environment_owner, parse_polymorphic_agent_recipient, parse_polymorphic_secret_resource, ["hold" => Hold, "mint" => Mint, "reveal" => Reveal]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "agent", Agent, PolymorphicAgentPermissionPattern, AgentVerb, parse_polymorphic_agent_owner, parse_polymorphic_agent_recipient, parse_polymorphic_agent_resource, ["invoke" => Invoke, "view" => View, "create" => Create, "delete" => Delete, "interrupt" => Interrupt, "resume" => Resume, "update-revision" => UpdateRevision, "fork" => Fork, "revert" => Revert, "cancel-invocation" => CancelInvocation, "activate-plugin" => ActivatePlugin, "deactivate-plugin" => DeactivatePlugin]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "tool", Tool, PolymorphicToolPermissionPattern, ToolVerb, parse_polymorphic_tool_owner, parse_polymorphic_agent_recipient, parse_polymorphic_tool_resource, ["invoke" => Invoke]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "kv", Kv, PolymorphicKvPermissionPattern, KvVerb, parse_polymorphic_environment_owner, parse_polymorphic_agent_recipient, parse_polymorphic_kv_resource, ["read" => Read, "write" => Write, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "blob", Blob, PolymorphicBlobPermissionPattern, BlobVerb, parse_polymorphic_environment_owner, parse_polymorphic_agent_recipient, parse_polymorphic_blob_resource, ["read" => Read, "write" => Write, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "rdbms", Rdbms, PolymorphicRdbmsPermissionPattern, RdbmsVerb, parse_polymorphic_environment_owner, parse_polymorphic_agent_recipient, parse_polymorphic_rdbms_resource, ["query" => Query, "execute" => Execute]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "card", Card, PolymorphicCardPermissionPattern, CardVerb, parse_polymorphic_account_owner, parse_polymorphic_agent_recipient, parse_polymorphic_card_resource, ["derive" => Derive, "revoke" => Revoke, "inspect" => Inspect, "install" => Install]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "system", System, PolymorphicSystemPermissionPattern, SystemVerb, parse_polymorphic_empty_owner, parse_polymorphic_account_recipient, parse_polymorphic_system_resource, ["create-account" => CreateAccount, "view-default-plan" => ViewDefaultPlan, "view-account-summaries-report" => ViewAccountSummariesReport, "view-account-counts-report" => ViewAccountCountsReport]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "plan", Plan, PolymorphicPlanPermissionPattern, PlanVerb, parse_polymorphic_empty_owner, parse_polymorphic_account_recipient, parse_polymorphic_plan_resource, ["view" => View, "create" => Create, "update" => Update]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "account", Account, PolymorphicAccountPermissionPattern, AccountVerb, parse_polymorphic_account_owner, parse_polymorphic_account_recipient, parse_polymorphic_account_resource, ["view" => View, "update" => Update, "delete" => Delete, "set-roles" => SetRoles, "set-plan" => SetPlan, "restore" => Restore]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "account.usage", AccountUsage, PolymorphicAccountUsagePermissionPattern, AccountUsageVerb, parse_polymorphic_account_owner, parse_polymorphic_account_recipient, parse_polymorphic_account_usage_resource, ["view" => View]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "account.token", AccountToken, PolymorphicAccountTokenPermissionPattern, AccountTokenVerb, parse_polymorphic_account_owner, parse_polymorphic_account_recipient, parse_polymorphic_account_token_resource, ["create" => Create, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "account.plugin", AccountPlugin, PolymorphicAccountPluginPermissionPattern, AccountPluginVerb, parse_polymorphic_account_owner, parse_polymorphic_account_recipient, parse_polymorphic_account_plugin_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "application", Application, PolymorphicApplicationPermissionPattern, ApplicationVerb, parse_polymorphic_application_owner, parse_polymorphic_account_recipient, parse_polymorphic_application_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete, "restore" => Restore, "mint-credential" => MintCredential, "rotate-credential" => RotateCredential, "revoke-credential" => RevokeCredential, "view-credentials" => ViewCredentials]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment", Environment, PolymorphicEnvironmentPermissionPattern, EnvironmentVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete, "restore" => Restore, "deploy" => Deploy, "rollback" => Rollback, "view-deployment-plan" => ViewDeploymentPlan, "write-deployment-record" => WriteDeploymentRecord]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.share", EnvironmentShare, PolymorphicEnvironmentSharePermissionPattern, EnvironmentShareVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_share_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.plugin-grant", EnvironmentPluginGrant, PolymorphicEnvironmentPluginGrantPermissionPattern, EnvironmentPluginGrantVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_plugin_grant_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.domain-registration", EnvironmentDomainRegistration, PolymorphicEnvironmentDomainRegistrationPermissionPattern, EnvironmentDomainRegistrationVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_domain_registration_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.security-scheme", EnvironmentSecurityScheme, PolymorphicEnvironmentSecuritySchemePermissionPattern, EnvironmentSecuritySchemeVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_security_scheme_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.http-api-deployment", EnvironmentHttpApiDeployment, PolymorphicEnvironmentHttpApiDeploymentPermissionPattern, EnvironmentHttpApiDeploymentVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_http_api_deployment_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.mcp-deployment", EnvironmentMcpDeployment, PolymorphicEnvironmentMcpDeploymentPermissionPattern, EnvironmentMcpDeploymentVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_mcp_deployment_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.agent-secret", EnvironmentAgentSecret, PolymorphicEnvironmentAgentSecretPermissionPattern, EnvironmentAgentSecretVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_agent_secret_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.resource-definition", EnvironmentResourceDefinition, PolymorphicEnvironmentResourceDefinitionPermissionPattern, EnvironmentResourceDefinitionVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_resource_definition_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.retry-policy", EnvironmentRetryPolicy, PolymorphicEnvironmentRetryPolicyPermissionPattern, EnvironmentRetryPolicyVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_retry_policy_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "component", Component, PolymorphicComponentPermissionPattern, ComponentVerb, parse_polymorphic_component_owner, parse_polymorphic_environment_recipient, parse_polymorphic_component_resource, ["view" => View, "create" => Create, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "account.oauth2-identity", AccountOauth2Identity, PolymorphicAccountOauth2IdentityPermissionPattern, AccountOauth2IdentityVerb, parse_polymorphic_account_owner, parse_polymorphic_account_recipient, parse_polymorphic_account_oauth2_identity_resource, ["view" => View, "link" => Link, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.initial-files", EnvironmentInitialFiles, PolymorphicEnvironmentInitialFilesPermissionPattern, EnvironmentInitialFilesVerb, parse_polymorphic_component_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_initial_files_resource, ["view" => View, "update" => Update, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.kv-bucket", EnvironmentKvBucket, PolymorphicEnvironmentKvBucketPermissionPattern, EnvironmentKvBucketVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_kv_bucket_resource, ["view" => View, "create" => Create, "delete" => Delete]);
+    parse_polymorphic_permission!(class, owner, recipient, verb, resource, "environment.blob-bucket", EnvironmentBlobBucket, PolymorphicEnvironmentBlobBucketPermissionPattern, EnvironmentBlobBucketVerb, parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient, parse_polymorphic_environment_blob_bucket_resource, ["view" => View, "create" => Create, "delete" => Delete]);
 
     Err(CardParseError::UnknownClass(class.to_string()))
 }
@@ -507,46 +507,35 @@ where
     parse_concrete(class, owner).map(concrete)
 }
 
-fn parse_empty_resource(
+fn parse_filesystem_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<FilesystemResourcePattern, CardParseError> {
+    if resource == "*" || resource == "**" {
+        Ok(FilesystemResourcePattern::Any)
+    } else if resource.contains('*') {
+        Ok(FilesystemResourcePattern::Glob(resource.to_string()))
+    } else {
+        Ok(FilesystemResourcePattern::Exact(resource.to_string()))
+    }
+}
+
+fn parse_polymorphic_filesystem_resource(
     class: &str,
     resource: &str,
-) -> Result<EmptyResourcePattern, CardParseError> {
-    if resource.is_empty() {
-        Ok(EmptyResourcePattern)
-    } else {
-        Err(CardParseError::InvalidResource {
-            class: class.to_string(),
-            resource: resource.to_string(),
-        })
-    }
-}
-
-fn parse_identifier_resource(
-    _class: &str,
-    resource: &str,
-) -> Result<IdentifierResourcePattern, CardParseError> {
-    if resource == "*" {
-        Ok(IdentifierResourcePattern::Any)
-    } else {
-        Ok(IdentifierResourcePattern::Exact(resource.to_string()))
-    }
-}
-
-fn parse_glob_resource(
-    _class: &str,
-    resource: &str,
-) -> Result<GlobResourcePattern, CardParseError> {
-    if resource == "*" || resource == "**" {
-        Ok(GlobResourcePattern::Any)
-    } else if resource.contains('*') {
-        Ok(GlobResourcePattern::Glob(resource.to_string()))
-    } else {
-        Ok(GlobResourcePattern::Exact(resource.to_string()))
-    }
+) -> Result<PolymorphicFilesystemResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_filesystem_resource,
+        PolymorphicFilesystemResourcePattern::Concrete,
+        PolymorphicFilesystemResourcePattern::Slot,
+        PolymorphicFilesystemResourcePattern::Template,
+    )
 }
 
 fn parse_network_resource(
-    _class: &str,
+    class: &str,
     resource: &str,
 ) -> Result<NetworkResourcePattern, CardParseError> {
     if resource == "*" {
@@ -555,7 +544,7 @@ fn parse_network_resource(
 
     let (host, ports) = if let Some((host, port)) = resource.rsplit_once(':') {
         if port.chars().all(|c| c.is_ascii_digit() || c == '-') {
-            (host.to_string(), parse_port_pattern(port)?)
+            (host.to_string(), parse_port_pattern(class, port)?)
         } else {
             (resource.to_string(), PortPattern::Any)
         }
@@ -566,25 +555,40 @@ fn parse_network_resource(
     Ok(NetworkResourcePattern::HostPort { host, ports })
 }
 
-fn parse_port_pattern(port: &str) -> Result<PortPattern, CardParseError> {
-    if let Some((start, end)) = port.split_once('-') {
-        let start = start.parse().map_err(|_| CardParseError::InvalidResource {
-            class: "network".to_string(),
-            resource: port.to_string(),
-        })?;
-        let end = end.parse().map_err(|_| CardParseError::InvalidResource {
-            class: "network".to_string(),
-            resource: port.to_string(),
-        })?;
-        Ok(PortPattern::Range { start, end })
+fn parse_polymorphic_network_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicNetworkResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_network_resource,
+        PolymorphicNetworkResourcePattern::Concrete,
+        PolymorphicNetworkResourcePattern::Slot,
+        PolymorphicNetworkResourcePattern::Template,
+    )
+}
+
+fn parse_env_resource(_class: &str, resource: &str) -> Result<EnvResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvResourcePattern::Any)
     } else {
-        Ok(PortPattern::Single(port.parse().map_err(|_| {
-            CardParseError::InvalidResource {
-                class: "network".to_string(),
-                resource: port.to_string(),
-            }
-        })?))
+        Ok(EnvResourcePattern::Exact(resource.to_string()))
     }
+}
+
+fn parse_polymorphic_env_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_env_resource,
+        PolymorphicEnvResourcePattern::Concrete,
+        PolymorphicEnvResourcePattern::Slot,
+        PolymorphicEnvResourcePattern::Template,
+    )
 }
 
 fn parse_oplog_resource(
@@ -617,6 +621,74 @@ fn parse_oplog_resource(
     Ok(OplogResourcePattern::Range { start, end })
 }
 
+fn parse_polymorphic_oplog_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicOplogResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_oplog_resource,
+        PolymorphicOplogResourcePattern::Concrete,
+        PolymorphicOplogResourcePattern::Slot,
+        PolymorphicOplogResourcePattern::Template,
+    )
+}
+
+fn parse_config_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<ConfigResourcePattern, CardParseError> {
+    if resource == "*" || resource == "**" {
+        Ok(ConfigResourcePattern::Any)
+    } else if resource.contains('*') {
+        Ok(ConfigResourcePattern::Glob(resource.to_string()))
+    } else {
+        Ok(ConfigResourcePattern::Exact(resource.to_string()))
+    }
+}
+
+fn parse_polymorphic_config_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicConfigResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_config_resource,
+        PolymorphicConfigResourcePattern::Concrete,
+        PolymorphicConfigResourcePattern::Slot,
+        PolymorphicConfigResourcePattern::Template,
+    )
+}
+
+fn parse_secret_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<SecretResourcePattern, CardParseError> {
+    if resource == "*" || resource == "**" {
+        Ok(SecretResourcePattern::Any)
+    } else if resource.contains('*') {
+        Ok(SecretResourcePattern::Glob(resource.to_string()))
+    } else {
+        Ok(SecretResourcePattern::Exact(resource.to_string()))
+    }
+}
+
+fn parse_polymorphic_secret_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicSecretResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_secret_resource,
+        PolymorphicSecretResourcePattern::Concrete,
+        PolymorphicSecretResourcePattern::Slot,
+        PolymorphicSecretResourcePattern::Template,
+    )
+}
+
 fn parse_agent_resource(
     _class: &str,
     resource: &str,
@@ -630,6 +702,20 @@ fn parse_agent_resource(
     }
 }
 
+fn parse_polymorphic_agent_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicAgentResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_agent_resource,
+        PolymorphicAgentResourcePattern::Concrete,
+        PolymorphicAgentResourcePattern::Slot,
+        PolymorphicAgentResourcePattern::Template,
+    )
+}
+
 fn parse_tool_resource(
     _class: &str,
     resource: &str,
@@ -639,6 +725,98 @@ fn parse_tool_resource(
     } else {
         Ok(ToolResourcePattern::Command(resource.to_string()))
     }
+}
+
+fn parse_polymorphic_tool_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicToolResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_tool_resource,
+        PolymorphicToolResourcePattern::Concrete,
+        PolymorphicToolResourcePattern::Slot,
+        PolymorphicToolResourcePattern::Template,
+    )
+}
+
+fn parse_kv_resource(_class: &str, resource: &str) -> Result<KvResourcePattern, CardParseError> {
+    if resource == "*" || resource == "**" {
+        Ok(KvResourcePattern::Any)
+    } else if resource.contains('*') {
+        Ok(KvResourcePattern::Glob(resource.to_string()))
+    } else {
+        Ok(KvResourcePattern::Exact(resource.to_string()))
+    }
+}
+
+fn parse_polymorphic_kv_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicKvResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_kv_resource,
+        PolymorphicKvResourcePattern::Concrete,
+        PolymorphicKvResourcePattern::Slot,
+        PolymorphicKvResourcePattern::Template,
+    )
+}
+
+fn parse_blob_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<BlobResourcePattern, CardParseError> {
+    if resource == "*" || resource == "**" {
+        Ok(BlobResourcePattern::Any)
+    } else if resource.contains('*') {
+        Ok(BlobResourcePattern::Glob(resource.to_string()))
+    } else {
+        Ok(BlobResourcePattern::Exact(resource.to_string()))
+    }
+}
+
+fn parse_polymorphic_blob_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicBlobResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_blob_resource,
+        PolymorphicBlobResourcePattern::Concrete,
+        PolymorphicBlobResourcePattern::Slot,
+        PolymorphicBlobResourcePattern::Template,
+    )
+}
+
+fn parse_rdbms_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<RdbmsResourcePattern, CardParseError> {
+    if resource == "*" || resource == "**" {
+        Ok(RdbmsResourcePattern::Any)
+    } else if resource.contains('*') {
+        Ok(RdbmsResourcePattern::Glob(resource.to_string()))
+    } else {
+        Ok(RdbmsResourcePattern::Exact(resource.to_string()))
+    }
+}
+
+fn parse_polymorphic_rdbms_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicRdbmsResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_rdbms_resource,
+        PolymorphicRdbmsResourcePattern::Concrete,
+        PolymorphicRdbmsResourcePattern::Slot,
+        PolymorphicRdbmsResourcePattern::Template,
+    )
 }
 
 fn parse_card_resource(
@@ -656,106 +834,6 @@ fn parse_card_resource(
     }
 }
 
-fn parse_polymorphic_empty_resource(
-    class: &str,
-    resource: &str,
-) -> Result<PolymorphicEmptyResourcePattern, CardParseError> {
-    if let Ok(resource) = parse_empty_resource(class, resource) {
-        Ok(PolymorphicEmptyResourcePattern::Concrete(resource))
-    } else if let Ok(slot) = SlotVariable::parse(resource) {
-        Ok(PolymorphicEmptyResourcePattern::Slot(slot))
-    } else {
-        Err(CardParseError::InvalidResource {
-            class: class.to_string(),
-            resource: resource.to_string(),
-        })
-    }
-}
-
-fn parse_polymorphic_identifier_resource(
-    class: &str,
-    resource: &str,
-) -> Result<PolymorphicIdentifierResourcePattern, CardParseError> {
-    parse_polymorphic_resource(
-        class,
-        resource,
-        parse_identifier_resource,
-        PolymorphicIdentifierResourcePattern::Concrete,
-        PolymorphicIdentifierResourcePattern::Slot,
-        PolymorphicIdentifierResourcePattern::Template,
-    )
-}
-
-fn parse_polymorphic_glob_resource(
-    class: &str,
-    resource: &str,
-) -> Result<PolymorphicGlobResourcePattern, CardParseError> {
-    parse_polymorphic_resource(
-        class,
-        resource,
-        parse_glob_resource,
-        PolymorphicGlobResourcePattern::Concrete,
-        PolymorphicGlobResourcePattern::Slot,
-        PolymorphicGlobResourcePattern::Template,
-    )
-}
-
-fn parse_polymorphic_network_resource(
-    class: &str,
-    resource: &str,
-) -> Result<PolymorphicNetworkResourcePattern, CardParseError> {
-    parse_polymorphic_resource(
-        class,
-        resource,
-        parse_network_resource,
-        PolymorphicNetworkResourcePattern::Concrete,
-        PolymorphicNetworkResourcePattern::Slot,
-        PolymorphicNetworkResourcePattern::Template,
-    )
-}
-
-fn parse_polymorphic_oplog_resource(
-    class: &str,
-    resource: &str,
-) -> Result<PolymorphicOplogResourcePattern, CardParseError> {
-    parse_polymorphic_resource(
-        class,
-        resource,
-        parse_oplog_resource,
-        PolymorphicOplogResourcePattern::Concrete,
-        PolymorphicOplogResourcePattern::Slot,
-        PolymorphicOplogResourcePattern::Template,
-    )
-}
-
-fn parse_polymorphic_agent_resource(
-    class: &str,
-    resource: &str,
-) -> Result<PolymorphicAgentResourcePattern, CardParseError> {
-    parse_polymorphic_resource(
-        class,
-        resource,
-        parse_agent_resource,
-        PolymorphicAgentResourcePattern::Concrete,
-        PolymorphicAgentResourcePattern::Slot,
-        PolymorphicAgentResourcePattern::Template,
-    )
-}
-
-fn parse_polymorphic_tool_resource(
-    class: &str,
-    resource: &str,
-) -> Result<PolymorphicToolResourcePattern, CardParseError> {
-    parse_polymorphic_resource(
-        class,
-        resource,
-        parse_tool_resource,
-        PolymorphicToolResourcePattern::Concrete,
-        PolymorphicToolResourcePattern::Slot,
-        PolymorphicToolResourcePattern::Template,
-    )
-}
-
 fn parse_polymorphic_card_resource(
     class: &str,
     resource: &str,
@@ -768,6 +846,639 @@ fn parse_polymorphic_card_resource(
         PolymorphicCardResourcePattern::Slot,
         PolymorphicCardResourcePattern::Template,
     )
+}
+
+fn parse_system_resource(
+    class: &str,
+    resource: &str,
+) -> Result<SystemResourcePattern, CardParseError> {
+    if resource.is_empty() {
+        Ok(SystemResourcePattern)
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_polymorphic_system_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicSystemResourcePattern, CardParseError> {
+    if let Ok(resource) = parse_system_resource(class, resource) {
+        Ok(PolymorphicSystemResourcePattern::Concrete(resource))
+    } else if let Ok(slot) = SlotVariable::parse(resource) {
+        Ok(PolymorphicSystemResourcePattern::Slot(slot))
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_plan_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<PlanResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(PlanResourcePattern::Any)
+    } else {
+        Ok(PlanResourcePattern::Exact(resource.to_string()))
+    }
+}
+
+fn parse_polymorphic_plan_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicPlanResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_plan_resource,
+        PolymorphicPlanResourcePattern::Concrete,
+        PolymorphicPlanResourcePattern::Slot,
+        PolymorphicPlanResourcePattern::Template,
+    )
+}
+
+fn parse_account_resource(
+    class: &str,
+    resource: &str,
+) -> Result<AccountResourcePattern, CardParseError> {
+    if resource.is_empty() {
+        Ok(AccountResourcePattern)
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_polymorphic_account_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicAccountResourcePattern, CardParseError> {
+    if let Ok(resource) = parse_account_resource(class, resource) {
+        Ok(PolymorphicAccountResourcePattern::Concrete(resource))
+    } else if let Ok(slot) = SlotVariable::parse(resource) {
+        Ok(PolymorphicAccountResourcePattern::Slot(slot))
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_account_usage_resource(
+    class: &str,
+    resource: &str,
+) -> Result<AccountUsageResourcePattern, CardParseError> {
+    if resource.is_empty() {
+        Ok(AccountUsageResourcePattern)
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_polymorphic_account_usage_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicAccountUsageResourcePattern, CardParseError> {
+    if let Ok(resource) = parse_account_usage_resource(class, resource) {
+        Ok(PolymorphicAccountUsageResourcePattern::Concrete(resource))
+    } else if let Ok(slot) = SlotVariable::parse(resource) {
+        Ok(PolymorphicAccountUsageResourcePattern::Slot(slot))
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_account_token_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<AccountTokenResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(AccountTokenResourcePattern::Any)
+    } else {
+        Ok(AccountTokenResourcePattern::Exact(resource.to_string()))
+    }
+}
+
+fn parse_polymorphic_account_token_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicAccountTokenResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_account_token_resource,
+        PolymorphicAccountTokenResourcePattern::Concrete,
+        PolymorphicAccountTokenResourcePattern::Slot,
+        PolymorphicAccountTokenResourcePattern::Template,
+    )
+}
+
+fn parse_account_plugin_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<AccountPluginResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(AccountPluginResourcePattern::Any)
+    } else {
+        Ok(AccountPluginResourcePattern::Exact(resource.to_string()))
+    }
+}
+
+fn parse_polymorphic_account_plugin_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicAccountPluginResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_account_plugin_resource,
+        PolymorphicAccountPluginResourcePattern::Concrete,
+        PolymorphicAccountPluginResourcePattern::Slot,
+        PolymorphicAccountPluginResourcePattern::Template,
+    )
+}
+
+fn parse_application_resource(
+    class: &str,
+    resource: &str,
+) -> Result<ApplicationResourcePattern, CardParseError> {
+    if resource.is_empty() {
+        Ok(ApplicationResourcePattern)
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_polymorphic_application_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicApplicationResourcePattern, CardParseError> {
+    if let Ok(resource) = parse_application_resource(class, resource) {
+        Ok(PolymorphicApplicationResourcePattern::Concrete(resource))
+    } else if let Ok(slot) = SlotVariable::parse(resource) {
+        Ok(PolymorphicApplicationResourcePattern::Slot(slot))
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_environment_resource(
+    class: &str,
+    resource: &str,
+) -> Result<EnvironmentResourcePattern, CardParseError> {
+    if resource.is_empty() {
+        Ok(EnvironmentResourcePattern)
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_polymorphic_environment_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentResourcePattern, CardParseError> {
+    if let Ok(resource) = parse_environment_resource(class, resource) {
+        Ok(PolymorphicEnvironmentResourcePattern::Concrete(resource))
+    } else if let Ok(slot) = SlotVariable::parse(resource) {
+        Ok(PolymorphicEnvironmentResourcePattern::Slot(slot))
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_environment_share_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentShareResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvironmentShareResourcePattern::Any)
+    } else {
+        Ok(EnvironmentShareResourcePattern::Exact(resource.to_string()))
+    }
+}
+
+fn parse_polymorphic_environment_share_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentShareResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_share_resource,
+        PolymorphicEnvironmentShareResourcePattern::Concrete,
+        PolymorphicEnvironmentShareResourcePattern::Slot,
+        PolymorphicEnvironmentShareResourcePattern::Template,
+    )
+}
+
+fn parse_environment_plugin_grant_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentPluginGrantResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvironmentPluginGrantResourcePattern::Any)
+    } else {
+        Ok(EnvironmentPluginGrantResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_plugin_grant_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentPluginGrantResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_plugin_grant_resource,
+        PolymorphicEnvironmentPluginGrantResourcePattern::Concrete,
+        PolymorphicEnvironmentPluginGrantResourcePattern::Slot,
+        PolymorphicEnvironmentPluginGrantResourcePattern::Template,
+    )
+}
+
+fn parse_environment_domain_registration_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentDomainRegistrationResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvironmentDomainRegistrationResourcePattern::Any)
+    } else {
+        Ok(EnvironmentDomainRegistrationResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_domain_registration_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentDomainRegistrationResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_domain_registration_resource,
+        PolymorphicEnvironmentDomainRegistrationResourcePattern::Concrete,
+        PolymorphicEnvironmentDomainRegistrationResourcePattern::Slot,
+        PolymorphicEnvironmentDomainRegistrationResourcePattern::Template,
+    )
+}
+
+fn parse_environment_security_scheme_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentSecuritySchemeResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvironmentSecuritySchemeResourcePattern::Any)
+    } else {
+        Ok(EnvironmentSecuritySchemeResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_security_scheme_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentSecuritySchemeResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_security_scheme_resource,
+        PolymorphicEnvironmentSecuritySchemeResourcePattern::Concrete,
+        PolymorphicEnvironmentSecuritySchemeResourcePattern::Slot,
+        PolymorphicEnvironmentSecuritySchemeResourcePattern::Template,
+    )
+}
+
+fn parse_environment_http_api_deployment_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentHttpApiDeploymentResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvironmentHttpApiDeploymentResourcePattern::Any)
+    } else {
+        Ok(EnvironmentHttpApiDeploymentResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_http_api_deployment_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentHttpApiDeploymentResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_http_api_deployment_resource,
+        PolymorphicEnvironmentHttpApiDeploymentResourcePattern::Concrete,
+        PolymorphicEnvironmentHttpApiDeploymentResourcePattern::Slot,
+        PolymorphicEnvironmentHttpApiDeploymentResourcePattern::Template,
+    )
+}
+
+fn parse_environment_mcp_deployment_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentMcpDeploymentResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvironmentMcpDeploymentResourcePattern::Any)
+    } else {
+        Ok(EnvironmentMcpDeploymentResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_mcp_deployment_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentMcpDeploymentResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_mcp_deployment_resource,
+        PolymorphicEnvironmentMcpDeploymentResourcePattern::Concrete,
+        PolymorphicEnvironmentMcpDeploymentResourcePattern::Slot,
+        PolymorphicEnvironmentMcpDeploymentResourcePattern::Template,
+    )
+}
+
+fn parse_environment_agent_secret_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentAgentSecretResourcePattern, CardParseError> {
+    if resource == "*" || resource == "**" {
+        Ok(EnvironmentAgentSecretResourcePattern::Any)
+    } else if resource.contains('*') {
+        Ok(EnvironmentAgentSecretResourcePattern::Glob(
+            resource.to_string(),
+        ))
+    } else {
+        Ok(EnvironmentAgentSecretResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_agent_secret_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentAgentSecretResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_agent_secret_resource,
+        PolymorphicEnvironmentAgentSecretResourcePattern::Concrete,
+        PolymorphicEnvironmentAgentSecretResourcePattern::Slot,
+        PolymorphicEnvironmentAgentSecretResourcePattern::Template,
+    )
+}
+
+fn parse_environment_resource_definition_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentResourceDefinitionResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvironmentResourceDefinitionResourcePattern::Any)
+    } else {
+        Ok(EnvironmentResourceDefinitionResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_resource_definition_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentResourceDefinitionResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_resource_definition_resource,
+        PolymorphicEnvironmentResourceDefinitionResourcePattern::Concrete,
+        PolymorphicEnvironmentResourceDefinitionResourcePattern::Slot,
+        PolymorphicEnvironmentResourceDefinitionResourcePattern::Template,
+    )
+}
+
+fn parse_environment_retry_policy_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentRetryPolicyResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvironmentRetryPolicyResourcePattern::Any)
+    } else {
+        Ok(EnvironmentRetryPolicyResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_retry_policy_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentRetryPolicyResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_retry_policy_resource,
+        PolymorphicEnvironmentRetryPolicyResourcePattern::Concrete,
+        PolymorphicEnvironmentRetryPolicyResourcePattern::Slot,
+        PolymorphicEnvironmentRetryPolicyResourcePattern::Template,
+    )
+}
+
+fn parse_component_resource(
+    class: &str,
+    resource: &str,
+) -> Result<ComponentResourcePattern, CardParseError> {
+    if resource.is_empty() {
+        Ok(ComponentResourcePattern)
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_polymorphic_component_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicComponentResourcePattern, CardParseError> {
+    if let Ok(resource) = parse_component_resource(class, resource) {
+        Ok(PolymorphicComponentResourcePattern::Concrete(resource))
+    } else if let Ok(slot) = SlotVariable::parse(resource) {
+        Ok(PolymorphicComponentResourcePattern::Slot(slot))
+    } else {
+        Err(CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+}
+
+fn parse_account_oauth2_identity_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<AccountOauth2IdentityResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(AccountOauth2IdentityResourcePattern::Any)
+    } else {
+        Ok(AccountOauth2IdentityResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_account_oauth2_identity_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicAccountOauth2IdentityResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_account_oauth2_identity_resource,
+        PolymorphicAccountOauth2IdentityResourcePattern::Concrete,
+        PolymorphicAccountOauth2IdentityResourcePattern::Slot,
+        PolymorphicAccountOauth2IdentityResourcePattern::Template,
+    )
+}
+
+fn parse_environment_initial_files_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentInitialFilesResourcePattern, CardParseError> {
+    if resource == "*" || resource == "**" {
+        Ok(EnvironmentInitialFilesResourcePattern::Any)
+    } else if resource.contains('*') {
+        Ok(EnvironmentInitialFilesResourcePattern::Glob(
+            resource.to_string(),
+        ))
+    } else {
+        Ok(EnvironmentInitialFilesResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_initial_files_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentInitialFilesResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_initial_files_resource,
+        PolymorphicEnvironmentInitialFilesResourcePattern::Concrete,
+        PolymorphicEnvironmentInitialFilesResourcePattern::Slot,
+        PolymorphicEnvironmentInitialFilesResourcePattern::Template,
+    )
+}
+
+fn parse_environment_kv_bucket_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentKvBucketResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvironmentKvBucketResourcePattern::Any)
+    } else {
+        Ok(EnvironmentKvBucketResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_kv_bucket_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentKvBucketResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_kv_bucket_resource,
+        PolymorphicEnvironmentKvBucketResourcePattern::Concrete,
+        PolymorphicEnvironmentKvBucketResourcePattern::Slot,
+        PolymorphicEnvironmentKvBucketResourcePattern::Template,
+    )
+}
+
+fn parse_environment_blob_bucket_resource(
+    _class: &str,
+    resource: &str,
+) -> Result<EnvironmentBlobBucketResourcePattern, CardParseError> {
+    if resource == "*" {
+        Ok(EnvironmentBlobBucketResourcePattern::Any)
+    } else {
+        Ok(EnvironmentBlobBucketResourcePattern::Exact(
+            resource.to_string(),
+        ))
+    }
+}
+
+fn parse_polymorphic_environment_blob_bucket_resource(
+    class: &str,
+    resource: &str,
+) -> Result<PolymorphicEnvironmentBlobBucketResourcePattern, CardParseError> {
+    parse_polymorphic_resource(
+        class,
+        resource,
+        parse_environment_blob_bucket_resource,
+        PolymorphicEnvironmentBlobBucketResourcePattern::Concrete,
+        PolymorphicEnvironmentBlobBucketResourcePattern::Slot,
+        PolymorphicEnvironmentBlobBucketResourcePattern::Template,
+    )
+}
+
+fn parse_port_pattern(class: &str, port: &str) -> Result<PortPattern, CardParseError> {
+    if let Some((start, end)) = port.split_once('-') {
+        let start = start.parse().map_err(|_| CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: port.to_string(),
+        })?;
+        let end = end.parse().map_err(|_| CardParseError::InvalidResource {
+            class: class.to_string(),
+            resource: port.to_string(),
+        })?;
+        Ok(PortPattern::Range { start, end })
+    } else {
+        Ok(PortPattern::Single(port.parse().map_err(|_| {
+            CardParseError::InvalidResource {
+                class: class.to_string(),
+                resource: port.to_string(),
+            }
+        })?))
+    }
 }
 
 fn parse_polymorphic_resource<T, U, Parse, Concrete, Slot, Template>(
