@@ -109,16 +109,16 @@ impl RecipientPattern for EnvironmentRecipientPattern {
             Self::ApplicationEnvironments {
                 account,
                 application,
-            } => segments.len() >= 3 && account == &segments[0] && application == &segments[1],
+            } => segments.len() >= 3 && account == segments[0] && application == segments[1],
             Self::Environment {
                 account,
                 application,
                 environment,
             } => {
                 segments.len() >= 3
-                    && account == &segments[0]
-                    && application == &segments[1]
-                    && environment == &segments[2]
+                    && account == segments[0]
+                    && application == segments[1]
+                    && environment == segments[2]
             }
         }
     }

@@ -13,6 +13,10 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::card::owner::{AgentOwnerPattern, EmptyOwnerPattern, OwnerPattern};
+use crate::model::card::recipient::{
+    AccountRecipientPattern, AgentRecipientPattern, EnvironmentRecipientPattern, RecipientPattern,
+};
 use chrono::Utc;
 use pretty_assertions::assert_matches;
 use test_r::core::{DynamicTestRegistration, TestProperties};

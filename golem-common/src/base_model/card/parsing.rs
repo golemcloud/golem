@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::base_model::card::*;
+use crate::model::card::owner::OwnerPattern;
+use crate::model::card::recipient::RecipientPattern;
 use nom::IResult;
 use nom::bytes::complete::{tag, take_until};
 use nom::character::complete::{char, multispace0};

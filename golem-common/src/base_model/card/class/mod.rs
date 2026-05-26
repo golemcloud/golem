@@ -12,35 +12,129 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod account;
+mod account_oauth2_identity;
+mod account_plugin;
+mod account_token;
+mod account_usage;
+mod agent;
+mod application;
+mod blob;
+mod card;
+mod component;
+mod config;
+mod env;
+mod environment;
+mod environment_agent_secret;
+mod environment_blob_bucket;
+mod environment_domain_registration;
+mod environment_http_api_deployment;
+mod environment_initial_files;
+mod environment_kv_bucket;
+mod environment_mcp_deployment;
+mod environment_plugin_grant;
+mod environment_resource_definition;
+mod environment_retry_policy;
+mod environment_security_scheme;
+mod environment_share;
+mod filesystem;
+mod kv;
+mod network;
+mod oplog;
+mod plan;
+mod rdbms;
+mod secret;
+mod system;
+mod tool;
+
+use super::owner::OwnerPattern;
+use super::recipient::RecipientPattern;
 use crate::base_model::card::CardParseError;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
-pub use super::owner::*;
-pub use super::recipient::*;
+pub use account::*;
+pub use account_oauth2_identity::*;
+pub use account_plugin::*;
+pub use account_token::*;
+pub use account_usage::*;
+pub use agent::*;
+pub use application::*;
+pub use blob::*;
+pub use card::*;
+pub use component::*;
+pub use config::*;
+pub use env::*;
+pub use environment::*;
+pub use environment_agent_secret::*;
+pub use environment_blob_bucket::*;
+pub use environment_domain_registration::*;
+pub use environment_http_api_deployment::*;
+pub use environment_initial_files::*;
+pub use environment_kv_bucket::*;
+pub use environment_mcp_deployment::*;
+pub use environment_plugin_grant::*;
+pub use environment_resource_definition::*;
+pub use environment_retry_policy::*;
+pub use environment_security_scheme::*;
+pub use environment_share::*;
+pub use filesystem::*;
+pub use kv::*;
+pub use network::*;
+pub use oplog::*;
+pub use plan::*;
+pub use rdbms::*;
+pub use secret::*;
+pub use system::*;
+pub use tool::*;
 
 #[cfg(feature = "full")]
-pub trait CardBinaryCodec: desert_rust::BinarySerializer + desert_rust::BinaryDeserializer {}
-
-#[cfg(feature = "full")]
-impl<T: desert_rust::BinarySerializer + desert_rust::BinaryDeserializer> CardBinaryCodec for T {}
-
-#[cfg(not(feature = "full"))]
-pub trait CardBinaryCodec {}
-
-#[cfg(not(feature = "full"))]
-impl<T> CardBinaryCodec for T {}
-
 pub trait VerbPattern:
-    Debug + Copy + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
+    Debug
+    + Copy
+    + Clone
+    + PartialEq
+    + Eq
+    + Serialize
+    + for<'de> Deserialize<'de>
+    + desert_rust::BinarySerializer
+    + desert_rust::BinaryDeserializer
 {
     fn parse_verb(verb: &str) -> Option<Self>
     where
         Self: Sized;
 }
 
+#[cfg(not(feature = "full"))]
+pub trait VerbPattern:
+    Debug + Copy + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de>
+{
+    fn parse_verb(verb: &str) -> Option<Self>
+    where
+        Self: Sized;
+}
+
+#[cfg(feature = "full")]
 pub trait ResourcePattern:
-    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
+    Debug
+    + Clone
+    + PartialEq
+    + Eq
+    + Serialize
+    + for<'de> Deserialize<'de>
+    + desert_rust::BinarySerializer
+    + desert_rust::BinaryDeserializer
+{
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError>
+    where
+        Self: Sized;
+
+    fn subsumes(&self, other: &Self) -> bool;
+}
+
+#[cfg(not(feature = "full"))]
+pub trait ResourcePattern:
+    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de>
 {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError>
     where
@@ -140,109 +234,6 @@ pub enum PolymorphicClassPermissionPattern<C: PermissionClass> {
         resource: C::Resource,
     },
 }
-
-pub mod filesystem;
-
-pub mod network;
-
-pub mod env;
-
-pub mod oplog;
-
-pub mod config;
-
-pub mod secret;
-
-pub mod agent;
-
-pub mod tool;
-
-pub mod kv;
-
-pub mod blob;
-
-pub mod rdbms;
-
-pub mod card;
-
-pub mod system;
-
-pub mod plan;
-
-pub mod account;
-
-pub mod account_usage;
-
-pub mod account_token;
-
-pub mod account_plugin;
-
-pub mod application;
-
-pub mod environment;
-
-pub mod environment_share;
-
-pub mod environment_plugin_grant;
-
-pub mod environment_domain_registration;
-
-pub mod environment_security_scheme;
-
-pub mod environment_http_api_deployment;
-
-pub mod environment_mcp_deployment;
-
-pub mod environment_agent_secret;
-
-pub mod environment_resource_definition;
-
-pub mod environment_retry_policy;
-
-pub mod component;
-
-pub mod account_oauth2_identity;
-
-pub mod environment_initial_files;
-
-pub mod environment_kv_bucket;
-
-pub mod environment_blob_bucket;
-
-pub use account::*;
-pub use account_oauth2_identity::*;
-pub use account_plugin::*;
-pub use account_token::*;
-pub use account_usage::*;
-pub use agent::*;
-pub use application::*;
-pub use blob::*;
-pub use card::*;
-pub use component::*;
-pub use config::*;
-pub use env::*;
-pub use environment::*;
-pub use environment_agent_secret::*;
-pub use environment_blob_bucket::*;
-pub use environment_domain_registration::*;
-pub use environment_http_api_deployment::*;
-pub use environment_initial_files::*;
-pub use environment_kv_bucket::*;
-pub use environment_mcp_deployment::*;
-pub use environment_plugin_grant::*;
-pub use environment_resource_definition::*;
-pub use environment_retry_policy::*;
-pub use environment_security_scheme::*;
-pub use environment_share::*;
-pub use filesystem::*;
-pub use kv::*;
-pub use network::*;
-pub use oplog::*;
-pub use plan::*;
-pub use rdbms::*;
-pub use secret::*;
-pub use system::*;
-pub use tool::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]

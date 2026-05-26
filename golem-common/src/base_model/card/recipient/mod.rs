@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::CardBinaryCodec;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -24,8 +23,17 @@ pub use account::*;
 pub use agent::*;
 pub use environment::*;
 
+#[cfg(feature = "full")]
 pub trait RecipientPattern:
-    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec + Sized
+    Debug
+    + Clone
+    + PartialEq
+    + Eq
+    + Serialize
+    + for<'de> Deserialize<'de>
+    + desert_rust::BinarySerializer
+    + desert_rust::BinaryDeserializer
+    + Sized
 {
     type Polymorphic: Debug
         + Clone
@@ -33,7 +41,20 @@ pub trait RecipientPattern:
         + Eq
         + Serialize
         + for<'de> Deserialize<'de>
-        + CardBinaryCodec;
+        + desert_rust::BinarySerializer
+        + desert_rust::BinaryDeserializer;
+
+    fn parse(value: &str) -> Result<Self, String>;
+    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String>;
+    fn subsumes(&self, other: &Self) -> bool;
+    fn matches_holder(&self, holder: &str) -> bool;
+}
+
+#[cfg(not(feature = "full"))]
+pub trait RecipientPattern:
+    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + Sized
+{
+    type Polymorphic: Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de>;
 
     fn parse(value: &str) -> Result<Self, String>;
     fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String>;

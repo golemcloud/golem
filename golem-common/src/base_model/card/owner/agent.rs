@@ -10,10 +10,10 @@ pub enum AgentOwnerLeafPattern {
 impl AgentOwnerLeafPattern {
     pub fn parse(value: &str) -> Result<Self, String> {
         let value = parse_concrete_segment(value)?;
-        if let Some(agent_type) = value.strip_suffix("(*)") {
-            if !agent_type.is_empty() {
-                return Ok(Self::AgentTypeWildcard(agent_type.to_string()));
-            }
+        if let Some(agent_type) = value.strip_suffix("(*)")
+            && !agent_type.is_empty()
+        {
+            return Ok(Self::AgentTypeWildcard(agent_type.to_string()));
         }
         Ok(Self::Agent(value.to_string()))
     }

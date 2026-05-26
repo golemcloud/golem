@@ -13,17 +13,21 @@
 // limitations under the License.
 
 use crate::base_model::card::{
-    AccountOwnerPattern, AgentOwnerPattern, AgentPermissionPattern, AgentRecipientPattern,
-    AgentResourcePattern, AgentVerb, BlobPermissionPattern, BlobResourcePattern, BlobVerb,
-    CardPermissionPattern, CardResourcePattern, CardVerb, ConfigPermissionPattern,
-    ConfigResourcePattern, ConfigVerb, EmptyOwnerPattern, EnvPermissionPattern, EnvResourcePattern,
-    EnvVerb, EnvironmentOwnerPattern, FilesystemPermissionPattern, FilesystemResourcePattern,
+    AgentPermissionPattern, AgentResourcePattern, AgentVerb, BlobPermissionPattern,
+    BlobResourcePattern, BlobVerb, CardPermissionPattern, CardResourcePattern, CardVerb,
+    ConfigPermissionPattern, ConfigResourcePattern, ConfigVerb, EnvPermissionPattern,
+    EnvResourcePattern, EnvVerb, FilesystemPermissionPattern, FilesystemResourcePattern,
     FilesystemVerb, KvPermissionPattern, KvResourcePattern, KvVerb, NetworkPermissionPattern,
     NetworkResourcePattern, NetworkVerb, OplogPermissionPattern, OplogResourcePattern, OplogVerb,
     PermissionPattern, PolymorphicPermissionPattern, PortPattern, RdbmsPermissionPattern,
     RdbmsResourcePattern, RdbmsVerb, SecretPermissionPattern, SecretResourcePattern, SecretVerb,
-    ToolOwnerPattern, ToolPermissionPattern, ToolResourcePattern, ToolVerb,
+    ToolPermissionPattern, ToolResourcePattern, ToolVerb,
 };
+use crate::model::card::owner::{
+    AccountOwnerPattern, AgentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern,
+    ToolOwnerPattern,
+};
+use crate::model::card::recipient::AgentRecipientPattern;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

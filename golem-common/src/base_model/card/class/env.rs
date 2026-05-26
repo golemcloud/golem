@@ -1,5 +1,11 @@
-use super::*;
+use super::{
+    ClassPermissionPattern, PermissionClass, PermissionPattern, PolymorphicClassPermissionPattern,
+    PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
+};
 use crate::base_model::card::parsing::CardParseError;
+use crate::model::card::owner::AgentOwnerPattern;
+use crate::model::card::recipient::AgentRecipientPattern;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]

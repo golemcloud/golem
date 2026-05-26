@@ -13,6 +13,10 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::card::owner::AgentOwnerPattern;
+use crate::model::card::recipient::{
+    AccountRecipientPattern, AgentRecipientPattern, EnvironmentRecipientPattern, RecipientPattern,
+};
 use chrono::Utc;
 use test_r::test;
 use uuid::Uuid;

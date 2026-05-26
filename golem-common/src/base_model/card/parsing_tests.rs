@@ -13,6 +13,18 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::card::owner::{
+    AccountOwnerPattern, AgentOwnerLeafPattern, AgentOwnerPattern, ApplicationOwnerPattern,
+    ComponentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern,
+    PolymorphicAccountOwnerPattern, PolymorphicAgentOwnerPattern,
+    PolymorphicApplicationOwnerPattern, PolymorphicEmptyOwnerPattern,
+    PolymorphicEnvironmentOwnerPattern, PolymorphicToolOwnerPattern, ToolOwnerPattern,
+};
+use crate::model::card::recipient::{
+    AccountRecipientPattern, AgentRecipientPattern, EnvironmentRecipientPattern,
+    PolymorphicAccountRecipientPattern, PolymorphicAgentRecipientPattern,
+    PolymorphicEnvironmentRecipientPattern,
+};
 use pretty_assertions::assert_eq;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};

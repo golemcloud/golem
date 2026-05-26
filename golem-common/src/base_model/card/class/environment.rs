@@ -1,9 +1,15 @@
-use super::*;
+use super::{
+    ClassPermissionPattern, PermissionClass, PermissionPattern, PolymorphicClassPermissionPattern,
+    PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
+};
 use crate::base_model::card::parsing::CardParseError;
+use crate::model::card::owner::ApplicationOwnerPattern;
+use crate::model::card::recipient::EnvironmentRecipientPattern;
 use nom::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while1};
 use nom::combinator::{all_consuming, map, map_res};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]

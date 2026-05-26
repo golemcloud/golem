@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::CardBinaryCodec;
 use nom::IResult;
 use nom::bytes::complete::is_not;
 use nom::character::complete::char;
@@ -37,8 +36,16 @@ pub use empty::*;
 pub use environment::*;
 pub use tool::*;
 
+#[cfg(feature = "full")]
 pub trait OwnerPattern:
-    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
+    Debug
+    + Clone
+    + PartialEq
+    + Eq
+    + Serialize
+    + for<'de> Deserialize<'de>
+    + desert_rust::BinarySerializer
+    + desert_rust::BinaryDeserializer
 {
     type Polymorphic: Debug
         + Clone
@@ -46,7 +53,24 @@ pub trait OwnerPattern:
         + Eq
         + Serialize
         + for<'de> Deserialize<'de>
-        + CardBinaryCodec;
+        + desert_rust::BinarySerializer
+        + desert_rust::BinaryDeserializer;
+
+    fn parse(value: &str) -> Result<Self, String>
+    where
+        Self: Sized;
+    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String>
+    where
+        Self: Sized;
+
+    fn subsumes(&self, other: &Self) -> bool;
+}
+
+#[cfg(not(feature = "full"))]
+pub trait OwnerPattern:
+    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de>
+{
+    type Polymorphic: Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de>;
 
     fn parse(value: &str) -> Result<Self, String>
     where

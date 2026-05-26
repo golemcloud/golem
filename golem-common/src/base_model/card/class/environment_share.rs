@@ -1,5 +1,11 @@
-use super::*;
+use super::{
+    ClassPermissionPattern, PermissionClass, PermissionPattern, PolymorphicClassPermissionPattern,
+    PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
+};
 use crate::base_model::card::parsing::CardParseError;
+use crate::model::card::owner::EnvironmentOwnerPattern;
+use crate::model::card::recipient::EnvironmentRecipientPattern;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
