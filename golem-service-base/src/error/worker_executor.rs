@@ -49,6 +49,9 @@ pub enum WorkerExecutorError {
         agent_id: AgentId,
         reason: Box<WorkerExecutorError>,
     },
+    ComponentNotFound {
+        component_id: ComponentId,
+    },
     ComponentDownloadFailed {
         component_id: ComponentId,
         component_revision: ComponentRevision,
@@ -210,6 +213,9 @@ impl Display for WorkerExecutorError {
             Self::FailedToResumeAgent { agent_id, reason } => {
                 write!(f, "Failed to resume worker: {agent_id}: {reason}")
             }
+            Self::ComponentNotFound { component_id } => {
+                write!(f, "Component for id {component_id} not found")
+            }
             Self::ComponentDownloadFailed {
                 component_id,
                 component_revision,
@@ -320,6 +326,7 @@ impl Error for WorkerExecutorError {
             Self::AgentNotFound { .. } => "Worker not found",
             Self::AgentCreationFailed { .. } => "Failed to create worker",
             Self::FailedToResumeAgent { .. } => "Failed to resume worker",
+            Self::ComponentNotFound { .. } => "Component not found",
             Self::ComponentDownloadFailed { .. } => "Failed to download component",
             Self::ComponentParseFailed { .. } => "Failed to parse downloaded component",
             Self::GetCurrentVersionOfComponentFailed { .. } => {
@@ -355,6 +362,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::AgentNotFound { .. } => "AgentNotFound",
             Self::AgentCreationFailed { .. } => "AgentCreationFailed",
             Self::FailedToResumeAgent { .. } => "FailedToResumeAgent",
+            Self::ComponentNotFound { .. } => "ComponentNotFound",
             Self::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
             Self::ComponentParseFailed { .. } => "ComponentParseFailed",
             Self::GetCurrentVersionOfComponentFailed { .. } => "GetCurrentVersionOfComponentFailed",
@@ -387,7 +395,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::PromiseDropped { .. }
             | Self::PromiseAlreadyCompleted { .. }
             | Self::Interrupted { .. }
-            | Self::InvalidShardId { .. } => true,
+            | Self::InvalidShardId { .. }
+            | Self::ComponentNotFound { .. } => true,
             Self::InvalidRequest { .. }
             | Self::AgentCreationFailed { .. }
             | Self::FailedToResumeAgent { .. }
@@ -423,10 +432,33 @@ impl From<InterruptKind> for WorkerExecutorError {
 
 impl From<anyhow::Error> for WorkerExecutorError {
     fn from(error: anyhow::Error) -> Self {
-        match error.root_cause().downcast_ref::<InterruptKind>() {
-            Some(kind) => Self::Interrupted { kind: *kind },
-            None => Self::runtime(format!("{error:#?}")),
+        if let Some(kind) = error.root_cause().downcast_ref::<InterruptKind>() {
+            return Self::Interrupted { kind: *kind };
         }
+        // Preserve the original `WorkerExecutorError` if it survives in the
+        // error chain so callers like `TrapType::from_error` can still
+        // classify replay-corruption variants (`UnexpectedOplogEntry`, ...)
+        // as non-retriable instead of collapsing everything to a generic
+        // `Runtime` message.
+        //
+        // We have to look in two places: anyhow can hold the original error
+        // directly (when it was constructed via `anyhow::Error::new(we)`), or
+        // — when we round-trip through `wasmtime::Error` — anyhow holds a
+        // `Box<dyn StdError + Send + Sync>` whose concrete content is the
+        // original `WorkerExecutorError`. The latter happens because
+        // `From<wasmtime::Error> for anyhow::Error` uses
+        // `anyhow::Error::from_boxed`, which erases the inner TypeId from
+        // anyhow's vtable but keeps the original value inside the box.
+        if let Some(we) = error.downcast_ref::<WorkerExecutorError>() {
+            return we.clone();
+        }
+        if let Some(boxed) =
+            error.downcast_ref::<Box<dyn std::error::Error + Send + Sync + 'static>>()
+            && let Some(we) = boxed.downcast_ref::<WorkerExecutorError>()
+        {
+            return we.clone();
+        }
+        Self::runtime(format!("{error:#?}"))
     }
 }
 
@@ -515,6 +547,17 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                         ),
                     ),
                 },
+            WorkerExecutorError::ComponentNotFound {
+                component_id,
+            } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::ComponentNotFound(
+                        golem::worker::v1::ComponentNotFound {
+                            component_id: Some(component_id.into()),
+                        },
+                    ),
+                ),
+            },
             WorkerExecutorError::ComponentDownloadFailed {
                 component_id,
                 component_revision,
@@ -745,6 +788,14 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 reason: Box::new(
                     (*failed_to_resume_worker.reason.ok_or("Missing reason")?).try_into()?,
                 ),
+            }),
+            Some(golem::worker::v1::worker_execution_error::Error::ComponentNotFound(
+                component_not_found,
+            )) => Ok(Self::ComponentNotFound {
+                component_id: component_not_found
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?
             }),
             Some(golem::worker::v1::worker_execution_error::Error::ComponentDownloadFailed(
                 component_download_failed,

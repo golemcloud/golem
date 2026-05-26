@@ -14,7 +14,9 @@
 
 use crate::client::check_http_response_success;
 use crate::log::{LogColorize, LogIndent, log_action};
-use crate::model::app::{CanonicalFilePathWithPermissions, InitialComponentFile};
+use crate::model::app::{
+    CanonicalFilePathWithPermissions, InitialComponentFile, InitialComponentFileSource,
+};
 use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
@@ -134,6 +136,91 @@ where
     Ok(result)
 }
 
+pub async fn expand_component_files(
+    component_files: &[InitialComponentFile],
+) -> anyhow::Result<Vec<InitialComponentFile>> {
+    let mut expanded = Vec::new();
+
+    for component_file in component_files {
+        let scheme = component_file.source.as_url().scheme();
+        match scheme {
+            "file" | "" => expanded.extend(expand_local_component_file(component_file).await?),
+            _ => expanded.push(component_file.clone()),
+        }
+    }
+
+    Ok(expanded)
+}
+
+async fn expand_local_component_file(
+    component_file: &InitialComponentFile,
+) -> anyhow::Result<Vec<InitialComponentFile>> {
+    let source_path = component_file.source.as_url().to_file_path().map_err(|_| {
+        anyhow!(
+            "Failed to convert local IFS file URL to path: {}",
+            component_file.source.as_url()
+        )
+    })?;
+    if !source_path.is_dir() {
+        return Ok(vec![component_file.clone()]);
+    }
+
+    let mut result = Vec::new();
+    let mut visited_dirs = HashSet::new();
+    let mut queue: VecDeque<(PathBuf, CanonicalFilePathWithPermissions)> =
+        vec![(source_path, component_file.target.clone())].into();
+
+    while let Some((path, target)) = queue.pop_front() {
+        if path.is_dir() {
+            let canonical_path = tokio::fs::canonicalize(&path)
+                .await
+                .with_context(|| anyhow!("Error canonicalizing directory: {}", path.display()))?;
+            if !visited_dirs.insert(canonical_path) {
+                continue;
+            }
+
+            let read_dir = tokio::fs::read_dir(&path)
+                .await
+                .with_context(|| anyhow!("Error reading directory: {}", path.display()))?;
+            let mut read_dir_stream = ReadDirStream::new(read_dir);
+            let mut entries = Vec::new();
+
+            while let Some(entry) = read_dir_stream.next().await {
+                entries.push(entry.context("Error reading directory entry")?);
+            }
+
+            entries.sort_by_key(|a| a.file_name());
+
+            for entry in entries {
+                let next_path = entry.path();
+                let file_name = entry.file_name().into_string().map_err(|_| {
+                    anyhow!("Error converting file name to string: Contains non-unicode data")
+                })?;
+
+                let mut new_target = target.clone();
+                new_target
+                    .extend_path(file_name.as_str())
+                    .map_err(|err| anyhow!("Error extending path: {err}"))?;
+
+                queue.push_back((next_path, new_target));
+            }
+        } else {
+            let source = Url::from_file_path(&path).map_err(|_| {
+                anyhow!(
+                    "Failed to convert local IFS file path to URL: {}",
+                    path.display()
+                )
+            })?;
+            let source = InitialComponentFileSource::new(source.as_str(), Path::new("/golem.yaml"))
+                .map_err(|err| anyhow!("Invalid expanded local IFS file URL: {err}"))?;
+
+            result.push(InitialComponentFile { source, target });
+        }
+    }
+
+    Ok(result)
+}
+
 impl IfsFileManager {
     pub fn new(client: reqwest::Client) -> Self {
         Self { client }
@@ -160,8 +247,10 @@ impl IfsFileManager {
             .with_context(|| "Error creating zip file for IFS archive")?;
         let mut zip_writer = ZipFileWriter::with_tokio(zip_file);
 
+        let component_files = expand_component_files(component_files).await?;
+
         let mut loaded_files = Vec::new();
-        for component_file in component_files {
+        for component_file in &component_files {
             loaded_files.extend(
                 self.process_component_file(&file_processor, component_file)
                     .await?,
@@ -237,10 +326,12 @@ impl IfsFileManager {
         );
         let _indent = LogIndent::new();
 
-        validate_unique_targets(component_files)?;
+        let component_files = expand_component_files(component_files).await?;
+
+        validate_unique_targets(&component_files)?;
 
         let mut hashes = Vec::with_capacity(component_files.len());
-        for component_file in component_files {
+        for component_file in &component_files {
             hashes.extend(
                 self.process_component_file(&file_processor, component_file)
                     .await?,
@@ -282,11 +373,19 @@ impl IfsFileManager {
         let source_path = PathBuf::from(component_file.source.as_url().path());
 
         let mut results: Vec<R> = vec![];
+        let mut visited_dirs = HashSet::new();
         let mut queue: VecDeque<(PathBuf, CanonicalFilePathWithPermissions)> =
             vec![(source_path, component_file.target.clone())].into();
 
         while let Some((path, target)) = queue.pop_front() {
             if path.is_dir() {
+                let canonical_path = tokio::fs::canonicalize(&path).await.with_context(|| {
+                    anyhow!("Error canonicalizing directory: {}", path.display())
+                })?;
+                if !visited_dirs.insert(canonical_path) {
+                    continue;
+                }
+
                 let read_dir = tokio::fs::read_dir(&path)
                     .await
                     .with_context(|| anyhow!("Error reading directory: {}", path.display()))?;
@@ -504,8 +603,13 @@ fn validate_unique_targets(component_files: &[InitialComponentFile]) -> anyhow::
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_archive_paths_for_sources;
+    use super::{expand_component_files, resolve_archive_paths_for_sources};
+    use crate::model::app::{
+        CanonicalFilePathWithPermissions, InitialComponentFile, InitialComponentFileSource,
+    };
+    use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
     use std::collections::BTreeMap;
+    use std::path::Path;
     use test_r::test;
     use url::Url;
 
@@ -551,6 +655,44 @@ mod tests {
             (first.ends_with("/.golem-ifs/main.ts") && second.ends_with("/.golem-ifs/main-2.ts"))
                 || (second.ends_with("/.golem-ifs/main.ts")
                     && first.ends_with("/.golem-ifs/main-2.ts"))
+        );
+    }
+
+    #[test]
+    fn local_directory_sources_expand_to_leaf_targets() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_dir = temp_dir.path().join("workspace");
+        std::fs::create_dir_all(source_dir.join("nested")).unwrap();
+        std::fs::write(source_dir.join(".keep"), "seed").unwrap();
+        std::fs::write(source_dir.join("nested").join("file.txt"), "nested").unwrap();
+
+        let source = Url::from_file_path(&source_dir).unwrap();
+        let files = vec![InitialComponentFile {
+            source: InitialComponentFileSource::new(source.as_str(), Path::new("/golem.yaml"))
+                .unwrap(),
+            target: CanonicalFilePathWithPermissions {
+                path: CanonicalFilePath::from_abs_str("/workspace").unwrap(),
+                permissions: AgentFilePermissions::ReadWrite,
+            },
+        }];
+
+        let expanded = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(expand_component_files(&files))
+            .unwrap();
+        let targets = expanded
+            .iter()
+            .map(|file| file.target.path.to_abs_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            targets,
+            vec!["/workspace/.keep", "/workspace/nested/file.txt"]
+        );
+        assert!(
+            expanded
+                .iter()
+                .all(|file| file.target.permissions == AgentFilePermissions::ReadWrite)
         );
     }
 }

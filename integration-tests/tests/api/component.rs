@@ -202,6 +202,80 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
 
 #[test]
 #[tracing::instrument]
+async fn component_update_removes_provision_configs_for_removed_agent_types(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .with_agent_config(
+            "CounterAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["var1".to_string()],
+                value: serde_json::Value::String("value1".to_string()).into(),
+            }],
+        )
+        .store()
+        .await?;
+
+    assert!(
+        component
+            .metadata
+            .agent_type_provision_configs()
+            .contains_key(&AgentTypeName("CounterAgent".to_string()))
+    );
+
+    let mut other_agent = component.metadata.agent_types()[0].clone();
+    other_agent.type_name = AgentTypeName("OtherAgent".to_string());
+    other_agent.description = "Constructs the agent OtherAgent".to_string();
+
+    let updated_component = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                agent_types: Some(vec![other_agent]),
+                agent_type_provision_config_updates: Some(BTreeMap::from([(
+                    AgentTypeName("OtherAgent".to_string()),
+                    AgentTypeProvisionConfigUpdate::default(),
+                )])),
+                allow_incompatible_config: false,
+            },
+            None::<File>,
+            None::<File>,
+        )
+        .await?;
+
+    assert_eq!(
+        updated_component
+            .metadata
+            .agent_types()
+            .iter()
+            .map(|agent_type| agent_type.type_name.0.as_str())
+            .collect::<Vec<_>>(),
+        vec!["OtherAgent"]
+    );
+    assert!(
+        updated_component
+            .metadata
+            .agent_type_provision_configs()
+            .contains_key(&AgentTypeName("OtherAgent".to_string()))
+    );
+    assert!(
+        !updated_component
+            .metadata
+            .agent_type_provision_configs()
+            .contains_key(&AgentTypeName("CounterAgent".to_string()))
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn component_update_with_wrong_revision_is_rejected(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {

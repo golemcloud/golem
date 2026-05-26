@@ -19,7 +19,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, Pool};
+use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::repo::RepoResult;
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};

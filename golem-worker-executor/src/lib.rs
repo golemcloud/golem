@@ -51,7 +51,7 @@ use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
     EngineConfig, GolemConfig, HttpClientConfig, IndexedStorageConfig, KeyValueStorageConfig,
-    KeyValueStorageInnerConfig,
+    KeyValueStorageInnerConfig, SchedulerStorageConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
@@ -90,12 +90,17 @@ use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use crate::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
 use crate::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
+use crate::storage::scheduler::SchedulerStorage;
+use crate::storage::scheduler::memory::InMemorySchedulerStorage;
+use crate::storage::scheduler::postgres::PostgresSchedulerStorage;
+use crate::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
+use golem_common::config::DbSqliteConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
@@ -488,6 +493,7 @@ pub async fn create_worker_executor_impl<
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
     shutdown_token: tokio_util::sync::CancellationToken,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
         All<Ctx>,
@@ -511,18 +517,28 @@ pub async fn create_worker_executor_impl<
             (Some(pool), None, key_value_storage)
         }
         KeyValueStorageConfig::Postgres(postgres) => {
-            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-                PostgresKeyValueStorage::configured(postgres)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            );
+            let kv = PostgresKeyValueStorage::configured(postgres)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            let kv_metrics = kv.clone();
+            join_set.spawn(async move { kv_metrics.run_metrics_loop("key_value_storage").await });
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(kv);
             (None, None, key_value_storage)
         }
         KeyValueStorageConfig::NamespaceRouted(namespace_routed) => {
-            let (cache_redis, cache_sqlite, cache_storage) =
-                build_inner_key_value_storage(&namespace_routed.cache).await?;
+            let (cache_redis, cache_sqlite, cache_storage) = build_inner_key_value_storage(
+                &namespace_routed.cache,
+                "key_value_storage_cache",
+                join_set,
+            )
+            .await?;
             let (persistent_redis, persistent_sqlite, persistent_storage) =
-                build_inner_key_value_storage(&namespace_routed.persistent).await?;
+                build_inner_key_value_storage(
+                    &namespace_routed.persistent,
+                    "key_value_storage_persistent",
+                    join_set,
+                )
+                .await?;
 
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
                 NamespaceRoutedKeyValueStorage::new(cache_storage, persistent_storage),
@@ -538,14 +554,11 @@ pub async fn create_worker_executor_impl<
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
         }
         KeyValueStorageConfig::Sqlite(sqlite) => {
-            let pool = SqlitePool::configured(sqlite)
+            let storage = SqliteKeyValueStorage::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
-            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-                SqliteKeyValueStorage::new(pool.clone())
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            );
+            let pool = storage.pool();
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(storage);
             (None, Some(pool), key_value_storage)
         }
         KeyValueStorageConfig::MultiSqlite(multi_sqlite) => {
@@ -559,6 +572,8 @@ pub async fn create_worker_executor_impl<
         }
     };
 
+    let scheduler_storage = build_scheduler_storage(&golem_config.scheduler_storage).await?;
+
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = match &golem_config.indexed_storage
     {
         IndexedStorageConfig::KVStoreRedis(_) => {
@@ -570,17 +585,27 @@ pub async fn create_worker_executor_impl<
             let pool = RedisPool::configured(redis).await?;
             Arc::new(RedisIndexedStorage::new(pool.clone()))
         }
-        IndexedStorageConfig::Postgres(postgres) => Arc::new(
-            PostgresIndexedStorage::configured(postgres)
+        IndexedStorageConfig::Postgres(postgres) => {
+            let is = PostgresIndexedStorage::configured(postgres)
                 .await
-                .map_err(|err| anyhow!(err))?,
-        ),
+                .map_err(|err| anyhow!(err))?;
+            let is_metrics = is.clone();
+            join_set.spawn(async move { is_metrics.run_metrics_loop().await });
+            Arc::new(is)
+        }
         IndexedStorageConfig::KVStoreSqlite(_) => {
-            let sqlite = sqlite
-                .clone()
-                .expect("Sqlite must be configured as key-value storage when using KVStoreSqlite");
+            let kv_sqlite_config = match &golem_config.key_value_storage {
+                KeyValueStorageConfig::Sqlite(sqlite_config) => sqlite_config,
+                _ => panic!(
+                    "Invalid configuration: sqlite must be used as key-value storage when using KVStoreSqlite"
+                ),
+            };
+            // The indexed storage uses its own SQLite DB file, disjoint from the
+            // key-value storage's one, so each module has an independent
+            // `_sqlx_migrations` table.
+            let indexed_sqlite_config = derive_disjoint_sqlite_config(kv_sqlite_config, "indexed");
             Arc::new(
-                SqliteIndexedStorage::new(sqlite.clone())
+                SqliteIndexedStorage::configured(&indexed_sqlite_config)
                     .await
                     .map_err(|err| anyhow!(err))?,
             )
@@ -597,16 +622,11 @@ pub async fn create_worker_executor_impl<
                 "Invalid configuration: multi-sqlite must be used as key-value storage when using KVStoreMultiSqlite"
             ),
         },
-        IndexedStorageConfig::Sqlite(sqlite) => {
-            let pool = SqlitePool::configured(sqlite)
+        IndexedStorageConfig::Sqlite(sqlite) => Arc::new(
+            SqliteIndexedStorage::configured(sqlite)
                 .await
-                .map_err(|err| anyhow!(err))?;
-            Arc::new(
-                SqliteIndexedStorage::new(pool.clone())
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            )
-        }
+                .map_err(|err| anyhow!(err))?,
+        ),
         IndexedStorageConfig::MultiSqlite(multi_sqlite) => {
             Arc::new(MultiSqliteIndexedStorage::new(
                 &multi_sqlite.root_dir,
@@ -854,13 +874,16 @@ pub async fn create_worker_executor_impl<
     let promise_service = Arc::new(LazyPromiseService::new());
 
     let scheduler_service = SchedulerServiceDefault::new(
-        key_value_storage.clone(),
+        scheduler_storage,
         shard_service.clone(),
         promise_service.clone(),
         Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
         oplog_service.clone(),
         worker_service.clone(),
         golem_config.scheduler.refresh_interval,
+        golem_config.scheduler.claim_batch_size,
+        golem_config.scheduler.lease_ttl,
+        golem_config.scheduler.max_batches_per_tick,
         shutdown_token.clone(),
     );
 
@@ -930,6 +953,39 @@ pub async fn create_worker_executor_impl<
     Ok((all, epoch_thread, epoch_stop, registry_service))
 }
 
+/// Derives a `DbSqliteConfig` for a module that should live in a separate
+/// SQLite DB file next to a base one (used by `KVStoreSqlite` to give the
+/// indexed storage its own DB and migration table).
+fn derive_disjoint_sqlite_config(base: &DbSqliteConfig, suffix: &str) -> DbSqliteConfig {
+    let database = match base.database.strip_suffix(".db") {
+        Some(stem) => format!("{stem}-{suffix}.db"),
+        None => format!("{}-{suffix}", base.database),
+    };
+    DbSqliteConfig {
+        database,
+        max_connections: base.max_connections,
+        foreign_keys: base.foreign_keys,
+    }
+}
+
+async fn build_scheduler_storage(
+    config: &SchedulerStorageConfig,
+) -> Result<Arc<dyn SchedulerStorage + Send + Sync>, anyhow::Error> {
+    match config {
+        SchedulerStorageConfig::Postgres(postgres) => Ok(Arc::new(
+            PostgresSchedulerStorage::configured(postgres)
+                .await
+                .map_err(|err| anyhow!(err))?,
+        )),
+        SchedulerStorageConfig::Sqlite(sqlite) => Ok(Arc::new(
+            SqliteSchedulerStorage::configured(sqlite)
+                .await
+                .map_err(|err| anyhow!(err))?,
+        )),
+        SchedulerStorageConfig::InMemory(_) => Ok(Arc::new(InMemorySchedulerStorage::new())),
+    }
+}
+
 /// Runs the worker executor
 pub async fn bootstrap_and_run_worker_executor<
     Ctx: WorkerCtx,
@@ -964,11 +1020,13 @@ pub async fn bootstrap_and_run_worker_executor<
             runtime.clone(),
             &lazy_worker_activator,
             shutdown.token(),
+            join_set,
         )
         .await?;
 
     if start_registry_invalidation_handler {
         let registry_service = registry_service.clone();
+        let active_workers = worker_executor_impl.active_workers();
         let component_service = worker_executor_impl.component_service();
         let environment_state_service = worker_executor_impl.environment_state_service();
         let agent_types_service = worker_executor_impl.agent_types();
@@ -976,6 +1034,7 @@ pub async fn bootstrap_and_run_worker_executor<
         join_set.spawn(async move {
             WorkerExecutorRegistryInvalidationHandler::run(
                 registry_service,
+                active_workers,
                 component_service,
                 environment_state_service,
                 agent_types_service,
@@ -1071,6 +1130,8 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
 
 async fn build_inner_key_value_storage(
     config: &KeyValueStorageInnerConfig,
+    svc_name: &'static str,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
         Option<RedisPool>,
@@ -1089,11 +1150,12 @@ async fn build_inner_key_value_storage(
             Ok((Some(pool), None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Postgres(postgres) => {
-            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-                PostgresKeyValueStorage::configured(postgres)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            );
+            let kv = PostgresKeyValueStorage::configured(postgres)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            let kv_metrics = kv.clone();
+            join_set.spawn(async move { kv_metrics.run_metrics_loop(svc_name).await });
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(kv);
             Ok((None, None, key_value_storage))
         }
         KeyValueStorageInnerConfig::InMemory(_) => {
@@ -1102,14 +1164,11 @@ async fn build_inner_key_value_storage(
             Ok((None, None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Sqlite(sqlite) => {
-            let pool = SqlitePool::configured(sqlite)
+            let storage = SqliteKeyValueStorage::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
-            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-                SqliteKeyValueStorage::new(pool.clone())
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            );
+            let pool = storage.pool();
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(storage);
             Ok((None, Some(pool), key_value_storage))
         }
         KeyValueStorageInnerConfig::MultiSqlite(multi_sqlite) => {

@@ -1,0 +1,347 @@
+---
+// Markup only — all copy lives in src/data/use-cases.ts.
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+import Quickstart from "../components/Quickstart.astro";
+import {
+  meta,
+  hero,
+  featuredSection,
+  classicSection,
+  featured,
+  classicDE,
+} from "../data/use-cases";
+---
+
+<BaseLayout title={meta.title} description={meta.description}>
+  <Nav />
+  <main>
+    <!-- ============================================================
+         Section 1 — Hero
+    ============================================================ -->
+    <section class="hero">
+      <div class="container">
+        <span class="eyebrow">{hero.eyebrow}</span>
+        <h1 class="hero-title">{hero.heading}</h1>
+        <p class="hero-lede">{hero.lede}</p>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Section 2 — Featured agent use cases
+    ============================================================ -->
+    <section class="featured-section">
+      <div class="container">
+        <header class="section-header">
+          <span class="eyebrow">{featuredSection.eyebrow}</span>
+          <h2 class="section-heading">{featuredSection.heading}</h2>
+        </header>
+        <div class="solution-grid">
+          {
+            featured.map((d) => (
+              <article class="solution-card">
+                <h3 class="solution-title">{d.title}</h3>
+                <p class="class-of-problem">{d.intro}</p>
+
+                <div class="examples-block">
+                  <h4 class="block-label">Examples</h4>
+                  <ul class="examples-list">
+                    {d.examples.map((e) => (
+                      <li>{e}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                <aside class="fit-box">
+                  <h4 class="fit-heading">Why Golem</h4>
+                  <ul class="fit-list">
+                    {d.fits.map((f) => (
+                      <li>
+                        <span class="fit-title">{f.title}</span>
+                        <p class="fit-body">{f.body}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </aside>
+              </article>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Section 3 — Beyond agents
+    ============================================================ -->
+    <section class="classic-section">
+      <div class="container">
+        <header class="section-header">
+          <span class="eyebrow">{classicSection.eyebrow}</span>
+          <h2 class="section-heading">{classicDE.title}</h2>
+        </header>
+
+        <article class="solution-card solution-card-wide">
+          <div class="wide-grid">
+            <div class="wide-col">
+              <h4 class="block-label">Overview</h4>
+              <p class="overview-text">{classicDE.overview}</p>
+            </div>
+            <div class="wide-col">
+              <h4 class="block-label">Examples</h4>
+              <ul class="examples-list">
+                {classicDE.examples.map((e) => <li>{e}</li>)}
+              </ul>
+            </div>
+            <div class="wide-col">
+              <h4 class="block-label">Why Golem</h4>
+              <ul class="examples-list">
+                {classicDE.fits.map((f) => <li>{f}</li>)}
+              </ul>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Section 4 — Closing CTA (shared Quickstart component)
+    ============================================================ -->
+    <Quickstart />
+  </main>
+  <Footer />
+</BaseLayout>
+
+<style>
+  main {
+    overflow-x: hidden;
+  }
+
+  /* ============================================================
+     Hero
+  ============================================================ */
+  .hero {
+    padding: clamp(3.5rem, 7vw, 5.5rem) 0 clamp(2rem, 4vw, 3.5rem);
+    position: relative;
+  }
+  .hero::before {
+    content: "";
+    position: absolute;
+    top: -20%;
+    left: 60%;
+    width: 700px;
+    height: 500px;
+    background: radial-gradient(ellipse, rgba(245, 176, 62, 0.08), transparent 65%);
+    pointer-events: none;
+    z-index: -1;
+  }
+  .hero-title {
+    font-size: clamp(2.3rem, 4.8vw, 3.4rem);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    margin: 0.5rem 0 1.25rem;
+    background: linear-gradient(to bottom, #ffffff 30%, #b0b0bc 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .hero-lede {
+    font-size: clamp(1rem, 1.4vw, 1.15rem);
+    line-height: 1.6;
+    color: var(--text-secondary);
+    max-width: 720px;
+    margin: 0;
+  }
+
+  /* ============================================================
+     Section headers
+  ============================================================ */
+  .featured-section,
+  .classic-section {
+    padding: 3.5rem 0 3rem;
+    border-top: 1px solid var(--border);
+  }
+  .section-header {
+    margin-bottom: 2rem;
+  }
+  .section-heading {
+    font-size: clamp(1.55rem, 2.8vw, 2.05rem);
+    font-weight: 600;
+    color: var(--text);
+    margin: 0;
+    letter-spacing: -0.02em;
+  }
+
+  /* ============================================================
+     Solution cards — subgrid keeps section boundaries aligned
+     across cards in the same row (3 cards / row on desktop).
+     Each card has 4 row tracks: title, intro, examples, fit.
+  ============================================================ */
+  .solution-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-auto-rows: auto;
+    gap: 1.25rem;
+  }
+  @media (min-width: 760px) {
+    .solution-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  @media (min-width: 1100px) {
+    .solution-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  .solution-card {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: span 4;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.75rem 1.6rem 1.6rem;
+    transition: border-color 200ms;
+  }
+  .solution-card:hover {
+    border-color: var(--border-strong);
+  }
+
+  /* Fallback for browsers without subgrid: flexbox column with
+     auto-pushed fit-box. Modern browsers ignore this. */
+  @supports not (grid-template-rows: subgrid) {
+    .solution-card {
+      display: flex;
+      flex-direction: column;
+    }
+    .fit-box {
+      margin-top: auto;
+    }
+  }
+
+  /* Section spacing inside each card. Subgrid ignores the card's own
+     `gap` declaration, so we use per-section margins. */
+  .solution-title {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 1rem;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+  }
+  .class-of-problem {
+    font-size: 0.94rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin: 0 0 1.5rem;
+  }
+  .examples-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .block-label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin: 0;
+    font-weight: 500;
+  }
+  .examples-list {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+  .examples-list li {
+    margin-bottom: 0.3rem;
+  }
+  .examples-list li:last-child {
+    margin-bottom: 0;
+  }
+
+  /* ============================================================
+     "Why Golem" box — visually distinct (elevated background,
+     amber left border). Stays at the bottom of the card.
+  ============================================================ */
+  .fit-box {
+    background: var(--bg-elevated);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 1.1rem 1.25rem;
+    align-self: stretch;
+  }
+  .fit-heading {
+    font-size: 0.78rem;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--accent);
+    margin: 0 0 0.85rem;
+    font-weight: 600;
+  }
+  .fit-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+  .fit-list > li {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .fit-title {
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.35;
+  }
+  .fit-body {
+    margin: 0;
+    font-size: 0.86rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+  }
+
+  /* ============================================================
+     Wide "classic-DE" card — 3-column layout inside one card.
+     Doesn't use subgrid because it stands alone, not in a row.
+  ============================================================ */
+  .solution-card-wide {
+    display: block;
+    padding: 2rem 1.9rem;
+  }
+  .wide-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+  @media (min-width: 960px) {
+    .wide-grid {
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 2.5rem;
+      align-items: start;
+    }
+  }
+  .wide-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .overview-text {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+</style>

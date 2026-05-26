@@ -21,6 +21,7 @@ use chrono::{TimeDelta, Utc};
 use fred::types::Expiration;
 use golem_common::error_forwarding;
 use golem_common::redis::{RedisError, RedisPool};
+use golem_service_base::db::PoolApi;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::repo::RepoError;
 use sqlx::Row;

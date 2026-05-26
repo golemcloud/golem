@@ -92,6 +92,7 @@ pub mod error_code {
     pub const BAD_FILE_TYPE: &str = "BAD_FILE_TYPE";
     pub const COMPONENT_PROCESSING_ERROR: &str = "COMPONENT_PROCESSING_ERROR";
     pub const DEPLOYMENT_HASH_MISMATCH: &str = "DEPLOYMENT_HASH_MISMATCH";
+    pub const DUPLICATE_AGENT_TYPE_NAME: &str = "DUPLICATE_AGENT_TYPE_NAME";
     pub mod deployment_validation {
         // Main code
         pub const FAILED: &str = "DEPLOYMENT_VALIDATION_FAILED";

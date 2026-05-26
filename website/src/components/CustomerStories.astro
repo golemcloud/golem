@@ -1,0 +1,189 @@
+---
+import { Image } from "astro:assets";
+import type { ImageMetadata } from "astro";
+import { customerStories } from "../data/homepage";
+
+const avatarModules = import.meta.glob<{ default: ImageMetadata }>(
+  "../assets/testimonials/*.{png,jpg,jpeg,webp}",
+  { eager: true }
+);
+const avatarsByFile = Object.fromEntries(
+  Object.entries(avatarModules).map(([path, mod]) => [path.split("/").pop()!, mod.default])
+);
+
+const logoModules = import.meta.glob<{ default: ImageMetadata }>(
+  "../assets/logo/*.{png,jpg,jpeg,svg,webp}",
+  { eager: true }
+);
+const logosByFile = Object.fromEntries(
+  Object.entries(logoModules).map(([path, mod]) => [path.split("/").pop()!, mod.default])
+);
+
+const { eyebrow, heading, testimonials, showAtLaunch } = customerStories;
+const isFeatured = testimonials.length === 1;
+---
+
+{
+  showAtLaunch && testimonials.length > 0 && (
+    <section class="customer-stories">
+      <div class="container">
+        <header class="cs-header">
+          <span class="eyebrow">{eyebrow}</span>
+          <h2 class="section-heading">{heading}</h2>
+        </header>
+        <div class={isFeatured ? "featured-wrap" : "stories-grid"}>
+          {testimonials.map((s) => (
+            <article class={isFeatured ? "story-card story-featured" : "story-card"}>
+              <blockquote>
+                <p>"{s.quote}"</p>
+              </blockquote>
+              <footer class="story-attribution">
+                {s.avatar ? (
+                  <Image
+                    class="avatar avatar-real"
+                    src={avatarsByFile[s.avatar.filename]}
+                    alt={s.avatar.alt}
+                    widths={[56, 112, 168]}
+                    sizes="56px"
+                  />
+                ) : (
+                  <div class="avatar" aria-hidden="true" />
+                )}
+                <div class="attribution-text">
+                  <div class="story-name">{s.name}</div>
+                  <div class="story-role muted">
+                    {s.role} · {s.company}
+                  </div>
+                </div>
+                {s.productLogo && (
+                  <Image
+                    class="product-logo"
+                    src={logosByFile[s.productLogo.filename]}
+                    alt={s.productLogo.alt}
+                    widths={[130, 260]}
+                    sizes="130px"
+                  />
+                )}
+              </footer>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+<style>
+  .customer-stories {
+    padding: 5rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .cs-header {
+    margin-bottom: 2.5rem;
+    max-width: 600px;
+  }
+  .stories-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+  @media (min-width: 900px) {
+    .stories-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  /* Featured single-testimonial layout: centered card, larger quote, larger
+     portrait, product logo aligned to the right of the attribution row. */
+  .featured-wrap {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+
+  .story-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.5rem 1.3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+  }
+  .story-card blockquote {
+    flex-grow: 1;
+  }
+  .story-card blockquote p {
+    color: var(--text);
+    font-size: 0.95rem;
+    line-height: 1.55;
+    font-weight: 400;
+  }
+
+  .story-featured {
+    padding: 2.25rem 2.25rem 1.75rem;
+  }
+  .story-featured blockquote p {
+    font-size: 1.2rem;
+    line-height: 1.5;
+    letter-spacing: -0.005em;
+  }
+
+  .story-attribution {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid var(--border);
+  }
+  .attribution-text {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent-dim), var(--marker-dim));
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .avatar-real {
+    object-fit: cover;
+    background: var(--bg-elevated);
+  }
+  .story-featured .avatar {
+    width: 56px;
+    height: 56px;
+  }
+
+  .story-name {
+    color: var(--text);
+    font-size: 0.88rem;
+    font-weight: 500;
+  }
+  .story-role {
+    font-size: 0.78rem;
+  }
+  .story-featured .story-name {
+    font-size: 0.98rem;
+  }
+  .story-featured .story-role {
+    font-size: 0.85rem;
+  }
+
+  /* Product logo: tucked to the right of the attribution row. Authored as
+     white-on-transparent marks; no filter needed. */
+  .product-logo {
+    flex-shrink: 0;
+    height: 44px;
+    width: auto;
+    max-width: 110px;
+    object-fit: contain;
+    opacity: 0.85;
+  }
+  .story-featured .product-logo {
+    height: 56px;
+    max-width: 130px;
+  }
+</style>

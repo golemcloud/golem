@@ -399,19 +399,6 @@ fn transform(
                     versions::sdk::MANIFEST.to_string(),
                 );
                 replacements.insert(
-                    "    # golem-app-manifest-env-doc",
-                    concat!(
-                        "    # Component environment variables can reference system environment variables with minijinja syntax:\n",
-                        "    #\n",
-                        "    #   env:\n",
-                        "    #     ENV_VAR_1: \"{{ ENV_VAR_1 }}\"\n",
-                        "    #     RENAMED_VAR_2: \"{{ ENV_VAR_2 }}\"\n",
-                        "    #     COMPOSED_VAR_3: \"{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}\"\n",
-                        "    #",
-                    )
-                    .to_string(),
-                );
-                replacements.insert(
                     "    # golem-app-manifest-dep-env-vars-doc",
                     DEP_ENV_VARS_DOC.to_string(),
                 );

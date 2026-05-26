@@ -30,10 +30,63 @@ pub struct FilesystemStorageSemaphore {
     acquire_retry_delay: Duration,
 }
 
+#[derive(Debug)]
+pub struct FilesystemStoragePermit {
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl FilesystemStoragePermit {
+    fn new(permit: OwnedSemaphorePermit) -> Self {
+        let permits = permit.num_permits() as u32;
+        crate::metrics::workers::dec_filesystem_semaphore_available(
+            filesystem_storage_permits_to_bytes(permits),
+        );
+        Self {
+            permit: Some(permit),
+        }
+    }
+
+    pub fn num_permits(&self) -> usize {
+        self.permit
+            .as_ref()
+            .map_or(0, |permit| permit.num_permits())
+    }
+
+    pub fn split(&mut self, n: usize) -> Option<Self> {
+        self.permit
+            .as_mut()
+            .and_then(|permit| permit.split(n))
+            .map(|permit| Self {
+                permit: Some(permit),
+            })
+    }
+
+    pub fn merge(&mut self, mut other: Self) {
+        if let Some(other_permit) = other.permit.take() {
+            match &mut self.permit {
+                Some(permit) => permit.merge(other_permit),
+                None => self.permit = Some(other_permit),
+            }
+        }
+    }
+}
+
+impl Drop for FilesystemStoragePermit {
+    fn drop(&mut self) {
+        let permits = self.num_permits() as u32;
+        crate::metrics::workers::inc_filesystem_semaphore_available(
+            filesystem_storage_permits_to_bytes(permits),
+        );
+    }
+}
+
 impl FilesystemStorageSemaphore {
     pub(crate) fn new(pool_bytes: usize, acquire_retry_delay: Duration) -> Self {
         let permits = filesystem_storage_pool_bytes_to_permits(pool_bytes);
         record_filesystem_pool_total(pool_bytes as u64);
+        crate::metrics::workers::set_filesystem_semaphore_available(
+            filesystem_storage_permits_to_bytes(permits as u32),
+        );
         Self {
             semaphore: Arc::new(Semaphore::new(permits)),
             priority_lock: Arc::new(Mutex::new(())),
@@ -42,7 +95,6 @@ impl FilesystemStorageSemaphore {
     }
 
     /// Available bytes remaining in the pool (rounded down to KB boundary).
-    #[cfg(test)]
     pub(crate) fn available_bytes(&self) -> u64 {
         filesystem_storage_permits_to_bytes(self.semaphore.available_permits() as u32)
     }
@@ -61,7 +113,7 @@ impl FilesystemStorageSemaphore {
         &self,
         storage_bytes: u64,
         try_free_up: F,
-    ) -> OwnedSemaphorePermit
+    ) -> FilesystemStoragePermit
     where
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = bool>,
@@ -84,7 +136,7 @@ impl FilesystemStorageSemaphore {
                     );
                     let actual_bytes = filesystem_storage_permits_to_bytes(permits);
                     record_filesystem_pool_acquired(actual_bytes);
-                    break permit;
+                    break FilesystemStoragePermit::new(permit);
                 }
                 Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
                 Err(TryAcquireError::NoPermits) => {
@@ -110,7 +162,7 @@ impl FilesystemStorageSemaphore {
     ///
     /// Returns `None` if `storage_bytes` are not available even after
     /// interrupting waiting acquires.
-    pub(crate) async fn try_acquire(&self, storage_bytes: u64) -> Option<OwnedSemaphorePermit> {
+    pub(crate) async fn try_acquire(&self, storage_bytes: u64) -> Option<FilesystemStoragePermit> {
         let permits = bytes_to_filesystem_storage_permits(storage_bytes);
         let mut lock = None;
         loop {
@@ -124,7 +176,7 @@ impl FilesystemStorageSemaphore {
                     );
                     let actual_bytes = filesystem_storage_permits_to_bytes(permits);
                     record_filesystem_pool_acquired(actual_bytes);
-                    break Some(permit);
+                    break Some(FilesystemStoragePermit::new(permit));
                 }
                 Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
                 Err(TryAcquireError::NoPermits) => {

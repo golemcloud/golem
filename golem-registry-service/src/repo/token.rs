@@ -146,15 +146,16 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
         self.with_rw("create")
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
-                    INSERT INTO tokens (token_id, account_id, secret, created_at, expires_at)
-                    VALUES ($1, $2, $3, $4, $5)
-                    RETURNING token_id, account_id, secret, created_at, expires_at
+                    INSERT INTO tokens (token_id, account_id, secret, created_at, expires_at, impersonated_by)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING token_id, account_id, secret, created_at, expires_at, impersonated_by
                 "#})
                 .bind(token.token_id)
                 .bind(token.account_id)
                 .bind(token.secret)
                 .bind(token.created_at)
-                .bind(token.expires_at),
+                .bind(token.expires_at)
+                .bind(token.impersonated_by),
             )
             .await
             .none_on_unique_violation()
@@ -164,7 +165,8 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at
+                    SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at,
+                           t.impersonated_by
                     FROM accounts a
                     JOIN tokens t
                         ON t.account_id = a.account_id
@@ -181,7 +183,8 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
         self.with_ro("get_by_secret")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at
+                    SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at,
+                           t.impersonated_by
                     FROM accounts a
                     JOIN tokens t
                         ON t.account_id = a.account_id
@@ -198,7 +201,8 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
         self.with_ro("get_by_account")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at
+                    SELECT t.token_id, t.secret, t.account_id, t.created_at, t.expires_at,
+                           t.impersonated_by
                     FROM accounts a
                     JOIN tokens t
                         ON t.account_id = a.account_id

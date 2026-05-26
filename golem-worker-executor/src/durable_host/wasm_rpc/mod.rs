@@ -23,7 +23,7 @@ use crate::services::HasWorker;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
-use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
+use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use anyhow::Error;
 use async_trait::async_trait;
 use futures::future::Either;
@@ -39,9 +39,7 @@ use golem_common::model::oplog::host_functions::{
     GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
     GolemRpcWasmRpcScheduleInvocation,
 };
-use golem_common::model::oplog::types::{
-    SerializableInvokeResult, SerializableScheduledInvocation,
-};
+use golem_common::model::oplog::types::{SerializableInvokeResult, SerializableScheduleId};
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
     HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
@@ -51,7 +49,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
-    OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduledAction,
+    OwnedAgentId, PredicateValue, RetryContext, RetryProperties, ScheduleId, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
 
@@ -173,12 +171,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // which maps to RetryDecision::TryStop — suspending the worker.
         self.record_monthly_rpc_call()?;
 
-        let current_idempotency_key = self
-            .get_current_idempotency_key()
-            .await
-            .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.oplog.current_oplog_index().await;
-        let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+        let idempotency_key = self.derive_idempotency_key(oplog_index);
 
         let span =
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
@@ -204,10 +198,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let retry_properties =
                 RetryContext::rpc("invoke-and-await", &remote_agent_id, &method_name);
             let result = loop {
-                let stack = self
-                    .state
-                    .invocation_context
-                    .clone_as_inherited_stack(span.span_id());
+                let stack = self.clone_as_inherited_stack(span.span_id());
 
                 let interrupt_signal = self
                     .execution_status
@@ -314,12 +305,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // which maps to RetryDecision::TryStop — suspending the worker.
         self.record_monthly_rpc_call()?;
 
-        let current_idempotency_key = self
-            .get_current_idempotency_key()
-            .await
-            .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.oplog.current_oplog_index().await;
-        let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+        let idempotency_key = self.derive_idempotency_key(oplog_index);
 
         let span =
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
@@ -342,10 +329,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             };
             let retry_properties = RetryContext::rpc("invoke", &remote_agent_id, &method_name);
             let result = loop {
-                let stack = self
-                    .state
-                    .invocation_context
-                    .clone_as_inherited_stack(span.span_id());
+                let stack = self.clone_as_inherited_stack(span.span_id());
                 let result = self
                     .rpc()
                     .invoke(
@@ -429,12 +413,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .begin_function(&DurableFunctionType::WriteRemote)
             .await?;
 
-        let current_idempotency_key = self
-            .get_current_idempotency_key()
-            .await
-            .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.oplog.current_oplog_index().await;
-        let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
+        let idempotency_key = self.derive_idempotency_key(oplog_index);
 
         let span =
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
@@ -455,10 +435,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let result = if self.state.is_live() {
             let rpc = self.rpc();
-            let stack = self
-                .state
-                .invocation_context
-                .clone_as_inherited_stack(span.span_id());
+            let stack = self.clone_as_inherited_stack(span.span_id());
 
             let in_atomic_region = self.in_atomic_region();
             let allow_retry = !in_atomic_region;
@@ -577,15 +554,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
             let input_untyped: UntypedDataValue = input.into();
 
-            let current_idempotency_key = self
-                .state
-                .get_current_idempotency_key()
-                .expect("Expected to get an idempotency key as we are inside an invocation");
-
             let current_oplog_index = self.state.oplog.current_oplog_index().await;
 
-            let idempotency_key =
-                IdempotencyKey::derived(&current_idempotency_key, current_oplog_index);
+            let idempotency_key = self.derive_idempotency_key(current_oplog_index);
+            let schedule_id = ScheduleId::from_idempotency_key(&idempotency_key);
 
             let request = HostRequestGolemRpcScheduledInvocation {
                 remote_agent_id: remote_agent_id.agent_id(),
@@ -597,10 +569,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_agent_parameters: None,
             };
 
-            let stack = self
-                .state
-                .invocation_context
-                .clone_as_inherited_stack(&self.state.current_span_id);
+            let stack = InvocationContextStack::new(
+                self.state.invocation_context.trace_id.clone(),
+                InvocationContextSpan::external_parent(self.state.current_span_id.clone()),
+                self.state.invocation_context.trace_states.clone(),
+            );
 
             let action = ScheduledAction::Invoke {
                 account_id: self.created_by(),
@@ -615,31 +588,39 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 target_worker_fingerprint,
             };
 
+            let scheduled_at =
+                chrono::DateTime::from_timestamp(datetime.seconds as i64, datetime.nanoseconds)
+                    .ok_or_else(|| {
+                        anyhow::Error::from(WorkerExecutorError::runtime(format!(
+                            "Received invalid datetime from wasi: seconds={}, nanoseconds={}",
+                            datetime.seconds, datetime.nanoseconds
+                        )))
+                    })?;
+
             let result = self
                 .state
                 .scheduler_service
-                .schedule(
-                    chrono::DateTime::from_timestamp(datetime.seconds as i64, datetime.nanoseconds)
-                        .expect("Received invalid datetime from wasi"),
-                    action,
-                )
+                .schedule_with_id(schedule_id, scheduled_at, action)
                 .await;
 
-            let invocation = SerializableScheduledInvocation::from_domain(result)
-                .map_err(|err| anyhow::anyhow!(err))?;
+            let schedule_id = SerializableScheduleId::from_domain(result);
 
             durability
                 .persist(
                     self,
                     request,
-                    HostResponseGolemRpcScheduledInvocation { invocation },
+                    HostResponseGolemRpcScheduledInvocation { schedule_id },
                 )
                 .await
         } else {
             durability.replay(self).await
         }?;
 
-        let serialized_result = serialize(&result.invocation).expect("Failed to serialize result");
+        let serialized_result = serialize(&result.schedule_id).map_err(|err| {
+            anyhow::Error::from(WorkerExecutorError::runtime(format!(
+                "Failed to serialize schedule id: {err}"
+            )))
+        })?;
         let cancellation_token = CancellationTokenEntry {
             schedule_id: serialized_result,
         };
@@ -702,10 +683,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
         if self.state.is_live() || self.state.snapshotting_mode.is_some() {
             // Main state machine match
-            let stack = self
-                .state
-                .invocation_context
-                .clone_as_inherited_stack(&span_id);
+            let stack = self.clone_as_inherited_stack(&span_id);
 
             let in_atomic_region = self.in_atomic_region();
             let allow_retry = !in_atomic_region;
@@ -767,7 +745,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     )
                 }
                 FutureInvokeResultState::Completed { .. } => {
-                    handle_completed_rpc_result(entry, &span_id)
+                    handle_completed_rpc_result(entry, &span_id)?
                 }
                 FutureInvokeResultState::Cancelled {
                     request,
@@ -890,12 +868,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             )
             .into())
         } else {
-            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)
-                .map_err(|golem_err| {
-                    anyhow::anyhow!(
-                    "failed to get golem::rpc::future-invoke-result::get oplog entry: {golem_err}"
-                )
-                })?;
+            // Propagate WorkerExecutorError via `?` (From) so the downcast
+            // survives the anyhow::Error chain — TrapType::from_error
+            // classifies UnexpectedOplogEntry as non-retriable.
+            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)?;
 
             let serialized_invoke_result = match oplog_entry {
                 OplogEntry::HostCall { response, .. } => {
@@ -905,17 +881,36 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             .download_payload(response)
                             .await
                             .map_err(|err| {
-                                anyhow::anyhow!("Failed to download oplog payload: {err}")
+                                WorkerExecutorError::runtime(format!(
+                                    "Failed to download golem::rpc::future-invoke-result oplog payload: {err}"
+                                ))
                             })?;
 
                     match response {
                         HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
                             result,
                         }) => result,
-                        _ => panic!("unexpected oplog payload type"),
+                        other => {
+                            return Err(anyhow::Error::from(
+                                WorkerExecutorError::unexpected_oplog_entry(
+                                    "HostResponse::GolemRpcInvokeGet",
+                                    format!("{other:?}"),
+                                ),
+                            ));
+                        }
                     }
                 }
-                _ => panic!("unexpected oplog entry type"),
+                // The macro above already guarantees `OplogEntry::HostCall`, so
+                // this arm is structurally unreachable. We still return an
+                // error rather than panicking to keep the function panic-free.
+                other => {
+                    return Err(anyhow::Error::from(
+                        WorkerExecutorError::unexpected_oplog_entry(
+                            "OplogEntry::HostCall",
+                            format!("{other:?}"),
+                        ),
+                    ));
+                }
             };
 
             let entry = self.table().get_mut(&this)?;
@@ -1097,8 +1092,12 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
         let entry = self.table().get(&this)?;
-        let serialized_scheduled_invocation: SerializableScheduledInvocation =
-            deserialize(&entry.schedule_id).expect("Failed to deserialize cancellation token");
+        let serialized_schedule_id: SerializableScheduleId = deserialize(&entry.schedule_id)
+            .map_err(|err| {
+                anyhow::Error::from(WorkerExecutorError::runtime(format!(
+                    "Failed to deserialize cancellation token: {err}"
+                )))
+            })?;
 
         let durability = Durability::<GolemRpcCancellationTokenCancel>::new(
             self,
@@ -1108,14 +1107,14 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
 
         if durability.is_live() {
             self.scheduler_service()
-                .cancel(serialized_scheduled_invocation.clone().into_domain())
+                .cancel(serialized_schedule_id.clone().into_domain())
                 .await;
 
             durability
                 .persist(
                     self,
                     HostRequestGolemRpcScheduledInvocationCancellation {
-                        invocation: serialized_scheduled_invocation,
+                        schedule_id: serialized_schedule_id,
                     },
                     HostResponseGolemRpcUnit {},
                 )
@@ -1158,10 +1157,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let span = create_rpc_connection_span(ctx, &remote_agent_id).await?;
 
-    let stack = ctx
-        .state
-        .invocation_context
-        .clone_as_inherited_stack(span.span_id());
+    let stack = ctx.clone_as_inherited_stack(span.span_id());
 
     let target_component = ctx
         .component_service()
@@ -1180,6 +1176,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         )
         .await?;
     let target_fingerprint = demand.fingerprint();
+
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
             demand,
@@ -1289,15 +1286,32 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
 fn handle_completed_rpc_result(
     entry: &mut FutureInvokeResultState,
     span_id: &SpanId,
-) -> (
-    Result<Option<Result<UntypedDataValue, RpcError>>, anyhow::Error>,
-    HostRequestGolemRpcInvoke,
-    SerializableInvokeResult,
-    OplogIndex,
-) {
+) -> Result<
+    (
+        Result<Option<Result<UntypedDataValue, RpcError>>, anyhow::Error>,
+        HostRequestGolemRpcInvoke,
+        SerializableInvokeResult,
+        OplogIndex,
+    ),
+    WorkerExecutorError,
+> {
+    // Validate the state *before* any mutation so a corrupt/unexpected state
+    // does not leave a torn entry behind.
+    if !matches!(entry, FutureInvokeResultState::Completed { .. }) {
+        return Err(WorkerExecutorError::runtime(
+            "handle_completed_rpc_result called with state != FutureInvokeResultState::Completed",
+        ));
+    }
     let request = match entry {
         FutureInvokeResultState::Completed { request, .. } => request.clone(),
-        _ => panic!("unexpected state: not FutureInvokeResultState::Completed"),
+        // Structurally excluded by the `matches!` check above, but we surface a runtime
+        // error instead of panicking to keep the worker-executor process alive on any
+        // unforeseen state-machine corruption.
+        _ => {
+            return Err(WorkerExecutorError::runtime(
+                "handle_completed_rpc_result: unexpected non-completed state after precheck",
+            ));
+        }
     };
     let begin_index = entry.begin_index();
     let span_id = span_id.clone();
@@ -1313,7 +1327,7 @@ fn handle_completed_rpc_result(
         request, result, ..
     } = result
     {
-        match result {
+        Ok(match result {
             Ok(Ok(untyped)) => (
                 Ok(Some(Ok(untyped.clone()))),
                 request,
@@ -1335,9 +1349,13 @@ fn handle_completed_rpc_result(
                     begin_index,
                 )
             }
-        }
+        })
     } else {
-        panic!("unexpected state: not FutureInvokeResultState::Completed")
+        // Unreachable in practice (we validated `entry` above and only swapped
+        // a different value out of the *same slot*), but kept for safety.
+        Err(WorkerExecutorError::runtime(
+            "handle_completed_rpc_result: extracted state was not FutureInvokeResultState::Completed",
+        ))
     }
 }
 

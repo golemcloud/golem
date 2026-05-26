@@ -23,8 +23,7 @@ use self::grpc::ShardManagerServiceImpl;
 use crate::config::{HealthCheckK8sConfig, HealthCheckMode};
 use crate::quota::{DbQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
-use crate::sharding::healthcheck::{GrpcHealthCheck, HealthCheck};
-use crate::sharding::shard_management::ShardManagement;
+use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
 use config::ShardManagerConfig;
 use futures::TryFutureExt;
@@ -34,7 +33,11 @@ use golem_service_base::clients::registry::GrpcRegistryService;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use include_dir::include_dir;
 use prometheus::Registry;
+pub use sharding::error::{HealthCheckError, ShardManagerError};
+pub use sharding::healthcheck::HealthCheck;
 pub use sharding::persistence::{DbRoutingTablePersistence, RoutingTablePersistence};
+pub use sharding::shard_management::ShardManagement;
+pub use sharding::worker_executor::WorkerExecutorService;
 pub use sharding::{PodState, RoutingTable, RoutingTableEntry};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
@@ -101,6 +104,10 @@ pub async fn run(
                 db::postgres::migrate(postgres, migrations.postgres_migrations()).await?;
                 let pool =
                     golem_service_base::db::postgres::PostgresPool::configured(postgres).await?;
+
+                let pool_for_metrics = pool.clone();
+                join_set
+                    .spawn(async move { pool_for_metrics.run_metrics_loop("shard_manager").await });
 
                 let persistence = Arc::new(
                     crate::sharding::persistence::DbRoutingTablePersistence::new(

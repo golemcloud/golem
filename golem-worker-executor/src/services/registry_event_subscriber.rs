@@ -12,24 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
+use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::RegistryInvalidationEvent;
 use golem_service_base::clients::registry::{RegistryInvalidationHandler, RegistryService};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-pub(crate) struct WorkerExecutorRegistryInvalidationHandler {
+pub(crate) struct WorkerExecutorRegistryInvalidationHandler<Ctx: WorkerCtx> {
+    active_workers: Arc<ActiveWorkers<Ctx>>,
     component_service: Arc<dyn ComponentService>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     agent_types_service: Arc<dyn AgentTypesService>,
 }
 
-impl WorkerExecutorRegistryInvalidationHandler {
+impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
     pub async fn run(
         registry_service: Arc<dyn RegistryService>,
+        active_workers: Arc<ActiveWorkers<Ctx>>,
         component_service: Arc<dyn ComponentService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_types_service: Arc<dyn AgentTypesService>,
@@ -40,6 +44,7 @@ impl WorkerExecutorRegistryInvalidationHandler {
                 "worker-executor",
                 Some(shutdown_token),
                 Arc::new(Self {
+                    active_workers,
                     component_service,
                     environment_state_service,
                     agent_types_service,
@@ -50,7 +55,9 @@ impl WorkerExecutorRegistryInvalidationHandler {
 }
 
 #[async_trait::async_trait]
-impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
+impl<Ctx: WorkerCtx> RegistryInvalidationHandler
+    for WorkerExecutorRegistryInvalidationHandler<Ctx>
+{
     async fn on_event(&self, event: RegistryInvalidationEvent) {
         match &event {
             RegistryInvalidationEvent::CursorExpired { .. } => {
@@ -151,8 +158,9 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                 // Invalidate each environment individually using the provided UUIDs
                 // rather than flushing all caches.
                 for env_id in environment_ids {
+                    self.active_workers.unload_environment(*env_id).await;
                     self.component_service
-                        .invalidate_current_deployed_metadata_for_environment(*env_id)
+                        .invalidate_all_metadata_for_environment(*env_id)
                         .await;
                     self.environment_state_service
                         .invalidate_environment(*env_id)
@@ -174,8 +182,11 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                     env_name,
                     "Received environment deleted event, invalidating environment caches"
                 );
+                self.active_workers
+                    .unload_environment(*environment_id)
+                    .await;
                 self.component_service
-                    .invalidate_current_deployed_metadata_for_environment(*environment_id)
+                    .invalidate_all_metadata_for_environment(*environment_id)
                     .await;
                 self.environment_state_service
                     .invalidate_environment(*environment_id)

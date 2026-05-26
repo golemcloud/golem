@@ -24,8 +24,8 @@ use golem_worker_executor_test_utils::{
     start_with_overrides,
 };
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -608,11 +608,15 @@ async fn start_failing_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>)
     (port, counter)
 }
 
-async fn start_status_code_retry_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>) {
+async fn start_status_code_retry_http_server(
+    fail_count: usize,
+) -> (u16, Arc<AtomicUsize>, Arc<Mutex<Vec<Option<String>>>>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
+    let idempotency_keys = Arc::new(Mutex::new(Vec::new()));
+    let idempotency_keys_clone = idempotency_keys.clone();
 
     spawn(
         async move {
@@ -641,6 +645,19 @@ async fn start_status_code_retry_http_server(fail_count: usize) -> (u16, Arc<Ato
                     .map(|position| position + 4)
                     .unwrap_or(data.len());
                 let header_text = String::from_utf8_lossy(&data[..header_end]);
+                let idempotency_key = header_text.lines().find_map(|line| {
+                    line.split_once(':').and_then(|(name, value)| {
+                        if name.eq_ignore_ascii_case("idempotency-key") {
+                            Some(value.trim().to_string())
+                        } else {
+                            None
+                        }
+                    })
+                });
+                idempotency_keys_clone
+                    .lock()
+                    .unwrap()
+                    .push(idempotency_key);
                 let content_length = header_text
                     .lines()
                     .find_map(|line| {
@@ -678,7 +695,7 @@ async fn start_status_code_retry_http_server(fail_count: usize) -> (u16, Arc<Ato
         .in_current_span(),
     );
 
-    (port, counter)
+    (port, counter, idempotency_keys)
 }
 
 #[test]
@@ -692,7 +709,7 @@ async fn http_status_retry_policy_retries_matching_status(
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, Default::default()).await?;
 
-    let (port, counter) = start_status_code_retry_http_server(3).await;
+    let (port, counter, idempotency_keys) = start_status_code_retry_http_server(3).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -720,6 +737,19 @@ async fn http_status_retry_policy_retries_matching_status(
         Some(Value::String("200 status-retry-ok".to_string()))
     );
     assert_eq!(counter.load(Ordering::SeqCst), 4);
+    {
+        let idempotency_keys = idempotency_keys.lock().unwrap();
+        assert_eq!(idempotency_keys.len(), 4);
+        let first_key = idempotency_keys[0]
+            .as_ref()
+            .expect("initial HTTP request must have idempotency-key");
+        assert!(
+            idempotency_keys
+                .iter()
+                .all(|key| key.as_ref() == Some(first_key)),
+            "status-code retries must preserve the original idempotency-key"
+        );
+    }
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1001,6 +1031,156 @@ async fn start_body_dropping_http_server(fail_count: usize) -> (u16, Arc<AtomicU
     (port, counter)
 }
 
+async fn read_http_request_body_len(stream: &mut tokio::net::TcpStream) -> usize {
+    let mut data = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        match stream.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => data.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+
+        let data_str = String::from_utf8_lossy(&data);
+        if let Some(header_end) = data_str.find("\r\n\r\n") {
+            let headers = &data_str[..header_end];
+            let body_start = header_end + 4;
+            if let Some(cl_line) = headers
+                .lines()
+                .find(|line| line.to_lowercase().starts_with("content-length:"))
+            {
+                let content_length = cl_line
+                    .split(':')
+                    .nth(1)
+                    .unwrap()
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap_or(0);
+                if data.len() >= body_start + content_length {
+                    return content_length;
+                }
+            } else if headers
+                .lines()
+                .any(|line| line.to_lowercase().contains("transfer-encoding: chunked"))
+            {
+                let body_data = &data[body_start..];
+                if body_data.ends_with(b"\r\n\r\n") {
+                    return decoded_chunked_body_len(body_data);
+                }
+            }
+        }
+    }
+
+    let data_str = String::from_utf8_lossy(&data);
+    data_str
+        .find("\r\n\r\n")
+        .map(|header_end| data.len().saturating_sub(header_end + 4))
+        .unwrap_or(0)
+}
+
+fn decoded_chunked_body_len(mut body: &[u8]) -> usize {
+    let mut result = 0;
+    loop {
+        let Some(line_end) = body.windows(2).position(|window| window == b"\r\n") else {
+            return result;
+        };
+        let size_line = String::from_utf8_lossy(&body[..line_end]);
+        let size_hex = size_line.split(';').next().unwrap_or("0").trim();
+        let size = usize::from_str_radix(size_hex, 16).unwrap_or(0);
+        body = &body[line_end + 2..];
+        if size == 0 {
+            return result;
+        }
+        if body.len() < size + 2 {
+            return result;
+        }
+        result += size;
+        body = &body[size + 2..];
+    }
+}
+
+/// Drives two different inline retry phases for a streaming POST body:
+///
+/// 1. The first connection is closed after one 64KiB chunk has been received,
+///    so the next body write fails and output-stream inline retry rebuilds the
+///    request.
+/// 2. The second connection receives the full rebuilt body and then closes
+///    before sending any response, so `FutureIncomingResponse::get()` performs
+///    awaiting-response inline retry.
+/// 3. The third connection must receive the full body again. Before the fix,
+///    the awaiting-response retry reconstructed only chunks after the previous
+///    retry error and resent a suffix of the body.
+async fn start_body_retry_then_response_retry_http_server() -> (u16, Arc<Mutex<Vec<usize>>>) {
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let body_lengths = Arc::new(Mutex::new(Vec::new()));
+    let body_lengths_clone = body_lengths.clone();
+
+    spawn(
+        async move {
+            let mut attempt = 0usize;
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                attempt += 1;
+
+                match attempt {
+                    1 => {
+                        let mut data = Vec::new();
+                        let mut buf = [0u8; 8192];
+                        let mut body_start = None;
+                        while data.len().saturating_sub(body_start.unwrap_or(data.len()))
+                            < 64 * 1024
+                        {
+                            match stream.read(&mut buf).await {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    data.extend_from_slice(&buf[..n]);
+                                    if body_start.is_none()
+                                        && let Some(header_end) =
+                                            String::from_utf8_lossy(&data).find("\r\n\r\n")
+                                    {
+                                        body_start = Some(header_end + 4);
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        body_lengths_clone.lock().unwrap().push(
+                            body_start
+                                .map(|start| data.len().saturating_sub(start))
+                                .unwrap_or(0),
+                        );
+                        drop(stream);
+                    }
+                    2 => {
+                        let body_len = read_http_request_body_len(&mut stream).await;
+                        body_lengths_clone.lock().unwrap().push(body_len);
+                        drop(stream);
+                    }
+                    _ => {
+                        let body_len = read_http_request_body_len(&mut stream).await;
+                        body_lengths_clone.lock().unwrap().push(body_len);
+                        let body = format!("received {body_len} body bytes");
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body,
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                        let _ = stream.shutdown().await;
+                    }
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    (port, body_lengths)
+}
+
 /// Starts a raw TCP server that responds to both GET and POST requests.
 /// The first `fail_count` connections are dropped immediately.
 /// Subsequent connections get a valid HTTP 200 response.
@@ -1160,6 +1340,86 @@ async fn http_output_stream_inline_retry_on_body_write_failure(
     assert!(
         retry_count > 0,
         "Expected at least 1 in-function retry error entry in oplog, got {retry_count}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_awaiting_response_retry_resends_full_body_after_output_stream_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let (port, body_lengths) = start_body_retry_then_response_retry_http_server().await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "post_large_body", data_value!())
+        .await?;
+    let result_value = result.into_return_value().expect("Expected a return value");
+
+    const FULL_BODY_LEN: usize = 4 * 64 * 1024;
+    assert_eq!(
+        result_value,
+        Value::String(format!("200 received {FULL_BODY_LEN} body bytes"))
+    );
+
+    {
+        let body_lengths = body_lengths.lock().unwrap();
+        assert!(
+            body_lengths.len() >= 3,
+            "Expected at least three requests, got body lengths {body_lengths:?}"
+        );
+        assert!(
+            body_lengths[0] >= 64 * 1024,
+            "First attempt must receive at least one body chunk before output-stream retry, got {body_lengths:?}"
+        );
+        assert_eq!(
+            body_lengths[1], FULL_BODY_LEN,
+            "Output-stream retry should rebuild and send the full body"
+        );
+        assert_eq!(
+            body_lengths[2], FULL_BODY_LEN,
+            "Awaiting-response retry must resend the full body, not only the suffix after the previous retry error"
+        );
+    }
+
+    let retry_count =
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    assert!(
+        retry_count > 0,
+        "Expected at least one in-function retry error entry in oplog, got {retry_count}"
     );
 
     Ok(())

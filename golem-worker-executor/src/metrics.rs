@@ -107,7 +107,9 @@ pub mod events {
 }
 
 pub mod workers {
+    use golem_common::model::AgentStatus;
     use lazy_static::lazy_static;
+    use prometheus::core::Number;
     use prometheus::*;
 
     lazy_static! {
@@ -117,12 +119,113 @@ pub mod workers {
             &["api"]
         )
         .unwrap();
+        static ref WORKER_COUNT_BY_STATUS: GaugeVec = register_gauge_vec!(
+            "worker_count_by_status",
+            "Number of in-memory workers per status",
+            &["status"]
+        )
+        .unwrap();
+        static ref WORKER_EVICTION_TOTAL: CounterVec = register_counter_vec!(
+            "worker_eviction_total",
+            "Number of workers evicted from memory",
+            &["class"]
+        )
+        .unwrap();
+        static ref WORKER_MEMORY_SEMAPHORE_AVAILABLE: Gauge = register_gauge!(
+            "worker_memory_semaphore_available",
+            "Available memory semaphore permits (bytes)"
+        )
+        .unwrap();
+        static ref WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE: Gauge = register_gauge!(
+            "worker_filesystem_semaphore_available",
+            "Available filesystem semaphore permits (bytes)"
+        )
+        .unwrap();
     }
 
     pub fn record_worker_call(api_name: &'static str) {
         WORKER_EXECUTOR_CALL_TOTAL
             .with_label_values(&[api_name])
             .inc();
+    }
+
+    pub fn set_worker_count_by_status(status: &'static str, count: f64) {
+        WORKER_COUNT_BY_STATUS
+            .with_label_values(&[status])
+            .set(count);
+    }
+
+    pub fn initialize_worker_count_by_status() {
+        for status in [
+            AgentStatus::Running,
+            AgentStatus::Idle,
+            AgentStatus::Suspended,
+            AgentStatus::Interrupted,
+            AgentStatus::Retrying,
+            AgentStatus::Failed,
+            AgentStatus::Exited,
+        ] {
+            set_worker_count_by_status(worker_status_label(status), 0.0);
+        }
+    }
+
+    pub fn inc_worker_count_by_status(status: AgentStatus) {
+        WORKER_COUNT_BY_STATUS
+            .with_label_values(&[worker_status_label(status)])
+            .inc();
+    }
+
+    pub fn dec_worker_count_by_status(status: AgentStatus) {
+        WORKER_COUNT_BY_STATUS
+            .with_label_values(&[worker_status_label(status)])
+            .dec();
+    }
+
+    pub fn record_worker_status_transition(old_status: AgentStatus, new_status: AgentStatus) {
+        if old_status != new_status {
+            dec_worker_count_by_status(old_status);
+            inc_worker_count_by_status(new_status);
+        }
+    }
+
+    fn worker_status_label(status: AgentStatus) -> &'static str {
+        match status {
+            AgentStatus::Running => "Running",
+            AgentStatus::Idle => "Idle",
+            AgentStatus::Suspended => "Suspended",
+            AgentStatus::Interrupted => "Interrupted",
+            AgentStatus::Retrying => "Retrying",
+            AgentStatus::Failed => "Failed",
+            AgentStatus::Exited => "Exited",
+        }
+    }
+
+    pub fn record_worker_eviction(class: &'static str) {
+        WORKER_EVICTION_TOTAL.with_label_values(&[class]).inc();
+    }
+
+    pub fn set_memory_semaphore_available(permits: usize) {
+        WORKER_MEMORY_SEMAPHORE_AVAILABLE.set(permits as f64);
+    }
+
+    pub fn dec_memory_semaphore_available(permits: usize) {
+        WORKER_MEMORY_SEMAPHORE_AVAILABLE.sub(permits as f64);
+    }
+
+    pub fn inc_memory_semaphore_available(permits: usize) {
+        WORKER_MEMORY_SEMAPHORE_AVAILABLE.add(permits as f64);
+    }
+
+    pub fn set_filesystem_semaphore_available(permits: u64) {
+        WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.set(permits.into_f64());
+    }
+
+    pub fn dec_filesystem_semaphore_available(permits: u64) {
+        WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.sub(permits.into_f64());
+    }
+
+    pub fn inc_filesystem_semaphore_available(permits: u64) {
+        WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.add(permits.into_f64());
     }
 }
 

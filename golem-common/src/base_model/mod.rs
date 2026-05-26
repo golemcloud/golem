@@ -242,10 +242,20 @@ impl ShardId {
         Self { value }
     }
 
+    pub fn value(&self) -> i64 {
+        self.value
+    }
+
     pub fn from_agent_id(agent_id: &AgentId, number_of_shards: usize) -> Self {
         let hash = Self::hash_agent_id(agent_id);
-        let value = hash.abs() % number_of_shards as i64;
-        Self { value }
+        Self::from_routing_hash(hash, number_of_shards)
+    }
+
+    pub fn from_routing_hash(hash: i64, number_of_shards: usize) -> Self {
+        let value = hash.unsigned_abs() % number_of_shards as u64;
+        Self {
+            value: value as i64,
+        }
     }
 
     pub fn hash_agent_id(agent_id: &AgentId) -> i64 {
@@ -674,7 +684,7 @@ pub struct AgentResourceDescription {
 ///
 /// This is always recorded together with the current oplog index, and it can only be used
 /// as a source of truth if there are no newer oplog entries since the record.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum AgentStatus {
@@ -702,8 +712,8 @@ impl PartialOrd for AgentStatus {
 
 impl Ord for AgentStatus {
     fn cmp(&self, other: &Self) -> Ordering {
-        let v1: i32 = self.clone().into();
-        let v2: i32 = other.clone().into();
+        let v1: i32 = (*self).into();
+        let v2: i32 = (*other).into();
         v1.cmp(&v2)
     }
 }

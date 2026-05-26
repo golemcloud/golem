@@ -142,6 +142,53 @@ cargo make fix
 
 and fix any possible errors and warnings reported by it.
 
+## Release process
+
+Releases are triggered by **pushing a tag** to GitHub. There are five independent
+release channels, each gated by its own tag prefix:
+
+| Tag pattern                | What gets released                                                    | Workflow                                |
+|----------------------------|-----------------------------------------------------------------------|-----------------------------------------|
+| `v<major>.<minor>.<patch>` | Golem crates on crates.io, Docker images, signed CLI binaries on GH   | `.github/workflows/ci.yaml`             |
+| `golem-rust-v<x.y.z>`      | The Rust SDK (`golem-rust`, `golem-rust-macro`) on crates.io          | `.github/workflows/publish-golem-rust.yaml`    |
+| `golem-ts-v<x.y.z>`        | The TypeScript SDK packages on npmjs                                  | `.github/workflows/publish-golem-ts.yaml`      |
+| `golem-scala-v<x.y.z>`     | The Scala SDK on Maven Central                                        | `.github/workflows/publish-golem-scala.yaml`   |
+| `golem-moonbit-v<x.y.z>`   | The MoonBit SDK on mooncakes.io                                       | `.github/workflows/publish-golem-moonbit.yaml` |
+
+Version numbers are *not committed* to the repository — every `Cargo.toml`,
+`package.json`, `moon.mod.json`, etc. uses a placeholder version that is
+rewritten at release time from the tag.
+
+### Maintenance branches
+
+For each shipped `major.minor` line that still needs bug-fix releases, we keep a
+long-lived `<major>.<minor>.x` branch (e.g. `1.5.x`). Releases from this branch
+work the same way as releases from `main` — only the **branch the tag lives
+on** differs:
+
+```shell
+# Cut a 1.5.4 Golem patch release from the 1.5.x line
+git checkout 1.5.x
+git pull
+git tag v1.5.4
+git push origin v1.5.4
+
+# Or cut a 1.5.4 Rust SDK release from the same branch
+git tag golem-rust-v1.5.4
+git push origin golem-rust-v1.5.4
+```
+
+The CI workflows accept push events from `main` and any `<major>.<minor>.x`
+branch automatically.
+
+**Backports** between branches are done manually with `git cherry-pick`. The
+usual flow is: land the fix on `main` first, then cherry-pick the commit(s)
+onto the relevant maintenance branch(es) via a separate PR.
+
+**Docker `:latest`** is only updated when the tag's commit is reachable from
+`main`. A bug-fix release from `1.5.x` after `1.6.0` has shipped publishes
+`golemservices/...:v1.5.4` but does **not** overwrite `:latest`.
+
 ## Running Golem locally
 
 There are two ways now to run Golem locally:

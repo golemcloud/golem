@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::error::AppValidationError;
-use crate::error::{NonSuccessfulExit, PipedExitCode};
+use crate::error::{HintError, NonSuccessfulExit, PipedExitCode};
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -251,9 +251,13 @@ pub fn log_failed_to(subject: impl AsRef<str>) {
 
 pub fn logged_failed_to(error: anyhow::Error, subject: impl AsRef<str>) -> anyhow::Result<()> {
     log_failed_to(subject);
-    let _indent = LogIndent::new();
-    log_anyhow_error(&error);
-    Err(anyhow!(NonSuccessfulExit))
+    if error.downcast_ref::<HintError>().is_some() {
+        Err(error)
+    } else {
+        let _indent = LogIndent::new();
+        log_anyhow_error(&error);
+        Err(anyhow!(NonSuccessfulExit))
+    }
 }
 
 pub fn logged_finished_or_failed_to(

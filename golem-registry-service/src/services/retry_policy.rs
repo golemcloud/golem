@@ -118,7 +118,7 @@ impl RetryPolicyService {
             data.priority,
             predicate_json,
             policy_json,
-            auth.account_id(),
+            auth.actor_account_id(),
         );
 
         let result = self.retry_policy_repo.create(create_record).await;
@@ -167,7 +167,7 @@ impl RetryPolicyService {
             retry_policy.policy_json = policy_json(new_policy.0)?;
         }
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
+        let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
 
         let result = self
             .retry_policy_repo
@@ -206,7 +206,7 @@ impl RetryPolicyService {
 
         retry_policy.revision = current_revision.next()?;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
+        let audit = DeletableRevisionAuditFields::deletion(auth.actor_account_id().0);
 
         let result = self
             .retry_policy_repo

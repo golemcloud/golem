@@ -88,12 +88,25 @@ function extractInvokeJsonResult(output: string): unknown {
     return parsed;
   }
 
+  const unwrapValueAndType = (valueAndType: unknown): unknown => {
+    if (!valueAndType || typeof valueAndType !== "object") {
+      return undefined;
+    }
+
+    return "value" in valueAndType ? (valueAndType as Record<string, unknown>).value : undefined;
+  };
+
   const resultJson = parsed.result_json;
-  if (!resultJson || typeof resultJson !== "object") {
-    return parsed;
+  if (resultJson && typeof resultJson === "object") {
+    return unwrapValueAndType(resultJson);
   }
 
-  return "value" in resultJson ? (resultJson as Record<string, unknown>).value : undefined;
+  const resultsJson = parsed.results_json;
+  if (Array.isArray(resultsJson)) {
+    return resultsJson.map(unwrapValueAndType);
+  }
+
+  return parsed;
 }
 
 // --- Schemas ---

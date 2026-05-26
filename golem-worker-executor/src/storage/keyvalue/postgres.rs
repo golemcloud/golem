@@ -27,8 +27,7 @@ use sqlx::{Postgres, QueryBuilder};
 
 const DB_TYPE: &str = "postgres";
 
-static DB_MIGRATIONS: include_dir::Dir =
-    include_dir!("$CARGO_MANIFEST_DIR/db/migration/postgres/keyvalue");
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/keyvalue");
 
 #[derive(Debug, Clone)]
 pub struct PostgresKeyValueStorage {
@@ -60,6 +59,10 @@ impl PostgresKeyValueStorage {
 
     pub async fn new(pool: PostgresPool) -> Result<Self, String> {
         Ok(Self { pool })
+    }
+
+    pub async fn run_metrics_loop(&self, svc_name: &'static str) -> anyhow::Result<()> {
+        self.pool.run_metrics_loop(svc_name).await
     }
 
     fn namespace(namespace: KeyValueStorageNamespace) -> String {

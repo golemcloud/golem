@@ -1096,7 +1096,8 @@ impl ComponentCommandHandler {
                     component_name: component_name.clone(),
                     agent_types,
                     agent_type_provision_configs: component_stager
-                        .agent_type_provision_configs()?,
+                        .agent_type_provision_configs()
+                        .await?,
                 },
                 wasm,
                 OptionFuture::from(files.as_ref().map(|files| files.open_archive()))
@@ -1198,6 +1199,7 @@ impl ComponentCommandHandler {
                     agent_types,
                     agent_type_provision_config_updates: component_stager
                         .agent_type_provision_config_updates(&changed_files)
+                        .await
                         .map_err(UpdateStagedComponentError::Other)?,
                     allow_incompatible_config,
                 },

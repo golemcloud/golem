@@ -326,7 +326,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     created_by: Some(worker_metadata.created_by.into()),
                     component_revision: latest_status.component_revision.into(),
                     status: Into::<golem_api_grpc::proto::golem::worker::AgentStatus>::into(
-                        latest_status.status.clone(),
+                        latest_status.status,
                     )
                     .into(),
                     retry_count: latest_status
@@ -1979,6 +1979,8 @@ mod tests {
         async fn all_cached_metadata(&self) -> Vec<Component> {
             Vec::new()
         }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
     }
 
     /// A minimal in-memory oplog for testing ForwardingOplog behavior

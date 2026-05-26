@@ -45,9 +45,14 @@ pub enum McpDeploymentError {
     #[error("Domain {0} is not registered")]
     DomainNotRegistered(Domain),
     #[error(
-        "Domain {0} cannot be used for an MCP deployment: it belongs to the HTTP API domain namespace"
+        "Domain {domain} cannot be used for an MCP deployment. Only {direct_only_fragment}subdomains of {available_domain} may be used.",
+        direct_only_fragment = if !allow_arbitrary_subdomains { "direct " } else { "" }
     )]
-    DomainNotValidForMcp(Domain),
+    DomainNotValidForMcp {
+        domain: Domain,
+        available_domain: String,
+        allow_arbitrary_subdomains: bool,
+    },
     #[error("Concurrent update attempt")]
     ConcurrentUpdate,
     #[error(transparent)]
@@ -65,7 +70,7 @@ impl SafeDisplay for McpDeploymentError {
             Self::DeploymentRevisionNotFound(_) => self.to_string(),
             Self::McpDeploymentForDomainAlreadyExists(_) => self.to_string(),
             Self::DomainNotRegistered(_) => self.to_string(),
-            Self::DomainNotValidForMcp(_) => self.to_string(),
+            Self::DomainNotValidForMcp { .. } => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -140,14 +145,21 @@ impl McpDeploymentService {
         self.domain_registration_service
             .validate_domain_for_mcp(&data.domain)
             .map_err(|err| match err {
-                DomainRegistrationError::DomainNotValidForMcp(domain) => {
-                    McpDeploymentError::DomainNotValidForMcp(domain)
-                }
+                DomainRegistrationError::DomainNotValidForMcp {
+                    domain,
+                    available_domain,
+                    allow_arbitrary_subdomains,
+                } => McpDeploymentError::DomainNotValidForMcp {
+                    domain,
+                    available_domain,
+                    allow_arbitrary_subdomains,
+                },
                 other => other.into(),
             })?;
 
         let id = McpDeploymentId::new();
-        let record = McpDeploymentRevisionRecord::creation(id, auth.account_id(), data.agents)?;
+        let record =
+            McpDeploymentRevisionRecord::creation(id, auth.actor_account_id(), data.agents)?;
 
         let stored_mcp_deployment: McpDeployment = self
             .mcp_deployment_repo
@@ -215,7 +227,7 @@ impl McpDeploymentService {
 
         let record = McpDeploymentRevisionRecord::from_model(
             mcp_deployment,
-            DeletableRevisionAuditFields::new(auth.account_id().0),
+            DeletableRevisionAuditFields::new(auth.actor_account_id().0),
         )?;
 
         let stored_mcp_deployment: McpDeployment = self
@@ -276,7 +288,7 @@ impl McpDeploymentService {
 
         self.mcp_deployment_repo
             .delete(
-                auth.account_id().0,
+                auth.actor_account_id().0,
                 mcp_deployment_id.0,
                 current_revision.next()?.into(),
             )

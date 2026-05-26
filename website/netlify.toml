@@ -1,0 +1,18 @@
+# Netlify deployment configuration for the Golem website (static Astro).
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  # Astro 6 + the build scripts in package.json require Node >= 22.12.0.
+  # Netlify's default Node is older, so pin it here.
+  NODE_VERSION = "22.12.0"
+
+# Old golem.cloud blog URLs lived at /post/<slug>; the new site serves them
+# at /blog/<slug>. 301 to preserve SEO and any inbound links.
+[[redirects]]
+  from = "/post/*"
+  to = "/blog/:splat"
+  status = 301
+  force = true

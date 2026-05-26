@@ -19,6 +19,7 @@ use crate::config::{
 };
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::log::LogColorize;
+use crate::log::log_warn_action;
 use anyhow::{Context, anyhow, bail};
 use colored::Colorize;
 use golem_client::Security;
@@ -102,7 +103,19 @@ impl Auth {
                 }
                 AuthenticationConfig::OAuth2(inner) => {
                     if let Some(data) = &inner.data {
-                        Ok(Authentication::from_oauth2_config(data.clone()))
+                        let authentication = Authentication::from_oauth2_config(data.clone());
+
+                        match self.token_details(&authentication.0.secret).await {
+                            Ok(_) => Ok(authentication),
+                            Err(err) if err.is_auth_unauthorized() => {
+                                log_warn_action(
+                                    "Re-authenticating",
+                                    "user, stored token is no longer valid",
+                                );
+                                self.oauth2(&auth_config.source, config_dir).await
+                            }
+                            Err(err) => Err(err.into()),
+                        }
                     } else {
                         self.oauth2(&auth_config.source, config_dir).await
                     }
@@ -161,14 +174,14 @@ impl Auth {
         Ok(Authentication(token))
     }
 
-    async fn token_details(&self, token_secret: &TokenSecret) -> anyhow::Result<Token> {
+    async fn token_details(&self, token_secret: &TokenSecret) -> Result<Token, ServiceError> {
         info!("Getting token info");
         let mut context = self.login_client.context.clone();
         context.security_token = Security::Bearer(token_secret.secret().to_string());
 
         let client = MeClientLive { context };
 
-        Ok(client.current_login_token().await.map_service_error()?)
+        client.current_login_token().await.map_service_error()
     }
 
     async fn start_oauth2(&self) -> anyhow::Result<OAuth2WebflowData> {

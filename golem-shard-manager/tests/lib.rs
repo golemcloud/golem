@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod persistence;
+mod shard_management;
 
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use test_r::test_dep;

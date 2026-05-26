@@ -124,6 +124,12 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
                     code: api::error_code::AGENT_NOT_FOUND.to_string(),
                 })
             }
+            WorkerServiceError::GolemError(WorkerExecutorError::ComponentNotFound { .. }) => {
+                Self::NotFound(ErrorBody {
+                    error: error.to_safe_string(),
+                    code: api::error_code::COMPONENT_NOT_FOUND.to_string(),
+                })
+            }
 
             WorkerServiceError::BadFileType(_) => Self::BadRequest(ErrorsBody {
                 errors: vec![error.to_safe_string()],

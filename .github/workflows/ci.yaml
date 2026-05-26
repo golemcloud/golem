@@ -5,6 +5,10 @@ on:
       - "v*.*.*"
     branches:
       - main
+      # Long-lived maintenance branches for shipped major.minor lines,
+      # e.g. `1.5.x`. The wildcard means a new `1.6.x` branch starts running
+      # CI on push automatically when it is created.
+      - "[0-9]+.[0-9]+.x"
   pull_request:
 
 concurrency:
@@ -20,6 +24,7 @@ permissions:
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
   WASM_RQUICKJS_BRANCH: "wasmtime-v45"
+  MOONBIT_INSTALL_VERSION: "0.9.2+bbe2b338f"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -249,6 +254,9 @@ jobs:
       - name: Setup MoonBit
         if: matrix.group.name == 'cli-integration-tests-group2'
         uses: hustcer/setup-moonbit@v1
+        with:
+          version: ${{ env.MOONBIT_INSTALL_VERSION }}
+          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
 
       - name: Install MoonBit SDK tools dependencies
         if: matrix.group.name == 'cli-integration-tests-group2'
@@ -479,6 +487,9 @@ jobs:
       - uses: actions/checkout@v5
       - name: Setup MoonBit
         uses: hustcer/setup-moonbit@v1
+        with:
+          version: ${{ env.MOONBIT_INSTALL_VERSION }}
+          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Check SDK

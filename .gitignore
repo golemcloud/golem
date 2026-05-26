@@ -38,3 +38,6 @@ golem-skills/**/dist/
 .cqs/
 .ck
 .ckignore
+
+# Claude Code local settings
+.claude/

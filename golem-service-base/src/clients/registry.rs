@@ -15,7 +15,7 @@
 use crate::custom_api::CompiledRoutes;
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::mcp::CompiledMcp;
-use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
+use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment};
 use crate::model::component::Component;
 use crate::model::environment::EnvironmentState;
 use crate::model::{AccountResourceLimits, ResourceLimits};
@@ -454,11 +454,11 @@ impl RegistryService for GrpcRegistryService {
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
             Some(authenticate_token_response::Result::Success(payload)) => {
-                let user_auth_ctx: UserAuthCtx = payload
+                let auth_ctx: AuthCtx = payload
                     .auth_ctx
                     .ok_or("missing authctx field")?
                     .try_into()?;
-                Ok(AuthCtx::User(user_auth_ctx))
+                Ok(auth_ctx)
             }
             Some(authenticate_token_response::Result::Error(error)) => Err(error.into()),
         }

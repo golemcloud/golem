@@ -4,6 +4,3 @@ components:
   componentname:
     dir: "componentDir"
     templates: moonbit
-
-    # golem-app-manifest-env-doc
-    env:

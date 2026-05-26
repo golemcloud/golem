@@ -39,6 +39,7 @@ service WorkerExecutor {
   rpc InterruptWorker(InterruptWorkerRequest) returns (InterruptWorkerResponse);
   rpc RevokeShards(RevokeShardsRequest) returns (RevokeShardsResponse);
   rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
+  rpc SetShardAssignment(SetShardAssignmentRequest) returns (SetShardAssignmentResponse);
   rpc GetAgentMetadata(GetAgentMetadataRequest) returns (GetAgentMetadataResponse);
   rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc GetRunningWorkersMetadata(GetRunningWorkersMetadataRequest) returns (GetRunningWorkersMetadataResponse);
@@ -177,6 +178,18 @@ message AssignShardsRequest {
 }
 
 message AssignShardsResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message SetShardAssignmentRequest {
+  uint32 number_of_shards = 1;
+  repeated golem.shardmanager.ShardId shard_ids = 2;
+}
+
+message SetShardAssignmentResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;

@@ -311,7 +311,7 @@ impl DeploymentWriteService {
         let new_retry_policies = deployment_context.deployment_retry_policy_creations(
             retry_policies_in_environment,
             data.retry_policy_defaults,
-            auth.account_id(),
+            auth.actor_account_id(),
             &mut errors,
         )?;
 
@@ -352,7 +352,7 @@ impl DeploymentWriteService {
             replaced_agent_secrets,
             new_resource_definitions,
             new_retry_policies,
-            auth.account_id(),
+            auth.actor_account_id(),
         )?;
 
         let ext_revision = self
@@ -437,7 +437,7 @@ impl DeploymentWriteService {
         let revision_record = self
             .deployment_repo
             .set_current_deployment(
-                auth.account_id().0,
+                auth.actor_account_id().0,
                 environment_id.0,
                 payload.deployment_revision.into(),
             )

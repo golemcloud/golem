@@ -47,9 +47,14 @@ pub enum HttpApiDeploymentError {
     #[error("Domain {0} is not registered")]
     DomainNotRegistered(Domain),
     #[error(
-        "Domain {0} cannot be used for an HTTP API deployment: it belongs to the MCP domain namespace"
+        "Domain {domain} cannot be used for an HTTP API deployment. Only {direct_only_fragment}subdomains of {available_domain} may be used.",
+        direct_only_fragment = if !allow_arbitrary_subdomains { "direct " } else { "" }
     )]
-    DomainNotValidForHttpApi(Domain),
+    DomainNotValidForHttpApi {
+        domain: Domain,
+        available_domain: String,
+        allow_arbitrary_subdomains: bool,
+    },
     #[error("Concurrent update attempt")]
     ConcurrentUpdate,
     #[error(transparent)]
@@ -67,7 +72,7 @@ impl SafeDisplay for HttpApiDeploymentError {
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::HttpApiDeploymentForDomainAlreadyExists(_) => self.to_string(),
             Self::DomainNotRegistered(_) => self.to_string(),
-            Self::DomainNotValidForHttpApi(_) => self.to_string(),
+            Self::DomainNotValidForHttpApi { .. } => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -142,9 +147,15 @@ impl HttpApiDeploymentService {
         self.domain_registration_service
             .validate_domain_for_http_api(&data.domain)
             .map_err(|err| match err {
-                DomainRegistrationError::DomainNotValidForHttpApi(domain) => {
-                    HttpApiDeploymentError::DomainNotValidForHttpApi(domain)
-                }
+                DomainRegistrationError::DomainNotValidForHttpApi {
+                    domain,
+                    available_domain,
+                    allow_arbitrary_subdomains,
+                } => HttpApiDeploymentError::DomainNotValidForHttpApi {
+                    domain,
+                    available_domain,
+                    allow_arbitrary_subdomains,
+                },
                 other => other.into(),
             })?;
 
@@ -156,7 +167,7 @@ impl HttpApiDeploymentService {
                 data.openapi_endpoint_prefix,
             ),
             data.agents,
-            auth.account_id(),
+            auth.actor_account_id(),
         )?;
 
         let stored_http_api_deployment: HttpApiDeployment = self
@@ -235,7 +246,7 @@ impl HttpApiDeploymentService {
 
         let record = HttpApiDeploymentRevisionRecord::from_model(
             http_api_deployment,
-            DeletableRevisionAuditFields::new(auth.account_id().0),
+            DeletableRevisionAuditFields::new(auth.actor_account_id().0),
         )?;
 
         let stored_http_api_deployment: HttpApiDeployment = self
@@ -298,7 +309,7 @@ impl HttpApiDeploymentService {
 
         self.http_api_deployment_repo
             .delete(
-                auth.account_id().0,
+                auth.actor_account_id().0,
                 http_api_deployment_id.0,
                 current_revision.next()?.into(),
             )

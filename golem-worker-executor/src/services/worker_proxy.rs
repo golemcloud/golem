@@ -258,7 +258,7 @@ impl RemoteWorkerProxy {
     }
 
     fn get_auth_ctx(&self, account_id: AccountId) -> AuthCtx {
-        AuthCtx::impersonated_user(account_id)
+        AuthCtx::agent(account_id)
     }
 }
 

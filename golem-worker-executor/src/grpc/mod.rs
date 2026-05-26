@@ -118,6 +118,18 @@ type ResponseStream = WorkerEventStream;
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
 {
+    fn limit_invocation_context_stack_depth(
+        &self,
+        invocation_context: InvocationContextStack,
+    ) -> InvocationContextStack {
+        invocation_context.limit_depth(
+            self.services
+                .config()
+                .limits
+                .max_invocation_context_stack_depth,
+        )
+    }
+
     pub async fn new(
         services: Svcs,
         lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
@@ -325,23 +337,36 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
-        // NOTE: to return creation (limit) errors, we still "get_or_create",
-        //       even if the worker already exists with ignore_already_existing requested
-        let existing_worker = self.worker_service().get(&owned_agent_id).await;
-        if let Some(existing) = existing_worker
-            && !request.ignore_already_existing
-            && !Self::is_same_worker_creation_request(
-                &existing.initial_worker_metadata,
-                &env,
-                &config,
-            )
-        {
-            return Err(WorkerExecutorError::worker_already_exists(
-                owned_agent_id.agent_id(),
-            ));
+        if !request.ignore_already_existing {
+            if let Some(existing) = self.active_workers().try_get(&owned_agent_id).await {
+                if !Self::is_same_worker_creation_request(
+                    &existing.get_initial_worker_metadata(),
+                    &env,
+                    &config,
+                ) {
+                    return Err(WorkerExecutorError::worker_already_exists(
+                        owned_agent_id.agent_id(),
+                    ));
+                }
+            } else {
+                let existing_worker = self.worker_service().get(&owned_agent_id).await;
+                if let Some(existing) = existing_worker
+                    && !Self::is_same_worker_creation_request(
+                        &existing.initial_worker_metadata,
+                        &env,
+                        &config,
+                    )
+                {
+                    return Err(WorkerExecutorError::worker_already_exists(
+                        owned_agent_id.agent_id(),
+                    ));
+                }
+            }
         }
 
-        let invocation_context = from_proto_invocation_context(&request.invocation_context);
+        let invocation_context = self.limit_invocation_context_stack_depth(
+            from_proto_invocation_context(&request.invocation_context),
+        );
 
         let worker = Worker::get_or_create_suspended(
             self,
@@ -820,6 +845,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let invocation_context = request
             .maybe_invocation_context()
             .unwrap_or_else(InvocationContextStack::fresh);
+        let invocation_context = self.limit_invocation_context_stack_depth(invocation_context);
 
         // Lookup must be able to observe the current idempotency state even while the
         // invocation is still retrying and has transient error entries in the oplog.
@@ -858,6 +884,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let invocation_context = request
             .maybe_invocation_context()
             .unwrap_or_else(InvocationContextStack::fresh);
+        let invocation_context = self.limit_invocation_context_stack_depth(invocation_context);
 
         Worker::get_or_create_suspended(
             self,
@@ -904,6 +931,34 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
         self.shard_service().assign_shards(&shard_ids)?;
+        Ctx::on_shard_assignment_changed(self).await?;
+
+        Ok(())
+    }
+
+    async fn set_shard_assignment_internal(
+        &self,
+        request: golem::workerexecutor::v1::SetShardAssignmentRequest,
+    ) -> Result<(), WorkerExecutorError> {
+        let shard_ids = request.shard_ids.into_iter().map(ShardId::from).collect();
+        let number_of_shards = request
+            .number_of_shards
+            .try_into()
+            .map_err(|_| WorkerExecutorError::runtime("Invalid number of shards"))?;
+
+        self.shard_service()
+            .set_shard_assignment(number_of_shards, &shard_ids)?;
+
+        for (agent_id, worker_details) in self.active_workers().snapshot().await {
+            if self.shard_service().check_worker(&agent_id).is_err()
+                && let Some(mut await_interrupted) = worker_details
+                    .set_interrupting(InterruptKind::Restart)
+                    .await
+            {
+                await_interrupted.recv().await.unwrap();
+            }
+        }
+
         Ctx::on_shard_assignment_changed(self).await?;
 
         Ok(())
@@ -1835,7 +1890,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?
             .unwrap_or_else(Principal::anonymous);
 
-        let invocation_context = from_proto_invocation_context(&request.context);
+        let invocation_context = self
+            .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
 
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: ik.clone(),
@@ -2039,7 +2095,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             config: metadata.config.into_iter().map(Into::into).collect(),
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),
-            status: Into::<golem::worker::AgentStatus>::into(latest_status.status.clone()).into(),
+            status: Into::<golem::worker::AgentStatus>::into(latest_status.status).into(),
             retry_count: last_error_and_retry_count
                 .as_ref()
                 .and_then(|last_error| {
@@ -2323,6 +2379,42 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     golem::workerexecutor::v1::AssignShardsResponse {
                         result: Some(
                             golem::workerexecutor::v1::assign_shards_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn set_shard_assignment(
+        &self,
+        request: Request<golem::workerexecutor::v1::SetShardAssignmentRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::SetShardAssignmentResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("set_shard_assignment",);
+
+        match self
+            .set_shard_assignment_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::v1::SetShardAssignmentResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::set_shard_assignment_response::Result::Success(
+                            golem::common::Empty {},
+                        ),
+                    ),
+                },
+            ))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::v1::SetShardAssignmentResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::set_shard_assignment_response::Result::Failure(
                                 err.clone().into(),
                             ),
                         ),

@@ -42,7 +42,7 @@ use golem_worker_executor::services::golem_config::{
     FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
     IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
-    WorkerServiceGrpcConfig,
+    SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
@@ -367,6 +367,15 @@ fn worker_executor_config(
         indexed_storage: IndexedStorageConfig::KVStoreMultiSqlite(
             IndexedStorageKVStoreMultiSqliteConfig {},
         ),
+        scheduler_storage: SchedulerStorageConfig::Sqlite(DbSqliteConfig {
+            database: args
+                .data_dir
+                .join("scheduler.db")
+                .to_string_lossy()
+                .into_owned(),
+            max_connections: 4,
+            foreign_keys: false,
+        }),
         blob_storage: blob_storage_config(args),
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
@@ -488,8 +497,6 @@ async fn run_registry_service(
     let prometheus_registry = golem_registry_service::metrics::register_all();
     let span = tracing::info_span!("registry-service", component = "registry-service");
     RegistryService::new(config, prometheus_registry)
-        .instrument(span.clone())
-        .await?
         .start_for_single_executable(join_set)
         .instrument(span)
         .await

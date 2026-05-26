@@ -15,7 +15,7 @@
 use crate::repo::RepoError;
 use async_trait::async_trait;
 use golem_common::config::DbSqliteConfig;
-use golem_common::metrics::db::{record_db_failure, record_db_success};
+use golem_common::metrics::db::{record_db_failure, record_db_success, record_db_transaction};
 use sqlx::migrate::MigrationSource;
 use sqlx::query::{Query, QueryAs};
 use sqlx::sqlite::{SqliteArguments, SqlitePoolOptions, SqliteQueryResult, SqliteRow};
@@ -92,80 +92,6 @@ pub struct SqliteLabelledTransaction {
     start: Instant,
 }
 
-impl SqliteLabelledTransaction {
-    pub async fn execute<'a>(
-        &mut self,
-        query: Query<'a, Sqlite, SqliteArguments<'a>>,
-    ) -> Result<SqliteQueryResult, RepoError> {
-        Ok(query.execute(&mut *self.tx).await?)
-    }
-
-    pub async fn fetch_optional<'a, A>(
-        &mut self,
-        query: Query<'a, Sqlite, A>,
-    ) -> Result<Option<SqliteRow>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Sqlite>,
-    {
-        Ok(query.fetch_optional(&mut *self.tx).await?)
-    }
-
-    pub async fn fetch_optional_as<'a, O, A>(
-        &mut self,
-        query_as: QueryAs<'a, Sqlite, O, A>,
-    ) -> Result<Option<O>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Sqlite>,
-        O: 'a + Send + Unpin + for<'r> FromRow<'r, SqliteRow>,
-    {
-        Ok(query_as.fetch_optional(&mut *self.tx).await?)
-    }
-
-    pub async fn fetch_all<'a, A>(
-        &mut self,
-        query: Query<'a, Sqlite, A>,
-    ) -> Result<Vec<SqliteRow>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Sqlite>,
-    {
-        Ok(query.fetch_all(&mut *self.tx).await?)
-    }
-
-    pub async fn fetch_all_as<'a, O, A>(
-        &mut self,
-        query_as: QueryAs<'a, Sqlite, O, A>,
-    ) -> Result<Vec<O>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Sqlite>,
-        O: 'a + Send + Unpin + for<'r> FromRow<'r, SqliteRow>,
-    {
-        Ok(query_as.fetch_all(&mut *self.tx).await?)
-    }
-
-    pub async fn commit(self) -> Result<(), RepoError> {
-        SqliteLabelledApi::record(
-            self.svc_name,
-            self.api_name,
-            self.start,
-            self.tx.commit().await,
-        )
-    }
-
-    pub async fn rollback(self) -> Result<(), RepoError> {
-        warn!(
-            svc_name = self.svc_name,
-            api_name = self.api_name,
-            "DB transaction rollback",
-        );
-        SqliteLabelledApi::record(
-            self.svc_name,
-            self.api_name,
-            self.start,
-            self.tx.rollback().await,
-        )
-    }
-}
-
 #[async_trait]
 impl super::PoolApi for SqliteLabelledTransaction {
     type QueryResult = SqliteQueryResult;
@@ -177,7 +103,7 @@ impl super::PoolApi for SqliteLabelledTransaction {
         &mut self,
         query: Query<'a, Self::Db, SqliteArguments<'a>>,
     ) -> Result<SqliteQueryResult, RepoError> {
-        SqliteLabelledTransaction::execute(self, query).await
+        Ok(query.execute(&mut *self.tx).await?)
     }
 
     async fn fetch_optional<'a, A>(
@@ -187,7 +113,7 @@ impl super::PoolApi for SqliteLabelledTransaction {
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {
-        SqliteLabelledTransaction::fetch_optional(self, query).await
+        Ok(query.fetch_optional(&mut *self.tx).await?)
     }
 
     async fn fetch_optional_as<'a, O, A>(
@@ -198,7 +124,7 @@ impl super::PoolApi for SqliteLabelledTransaction {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        SqliteLabelledTransaction::fetch_optional_as(self, query_as).await
+        Ok(query_as.fetch_optional(&mut *self.tx).await?)
     }
 
     async fn fetch_all<'a, A>(
@@ -208,7 +134,7 @@ impl super::PoolApi for SqliteLabelledTransaction {
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {
-        SqliteLabelledTransaction::fetch_all(self, query).await
+        Ok(query.fetch_all(&mut *self.tx).await?)
     }
 
     async fn fetch_all_as<'a, O, A>(
@@ -219,33 +145,34 @@ impl super::PoolApi for SqliteLabelledTransaction {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        SqliteLabelledTransaction::fetch_all_as(self, query_as).await
+        Ok(query_as.fetch_all(&mut *self.tx).await?)
     }
 }
 
 #[async_trait]
 impl super::LabelledPoolTransaction for SqliteLabelledTransaction {
     async fn commit(self) -> Result<(), RepoError> {
-        SqliteLabelledApi::record(
-            self.svc_name,
-            self.api_name,
-            self.start,
-            self.tx.commit().await,
-        )
+        let svc_name = self.svc_name;
+        let api_name = self.api_name;
+        let start = self.start;
+        let result = self.tx.commit().await;
+        record_db_transaction("sqlite", svc_name, api_name, start.elapsed());
+        SqliteLabelledApi::record(svc_name, api_name, start, result)
     }
 
     async fn rollback(self) -> Result<(), RepoError> {
+        let svc_name = self.svc_name;
+        let api_name = self.api_name;
+        let start = self.start;
         warn!(
-            svc_name = self.svc_name,
-            api_name = self.api_name,
+            svc_name = svc_name,
+            api_name = api_name,
             "DB transaction rollback",
         );
-        SqliteLabelledApi::record(
-            self.svc_name,
-            self.api_name,
-            self.start,
-            self.tx.rollback().await,
-        )
+        golem_common::metrics::db::record_db_rollback("sqlite", svc_name, api_name);
+        let result = self.tx.rollback().await;
+        record_db_transaction("sqlite", svc_name, api_name, start.elapsed());
+        SqliteLabelledApi::record(svc_name, api_name, start, result)
     }
 }
 
@@ -256,70 +183,6 @@ pub struct SqliteLabelledApi {
 }
 
 impl SqliteLabelledApi {
-    pub async fn execute<'a>(
-        &self,
-        query: Query<'a, Sqlite, SqliteArguments<'a>>,
-    ) -> Result<SqliteQueryResult, RepoError> {
-        let start = Instant::now();
-        self.record_self(start, query.execute(&self.pool).await)
-    }
-
-    pub async fn fetch_optional<'a, A>(
-        &self,
-        query: Query<'a, Sqlite, A>,
-    ) -> Result<Option<SqliteRow>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Sqlite>,
-    {
-        let start = Instant::now();
-        self.record_self(start, query.fetch_optional(&self.pool).await)
-    }
-
-    pub async fn fetch_optional_as<'a, O, A>(
-        &self,
-        query_as: QueryAs<'a, Sqlite, O, A>,
-    ) -> Result<Option<O>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Sqlite>,
-        O: 'a + Send + Unpin + for<'r> FromRow<'r, SqliteRow>,
-    {
-        let start = Instant::now();
-        self.record_self(start, query_as.fetch_optional(&self.pool).await)
-    }
-
-    pub async fn fetch_all<'a, A>(
-        &self,
-        query: Query<'a, Sqlite, A>,
-    ) -> Result<Vec<SqliteRow>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Sqlite>,
-    {
-        let start = Instant::now();
-        self.record_self(start, query.fetch_all(&self.pool).await)
-    }
-
-    pub async fn fetch_all_as<'a, O, A>(
-        &self,
-        query_as: QueryAs<'a, Sqlite, O, A>,
-    ) -> Result<Vec<O>, RepoError>
-    where
-        A: 'a + IntoArguments<'a, Sqlite>,
-        O: 'a + Send + Unpin + for<'r> FromRow<'r, SqliteRow>,
-    {
-        let start = Instant::now();
-        self.record_self(start, query_as.fetch_all(&self.pool).await)
-    }
-
-    pub async fn begin(&self) -> Result<SqliteLabelledTransaction, RepoError> {
-        let tx = self.pool.begin().await?;
-        Ok(SqliteLabelledTransaction {
-            svc_name: self.svc_name,
-            api_name: self.api_name,
-            tx,
-            start: Instant::now(),
-        })
-    }
-
     fn record<R>(
         svc_name: &'static str,
         api_name: &'static str,
@@ -362,7 +225,8 @@ impl super::PoolApi for SqliteLabelledApi {
         &mut self,
         query: Query<'a, Self::Db, Self::Args<'a>>,
     ) -> Result<Self::QueryResult, RepoError> {
-        SqliteLabelledApi::execute(self, query).await
+        let start = Instant::now();
+        self.record_self(start, query.execute(&self.pool).await)
     }
 
     async fn fetch_optional<'a, A>(
@@ -372,7 +236,8 @@ impl super::PoolApi for SqliteLabelledApi {
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {
-        SqliteLabelledApi::fetch_optional(self, query).await
+        let start = Instant::now();
+        self.record_self(start, query.fetch_optional(&self.pool).await)
     }
 
     async fn fetch_optional_as<'a, O, A>(
@@ -383,7 +248,8 @@ impl super::PoolApi for SqliteLabelledApi {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        SqliteLabelledApi::fetch_optional_as(self, query_as).await
+        let start = Instant::now();
+        self.record_self(start, query_as.fetch_optional(&self.pool).await)
     }
 
     async fn fetch_all<'a, A>(
@@ -393,7 +259,8 @@ impl super::PoolApi for SqliteLabelledApi {
     where
         A: 'a + IntoArguments<'a, Self::Db>,
     {
-        SqliteLabelledApi::fetch_all(self, query).await
+        let start = Instant::now();
+        self.record_self(start, query.fetch_all(&self.pool).await)
     }
 
     async fn fetch_all_as<'a, O, A>(
@@ -404,7 +271,8 @@ impl super::PoolApi for SqliteLabelledApi {
         A: 'a + IntoArguments<'a, Self::Db>,
         O: 'a + Send + Unpin + for<'r> FromRow<'r, Self::Row>,
     {
-        SqliteLabelledApi::fetch_all_as(self, query_as).await
+        let start = Instant::now();
+        self.record_self(start, query_as.fetch_all(&self.pool).await)
     }
 }
 
@@ -413,7 +281,13 @@ impl super::LabelledPoolApi for SqliteLabelledApi {
     type LabelledTransaction = SqliteLabelledTransaction;
 
     async fn begin(&self) -> Result<Self::LabelledTransaction, RepoError> {
-        SqliteLabelledApi::begin(self).await
+        let tx = self.pool.begin().await?;
+        Ok(SqliteLabelledTransaction {
+            svc_name: self.svc_name,
+            api_name: self.api_name,
+            tx,
+            start: Instant::now(),
+        })
     }
 }
 

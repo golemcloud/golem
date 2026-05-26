@@ -20,7 +20,7 @@ use golem_common::base_model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, Weak};
@@ -29,6 +29,12 @@ use tracing::{error, warn};
 /// Service for activating workers in the background
 #[async_trait]
 pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
+    /// Returns the fingerprint of an active in-memory worker without touching persistent storage.
+    async fn active_worker_fingerprint(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint>;
+
     /// Makes sure an already existing worker is active in a background task. Returns immediately
     async fn activate_worker(&self, owned_agent_id: &OwnedAgentId);
 
@@ -81,6 +87,26 @@ impl<Ctx: WorkerCtx> Default for LazyWorkerActivator<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
+    async fn active_worker_fingerprint(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint> {
+        let maybe_worker_activator = self
+            .worker_activator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|w| w.upgrade());
+        match maybe_worker_activator {
+            Some(worker_activator) => {
+                worker_activator
+                    .active_worker_fingerprint(owned_agent_id)
+                    .await
+            }
+            None => None,
+        }
+    }
+
     async fn activate_worker(&self, owned_agent_id: &OwnedAgentId) {
         let maybe_worker_activator = self
             .worker_activator
@@ -186,7 +212,26 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<Ctx>
     for DefaultWorkerActivator<Ctx, Svcs>
 {
+    async fn active_worker_fingerprint(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentFingerprint> {
+        self.all
+            .active_workers()
+            .try_get(owned_agent_id)
+            .await
+            .map(|worker| worker.get_initial_worker_metadata().fingerprint)
+    }
+
     async fn activate_worker(&self, owned_agent_id: &OwnedAgentId) {
+        if self
+            .active_worker_fingerprint(owned_agent_id)
+            .await
+            .is_some()
+        {
+            return;
+        }
+
         let metadata = self.all.worker_service().get(owned_agent_id).await;
         match metadata {
             Some(_) => {

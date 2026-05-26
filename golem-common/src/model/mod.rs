@@ -393,16 +393,27 @@ impl Display for ScheduledAction {
     }
 }
 
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
 #[desert(evolution())]
 pub struct ScheduleId {
-    pub timestamp: i64,
-    pub action: ScheduledAction,
+    pub id: Uuid,
+}
+
+impl ScheduleId {
+    pub fn fresh() -> Self {
+        Self { id: Uuid::now_v7() }
+    }
+
+    pub fn from_idempotency_key(key: &IdempotencyKey) -> Self {
+        Self {
+            id: Uuid::parse_str(&key.value).expect("derived idempotency key must be a UUID"),
+        }
+    }
 }
 
 impl Display for ScheduleId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}@{}", self.action, self.timestamp)
+        write!(f, "{}", self.id)
     }
 }
 
@@ -494,9 +505,12 @@ impl ShardAssignment {
 
     pub fn register(&mut self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
         self.number_of_shards = number_of_shards;
-        for shard_id in shard_ids {
-            self.shard_ids.insert(*shard_id);
-        }
+        self.shard_ids = shard_ids.clone();
+    }
+
+    pub fn set_shards(&mut self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
+        self.number_of_shards = number_of_shards;
+        self.shard_ids = shard_ids.clone();
     }
 
     pub fn revoke_shards(&mut self, shard_ids: &HashSet<ShardId>) {

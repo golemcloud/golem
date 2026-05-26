@@ -1,0 +1,186 @@
+---
+import { openSource, languages, deployments } from "../data/homepage";
+---
+
+<section class="open-source">
+  <div class="container">
+    <header class="section-header">
+      <span class="eyebrow">{openSource.eyebrow}</span>
+      <h2 class="section-heading">{openSource.heading}</h2>
+    </header>
+
+    <div class="os-grid">
+      <div class="os-prose">
+        <div class="os-block">
+          <h3 class="os-block-title">{openSource.blocks[0].title}</h3>
+          <p>{openSource.blocks[0].body}</p>
+        </div>
+
+        <div class="os-block">
+          <h3 class="os-block-title">{openSource.blocks[1].title}</h3>
+          <p>{openSource.blocks[1].body}</p>
+        </div>
+
+        <div class="os-block">
+          <h3 class="os-block-title">{openSource.blocks[2].title}</h3>
+          <p>{openSource.blocks[2].body}</p>
+          <div class="languages">
+            {
+              languages.map((l) => (
+                <div class="lang-pill">
+                  <span class="lang-name">{l.name}</span>
+                  <span class="lang-note muted">{l.note}</span>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+
+        <p class="pedigree" set:html={openSource.pedigreeHtml} />
+      </div>
+
+      <aside class="deployments">
+        <div class="deployments-label muted">Deploy anywhere</div>
+        <ul>
+          {
+            deployments.map((d) => (
+              <li class="deploy-row">
+                <span class="deploy-icon" aria-hidden="true">
+                  {d.icon}
+                </span>
+                <div>
+                  <div class="deploy-label">{d.label}</div>
+                  <div class="deploy-note muted">{d.note}</div>
+                </div>
+              </li>
+            ))
+          }
+        </ul>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<style>
+  .open-source {
+    padding: 5rem 0;
+    border-top: 1px solid var(--border);
+  }
+  .os-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+  @media (min-width: 900px) {
+    .os-grid {
+      grid-template-columns: 1.5fr 1fr;
+      gap: 3.5rem;
+    }
+  }
+
+  .os-block {
+    margin-bottom: 1.75rem;
+  }
+  .os-block-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.5rem;
+  }
+  .os-block p {
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+
+  .languages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-top: 0.95rem;
+  }
+  .lang-pill {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.45rem 0.8rem;
+    font-size: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
+  }
+  .lang-name {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .lang-note {
+    font-size: 0.72rem;
+  }
+
+  .pedigree {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .pedigree :global(a) {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .pedigree :global(a:hover) {
+    color: var(--accent-hover);
+  }
+  .pedigree :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .deployments {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.5rem 1.6rem;
+    align-self: start;
+    position: sticky;
+    top: 90px;
+  }
+  .deployments-label {
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+  }
+  .deployments ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.95rem;
+  }
+  .deploy-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.85rem;
+  }
+  .deploy-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: var(--accent-dim);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 0.95rem;
+  }
+  .deploy-label {
+    color: var(--text);
+    font-weight: 500;
+    font-size: 0.92rem;
+  }
+  .deploy-note {
+    font-size: 0.78rem;
+    margin-top: 0.1rem;
+  }
+</style>

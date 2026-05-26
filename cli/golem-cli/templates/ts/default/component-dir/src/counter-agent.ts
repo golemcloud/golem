@@ -14,7 +14,7 @@ class CounterAgent extends BaseAgent {
     private value: number = 0;
 
     constructor(name: string) {
-        super()
+        super();
         this.name = name;
     }
 

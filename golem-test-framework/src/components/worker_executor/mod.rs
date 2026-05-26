@@ -57,6 +57,7 @@ async fn env_vars(
     rdb: &Arc<dyn Rdb>,
     registry_service: &Arc<dyn RegistryService>,
     environment_state_cache_capacity: Option<usize>,
+    oplog_archive_interval: Option<Duration>,
     verbosity: Level,
     otlp: bool,
 ) -> HashMap<String, String> {
@@ -114,6 +115,13 @@ async fn env_vars(
         );
     }
 
+    if let Some(oplog_archive_interval) = oplog_archive_interval {
+        env.insert(
+            "GOLEM__OPLOG__ARCHIVE_INTERVAL".to_string(),
+            serde_json::to_string(&humantime_serde::Serde::from(oplog_archive_interval)).unwrap(),
+        );
+    }
+
     let db_env = rdb.info().env("golem_worker_executor", false);
     let db_type = db_env
         .get("GOLEM__DB__TYPE")
@@ -122,6 +130,10 @@ async fn env_vars(
 
     env.insert(
         "GOLEM__KEY_VALUE_STORAGE__TYPE".to_string(),
+        db_type.to_string(),
+    );
+    env.insert(
+        "GOLEM__SCHEDULER_STORAGE__TYPE".to_string(),
         db_type.to_string(),
     );
 
@@ -141,6 +153,17 @@ async fn env_vars(
                     env.insert(
                         format!("GOLEM__INDEXED_STORAGE__CONFIG__{rest}"),
                         indexed_value,
+                    );
+                    let scheduler_value = if rest == "SCHEMA" {
+                        format!("{value}_scheduler")
+                    } else {
+                        value.clone()
+                    };
+                    // SchedulerStoragePostgresConfig flattens DbPostgresConfig, so its
+                    // fields appear directly under CONFIG (not nested under POSTGRES).
+                    env.insert(
+                        format!("GOLEM__SCHEDULER_STORAGE__CONFIG__{rest}"),
+                        scheduler_value,
                     );
                 }
             }
@@ -162,7 +185,25 @@ async fn env_vars(
         }
 
         if let Some(rest) = key.strip_prefix("GOLEM__DB__") {
-            env.insert(format!("GOLEM__KEY_VALUE_STORAGE__{rest}"), value);
+            env.insert(format!("GOLEM__KEY_VALUE_STORAGE__{rest}"), value.clone());
+            if let Some(config_rest) = rest.strip_prefix("CONFIG__")
+                && matches!(rdb.info(), DbInfo::Sqlite(_))
+            {
+                // Use a dedicated SQLite file for the scheduler storage. Keyvalue,
+                // indexed and scheduler each ship their own sqlx migrations under
+                // separate migration tables; if they shared one DB file their
+                // `_sqlx_migrations` entries would collide (both have a migration
+                // with version 1 but different SQL).
+                let scheduler_value = if config_rest == "DATABASE" {
+                    value.replacen(".db", "-scheduler.db", 1)
+                } else {
+                    value.clone()
+                };
+                env.insert(
+                    format!("GOLEM__SCHEDULER_STORAGE__CONFIG__{config_rest}"),
+                    scheduler_value,
+                );
+            }
         }
     }
 

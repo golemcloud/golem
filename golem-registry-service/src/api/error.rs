@@ -507,6 +507,9 @@ impl From<ComponentError> for ApiError {
             ComponentError::AgentTypeForNameNotFound(_) => {
                 Self::not_found(api::error_code::AGENT_TYPE_NOT_FOUND, error)
             }
+            ComponentError::DuplicateAgentTypeName(_) => {
+                Self::bad_request(api::error_code::DUPLICATE_AGENT_TYPE_NAME, error)
+            }
             ComponentError::DeploymentRevisionNotFound(_) => {
                 Self::not_found(api::error_code::DEPLOYMENT_NOT_FOUND, error)
             }
@@ -796,11 +799,11 @@ impl From<DomainRegistrationError> for ApiError {
                 Self::conflict(api::error_code::DOMAIN_ALREADY_EXISTS, error)
             }
 
-            DomainRegistrationError::DomainNotValidForHttpApi(_) => {
+            DomainRegistrationError::DomainNotValidForHttpApi { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
             }
 
-            DomainRegistrationError::DomainNotValidForMcp(_) => {
+            DomainRegistrationError::DomainNotValidForMcp { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_MCP, error)
             }
 
@@ -875,7 +878,7 @@ impl From<HttpApiDeploymentError> for ApiError {
                 cause: None,
             })),
 
-            HttpApiDeploymentError::DomainNotValidForHttpApi(_) => {
+            HttpApiDeploymentError::DomainNotValidForHttpApi { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
             }
 
@@ -919,7 +922,7 @@ impl From<McpDeploymentError> for ApiError {
                 cause: None,
             })),
 
-            McpDeploymentError::DomainNotValidForMcp(_) => {
+            McpDeploymentError::DomainNotValidForMcp { .. } => {
                 Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_MCP, error)
             }
 
