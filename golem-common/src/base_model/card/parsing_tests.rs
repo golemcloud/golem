@@ -218,7 +218,7 @@ fn generate_declared_permission_class_parser_tests(r: &mut DynamicTestRegistrati
         ),
         ("application(acme/shop) @ acme : view :", "application"),
         (
-            "environment(acme/shop/prod) @ acme/shop/prod : view :",
+            "environment(acme/shop) @ acme/shop/prod : view : prod",
             "environment",
         ),
         (
@@ -258,7 +258,7 @@ fn generate_declared_permission_class_parser_tests(r: &mut DynamicTestRegistrati
             "environment.retry-policy",
         ),
         (
-            "component(acme/shop/prod/cart-svc) @ acme/shop/prod : view :",
+            "component(acme/shop/prod) @ acme/shop/prod : view : cart-svc",
             "component",
         ),
         (
@@ -424,12 +424,12 @@ fn parses_admin_class_examples() {
     );
 
     assert_matches!(
-        parsed_permission("environment(acme/shop/prod) @ acme/shop/prod : deploy :"),
+        parsed_permission("environment(acme/shop) @ acme/shop/prod : deploy : prod"),
         PermissionPattern::Environment(EnvironmentPermissionPattern::Verb { verb: EnvironmentVerb::Deploy,
             owner,
-            resource: EnvironmentResourcePattern::Empty,
+            resource: EnvironmentResourcePattern::Environment(environment),
             ..
-        }) if owner == EnvironmentOwnerPattern::new("acme/shop/prod")
+        }) if owner == ApplicationOwnerPattern::new("acme/shop") && environment == EnvironmentName("prod".to_string())
     );
 
     assert_matches!(
@@ -455,19 +455,19 @@ fn parses_spec_specific_resource_shapes() {
     );
 
     assert_matches!(
-        parsed_permission("environment(acme/shop/prod) @ acme/shop/prod : rollback : rev=42"),
+        parsed_permission("environment(acme/shop) @ acme/shop/prod : rollback : prod@rev=42"),
         PermissionPattern::Environment(EnvironmentPermissionPattern::Verb {
-            resource: EnvironmentResourcePattern::Revision(42),
+            resource: EnvironmentResourcePattern::Revision { environment, revision: 42 },
             ..
-        })
+        }) if environment == EnvironmentName("prod".to_string())
     );
 
     assert_matches!(
-        parsed_permission("component(acme/shop/prod/cart-svc) @ acme/shop/prod : view : rev=*"),
+        parsed_permission("component(acme/shop/prod) @ acme/shop/prod : view : cart-svc"),
         PermissionPattern::Component(ComponentPermissionPattern::Verb {
-            resource: ComponentResourcePattern::AnyRevision,
+            resource: ComponentResourcePattern::Component(component),
             ..
-        })
+        }) if component == ComponentName("cart-svc".to_string())
     );
 
     assert_matches!(
@@ -566,7 +566,7 @@ fn parses_polymorphic_recipient_templates_and_concrete_paths() {
 #[test_gen]
 fn generate_polymorphic_owner_slot_parser_tests(r: &mut DynamicTestRegistration) {
     let cases = [
-        ("environment(?env) @ ?env : view :", "environment"),
+        ("environment(?env) @ ?env : view : prod", "environment"),
         ("env(?self) @ ?self : read : HOME", "self"),
     ];
 
@@ -597,7 +597,7 @@ fn rejects_undeclared_polymorphic_owner_slots() {
     );
 
     assert_matches!(
-        parse_polymorphic_pattern_grant("component(?component) @ ?env : view : rev=*"),
+        parse_polymorphic_pattern_grant("component(?component) @ ?env : view : cart-svc"),
         Err(CardParseError::InvalidOwnerPath { class, owner })
             if class == ComponentClass::NAME && owner == "?component"
     );
@@ -630,7 +630,7 @@ fn parses_polymorphic_owner_templates() {
 
 #[test]
 fn parses_only_declared_polymorphic_recipient_slots() {
-    let grant = parse_polymorphic_pattern_grant("environment(?env) @ ?env : view :").unwrap();
+    let grant = parse_polymorphic_pattern_grant("environment(?env) @ ?env : view : prod").unwrap();
 
     assert_matches!(
         grant.permission,

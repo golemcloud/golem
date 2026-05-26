@@ -1,20 +1,42 @@
 use super::*;
 use crate::base_model::card::parsing::CardParseError;
+use nom::IResult;
+use nom::branch::alt;
+use nom::bytes::complete::{tag, take_while1};
+use nom::combinator::{all_consuming, map, map_res};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentResourcePattern {
     Empty,
-    AnyRevision,
-    Revision(u64),
+    Environment(EnvironmentName),
+    Revision {
+        environment: EnvironmentName,
+        revision: u64,
+    },
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct EnvironmentName(pub String);
 
 impl Subsumes for EnvironmentResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Empty, Self::Empty) => true,
-            (Self::AnyRevision, Self::AnyRevision | Self::Revision(_)) => true,
-            (Self::Revision(a), Self::Revision(b)) => a == b,
+            (Self::Environment(a), Self::Environment(b)) => a == b,
+            (Self::Environment(a), Self::Revision { environment: b, .. }) => a == b,
+            (
+                Self::Revision {
+                    environment: a,
+                    revision: ar,
+                },
+                Self::Revision {
+                    environment: b,
+                    revision: br,
+                },
+            ) => a == b && ar == br,
             _ => false,
         }
     }
@@ -41,7 +63,7 @@ pub struct EnvironmentClass;
 
 impl PermissionClass for EnvironmentClass {
     type Verb = EnvironmentVerb;
-    type Owner = EnvironmentOwnerPattern;
+    type Owner = ApplicationOwnerPattern;
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentResourcePattern;
     const NAME: &'static str = "environment";
@@ -89,21 +111,43 @@ impl EnvironmentClass {
     ) -> Result<EnvironmentResourcePattern, CardParseError> {
         if resource.is_empty() {
             Ok(EnvironmentResourcePattern::Empty)
-        } else if resource == "rev=*" {
-            Ok(EnvironmentResourcePattern::AnyRevision)
-        } else if let Some(revision) = resource.strip_prefix("rev=") {
-            revision
-                .parse::<u64>()
-                .map(EnvironmentResourcePattern::Revision)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: class.to_string(),
-                    resource: resource.to_string(),
-                })
         } else {
-            Err(CardParseError::InvalidResource {
+            parse_environment_resource(resource).map_err(|_| CardParseError::InvalidResource {
                 class: class.to_string(),
                 resource: resource.to_string(),
             })
         }
     }
+}
+
+fn parse_environment_resource(resource: &str) -> Result<EnvironmentResourcePattern, String> {
+    all_consuming(environment_resource)(resource)
+        .map(|(_, resource)| resource)
+        .map_err(|_| resource.to_string())
+}
+
+fn environment_resource(input: &str) -> IResult<&str, EnvironmentResourcePattern> {
+    let (input, environment) = environment_name(input)?;
+    alt((
+        map(
+            map_res(
+                nom::sequence::preceded(tag("@rev="), take_while1(|c: char| c.is_ascii_digit())),
+                |revision: &str| revision.parse::<u64>(),
+            ),
+            |revision| EnvironmentResourcePattern::Revision {
+                environment: environment.clone(),
+                revision,
+            },
+        ),
+        map(nom::combinator::success(()), |_| {
+            EnvironmentResourcePattern::Environment(environment.clone())
+        }),
+    ))(input)
+}
+
+fn environment_name(input: &str) -> IResult<&str, EnvironmentName> {
+    map(
+        take_while1(|c: char| c != '@' && c != ':' && c != '/' && !c.is_whitespace()),
+        |value: &str| EnvironmentName(value.to_string()),
+    )(input)
 }

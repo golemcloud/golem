@@ -1,20 +1,42 @@
 use super::*;
 use crate::base_model::card::parsing::CardParseError;
+use nom::IResult;
+use nom::branch::alt;
+use nom::bytes::complete::{tag, take_while1};
+use nom::combinator::{all_consuming, map, map_res};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ComponentResourcePattern {
     Empty,
-    AnyRevision,
-    Revision(u64),
+    Component(ComponentName),
+    Revision {
+        component: ComponentName,
+        revision: u64,
+    },
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct ComponentName(pub String);
 
 impl Subsumes for ComponentResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Empty, Self::Empty) => true,
-            (Self::AnyRevision, Self::AnyRevision | Self::Revision(_)) => true,
-            (Self::Revision(a), Self::Revision(b)) => a == b,
+            (Self::Component(a), Self::Component(b)) => a == b,
+            (Self::Component(a), Self::Revision { component: b, .. }) => a == b,
+            (
+                Self::Revision {
+                    component: a,
+                    revision: ar,
+                },
+                Self::Revision {
+                    component: b,
+                    revision: br,
+                },
+            ) => a == b && ar == br,
             _ => false,
         }
     }
@@ -34,7 +56,7 @@ pub struct ComponentClass;
 
 impl PermissionClass for ComponentClass {
     type Verb = ComponentVerb;
-    type Owner = ComponentOwnerPattern;
+    type Owner = EnvironmentOwnerPattern;
     type Recipient = EnvironmentRecipientPattern;
     type Resource = ComponentResourcePattern;
     const NAME: &'static str = "component";
@@ -74,21 +96,43 @@ impl ComponentClass {
     ) -> Result<ComponentResourcePattern, CardParseError> {
         if resource.is_empty() {
             Ok(ComponentResourcePattern::Empty)
-        } else if resource == "rev=*" {
-            Ok(ComponentResourcePattern::AnyRevision)
-        } else if let Some(revision) = resource.strip_prefix("rev=") {
-            revision
-                .parse::<u64>()
-                .map(ComponentResourcePattern::Revision)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: class.to_string(),
-                    resource: resource.to_string(),
-                })
         } else {
-            Err(CardParseError::InvalidResource {
+            parse_component_resource(resource).map_err(|_| CardParseError::InvalidResource {
                 class: class.to_string(),
                 resource: resource.to_string(),
             })
         }
     }
+}
+
+fn parse_component_resource(resource: &str) -> Result<ComponentResourcePattern, String> {
+    all_consuming(component_resource)(resource)
+        .map(|(_, resource)| resource)
+        .map_err(|_| resource.to_string())
+}
+
+fn component_resource(input: &str) -> IResult<&str, ComponentResourcePattern> {
+    let (input, component) = component_name(input)?;
+    alt((
+        map(
+            map_res(
+                nom::sequence::preceded(tag("@rev="), take_while1(|c: char| c.is_ascii_digit())),
+                |revision: &str| revision.parse::<u64>(),
+            ),
+            |revision| ComponentResourcePattern::Revision {
+                component: component.clone(),
+                revision,
+            },
+        ),
+        map(nom::combinator::success(()), |_| {
+            ComponentResourcePattern::Component(component.clone())
+        }),
+    ))(input)
+}
+
+fn component_name(input: &str) -> IResult<&str, ComponentName> {
+    map(
+        take_while1(|c: char| c != '@' && c != ':' && c != '/' && !c.is_whitespace()),
+        |value: &str| ComponentName(value.to_string()),
+    )(input)
 }
