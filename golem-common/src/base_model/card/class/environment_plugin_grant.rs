@@ -8,7 +8,7 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentPluginGrantResourcePattern {
     Any,
-    Exact(String),
+    Name(ResourceIdentifier),
 }
 
 impl EnvironmentPluginGrantResourcePattern {
@@ -17,7 +17,7 @@ impl EnvironmentPluginGrantResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid plugin name"))
     }
 }
 
@@ -25,8 +25,8 @@ impl Subsumes for EnvironmentPluginGrantResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (Self::Name(a), Self::Name(b)) => a == b,
+            (Self::Name(_), Self::Any) => false,
         }
     }
 }
@@ -119,9 +119,12 @@ impl EnvironmentPluginGrantClass {
         if resource == "*" {
             Ok(EnvironmentPluginGrantResourcePattern::Any)
         } else {
-            Ok(EnvironmentPluginGrantResourcePattern::Exact(
-                resource.to_string(),
-            ))
+            ResourceIdentifier::parse(resource)
+                .map(EnvironmentPluginGrantResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentPluginGrantClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 

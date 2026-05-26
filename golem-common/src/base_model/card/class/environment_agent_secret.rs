@@ -2,15 +2,13 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_environment_owner, parse_environment_recipient,
     parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient,
-    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentAgentSecretResourcePattern {
     Any,
-    Exact(String),
-    Glob(String),
+    Key(DotPathPattern),
 }
 
 impl EnvironmentAgentSecretResourcePattern {
@@ -19,11 +17,11 @@ impl EnvironmentAgentSecretResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Key(DotPathPattern::parse(&value.into()).expect("invalid agent-secret key path"))
     }
 
     pub fn glob(value: impl Into<String>) -> Self {
-        Self::Glob(value.into())
+        Self::exact(value)
     }
 }
 
@@ -31,36 +29,13 @@ impl Subsumes for EnvironmentAgentSecretResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Glob(a), Self::Glob(b)) => glob_subsumes(a, b),
-            (Self::Glob(a), Self::Exact(b)) => glob_matches(a, b),
-            (Self::Glob(_), Self::Any) => false,
-            (Self::Exact(_), Self::Any | Self::Glob(_)) => false,
+            (Self::Key(a), Self::Key(b)) => a.subsumes(b),
+            (Self::Key(_), Self::Any) => false,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicEnvironmentAgentSecretResourcePattern {
-    Any,
-    Exact(String),
-    Glob(String),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
-
-impl From<EnvironmentAgentSecretResourcePattern>
-    for PolymorphicEnvironmentAgentSecretResourcePattern
-{
-    fn from(value: EnvironmentAgentSecretResourcePattern) -> Self {
-        match value {
-            EnvironmentAgentSecretResourcePattern::Any => Self::Any,
-            EnvironmentAgentSecretResourcePattern::Exact(value) => Self::Exact(value),
-            EnvironmentAgentSecretResourcePattern::Glob(value) => Self::Glob(value),
-        }
-    }
-}
+pub type PolymorphicEnvironmentAgentSecretResourcePattern = EnvironmentAgentSecretResourcePattern;
 
 impl ResourcePattern for EnvironmentAgentSecretResourcePattern {
     type Polymorphic = PolymorphicEnvironmentAgentSecretResourcePattern;
@@ -149,16 +124,15 @@ impl EnvironmentAgentSecretClass {
         _class: &str,
         resource: &str,
     ) -> Result<EnvironmentAgentSecretResourcePattern, CardParseError> {
-        if resource == "*" || resource == "**" {
+        if resource == "*" {
             Ok(EnvironmentAgentSecretResourcePattern::Any)
-        } else if resource.contains('*') {
-            Ok(EnvironmentAgentSecretResourcePattern::Glob(
-                resource.to_string(),
-            ))
         } else {
-            Ok(EnvironmentAgentSecretResourcePattern::Exact(
-                resource.to_string(),
-            ))
+            DotPathPattern::parse(resource)
+                .map(EnvironmentAgentSecretResourcePattern::Key)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentAgentSecretClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 
@@ -166,13 +140,6 @@ impl EnvironmentAgentSecretClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicEnvironmentAgentSecretResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicEnvironmentAgentSecretResourcePattern::from,
-            PolymorphicEnvironmentAgentSecretResourcePattern::Slot,
-            PolymorphicEnvironmentAgentSecretResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

@@ -8,7 +8,7 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountPluginResourcePattern {
     Any,
-    Name(String),
+    Name(ResourceIdentifier),
 }
 
 impl AccountPluginResourcePattern {
@@ -17,7 +17,7 @@ impl AccountPluginResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(value.into())
+        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid plugin name"))
     }
 }
 
@@ -120,7 +120,12 @@ impl AccountPluginClass {
         if resource == "*" {
             Ok(AccountPluginResourcePattern::Any)
         } else {
-            Ok(AccountPluginResourcePattern::Name(resource.to_string()))
+            ResourceIdentifier::parse(resource)
+                .map(AccountPluginResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: AccountPluginClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 

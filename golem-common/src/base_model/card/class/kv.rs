@@ -2,7 +2,6 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_agent_recipient, parse_environment_owner,
     parse_polymorphic_agent_recipient, parse_polymorphic_environment_owner,
-    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,21 +60,7 @@ impl Subsumes for KvResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicKvResourcePattern {
-    StoreKey { store: String, key_pattern: String },
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
-
-impl From<KvResourcePattern> for PolymorphicKvResourcePattern {
-    fn from(value: KvResourcePattern) -> Self {
-        match value {
-            KvResourcePattern::StoreKey { store, key_pattern } => Self::StoreKey { store, key_pattern },
-        }
-    }
-}
+pub type PolymorphicKvResourcePattern = KvResourcePattern;
 
 impl ResourcePattern for KvResourcePattern {
     type Polymorphic = PolymorphicKvResourcePattern;
@@ -167,13 +152,6 @@ impl KvClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicKvResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicKvResourcePattern::from,
-            PolymorphicKvResourcePattern::Slot,
-            PolymorphicKvResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

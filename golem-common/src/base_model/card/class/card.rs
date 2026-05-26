@@ -1,7 +1,7 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_account_owner, parse_agent_recipient, parse_polymorphic_account_owner,
-    parse_polymorphic_agent_recipient, parse_polymorphic_resource,
+    parse_polymorphic_agent_recipient,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,25 +37,7 @@ impl Subsumes for CardResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicCardResourcePattern {
-    Any,
-    Empty,
-    InstallTarget(RecipientPathPattern),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
-
-impl From<CardResourcePattern> for PolymorphicCardResourcePattern {
-    fn from(value: CardResourcePattern) -> Self {
-        match value {
-            CardResourcePattern::Any => Self::Any,
-            CardResourcePattern::Empty => Self::Empty,
-            CardResourcePattern::InstallTarget(value) => Self::InstallTarget(value),
-        }
-    }
-}
+pub type PolymorphicCardResourcePattern = CardResourcePattern;
 
 impl ResourcePattern for CardResourcePattern {
     type Polymorphic = PolymorphicCardResourcePattern;
@@ -153,13 +135,6 @@ impl CardClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicCardResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicCardResourcePattern::from,
-            PolymorphicCardResourcePattern::Slot,
-            PolymorphicCardResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

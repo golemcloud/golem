@@ -36,53 +36,259 @@ pub trait Subsumes {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct ResourceTemplate {
-    pub parts: Vec<ResourceTemplatePart>,
-}
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct ResourceIdentifier(pub String);
 
-impl ResourceTemplate {
+impl ResourceIdentifier {
     pub fn parse(value: &str) -> Result<Self, String> {
-        let mut parts = Vec::new();
-        let mut rest = value;
-
-        while let Some(idx) = rest.find('?') {
-            let (literal, suffix) = rest.split_at(idx);
-            if !literal.is_empty() {
-                parts.push(ResourceTemplatePart::Literal(literal.to_string()));
-            }
-
-            let slot_len = suffix
-                .char_indices()
-                .skip(1)
-                .take_while(|(_, c)| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-                .last()
-                .map(|(idx, c)| idx + c.len_utf8())
-                .unwrap_or(1);
-            let (slot, next) = suffix.split_at(slot_len);
-            parts.push(ResourceTemplatePart::Slot(SlotVariable::parse(slot)?));
-            rest = next;
-        }
-
-        if !rest.is_empty() {
-            parts.push(ResourceTemplatePart::Literal(rest.to_string()));
-        }
-
-        if parts
-            .iter()
-            .any(|part| matches!(part, ResourceTemplatePart::Slot(_)))
+        let mut chars = value.chars();
+        if chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
-            Ok(Self { parts })
+            Ok(Self(value.to_string()))
         } else {
             Err(value.to_string())
         }
     }
 }
 
+impl From<&str> for ResourceIdentifier {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum ResourceTemplatePart {
-    Literal(String),
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct ResourceLiteral(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum ResourcePathSegmentPattern {
+    Literal(ResourceLiteral),
+    Star,
+    GlobStar,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct SlashPathPattern {
+    pub segments: Vec<ResourcePathSegmentPattern>,
+}
+
+impl SlashPathPattern {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let Some(path) = value.strip_prefix('/') else {
+            return Err(value.to_string());
+        };
+
+        let segments = if path.is_empty() {
+            Vec::new()
+        } else {
+            path.split('/')
+                .map(parse_resource_path_segment)
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
+        Ok(Self { segments })
+    }
+
+    pub fn subsumes(&self, other: &Self) -> bool {
+        resource_segments_subsume(&self.segments, &other.segments)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PolymorphicResourcePathSegmentPattern {
+    Literal(ResourceLiteral),
+    Star,
+    GlobStar,
     Slot(SlotVariable),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct PolymorphicSlashPathPattern {
+    pub segments: Vec<PolymorphicResourcePathSegmentPattern>,
+}
+
+impl PolymorphicSlashPathPattern {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let Some(path) = value.strip_prefix('/') else {
+            return Err(value.to_string());
+        };
+
+        let segments = if path.is_empty() {
+            Vec::new()
+        } else {
+            path.split('/')
+                .map(parse_polymorphic_resource_path_segment)
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
+        if segments
+            .iter()
+            .any(|segment| matches!(segment, PolymorphicResourcePathSegmentPattern::Slot(_)))
+        {
+            Ok(Self { segments })
+        } else {
+            Err(value.to_string())
+        }
+    }
+}
+
+impl From<SlashPathPattern> for PolymorphicSlashPathPattern {
+    fn from(value: SlashPathPattern) -> Self {
+        Self {
+            segments: value
+                .segments
+                .into_iter()
+                .map(|segment| match segment {
+                    ResourcePathSegmentPattern::Literal(value) => {
+                        PolymorphicResourcePathSegmentPattern::Literal(value)
+                    }
+                    ResourcePathSegmentPattern::Star => PolymorphicResourcePathSegmentPattern::Star,
+                    ResourcePathSegmentPattern::GlobStar => {
+                        PolymorphicResourcePathSegmentPattern::GlobStar
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct DotPathPattern {
+    pub segments: Vec<ResourcePathSegmentPattern>,
+}
+
+impl DotPathPattern {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        if value.is_empty() {
+            return Err(value.to_string());
+        }
+        Ok(Self {
+            segments: value
+                .split('.')
+                .map(parse_resource_path_segment)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+
+    pub fn subsumes(&self, other: &Self) -> bool {
+        resource_segments_subsume(&self.segments, &other.segments)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct PolymorphicDotPathPattern {
+    pub segments: Vec<PolymorphicResourcePathSegmentPattern>,
+}
+
+impl PolymorphicDotPathPattern {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        if value.is_empty() {
+            return Err(value.to_string());
+        }
+        let segments = value
+            .split('.')
+            .map(parse_polymorphic_resource_path_segment)
+            .collect::<Result<Vec<_>, _>>()?;
+        if segments
+            .iter()
+            .any(|segment| matches!(segment, PolymorphicResourcePathSegmentPattern::Slot(_)))
+        {
+            Ok(Self { segments })
+        } else {
+            Err(value.to_string())
+        }
+    }
+}
+
+impl From<DotPathPattern> for PolymorphicDotPathPattern {
+    fn from(value: DotPathPattern) -> Self {
+        Self {
+            segments: value
+                .segments
+                .into_iter()
+                .map(|segment| match segment {
+                    ResourcePathSegmentPattern::Literal(value) => {
+                        PolymorphicResourcePathSegmentPattern::Literal(value)
+                    }
+                    ResourcePathSegmentPattern::Star => PolymorphicResourcePathSegmentPattern::Star,
+                    ResourcePathSegmentPattern::GlobStar => {
+                        PolymorphicResourcePathSegmentPattern::GlobStar
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+fn parse_resource_path_segment(value: &str) -> Result<ResourcePathSegmentPattern, String> {
+    if value.is_empty() {
+        Err(value.to_string())
+    } else if value == "*" {
+        Ok(ResourcePathSegmentPattern::Star)
+    } else if value == "**" {
+        Ok(ResourcePathSegmentPattern::GlobStar)
+    } else if value.contains('*') || value.contains('/') {
+        Err(value.to_string())
+    } else {
+        Ok(ResourcePathSegmentPattern::Literal(ResourceLiteral(
+            value.to_string(),
+        )))
+    }
+}
+
+fn parse_polymorphic_resource_path_segment(
+    value: &str,
+) -> Result<PolymorphicResourcePathSegmentPattern, String> {
+    if let Ok(slot) = SlotVariable::parse(value) {
+        Ok(PolymorphicResourcePathSegmentPattern::Slot(slot))
+    } else {
+        parse_resource_path_segment(value).map(|segment| match segment {
+            ResourcePathSegmentPattern::Literal(value) => {
+                PolymorphicResourcePathSegmentPattern::Literal(value)
+            }
+            ResourcePathSegmentPattern::Star => PolymorphicResourcePathSegmentPattern::Star,
+            ResourcePathSegmentPattern::GlobStar => PolymorphicResourcePathSegmentPattern::GlobStar,
+        })
+    }
+}
+
+fn resource_segments_subsume(
+    left: &[ResourcePathSegmentPattern],
+    right: &[ResourcePathSegmentPattern],
+) -> bool {
+    if left
+        .first()
+        .is_some_and(|segment| matches!(segment, ResourcePathSegmentPattern::GlobStar))
+    {
+        return true;
+    }
+
+    if left.len() != right.len() {
+        return false;
+    }
+
+    left.iter()
+        .zip(right)
+        .all(|(left, right)| match (left, right) {
+            (ResourcePathSegmentPattern::GlobStar, _) => true,
+            (ResourcePathSegmentPattern::Star, ResourcePathSegmentPattern::Literal(_)) => true,
+            (ResourcePathSegmentPattern::Star, ResourcePathSegmentPattern::Star) => true,
+            (ResourcePathSegmentPattern::Literal(a), ResourcePathSegmentPattern::Literal(b)) => {
+                a == b
+            }
+            _ => false,
+        })
 }
 
 pub trait OwnerPattern:
@@ -1183,18 +1389,6 @@ impl PolymorphicPermissionPattern {
 
 fn glob_subsumes(left: &str, right: &str) -> bool {
     left == "**" || left == "*" || left == right
-}
-
-fn glob_matches(pattern: &str, value: &str) -> bool {
-    if pattern == "**" || pattern == "*" {
-        true
-    } else if let Some(prefix) = pattern.strip_suffix("**") {
-        value.starts_with(prefix)
-    } else if let Some(prefix) = pattern.strip_suffix('*') {
-        value.starts_with(prefix)
-    } else {
-        pattern == value
-    }
 }
 
 fn range_subsumes(

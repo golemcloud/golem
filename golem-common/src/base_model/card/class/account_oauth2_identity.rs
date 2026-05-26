@@ -8,7 +8,10 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountOauth2IdentityResourcePattern {
     Any,
-    Identity { provider: String, external_id: String },
+    Identity {
+        provider: String,
+        external_id: String,
+    },
 }
 
 impl AccountOauth2IdentityResourcePattern {

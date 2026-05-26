@@ -8,7 +8,7 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentRetryPolicyResourcePattern {
     Any,
-    Exact(String),
+    Name(ResourceIdentifier),
 }
 
 impl EnvironmentRetryPolicyResourcePattern {
@@ -17,7 +17,7 @@ impl EnvironmentRetryPolicyResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid retry policy name"))
     }
 }
 
@@ -25,8 +25,8 @@ impl Subsumes for EnvironmentRetryPolicyResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (Self::Name(a), Self::Name(b)) => a == b,
+            (Self::Name(_), Self::Any) => false,
         }
     }
 }
@@ -123,9 +123,12 @@ impl EnvironmentRetryPolicyClass {
         if resource == "*" {
             Ok(EnvironmentRetryPolicyResourcePattern::Any)
         } else {
-            Ok(EnvironmentRetryPolicyResourcePattern::Exact(
-                resource.to_string(),
-            ))
+            ResourceIdentifier::parse(resource)
+                .map(EnvironmentRetryPolicyResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentRetryPolicyClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 

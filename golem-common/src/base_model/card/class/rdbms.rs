@@ -2,7 +2,6 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_agent_recipient, parse_environment_owner,
     parse_polymorphic_agent_recipient, parse_polymorphic_environment_owner,
-    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,40 +62,16 @@ impl Subsumes for RdbmsResourcePattern {
                     schema: b_schema,
                     table: b_table,
                 },
-            ) => component_subsumes(a_database, b_database)
-                && component_subsumes(a_schema, b_schema)
-                && component_subsumes(a_table, b_table),
+            ) => {
+                component_subsumes(a_database, b_database)
+                    && component_subsumes(a_schema, b_schema)
+                    && component_subsumes(a_table, b_table)
+            }
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicRdbmsResourcePattern {
-    Table {
-        database: String,
-        schema: String,
-        table: String,
-    },
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
-
-impl From<RdbmsResourcePattern> for PolymorphicRdbmsResourcePattern {
-    fn from(value: RdbmsResourcePattern) -> Self {
-        match value {
-            RdbmsResourcePattern::Table {
-                database,
-                schema,
-                table,
-            } => Self::Table {
-                database,
-                schema,
-                table,
-            },
-        }
-    }
-}
+pub type PolymorphicRdbmsResourcePattern = RdbmsResourcePattern;
 
 impl ResourcePattern for RdbmsResourcePattern {
     type Polymorphic = PolymorphicRdbmsResourcePattern;
@@ -187,14 +162,7 @@ impl RdbmsClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicRdbmsResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicRdbmsResourcePattern::from,
-            PolymorphicRdbmsResourcePattern::Slot,
-            PolymorphicRdbmsResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }
 

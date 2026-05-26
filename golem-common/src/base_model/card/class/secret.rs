@@ -2,15 +2,13 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_agent_recipient, parse_environment_owner,
     parse_polymorphic_agent_recipient, parse_polymorphic_environment_owner,
-    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum SecretResourcePattern {
     Any,
-    Exact(String),
-    Glob(String),
+    Key(DotPathPattern),
 }
 
 impl SecretResourcePattern {
@@ -19,11 +17,11 @@ impl SecretResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Key(DotPathPattern::parse(&value.into()).expect("invalid secret key path"))
     }
 
     pub fn glob(value: impl Into<String>) -> Self {
-        Self::Glob(value.into())
+        Self::exact(value)
     }
 }
 
@@ -31,34 +29,13 @@ impl Subsumes for SecretResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Glob(a), Self::Glob(b)) => glob_subsumes(a, b),
-            (Self::Glob(a), Self::Exact(b)) => glob_matches(a, b),
-            (Self::Glob(_), Self::Any) => false,
-            (Self::Exact(_), Self::Any | Self::Glob(_)) => false,
+            (Self::Key(a), Self::Key(b)) => a.subsumes(b),
+            (Self::Key(_), Self::Any) => false,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicSecretResourcePattern {
-    Any,
-    Exact(String),
-    Glob(String),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
-
-impl From<SecretResourcePattern> for PolymorphicSecretResourcePattern {
-    fn from(value: SecretResourcePattern) -> Self {
-        match value {
-            SecretResourcePattern::Any => Self::Any,
-            SecretResourcePattern::Exact(value) => Self::Exact(value),
-            SecretResourcePattern::Glob(value) => Self::Glob(value),
-        }
-    }
-}
+pub type PolymorphicSecretResourcePattern = SecretResourcePattern;
 
 impl ResourcePattern for SecretResourcePattern {
     type Polymorphic = PolymorphicSecretResourcePattern;
@@ -141,12 +118,15 @@ impl SecretClass {
         _class: &str,
         resource: &str,
     ) -> Result<SecretResourcePattern, CardParseError> {
-        if resource == "*" || resource == "**" {
+        if resource == "*" {
             Ok(SecretResourcePattern::Any)
-        } else if resource.contains('*') {
-            Ok(SecretResourcePattern::Glob(resource.to_string()))
         } else {
-            Ok(SecretResourcePattern::Exact(resource.to_string()))
+            DotPathPattern::parse(resource)
+                .map(SecretResourcePattern::Key)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: SecretClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 
@@ -154,13 +134,6 @@ impl SecretClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicSecretResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicSecretResourcePattern::from,
-            PolymorphicSecretResourcePattern::Slot,
-            PolymorphicSecretResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

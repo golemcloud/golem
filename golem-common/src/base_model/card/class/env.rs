@@ -8,7 +8,7 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvResourcePattern {
     Any,
-    Exact(String),
+    VarName(ResourceIdentifier),
 }
 
 impl EnvResourcePattern {
@@ -17,7 +17,7 @@ impl EnvResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::VarName(ResourceIdentifier::parse(&value.into()).expect("invalid env var name"))
     }
 }
 
@@ -25,28 +25,13 @@ impl Subsumes for EnvResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (Self::VarName(a), Self::VarName(b)) => a == b,
+            (Self::VarName(_), Self::Any) => false,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicEnvResourcePattern {
-    Any,
-    VarName(String),
-    Slot(SlotVariable),
-}
-
-impl From<EnvResourcePattern> for PolymorphicEnvResourcePattern {
-    fn from(value: EnvResourcePattern) -> Self {
-        match value {
-            EnvResourcePattern::Any => Self::Any,
-            EnvResourcePattern::Exact(value) => Self::VarName(value),
-        }
-    }
-}
+pub type PolymorphicEnvResourcePattern = EnvResourcePattern;
 
 impl ResourcePattern for EnvResourcePattern {
     type Polymorphic = PolymorphicEnvResourcePattern;
@@ -125,7 +110,12 @@ impl EnvClass {
         if resource == "*" {
             Ok(EnvResourcePattern::Any)
         } else {
-            Ok(EnvResourcePattern::Exact(resource.to_string()))
+            ResourceIdentifier::parse(resource)
+                .map(EnvResourcePattern::VarName)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 
@@ -133,15 +123,6 @@ impl EnvClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicEnvResourcePattern, CardParseError> {
-        if let Ok(slot) = SlotVariable::parse(resource) {
-            Ok(PolymorphicEnvResourcePattern::Slot(slot))
-        } else if crate::base_model::card::parsing::contains_slot_reference(resource) {
-            Err(CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            })
-        } else {
-            Self::parse_resource(class, resource).map(PolymorphicEnvResourcePattern::from)
-        }
+        Self::parse_resource(class, resource)
     }
 }

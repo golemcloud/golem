@@ -2,7 +2,6 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_agent_recipient, parse_environment_owner,
     parse_polymorphic_agent_recipient, parse_polymorphic_environment_owner,
-    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,21 +60,7 @@ impl Subsumes for BlobResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicBlobResourcePattern {
-    BucketKey { bucket: String, key_pattern: String },
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
-
-impl From<BlobResourcePattern> for PolymorphicBlobResourcePattern {
-    fn from(value: BlobResourcePattern) -> Self {
-        match value {
-            BlobResourcePattern::BucketKey { bucket, key_pattern } => Self::BucketKey { bucket, key_pattern },
-        }
-    }
-}
+pub type PolymorphicBlobResourcePattern = BlobResourcePattern;
 
 impl ResourcePattern for BlobResourcePattern {
     type Polymorphic = PolymorphicBlobResourcePattern;
@@ -167,13 +152,6 @@ impl BlobClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicBlobResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicBlobResourcePattern::from,
-            PolymorphicBlobResourcePattern::Slot,
-            PolymorphicBlobResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

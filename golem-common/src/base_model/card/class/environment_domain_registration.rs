@@ -8,7 +8,27 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentDomainRegistrationResourcePattern {
     Any,
-    Exact(String),
+    Domain(DomainNamePattern),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct DomainNamePattern {
+    pub labels: Vec<ResourceIdentifier>,
+}
+
+impl DomainNamePattern {
+    fn parse(value: &str) -> Result<Self, String> {
+        let labels = value
+            .split('.')
+            .map(ResourceIdentifier::parse)
+            .collect::<Result<Vec<_>, _>>()?;
+        if labels.is_empty() {
+            Err(value.to_string())
+        } else {
+            Ok(Self { labels })
+        }
+    }
 }
 
 impl EnvironmentDomainRegistrationResourcePattern {
@@ -17,7 +37,7 @@ impl EnvironmentDomainRegistrationResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Domain(DomainNamePattern::parse(&value.into()).expect("invalid domain name"))
     }
 }
 
@@ -25,13 +45,14 @@ impl Subsumes for EnvironmentDomainRegistrationResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (Self::Domain(a), Self::Domain(b)) => a == b,
+            (Self::Domain(_), Self::Any) => false,
         }
     }
 }
 
-pub type PolymorphicEnvironmentDomainRegistrationResourcePattern = EnvironmentDomainRegistrationResourcePattern;
+pub type PolymorphicEnvironmentDomainRegistrationResourcePattern =
+    EnvironmentDomainRegistrationResourcePattern;
 
 impl ResourcePattern for EnvironmentDomainRegistrationResourcePattern {
     type Polymorphic = PolymorphicEnvironmentDomainRegistrationResourcePattern;
@@ -119,9 +140,12 @@ impl EnvironmentDomainRegistrationClass {
         if resource == "*" {
             Ok(EnvironmentDomainRegistrationResourcePattern::Any)
         } else {
-            Ok(EnvironmentDomainRegistrationResourcePattern::Exact(
-                resource.to_string(),
-            ))
+            DomainNamePattern::parse(resource)
+                .map(EnvironmentDomainRegistrationResourcePattern::Domain)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentDomainRegistrationClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 

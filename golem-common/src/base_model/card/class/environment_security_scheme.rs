@@ -8,7 +8,7 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentSecuritySchemeResourcePattern {
     Any,
-    Exact(String),
+    Name(ResourceIdentifier),
 }
 
 impl EnvironmentSecuritySchemeResourcePattern {
@@ -17,7 +17,7 @@ impl EnvironmentSecuritySchemeResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid scheme name"))
     }
 }
 
@@ -25,13 +25,14 @@ impl Subsumes for EnvironmentSecuritySchemeResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (Self::Name(a), Self::Name(b)) => a == b,
+            (Self::Name(_), Self::Any) => false,
         }
     }
 }
 
-pub type PolymorphicEnvironmentSecuritySchemeResourcePattern = EnvironmentSecuritySchemeResourcePattern;
+pub type PolymorphicEnvironmentSecuritySchemeResourcePattern =
+    EnvironmentSecuritySchemeResourcePattern;
 
 impl ResourcePattern for EnvironmentSecuritySchemeResourcePattern {
     type Polymorphic = PolymorphicEnvironmentSecuritySchemeResourcePattern;
@@ -123,9 +124,12 @@ impl EnvironmentSecuritySchemeClass {
         if resource == "*" {
             Ok(EnvironmentSecuritySchemeResourcePattern::Any)
         } else {
-            Ok(EnvironmentSecuritySchemeResourcePattern::Exact(
-                resource.to_string(),
-            ))
+            ResourceIdentifier::parse(resource)
+                .map(EnvironmentSecuritySchemeResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentSecuritySchemeClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 

@@ -1,63 +1,40 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_agent_owner, parse_agent_recipient, parse_polymorphic_agent_owner,
-    parse_polymorphic_agent_recipient, parse_polymorphic_resource,
+    parse_polymorphic_agent_recipient,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum FilesystemResourcePattern {
-    Any,
-    Exact(String),
-    Glob(String),
+    Path(SlashPathPattern),
 }
 
 impl FilesystemResourcePattern {
     pub fn any() -> Self {
-        Self::Any
+        Self::Path(SlashPathPattern {
+            segments: vec![ResourcePathSegmentPattern::GlobStar],
+        })
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Path(SlashPathPattern::parse(&value.into()).expect("invalid filesystem path"))
     }
 
     pub fn glob(value: impl Into<String>) -> Self {
-        Self::Glob(value.into())
+        Self::exact(value)
     }
 }
 
 impl Subsumes for FilesystemResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Glob(a), Self::Glob(b)) => glob_subsumes(a, b),
-            (Self::Glob(a), Self::Exact(b)) => glob_matches(a, b),
-            (Self::Glob(_), Self::Any) => false,
-            (Self::Exact(_), Self::Any | Self::Glob(_)) => false,
+            (Self::Path(a), Self::Path(b)) => a.subsumes(b),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicFilesystemResourcePattern {
-    Any,
-    Exact(String),
-    Glob(String),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
-
-impl From<FilesystemResourcePattern> for PolymorphicFilesystemResourcePattern {
-    fn from(value: FilesystemResourcePattern) -> Self {
-        match value {
-            FilesystemResourcePattern::Any => Self::Any,
-            FilesystemResourcePattern::Exact(value) => Self::Exact(value),
-            FilesystemResourcePattern::Glob(value) => Self::Glob(value),
-        }
-    }
-}
+pub type PolymorphicFilesystemResourcePattern = FilesystemResourcePattern;
 
 impl ResourcePattern for FilesystemResourcePattern {
     type Polymorphic = PolymorphicFilesystemResourcePattern;
@@ -145,26 +122,18 @@ impl FilesystemClass {
         _class: &str,
         resource: &str,
     ) -> Result<FilesystemResourcePattern, CardParseError> {
-        if resource == "*" || resource == "**" {
-            Ok(FilesystemResourcePattern::Any)
-        } else if resource.contains('*') {
-            Ok(FilesystemResourcePattern::Glob(resource.to_string()))
-        } else {
-            Ok(FilesystemResourcePattern::Exact(resource.to_string()))
-        }
+        SlashPathPattern::parse(resource)
+            .map(FilesystemResourcePattern::Path)
+            .map_err(|_| CardParseError::InvalidResource {
+                class: FilesystemClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
     }
 
     fn parse_polymorphic_resource(
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicFilesystemResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicFilesystemResourcePattern::from,
-            PolymorphicFilesystemResourcePattern::Slot,
-            PolymorphicFilesystemResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }

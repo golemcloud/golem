@@ -3,12 +3,20 @@ use crate::base_model::card::parsing::{
     CardParseError, parse_account_recipient, parse_empty_owner,
     parse_polymorphic_account_recipient, parse_polymorphic_empty_owner,
 };
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PlanResourcePattern {
     Any,
-    Exact(String),
+    Plan(PlanIdPattern),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PlanIdPattern {
+    Identifier(ResourceIdentifier),
+    Uuid(Uuid),
 }
 
 impl PlanResourcePattern {
@@ -17,7 +25,8 @@ impl PlanResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        let value = value.into();
+        Self::Plan(parse_plan_id(&value).expect("invalid plan id"))
     }
 }
 
@@ -25,8 +34,8 @@ impl Subsumes for PlanResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (Self::Plan(a), Self::Plan(b)) => a == b,
+            (Self::Plan(_), Self::Any) => false,
         }
     }
 }
@@ -114,7 +123,12 @@ impl PlanClass {
         if resource == "*" {
             Ok(PlanResourcePattern::Any)
         } else {
-            Ok(PlanResourcePattern::Exact(resource.to_string()))
+            parse_plan_id(resource)
+                .map(PlanResourcePattern::Plan)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: PlanClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 
@@ -123,5 +137,13 @@ impl PlanClass {
         resource: &str,
     ) -> Result<PolymorphicPlanResourcePattern, CardParseError> {
         Self::parse_resource(class, resource)
+    }
+}
+
+fn parse_plan_id(value: &str) -> Result<PlanIdPattern, String> {
+    if let Ok(uuid) = Uuid::parse_str(value) {
+        Ok(PlanIdPattern::Uuid(uuid))
+    } else {
+        ResourceIdentifier::parse(value).map(PlanIdPattern::Identifier)
     }
 }

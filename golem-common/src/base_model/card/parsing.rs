@@ -452,6 +452,12 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
 ) -> Result<PolymorphicPermissionPattern, CardParseError> {
     let owner = C::parse_polymorphic_owner(owner)?;
     let recipient = C::parse_polymorphic_recipient(recipient)?;
+    if contains_slot_reference(resource) {
+        return Err(CardParseError::InvalidResource {
+            class: C::NAME.to_string(),
+            resource: resource.to_string(),
+        });
+    }
     let resource = C::parse_polymorphic_resource(resource)?;
     let pattern = if verb == "*" {
         PolymorphicClassPermissionPattern::<C>::Any {
@@ -647,39 +653,6 @@ where
     }
 
     parse_concrete(class, owner).map(concrete)
-}
-
-pub(crate) fn parse_polymorphic_resource<T, U, Parse, Concrete, Slot, Template>(
-    class: &str,
-    resource: &str,
-    parse_concrete: Parse,
-    concrete: Concrete,
-    slot: Slot,
-    template: Template,
-) -> Result<T, CardParseError>
-where
-    Parse: Fn(&str, &str) -> Result<U, CardParseError>,
-    Concrete: Fn(U) -> T,
-    Slot: Fn(SlotVariable) -> T,
-    Template: Fn(ResourceTemplate) -> T,
-{
-    if let Ok(variable) = SlotVariable::parse(resource) {
-        return Ok(slot(variable));
-    }
-
-    if contains_slot_reference(resource) {
-        return Ok(template(ResourceTemplate::parse(resource).map_err(
-            |_| CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            },
-        )?));
-    }
-
-    match parse_concrete(class, resource) {
-        Ok(resource) => Ok(concrete(resource)),
-        Err(err) => Err(err),
-    }
 }
 
 pub(crate) fn contains_slot_reference(value: &str) -> bool {

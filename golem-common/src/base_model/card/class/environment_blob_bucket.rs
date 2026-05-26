@@ -8,7 +8,7 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentBlobBucketResourcePattern {
     Any,
-    Exact(String),
+    Name(ResourceIdentifier),
 }
 
 impl EnvironmentBlobBucketResourcePattern {
@@ -17,7 +17,7 @@ impl EnvironmentBlobBucketResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid blob bucket name"))
     }
 }
 
@@ -25,8 +25,8 @@ impl Subsumes for EnvironmentBlobBucketResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (Self::Name(a), Self::Name(b)) => a == b,
+            (Self::Name(_), Self::Any) => false,
         }
     }
 }
@@ -121,9 +121,12 @@ impl EnvironmentBlobBucketClass {
         if resource == "*" {
             Ok(EnvironmentBlobBucketResourcePattern::Any)
         } else {
-            Ok(EnvironmentBlobBucketResourcePattern::Exact(
-                resource.to_string(),
-            ))
+            ResourceIdentifier::parse(resource)
+                .map(EnvironmentBlobBucketResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentBlobBucketClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 

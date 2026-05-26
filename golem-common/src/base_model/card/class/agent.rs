@@ -3,16 +3,24 @@ use crate::base_model::card::parsing::{
     CardParseError, parse_agent_owner, parse_agent_recipient, parse_polymorphic_agent_owner,
     parse_polymorphic_agent_recipient,
 };
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentResourcePattern {
     Any,
     Empty,
-    Method(String),
+    Method(ResourceIdentifier),
     OplogIndex(u64),
-    InvocationId(String),
-    PluginName(String),
+    InvocationId(AgentInvocationIdPattern),
+    PluginName(ResourceIdentifier),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum AgentInvocationIdPattern {
+    Uuid(Uuid),
+    Identifier(ResourceIdentifier),
 }
 
 impl AgentResourcePattern {
@@ -25,7 +33,7 @@ impl AgentResourcePattern {
     }
 
     pub fn method(method: impl Into<String>) -> Self {
-        Self::Method(method.into())
+        Self::Method(ResourceIdentifier::parse(&method.into()).expect("invalid method name"))
     }
 }
 
@@ -145,10 +153,12 @@ impl AgentClass {
             Ok(AgentResourcePattern::Empty)
         } else if let Ok(index) = resource.parse::<u64>() {
             Ok(AgentResourcePattern::OplogIndex(index))
-        } else if uuid::Uuid::parse_str(resource).is_ok() {
-            Ok(AgentResourcePattern::InvocationId(resource.to_string()))
-        } else if is_identifier(resource) {
-            Ok(AgentResourcePattern::Method(resource.to_string()))
+        } else if let Ok(uuid) = Uuid::parse_str(resource) {
+            Ok(AgentResourcePattern::InvocationId(
+                AgentInvocationIdPattern::Uuid(uuid),
+            ))
+        } else if let Ok(identifier) = ResourceIdentifier::parse(resource) {
+            Ok(AgentResourcePattern::Method(identifier))
         } else {
             Err(CardParseError::InvalidResource {
                 class: class.to_string(),
@@ -163,12 +173,4 @@ impl AgentClass {
     ) -> Result<PolymorphicAgentResourcePattern, CardParseError> {
         Self::parse_resource(class, resource)
     }
-}
-
-fn is_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }

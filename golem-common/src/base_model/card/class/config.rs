@@ -1,15 +1,14 @@
 use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_agent_owner, parse_agent_recipient, parse_polymorphic_agent_owner,
-    parse_polymorphic_agent_recipient, parse_polymorphic_resource,
+    parse_polymorphic_agent_recipient,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ConfigResourcePattern {
     Any,
-    Exact(String),
-    Glob(String),
+    Key(DotPathPattern),
 }
 
 impl ConfigResourcePattern {
@@ -18,11 +17,11 @@ impl ConfigResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Key(DotPathPattern::parse(&value.into()).expect("invalid config key path"))
     }
 
     pub fn glob(value: impl Into<String>) -> Self {
-        Self::Glob(value.into())
+        Self::exact(value)
     }
 }
 
@@ -30,34 +29,13 @@ impl Subsumes for ConfigResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Glob(a), Self::Glob(b)) => glob_subsumes(a, b),
-            (Self::Glob(a), Self::Exact(b)) => glob_matches(a, b),
-            (Self::Glob(_), Self::Any) => false,
-            (Self::Exact(_), Self::Any | Self::Glob(_)) => false,
+            (Self::Key(a), Self::Key(b)) => a.subsumes(b),
+            (Self::Key(_), Self::Any) => false,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicConfigResourcePattern {
-    Any,
-    Exact(String),
-    Glob(String),
-    Slot(SlotVariable),
-    Template(ResourceTemplate),
-}
-
-impl From<ConfigResourcePattern> for PolymorphicConfigResourcePattern {
-    fn from(value: ConfigResourcePattern) -> Self {
-        match value {
-            ConfigResourcePattern::Any => Self::Any,
-            ConfigResourcePattern::Exact(value) => Self::Exact(value),
-            ConfigResourcePattern::Glob(value) => Self::Glob(value),
-        }
-    }
-}
+pub type PolymorphicConfigResourcePattern = ConfigResourcePattern;
 
 impl ResourcePattern for ConfigResourcePattern {
     type Polymorphic = PolymorphicConfigResourcePattern;
@@ -136,12 +114,15 @@ impl ConfigClass {
         _class: &str,
         resource: &str,
     ) -> Result<ConfigResourcePattern, CardParseError> {
-        if resource == "*" || resource == "**" {
+        if resource == "*" {
             Ok(ConfigResourcePattern::Any)
-        } else if resource.contains('*') {
-            Ok(ConfigResourcePattern::Glob(resource.to_string()))
         } else {
-            Ok(ConfigResourcePattern::Exact(resource.to_string()))
+            DotPathPattern::parse(resource)
+                .map(ConfigResourcePattern::Key)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: ConfigClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 
@@ -149,13 +130,6 @@ impl ConfigClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicConfigResourcePattern, CardParseError> {
-        parse_polymorphic_resource(
-            class,
-            resource,
-            Self::parse_resource,
-            PolymorphicConfigResourcePattern::from,
-            PolymorphicConfigResourcePattern::Slot,
-            PolymorphicConfigResourcePattern::Template,
-        )
+        Self::parse_resource(class, resource)
     }
 }
