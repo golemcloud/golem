@@ -435,47 +435,46 @@ fn parses_admin_class_examples() {
 #[test]
 fn parses_polymorphic_pattern_grant_with_slot_paths() {
     let grant =
-        parse_polymorphic_pattern_grant("secret(?env) @ ?self : reveal : billing.?account.*")
+        parse_polymorphic_pattern_grant("secret(?env) @ ?slot : reveal : billing.?account.*")
             .unwrap();
 
     assert_matches!(
         grant.permission,
         PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Reveal {
             owner: PolymorphicEnvironmentOwnerPattern::Slot(SlotVariable(owner)),
-            recipient: PolymorphicAgentRecipientPattern::Slot(SlotVariable(recipient)),
+            recipient: PolymorphicAgentRecipientPattern::Slot(recipient),
             resource: PolymorphicGlobResourcePattern::Template(resource),
             ..
-        }) if owner == "env" && recipient == "self" && resource == "billing.?account.*"
+        }) if owner == "env" && recipient == RecipientPathSlot::Slot && resource == "billing.?account.*"
     );
 }
 
 #[test]
 fn parses_polymorphic_resource_slots_and_templates() {
-    let env = parse_polymorphic_pattern_grant("env(?self) @ ?self : read : ?env_var").unwrap();
+    let env = parse_polymorphic_pattern_grant("env(?self) @ ?slot : read : ?env_var").unwrap();
     assert_matches!(
         env.permission,
         PolymorphicPermissionPattern::Env(PolymorphicEnvPermissionPattern::Read {
             owner: PolymorphicAgentOwnerPattern::Slot(SlotVariable(owner)),
-            recipient: PolymorphicAgentRecipientPattern::Slot(SlotVariable(recipient)),
+            recipient: PolymorphicAgentRecipientPattern::Slot(recipient),
             resource: PolymorphicIdentifierResourcePattern::Slot(SlotVariable(name)),
             ..
-        }) if owner == "self" && recipient == "self" && name == "env_var"
+        }) if owner == "self" && recipient == RecipientPathSlot::Slot && name == "env_var"
     );
 
-    let card =
-        parse_polymorphic_pattern_grant("card(?account) @ ?account : install : ?self").unwrap();
+    let card = parse_polymorphic_pattern_grant("card(?account) @ ?slot : install : ?self").unwrap();
     assert_matches!(
         card.permission,
         PolymorphicPermissionPattern::Card(PolymorphicCardPermissionPattern::Install {
             owner: PolymorphicAccountOwnerPattern::Slot(SlotVariable(owner)),
-            recipient: PolymorphicAgentRecipientPattern::Slot(SlotVariable(recipient)),
+            recipient: PolymorphicAgentRecipientPattern::Slot(recipient),
             resource: PolymorphicCardResourcePattern::Slot(SlotVariable(name)),
             ..
-        }) if owner == "account" && recipient == "account" && name == "self"
+        }) if owner == "account" && recipient == RecipientPathSlot::Slot && name == "self"
     );
 
     let card =
-        parse_polymorphic_pattern_grant("card(?account) @ ?account : install : acme/shop/?env/*/*")
+        parse_polymorphic_pattern_grant("card(?account) @ ?slot : install : acme/shop/?env/*/*")
             .unwrap();
     assert_matches!(
         card.permission,
@@ -489,7 +488,7 @@ fn parses_polymorphic_resource_slots_and_templates() {
 #[test]
 fn parses_polymorphic_recipient_templates_and_concrete_paths() {
     let grant = parse_polymorphic_pattern_grant(
-        "secret(?env) @ ?env/*/ShoppingCart(*) : hold : cart.api-key",
+        "secret(?env) @ ?env/cart-svc/ShoppingCart(*) : hold : cart.api-key",
     )
     .unwrap();
 
@@ -498,7 +497,7 @@ fn parses_polymorphic_recipient_templates_and_concrete_paths() {
         PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Hold {
             recipient: PolymorphicAgentRecipientPattern::Template(recipient),
             ..
-        }) if recipient == "?env/*/ShoppingCart(*)"
+        }) if recipient == RecipientPathTemplate::parse("?env/cart-svc/ShoppingCart(*)").unwrap()
     );
 
     let grant = parse_polymorphic_pattern_grant(
@@ -529,7 +528,7 @@ fn generate_hierarchy_slot_parser_tests(r: &mut DynamicTestRegistration) {
             TestProperties::unit_test(),
             || {
                 let grant = parse_polymorphic_pattern_grant(&format!(
-                    "secret({slot}) @ {slot} : reveal : secret.{slot}"
+                    "secret({slot}) @ ?slot : reveal : secret.{slot}"
                 ))
                 .unwrap();
                 let name = slot.trim_start_matches('?').to_string();
@@ -538,10 +537,10 @@ fn generate_hierarchy_slot_parser_tests(r: &mut DynamicTestRegistration) {
                     grant.permission,
                     PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Reveal {
                         owner: PolymorphicEnvironmentOwnerPattern::Slot(SlotVariable(owner)),
-                        recipient: PolymorphicAgentRecipientPattern::Slot(SlotVariable(recipient)),
+                        recipient: PolymorphicAgentRecipientPattern::Slot(recipient),
                         resource: PolymorphicGlobResourcePattern::Template(resource),
                         ..
-                    }) if owner == name && recipient == name && resource == format!("secret.{slot}")
+                    }) if owner == name && recipient == RecipientPathSlot::Slot && resource == format!("secret.{slot}")
                 );
             }
         );
@@ -551,7 +550,7 @@ fn generate_hierarchy_slot_parser_tests(r: &mut DynamicTestRegistration) {
 #[test]
 fn parses_polymorphic_owner_templates() {
     let grant =
-        parse_polymorphic_pattern_grant("agent(?env/*/PaymentAgent(*)) @ ?self : invoke : charge")
+        parse_polymorphic_pattern_grant("agent(?env/*/PaymentAgent(*)) @ ?slot : invoke : charge")
             .unwrap();
 
     assert_matches!(
@@ -560,6 +559,32 @@ fn parses_polymorphic_owner_templates() {
             owner: PolymorphicAgentOwnerPattern::Template(owner),
             ..
         }) if owner == "?env/*/PaymentAgent(*)"
+    );
+}
+
+#[test]
+fn parses_only_declared_polymorphic_recipient_slots() {
+    let grant = parse_polymorphic_pattern_grant("environment(?env) @ ?env : view :").unwrap();
+
+    assert_matches!(
+        grant.permission,
+        PolymorphicPermissionPattern::Environment(PolymorphicEnvironmentPermissionPattern::View {
+            recipient: PolymorphicEnvironmentRecipientPattern::Slot(RecipientPathSlot::Env),
+            ..
+        })
+    );
+
+    assert_matches!(
+        parse_polymorphic_pattern_grant("secret(?env) @ ?self : reveal : billing.*"),
+        Err(CardParseError::InvalidRecipientPath(path)) if path == "?self"
+    );
+    assert_matches!(
+        parse_polymorphic_pattern_grant("secret(?env) @ ?account : reveal : billing.*"),
+        Err(CardParseError::InvalidRecipientPath(path)) if path == "?account"
+    );
+    assert_matches!(
+        parse_polymorphic_pattern_grant("secret(?env) @ ?env : reveal : billing.*"),
+        Err(CardParseError::InvalidRecipientPath(path)) if path == "?env"
     );
 }
 

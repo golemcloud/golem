@@ -60,6 +60,89 @@ pub enum RecipientPathPattern {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum RecipientPathSlot {
+    Env,
+    Slot,
+}
+
+impl RecipientPathSlot {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "?env" => Ok(Self::Env),
+            "?slot" => Ok(Self::Slot),
+            _ => Err(value.to_string()),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Env => "?env",
+            Self::Slot => "?slot",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum RecipientPathTemplateSegment {
+    Exact(String),
+    Wildcard,
+    Slot(RecipientPathSlot),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct RecipientPathTemplate {
+    pub segments: Vec<RecipientPathTemplateSegment>,
+}
+
+impl RecipientPathTemplate {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        if value.is_empty() {
+            return Err(value.to_string());
+        }
+
+        let segments = value.split('/').collect::<Vec<_>>();
+        if segments.iter().any(|segment| segment.is_empty())
+            || has_segment_after_wildcard_segment(&segments)
+        {
+            return Err(value.to_string());
+        }
+
+        let mut parsed = Vec::with_capacity(segments.len());
+        for segment in segments {
+            parsed.push(match segment {
+                "*" => RecipientPathTemplateSegment::Wildcard,
+                value if value.starts_with('?') => {
+                    RecipientPathTemplateSegment::Slot(RecipientPathSlot::parse(value)?)
+                }
+                value => RecipientPathTemplateSegment::Exact(value.to_string()),
+            });
+        }
+
+        Ok(Self { segments: parsed })
+    }
+
+    pub fn validation_path(&self) -> String {
+        let mut segments = Vec::new();
+        for segment in &self.segments {
+            match segment {
+                RecipientPathTemplateSegment::Exact(value) => segments.push(value.as_str()),
+                RecipientPathTemplateSegment::Wildcard => segments.push("*"),
+                RecipientPathTemplateSegment::Slot(RecipientPathSlot::Env) => {
+                    segments.extend(["__account__", "__application__", "__environment__"]);
+                }
+                RecipientPathTemplateSegment::Slot(RecipientPathSlot::Slot) => {
+                    segments.push("__slot__");
+                }
+            }
+        }
+        segments.join("/")
+    }
+}
+
 impl RecipientPathPattern {
     pub fn any() -> Self {
         Self::Any
@@ -503,7 +586,7 @@ fn parse_exact_segments(value: &str) -> Result<Vec<&str>, String> {
     let segments = value.split('/').collect::<Vec<_>>();
     if segments.first() == Some(&"*")
         || segments.iter().any(|s| s.is_empty())
-        || has_concrete_after_wildcard_segment(&segments)
+        || has_segment_after_wildcard_segment(&segments)
     {
         Err(value.to_string())
     } else {
@@ -511,7 +594,7 @@ fn parse_exact_segments(value: &str) -> Result<Vec<&str>, String> {
     }
 }
 
-fn has_concrete_after_wildcard_segment(segments: &[&str]) -> bool {
+fn has_segment_after_wildcard_segment(segments: &[&str]) -> bool {
     let mut seen_wildcard = false;
     for segment in segments {
         match *segment {

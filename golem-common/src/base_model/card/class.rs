@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::{RecipientPathPattern, SlotVariable};
+use crate::base_model::card::{
+    RecipientPathPattern, RecipientPathSlot, RecipientPathTemplate, SlotVariable,
+};
 use serde::{Deserialize, Serialize};
 
 pub(crate) trait PermissionSubsumes {
@@ -447,8 +449,8 @@ macro_rules! define_polymorphic_recipient_pattern {
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum $name {
             Concrete($concrete),
-            Slot(SlotVariable),
-            Template(String),
+            Slot(RecipientPathSlot),
+            Template(RecipientPathTemplate),
         }
     };
 }

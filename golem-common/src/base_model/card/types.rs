@@ -19,8 +19,8 @@ use crate::base_model::card::{
     FilesystemPermissionPattern, GlobResourcePattern, IdentifierResourcePattern,
     KvPermissionPattern, NetworkPermissionPattern, NetworkResourcePattern, OplogPermissionPattern,
     OplogResourcePattern, PermissionPattern, PolymorphicPermissionPattern, PortPattern,
-    RdbmsPermissionPattern, RecipientPathPattern, SecretPermissionPattern, ToolOwnerPattern,
-    ToolPermissionPattern, ToolResourcePattern,
+    RdbmsPermissionPattern, RecipientPathPattern, RecipientPathSlot, RecipientPathTemplate,
+    SecretPermissionPattern, ToolOwnerPattern, ToolPermissionPattern, ToolResourcePattern,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,14 @@ impl SlotVariable {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PolymorphicRecipientPathPattern {
+    Concrete(RecipientPathPattern),
+    Slot(RecipientPathSlot),
+    Template(RecipientPathTemplate),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,14 +239,6 @@ impl PatternGrant {
             resource: CardResourcePattern::InstallTarget(target),
         }))
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicRecipientPathPattern {
-    Concrete(RecipientPathPattern),
-    Slot(SlotVariable),
-    Template(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

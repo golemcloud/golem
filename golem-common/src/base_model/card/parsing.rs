@@ -402,18 +402,30 @@ fn parse_polymorphic_typed_recipient<T, U, Parse, Concrete, Slot, Template>(
 where
     Parse: Fn(&str) -> Result<U, CardParseError>,
     Concrete: Fn(U) -> T,
-    Slot: Fn(SlotVariable) -> T,
-    Template: Fn(String) -> T,
+    Slot: Fn(RecipientPathSlot) -> T,
+    Template: Fn(RecipientPathTemplate) -> T,
 {
-    if let Ok(variable) = SlotVariable::parse(value) {
-        return Ok(slot(variable));
+    if let Ok(recipient_slot) = RecipientPathSlot::parse(value) {
+        match recipient_slot {
+            RecipientPathSlot::Slot => return Ok(slot(recipient_slot)),
+            RecipientPathSlot::Env => {
+                let template = RecipientPathTemplate::parse(value)
+                    .map_err(CardParseError::InvalidRecipientPath)?;
+                let validation_path = template.validation_path();
+                parse_concrete(&validation_path)
+                    .map_err(|_| CardParseError::InvalidRecipientPath(value.to_string()))?;
+                return Ok(slot(recipient_slot));
+            }
+        }
     }
 
     if contains_slot_reference(value) {
-        if value != "*" && (value.is_empty() || value.split('/').any(str::is_empty)) {
-            return Err(CardParseError::InvalidRecipientPath(value.to_string()));
-        }
-        return Ok(template(value.to_string()));
+        let recipient_template =
+            RecipientPathTemplate::parse(value).map_err(CardParseError::InvalidRecipientPath)?;
+        let validation_path = recipient_template.validation_path();
+        parse_concrete(&validation_path)
+            .map_err(|_| CardParseError::InvalidRecipientPath(value.to_string()))?;
+        return Ok(template(recipient_template));
     }
 
     parse_concrete(value).map(concrete)
