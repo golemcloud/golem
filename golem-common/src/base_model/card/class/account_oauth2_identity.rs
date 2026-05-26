@@ -61,6 +61,55 @@ impl PermissionClass for AccountOauth2IdentityClass {
     type Recipient = AccountRecipientPattern;
     type Resource = AccountOauth2IdentityResourcePattern;
     const NAME: &'static str = "account.oauth2-identity";
+
+    fn parse_verb(verb: &str) -> Option<Self::Verb> {
+        match verb {
+            "view" => Some(Self::Verb::View),
+            "link" => Some(Self::Verb::Link),
+            "delete" => Some(Self::Verb::Delete),
+            _ => None,
+        }
+    }
+
+    fn parse_owner(owner: &str) -> Result<Self::Owner, CardParseError> {
+        parse_account_owner(Self::NAME, owner)
+    }
+
+    fn parse_recipient(recipient: &str) -> Result<Self::Recipient, CardParseError> {
+        parse_account_recipient(recipient)
+    }
+
+    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
+        Self::parse_resource(Self::NAME, resource)
+    }
+
+    fn parse_polymorphic_owner(
+        owner: &str,
+    ) -> Result<<Self::Owner as OwnerPattern>::Polymorphic, CardParseError> {
+        parse_polymorphic_account_owner(Self::NAME, owner)
+    }
+
+    fn parse_polymorphic_recipient(
+        recipient: &str,
+    ) -> Result<<Self::Recipient as RecipientPattern>::Polymorphic, CardParseError> {
+        parse_polymorphic_account_recipient(recipient)
+    }
+
+    fn parse_polymorphic_resource(
+        resource: &str,
+    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
+        Self::parse_polymorphic_resource(Self::NAME, resource)
+    }
+
+    fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
+        PermissionPattern::AccountOauth2Identity(pattern)
+    }
+
+    fn into_polymorphic_permission(
+        pattern: PolymorphicClassPermissionPattern<Self>,
+    ) -> PolymorphicPermissionPattern {
+        PolymorphicPermissionPattern::AccountOauth2Identity(pattern)
+    }
 }
 
 pub type AccountOauth2IdentityPermissionPattern =
@@ -69,92 +118,6 @@ pub type PolymorphicAccountOauth2IdentityPermissionPattern =
     PolymorphicClassPermissionPattern<AccountOauth2IdentityClass>;
 
 impl AccountOauth2IdentityClass {
-    pub(crate) fn parse_permission(
-        owner: &str,
-        recipient: &str,
-        verb: &str,
-        resource: &str,
-    ) -> Result<PermissionPattern, CardParseError> {
-        let owner = parse_account_owner(Self::NAME, owner)?;
-        let recipient = parse_account_recipient(recipient)?;
-        let resource = Self::parse_resource(Self::NAME, resource)?;
-        Ok(PermissionPattern::AccountOauth2Identity(match verb {
-            "*" => AccountOauth2IdentityPermissionPattern::Any {
-                owner,
-                recipient,
-                resource,
-            },
-            "view" => AccountOauth2IdentityPermissionPattern::Verb {
-                verb: AccountOauth2IdentityVerb::View,
-                owner,
-                recipient,
-                resource,
-            },
-            "link" => AccountOauth2IdentityPermissionPattern::Verb {
-                verb: AccountOauth2IdentityVerb::Link,
-                owner,
-                recipient,
-                resource,
-            },
-            "delete" => AccountOauth2IdentityPermissionPattern::Verb {
-                verb: AccountOauth2IdentityVerb::Delete,
-                owner,
-                recipient,
-                resource,
-            },
-            other => {
-                return Err(CardParseError::UnknownVerb {
-                    class: Self::NAME.to_string(),
-                    verb: other.to_string(),
-                });
-            }
-        }))
-    }
-
-    pub(crate) fn parse_polymorphic_permission(
-        owner: &str,
-        recipient: &str,
-        verb: &str,
-        resource: &str,
-    ) -> Result<PolymorphicPermissionPattern, CardParseError> {
-        let owner = parse_polymorphic_account_owner(Self::NAME, owner)?;
-        let recipient = parse_polymorphic_account_recipient(recipient)?;
-        let resource = Self::parse_polymorphic_resource(Self::NAME, resource)?;
-        Ok(PolymorphicPermissionPattern::AccountOauth2Identity(
-            match verb {
-                "*" => PolymorphicAccountOauth2IdentityPermissionPattern::Any {
-                    owner,
-                    recipient,
-                    resource,
-                },
-                "view" => PolymorphicAccountOauth2IdentityPermissionPattern::Verb {
-                    verb: AccountOauth2IdentityVerb::View,
-                    owner,
-                    recipient,
-                    resource,
-                },
-                "link" => PolymorphicAccountOauth2IdentityPermissionPattern::Verb {
-                    verb: AccountOauth2IdentityVerb::Link,
-                    owner,
-                    recipient,
-                    resource,
-                },
-                "delete" => PolymorphicAccountOauth2IdentityPermissionPattern::Verb {
-                    verb: AccountOauth2IdentityVerb::Delete,
-                    owner,
-                    recipient,
-                    resource,
-                },
-                other => {
-                    return Err(CardParseError::UnknownVerb {
-                        class: Self::NAME.to_string(),
-                        verb: other.to_string(),
-                    });
-                }
-            },
-        ))
-    }
-
     fn parse_resource(
         _class: &str,
         resource: &str,

@@ -50,6 +50,61 @@ impl PermissionClass for EnvironmentClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentResourcePattern;
     const NAME: &'static str = "environment";
+
+    fn parse_verb(verb: &str) -> Option<Self::Verb> {
+        match verb {
+            "view" => Some(Self::Verb::View),
+            "create" => Some(Self::Verb::Create),
+            "update" => Some(Self::Verb::Update),
+            "delete" => Some(Self::Verb::Delete),
+            "restore" => Some(Self::Verb::Restore),
+            "deploy" => Some(Self::Verb::Deploy),
+            "rollback" => Some(Self::Verb::Rollback),
+            "view-deployment-plan" => Some(Self::Verb::ViewDeploymentPlan),
+            "write-deployment-record" => Some(Self::Verb::WriteDeploymentRecord),
+            _ => None,
+        }
+    }
+
+    fn parse_owner(owner: &str) -> Result<Self::Owner, CardParseError> {
+        parse_environment_owner(Self::NAME, owner)
+    }
+
+    fn parse_recipient(recipient: &str) -> Result<Self::Recipient, CardParseError> {
+        parse_environment_recipient(recipient)
+    }
+
+    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
+        Self::parse_resource(Self::NAME, resource)
+    }
+
+    fn parse_polymorphic_owner(
+        owner: &str,
+    ) -> Result<<Self::Owner as OwnerPattern>::Polymorphic, CardParseError> {
+        parse_polymorphic_environment_owner(Self::NAME, owner)
+    }
+
+    fn parse_polymorphic_recipient(
+        recipient: &str,
+    ) -> Result<<Self::Recipient as RecipientPattern>::Polymorphic, CardParseError> {
+        parse_polymorphic_environment_recipient(recipient)
+    }
+
+    fn parse_polymorphic_resource(
+        resource: &str,
+    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
+        Self::parse_polymorphic_resource(Self::NAME, resource)
+    }
+
+    fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
+        PermissionPattern::Environment(pattern)
+    }
+
+    fn into_polymorphic_permission(
+        pattern: PolymorphicClassPermissionPattern<Self>,
+    ) -> PolymorphicPermissionPattern {
+        PolymorphicPermissionPattern::Environment(pattern)
+    }
 }
 
 pub type EnvironmentPermissionPattern = ClassPermissionPattern<EnvironmentClass>;
@@ -57,162 +112,6 @@ pub type PolymorphicEnvironmentPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentClass>;
 
 impl EnvironmentClass {
-    pub(crate) fn parse_permission(
-        owner: &str,
-        recipient: &str,
-        verb: &str,
-        resource: &str,
-    ) -> Result<PermissionPattern, CardParseError> {
-        let owner = parse_environment_owner(Self::NAME, owner)?;
-        let recipient = parse_environment_recipient(recipient)?;
-        let resource = Self::parse_resource(Self::NAME, resource)?;
-        Ok(PermissionPattern::Environment(match verb {
-            "*" => EnvironmentPermissionPattern::Any {
-                owner,
-                recipient,
-                resource,
-            },
-            "view" => EnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::View,
-                owner,
-                recipient,
-                resource,
-            },
-            "create" => EnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Create,
-                owner,
-                recipient,
-                resource,
-            },
-            "update" => EnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Update,
-                owner,
-                recipient,
-                resource,
-            },
-            "delete" => EnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Delete,
-                owner,
-                recipient,
-                resource,
-            },
-            "restore" => EnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Restore,
-                owner,
-                recipient,
-                resource,
-            },
-            "deploy" => EnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Deploy,
-                owner,
-                recipient,
-                resource,
-            },
-            "rollback" => EnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Rollback,
-                owner,
-                recipient,
-                resource,
-            },
-            "view-deployment-plan" => EnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::ViewDeploymentPlan,
-                owner,
-                recipient,
-                resource,
-            },
-            "write-deployment-record" => EnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::WriteDeploymentRecord,
-                owner,
-                recipient,
-                resource,
-            },
-            other => {
-                return Err(CardParseError::UnknownVerb {
-                    class: Self::NAME.to_string(),
-                    verb: other.to_string(),
-                });
-            }
-        }))
-    }
-
-    pub(crate) fn parse_polymorphic_permission(
-        owner: &str,
-        recipient: &str,
-        verb: &str,
-        resource: &str,
-    ) -> Result<PolymorphicPermissionPattern, CardParseError> {
-        let owner = parse_polymorphic_environment_owner(Self::NAME, owner)?;
-        let recipient = parse_polymorphic_environment_recipient(recipient)?;
-        let resource = Self::parse_polymorphic_resource(Self::NAME, resource)?;
-        Ok(PolymorphicPermissionPattern::Environment(match verb {
-            "*" => PolymorphicEnvironmentPermissionPattern::Any {
-                owner,
-                recipient,
-                resource,
-            },
-            "view" => PolymorphicEnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::View,
-                owner,
-                recipient,
-                resource,
-            },
-            "create" => PolymorphicEnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Create,
-                owner,
-                recipient,
-                resource,
-            },
-            "update" => PolymorphicEnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Update,
-                owner,
-                recipient,
-                resource,
-            },
-            "delete" => PolymorphicEnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Delete,
-                owner,
-                recipient,
-                resource,
-            },
-            "restore" => PolymorphicEnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Restore,
-                owner,
-                recipient,
-                resource,
-            },
-            "deploy" => PolymorphicEnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Deploy,
-                owner,
-                recipient,
-                resource,
-            },
-            "rollback" => PolymorphicEnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::Rollback,
-                owner,
-                recipient,
-                resource,
-            },
-            "view-deployment-plan" => PolymorphicEnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::ViewDeploymentPlan,
-                owner,
-                recipient,
-                resource,
-            },
-            "write-deployment-record" => PolymorphicEnvironmentPermissionPattern::Verb {
-                verb: EnvironmentVerb::WriteDeploymentRecord,
-                owner,
-                recipient,
-                resource,
-            },
-            other => {
-                return Err(CardParseError::UnknownVerb {
-                    class: Self::NAME.to_string(),
-                    verb: other.to_string(),
-                });
-            }
-        }))
-    }
-
     fn parse_resource(
         class: &str,
         resource: &str,

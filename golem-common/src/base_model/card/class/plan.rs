@@ -61,96 +61,61 @@ impl PermissionClass for PlanClass {
     type Recipient = AccountRecipientPattern;
     type Resource = PlanResourcePattern;
     const NAME: &'static str = "plan";
+
+    fn parse_verb(verb: &str) -> Option<Self::Verb> {
+        match verb {
+            "view" => Some(Self::Verb::View),
+            "create" => Some(Self::Verb::Create),
+            "update" => Some(Self::Verb::Update),
+            _ => None,
+        }
+    }
+
+    fn parse_owner(owner: &str) -> Result<Self::Owner, CardParseError> {
+        parse_empty_owner(Self::NAME, owner)
+    }
+
+    fn parse_recipient(recipient: &str) -> Result<Self::Recipient, CardParseError> {
+        parse_account_recipient(recipient)
+    }
+
+    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
+        Self::parse_resource(Self::NAME, resource)
+    }
+
+    fn parse_polymorphic_owner(
+        owner: &str,
+    ) -> Result<<Self::Owner as OwnerPattern>::Polymorphic, CardParseError> {
+        parse_polymorphic_empty_owner(Self::NAME, owner)
+    }
+
+    fn parse_polymorphic_recipient(
+        recipient: &str,
+    ) -> Result<<Self::Recipient as RecipientPattern>::Polymorphic, CardParseError> {
+        parse_polymorphic_account_recipient(recipient)
+    }
+
+    fn parse_polymorphic_resource(
+        resource: &str,
+    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
+        Self::parse_polymorphic_resource(Self::NAME, resource)
+    }
+
+    fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
+        PermissionPattern::Plan(pattern)
+    }
+
+    fn into_polymorphic_permission(
+        pattern: PolymorphicClassPermissionPattern<Self>,
+    ) -> PolymorphicPermissionPattern {
+        PolymorphicPermissionPattern::Plan(pattern)
+    }
 }
 
 pub type PlanPermissionPattern = ClassPermissionPattern<PlanClass>;
 pub type PolymorphicPlanPermissionPattern = PolymorphicClassPermissionPattern<PlanClass>;
 
 impl PlanClass {
-    pub(crate) fn parse_permission(
-        owner: &str,
-        recipient: &str,
-        verb: &str,
-        resource: &str,
-    ) -> Result<PermissionPattern, CardParseError> {
-        let owner = parse_empty_owner(Self::NAME, owner)?;
-        let recipient = parse_account_recipient(recipient)?;
-        let resource = Self::parse_resource(Self::NAME, resource)?;
-        Ok(PermissionPattern::Plan(match verb {
-            "*" => PlanPermissionPattern::Any {
-                owner,
-                recipient,
-                resource,
-            },
-            "view" => PlanPermissionPattern::Verb {
-                verb: PlanVerb::View,
-                owner,
-                recipient,
-                resource,
-            },
-            "create" => PlanPermissionPattern::Verb {
-                verb: PlanVerb::Create,
-                owner,
-                recipient,
-                resource,
-            },
-            "update" => PlanPermissionPattern::Verb {
-                verb: PlanVerb::Update,
-                owner,
-                recipient,
-                resource,
-            },
-            other => {
-                return Err(CardParseError::UnknownVerb {
-                    class: Self::NAME.to_string(),
-                    verb: other.to_string(),
-                });
-            }
-        }))
-    }
-
-    pub(crate) fn parse_polymorphic_permission(
-        owner: &str,
-        recipient: &str,
-        verb: &str,
-        resource: &str,
-    ) -> Result<PolymorphicPermissionPattern, CardParseError> {
-        let owner = parse_polymorphic_empty_owner(Self::NAME, owner)?;
-        let recipient = parse_polymorphic_account_recipient(recipient)?;
-        let resource = Self::parse_polymorphic_resource(Self::NAME, resource)?;
-        Ok(PolymorphicPermissionPattern::Plan(match verb {
-            "*" => PolymorphicPlanPermissionPattern::Any {
-                owner,
-                recipient,
-                resource,
-            },
-            "view" => PolymorphicPlanPermissionPattern::Verb {
-                verb: PlanVerb::View,
-                owner,
-                recipient,
-                resource,
-            },
-            "create" => PolymorphicPlanPermissionPattern::Verb {
-                verb: PlanVerb::Create,
-                owner,
-                recipient,
-                resource,
-            },
-            "update" => PolymorphicPlanPermissionPattern::Verb {
-                verb: PlanVerb::Update,
-                owner,
-                recipient,
-                resource,
-            },
-            other => {
-                return Err(CardParseError::UnknownVerb {
-                    class: Self::NAME.to_string(),
-                    verb: other.to_string(),
-                });
-            }
-        }))
-    }
-
     fn parse_resource(_class: &str, resource: &str) -> Result<PlanResourcePattern, CardParseError> {
         if resource == "*" {
             Ok(PlanResourcePattern::Any)

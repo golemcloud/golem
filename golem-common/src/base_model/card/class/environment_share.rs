@@ -63,6 +63,56 @@ impl PermissionClass for EnvironmentShareClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentShareResourcePattern;
     const NAME: &'static str = "environment.share";
+
+    fn parse_verb(verb: &str) -> Option<Self::Verb> {
+        match verb {
+            "view" => Some(Self::Verb::View),
+            "create" => Some(Self::Verb::Create),
+            "update" => Some(Self::Verb::Update),
+            "delete" => Some(Self::Verb::Delete),
+            _ => None,
+        }
+    }
+
+    fn parse_owner(owner: &str) -> Result<Self::Owner, CardParseError> {
+        parse_environment_owner(Self::NAME, owner)
+    }
+
+    fn parse_recipient(recipient: &str) -> Result<Self::Recipient, CardParseError> {
+        parse_environment_recipient(recipient)
+    }
+
+    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
+        Self::parse_resource(Self::NAME, resource)
+    }
+
+    fn parse_polymorphic_owner(
+        owner: &str,
+    ) -> Result<<Self::Owner as OwnerPattern>::Polymorphic, CardParseError> {
+        parse_polymorphic_environment_owner(Self::NAME, owner)
+    }
+
+    fn parse_polymorphic_recipient(
+        recipient: &str,
+    ) -> Result<<Self::Recipient as RecipientPattern>::Polymorphic, CardParseError> {
+        parse_polymorphic_environment_recipient(recipient)
+    }
+
+    fn parse_polymorphic_resource(
+        resource: &str,
+    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
+        Self::parse_polymorphic_resource(Self::NAME, resource)
+    }
+
+    fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
+        PermissionPattern::EnvironmentShare(pattern)
+    }
+
+    fn into_polymorphic_permission(
+        pattern: PolymorphicClassPermissionPattern<Self>,
+    ) -> PolymorphicPermissionPattern {
+        PolymorphicPermissionPattern::EnvironmentShare(pattern)
+    }
 }
 
 pub type EnvironmentSharePermissionPattern = ClassPermissionPattern<EnvironmentShareClass>;
@@ -70,102 +120,6 @@ pub type PolymorphicEnvironmentSharePermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentShareClass>;
 
 impl EnvironmentShareClass {
-    pub(crate) fn parse_permission(
-        owner: &str,
-        recipient: &str,
-        verb: &str,
-        resource: &str,
-    ) -> Result<PermissionPattern, CardParseError> {
-        let owner = parse_environment_owner(Self::NAME, owner)?;
-        let recipient = parse_environment_recipient(recipient)?;
-        let resource = Self::parse_resource(Self::NAME, resource)?;
-        Ok(PermissionPattern::EnvironmentShare(match verb {
-            "*" => EnvironmentSharePermissionPattern::Any {
-                owner,
-                recipient,
-                resource,
-            },
-            "view" => EnvironmentSharePermissionPattern::Verb {
-                verb: EnvironmentShareVerb::View,
-                owner,
-                recipient,
-                resource,
-            },
-            "create" => EnvironmentSharePermissionPattern::Verb {
-                verb: EnvironmentShareVerb::Create,
-                owner,
-                recipient,
-                resource,
-            },
-            "update" => EnvironmentSharePermissionPattern::Verb {
-                verb: EnvironmentShareVerb::Update,
-                owner,
-                recipient,
-                resource,
-            },
-            "delete" => EnvironmentSharePermissionPattern::Verb {
-                verb: EnvironmentShareVerb::Delete,
-                owner,
-                recipient,
-                resource,
-            },
-            other => {
-                return Err(CardParseError::UnknownVerb {
-                    class: Self::NAME.to_string(),
-                    verb: other.to_string(),
-                });
-            }
-        }))
-    }
-
-    pub(crate) fn parse_polymorphic_permission(
-        owner: &str,
-        recipient: &str,
-        verb: &str,
-        resource: &str,
-    ) -> Result<PolymorphicPermissionPattern, CardParseError> {
-        let owner = parse_polymorphic_environment_owner(Self::NAME, owner)?;
-        let recipient = parse_polymorphic_environment_recipient(recipient)?;
-        let resource = Self::parse_polymorphic_resource(Self::NAME, resource)?;
-        Ok(PolymorphicPermissionPattern::EnvironmentShare(match verb {
-            "*" => PolymorphicEnvironmentSharePermissionPattern::Any {
-                owner,
-                recipient,
-                resource,
-            },
-            "view" => PolymorphicEnvironmentSharePermissionPattern::Verb {
-                verb: EnvironmentShareVerb::View,
-                owner,
-                recipient,
-                resource,
-            },
-            "create" => PolymorphicEnvironmentSharePermissionPattern::Verb {
-                verb: EnvironmentShareVerb::Create,
-                owner,
-                recipient,
-                resource,
-            },
-            "update" => PolymorphicEnvironmentSharePermissionPattern::Verb {
-                verb: EnvironmentShareVerb::Update,
-                owner,
-                recipient,
-                resource,
-            },
-            "delete" => PolymorphicEnvironmentSharePermissionPattern::Verb {
-                verb: EnvironmentShareVerb::Delete,
-                owner,
-                recipient,
-                resource,
-            },
-            other => {
-                return Err(CardParseError::UnknownVerb {
-                    class: Self::NAME.to_string(),
-                    verb: other.to_string(),
-                });
-            }
-        }))
-    }
-
     fn parse_resource(
         _class: &str,
         resource: &str,

@@ -214,76 +214,88 @@ fn parse_permission(
 ) -> Result<PermissionPattern, CardParseError> {
     match class {
         FilesystemClass::NAME => {
-            FilesystemClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<FilesystemClass>(owner, recipient, verb, resource)
         }
-        NetworkClass::NAME => NetworkClass::parse_permission(owner, recipient, verb, resource),
-        EnvClass::NAME => EnvClass::parse_permission(owner, recipient, verb, resource),
-        OplogClass::NAME => OplogClass::parse_permission(owner, recipient, verb, resource),
-        ConfigClass::NAME => ConfigClass::parse_permission(owner, recipient, verb, resource),
-        SecretClass::NAME => SecretClass::parse_permission(owner, recipient, verb, resource),
-        AgentClass::NAME => AgentClass::parse_permission(owner, recipient, verb, resource),
-        ToolClass::NAME => ToolClass::parse_permission(owner, recipient, verb, resource),
-        KvClass::NAME => KvClass::parse_permission(owner, recipient, verb, resource),
-        BlobClass::NAME => BlobClass::parse_permission(owner, recipient, verb, resource),
-        RdbmsClass::NAME => RdbmsClass::parse_permission(owner, recipient, verb, resource),
-        CardClass::NAME => CardClass::parse_permission(owner, recipient, verb, resource),
-        SystemClass::NAME => SystemClass::parse_permission(owner, recipient, verb, resource),
-        PlanClass::NAME => PlanClass::parse_permission(owner, recipient, verb, resource),
-        AccountClass::NAME => AccountClass::parse_permission(owner, recipient, verb, resource),
+        NetworkClass::NAME => {
+            parse_class_permission::<NetworkClass>(owner, recipient, verb, resource)
+        }
+        EnvClass::NAME => parse_class_permission::<EnvClass>(owner, recipient, verb, resource),
+        OplogClass::NAME => parse_class_permission::<OplogClass>(owner, recipient, verb, resource),
+        ConfigClass::NAME => {
+            parse_class_permission::<ConfigClass>(owner, recipient, verb, resource)
+        }
+        SecretClass::NAME => {
+            parse_class_permission::<SecretClass>(owner, recipient, verb, resource)
+        }
+        AgentClass::NAME => parse_class_permission::<AgentClass>(owner, recipient, verb, resource),
+        ToolClass::NAME => parse_class_permission::<ToolClass>(owner, recipient, verb, resource),
+        KvClass::NAME => parse_class_permission::<KvClass>(owner, recipient, verb, resource),
+        BlobClass::NAME => parse_class_permission::<BlobClass>(owner, recipient, verb, resource),
+        RdbmsClass::NAME => parse_class_permission::<RdbmsClass>(owner, recipient, verb, resource),
+        CardClass::NAME => parse_class_permission::<CardClass>(owner, recipient, verb, resource),
+        SystemClass::NAME => {
+            parse_class_permission::<SystemClass>(owner, recipient, verb, resource)
+        }
+        PlanClass::NAME => parse_class_permission::<PlanClass>(owner, recipient, verb, resource),
+        AccountClass::NAME => {
+            parse_class_permission::<AccountClass>(owner, recipient, verb, resource)
+        }
         AccountUsageClass::NAME => {
-            AccountUsageClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<AccountUsageClass>(owner, recipient, verb, resource)
         }
         AccountTokenClass::NAME => {
-            AccountTokenClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<AccountTokenClass>(owner, recipient, verb, resource)
         }
         AccountPluginClass::NAME => {
-            AccountPluginClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<AccountPluginClass>(owner, recipient, verb, resource)
         }
         ApplicationClass::NAME => {
-            ApplicationClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<ApplicationClass>(owner, recipient, verb, resource)
         }
         EnvironmentClass::NAME => {
-            EnvironmentClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<EnvironmentClass>(owner, recipient, verb, resource)
         }
         EnvironmentShareClass::NAME => {
-            EnvironmentShareClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<EnvironmentShareClass>(owner, recipient, verb, resource)
         }
         EnvironmentPluginGrantClass::NAME => {
-            EnvironmentPluginGrantClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<EnvironmentPluginGrantClass>(owner, recipient, verb, resource)
         }
-        EnvironmentDomainRegistrationClass::NAME => {
-            EnvironmentDomainRegistrationClass::parse_permission(owner, recipient, verb, resource)
-        }
-        EnvironmentSecuritySchemeClass::NAME => {
-            EnvironmentSecuritySchemeClass::parse_permission(owner, recipient, verb, resource)
-        }
-        EnvironmentHttpApiDeploymentClass::NAME => {
-            EnvironmentHttpApiDeploymentClass::parse_permission(owner, recipient, verb, resource)
-        }
-        EnvironmentMcpDeploymentClass::NAME => {
-            EnvironmentMcpDeploymentClass::parse_permission(owner, recipient, verb, resource)
-        }
+        EnvironmentDomainRegistrationClass::NAME => parse_class_permission::<
+            EnvironmentDomainRegistrationClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentSecuritySchemeClass::NAME => parse_class_permission::<
+            EnvironmentSecuritySchemeClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentHttpApiDeploymentClass::NAME => parse_class_permission::<
+            EnvironmentHttpApiDeploymentClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentMcpDeploymentClass::NAME => parse_class_permission::<
+            EnvironmentMcpDeploymentClass,
+        >(owner, recipient, verb, resource),
         EnvironmentAgentSecretClass::NAME => {
-            EnvironmentAgentSecretClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<EnvironmentAgentSecretClass>(owner, recipient, verb, resource)
         }
-        EnvironmentResourceDefinitionClass::NAME => {
-            EnvironmentResourceDefinitionClass::parse_permission(owner, recipient, verb, resource)
-        }
+        EnvironmentResourceDefinitionClass::NAME => parse_class_permission::<
+            EnvironmentResourceDefinitionClass,
+        >(owner, recipient, verb, resource),
         EnvironmentRetryPolicyClass::NAME => {
-            EnvironmentRetryPolicyClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<EnvironmentRetryPolicyClass>(owner, recipient, verb, resource)
         }
-        ComponentClass::NAME => ComponentClass::parse_permission(owner, recipient, verb, resource),
+        ComponentClass::NAME => {
+            parse_class_permission::<ComponentClass>(owner, recipient, verb, resource)
+        }
         AccountOauth2IdentityClass::NAME => {
-            AccountOauth2IdentityClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<AccountOauth2IdentityClass>(owner, recipient, verb, resource)
         }
         EnvironmentInitialFilesClass::NAME => {
-            EnvironmentInitialFilesClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<EnvironmentInitialFilesClass>(owner, recipient, verb, resource)
         }
         EnvironmentKvBucketClass::NAME => {
-            EnvironmentKvBucketClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<EnvironmentKvBucketClass>(owner, recipient, verb, resource)
         }
         EnvironmentBlobBucketClass::NAME => {
-            EnvironmentBlobBucketClass::parse_permission(owner, recipient, verb, resource)
+            parse_class_permission::<EnvironmentBlobBucketClass>(owner, recipient, verb, resource)
         }
         _ => Err(CardParseError::UnknownClass(class.to_string())),
     }
@@ -298,128 +310,169 @@ fn parse_polymorphic_permission(
 ) -> Result<PolymorphicPermissionPattern, CardParseError> {
     match class {
         FilesystemClass::NAME => {
-            FilesystemClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<FilesystemClass>(owner, recipient, verb, resource)
         }
         NetworkClass::NAME => {
-            NetworkClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<NetworkClass>(owner, recipient, verb, resource)
         }
-        EnvClass::NAME => EnvClass::parse_polymorphic_permission(owner, recipient, verb, resource),
+        EnvClass::NAME => {
+            parse_polymorphic_class_permission::<EnvClass>(owner, recipient, verb, resource)
+        }
         OplogClass::NAME => {
-            OplogClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<OplogClass>(owner, recipient, verb, resource)
         }
         ConfigClass::NAME => {
-            ConfigClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<ConfigClass>(owner, recipient, verb, resource)
         }
         SecretClass::NAME => {
-            SecretClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<SecretClass>(owner, recipient, verb, resource)
         }
         AgentClass::NAME => {
-            AgentClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<AgentClass>(owner, recipient, verb, resource)
         }
         ToolClass::NAME => {
-            ToolClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<ToolClass>(owner, recipient, verb, resource)
         }
-        KvClass::NAME => KvClass::parse_polymorphic_permission(owner, recipient, verb, resource),
+        KvClass::NAME => {
+            parse_polymorphic_class_permission::<KvClass>(owner, recipient, verb, resource)
+        }
         BlobClass::NAME => {
-            BlobClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<BlobClass>(owner, recipient, verb, resource)
         }
         RdbmsClass::NAME => {
-            RdbmsClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<RdbmsClass>(owner, recipient, verb, resource)
         }
         CardClass::NAME => {
-            CardClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<CardClass>(owner, recipient, verb, resource)
         }
         SystemClass::NAME => {
-            SystemClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<SystemClass>(owner, recipient, verb, resource)
         }
         PlanClass::NAME => {
-            PlanClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<PlanClass>(owner, recipient, verb, resource)
         }
         AccountClass::NAME => {
-            AccountClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<AccountClass>(owner, recipient, verb, resource)
         }
-        AccountUsageClass::NAME => {
-            AccountUsageClass::parse_polymorphic_permission(owner, recipient, verb, resource)
-        }
-        AccountTokenClass::NAME => {
-            AccountTokenClass::parse_polymorphic_permission(owner, recipient, verb, resource)
-        }
-        AccountPluginClass::NAME => {
-            AccountPluginClass::parse_polymorphic_permission(owner, recipient, verb, resource)
-        }
+        AccountUsageClass::NAME => parse_polymorphic_class_permission::<AccountUsageClass>(
+            owner, recipient, verb, resource,
+        ),
+        AccountTokenClass::NAME => parse_polymorphic_class_permission::<AccountTokenClass>(
+            owner, recipient, verb, resource,
+        ),
+        AccountPluginClass::NAME => parse_polymorphic_class_permission::<AccountPluginClass>(
+            owner, recipient, verb, resource,
+        ),
         ApplicationClass::NAME => {
-            ApplicationClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<ApplicationClass>(owner, recipient, verb, resource)
         }
         EnvironmentClass::NAME => {
-            EnvironmentClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<EnvironmentClass>(owner, recipient, verb, resource)
         }
-        EnvironmentShareClass::NAME => {
-            EnvironmentShareClass::parse_polymorphic_permission(owner, recipient, verb, resource)
-        }
-        EnvironmentPluginGrantClass::NAME => {
-            EnvironmentPluginGrantClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
-        EnvironmentDomainRegistrationClass::NAME => {
-            EnvironmentDomainRegistrationClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
-        EnvironmentSecuritySchemeClass::NAME => {
-            EnvironmentSecuritySchemeClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
-        EnvironmentHttpApiDeploymentClass::NAME => {
-            EnvironmentHttpApiDeploymentClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
-        EnvironmentMcpDeploymentClass::NAME => {
-            EnvironmentMcpDeploymentClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
-        EnvironmentAgentSecretClass::NAME => {
-            EnvironmentAgentSecretClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
-        EnvironmentResourceDefinitionClass::NAME => {
-            EnvironmentResourceDefinitionClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
-        EnvironmentRetryPolicyClass::NAME => {
-            EnvironmentRetryPolicyClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
+        EnvironmentShareClass::NAME => parse_polymorphic_class_permission::<EnvironmentShareClass>(
+            owner, recipient, verb, resource,
+        ),
+        EnvironmentPluginGrantClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentPluginGrantClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentDomainRegistrationClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentDomainRegistrationClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentSecuritySchemeClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentSecuritySchemeClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentHttpApiDeploymentClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentHttpApiDeploymentClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentMcpDeploymentClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentMcpDeploymentClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentAgentSecretClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentAgentSecretClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentResourceDefinitionClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentResourceDefinitionClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentRetryPolicyClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentRetryPolicyClass,
+        >(owner, recipient, verb, resource),
         ComponentClass::NAME => {
-            ComponentClass::parse_polymorphic_permission(owner, recipient, verb, resource)
+            parse_polymorphic_class_permission::<ComponentClass>(owner, recipient, verb, resource)
         }
-        AccountOauth2IdentityClass::NAME => {
-            AccountOauth2IdentityClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
-        EnvironmentInitialFilesClass::NAME => {
-            EnvironmentInitialFilesClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
-        EnvironmentKvBucketClass::NAME => {
-            EnvironmentKvBucketClass::parse_polymorphic_permission(owner, recipient, verb, resource)
-        }
-        EnvironmentBlobBucketClass::NAME => {
-            EnvironmentBlobBucketClass::parse_polymorphic_permission(
-                owner, recipient, verb, resource,
-            )
-        }
+        AccountOauth2IdentityClass::NAME => parse_polymorphic_class_permission::<
+            AccountOauth2IdentityClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentInitialFilesClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentInitialFilesClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentKvBucketClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentKvBucketClass,
+        >(owner, recipient, verb, resource),
+        EnvironmentBlobBucketClass::NAME => parse_polymorphic_class_permission::<
+            EnvironmentBlobBucketClass,
+        >(owner, recipient, verb, resource),
         _ => Err(CardParseError::UnknownClass(class.to_string())),
     }
 }
+
+fn parse_class_permission<C: PermissionClass>(
+    owner: &str,
+    recipient: &str,
+    verb: &str,
+    resource: &str,
+) -> Result<PermissionPattern, CardParseError> {
+    let owner = C::parse_owner(owner)?;
+    let recipient = C::parse_recipient(recipient)?;
+    let resource = C::parse_resource(resource)?;
+    let pattern = if verb == "*" {
+        ClassPermissionPattern::<C>::Any {
+            owner,
+            recipient,
+            resource,
+        }
+    } else {
+        ClassPermissionPattern::<C>::Verb {
+            verb: C::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
+                class: C::NAME.to_string(),
+                verb: verb.to_string(),
+            })?,
+            owner,
+            recipient,
+            resource,
+        }
+    };
+    Ok(C::into_permission(pattern))
+}
+
+fn parse_polymorphic_class_permission<C: PermissionClass>(
+    owner: &str,
+    recipient: &str,
+    verb: &str,
+    resource: &str,
+) -> Result<PolymorphicPermissionPattern, CardParseError> {
+    let owner = C::parse_polymorphic_owner(owner)?;
+    let recipient = C::parse_polymorphic_recipient(recipient)?;
+    let resource = C::parse_polymorphic_resource(resource)?;
+    let pattern = if verb == "*" {
+        PolymorphicClassPermissionPattern::<C>::Any {
+            owner,
+            recipient,
+            resource,
+        }
+    } else {
+        PolymorphicClassPermissionPattern::<C>::Verb {
+            verb: C::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
+                class: C::NAME.to_string(),
+                verb: verb.to_string(),
+            })?,
+            owner,
+            recipient,
+            resource,
+        }
+    };
+    Ok(C::into_polymorphic_permission(pattern))
+}
+
 macro_rules! define_owner_parser {
     ($parser:ident, $owner:ident) => {
         pub(crate) fn $parser(class: &str, owner: &str) -> Result<$owner, CardParseError> {

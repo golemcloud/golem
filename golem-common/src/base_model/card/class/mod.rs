@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::card::{
-    RecipientPathPattern, RecipientPathSlot, RecipientPathTemplate, SlotVariable,
+    CardParseError, RecipientPathPattern, RecipientPathSlot, RecipientPathTemplate, SlotVariable,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -680,6 +680,28 @@ pub trait PermissionClass {
     type Resource: ResourcePattern;
 
     const NAME: &'static str;
+
+    fn parse_verb(verb: &str) -> Option<Self::Verb>;
+    fn parse_owner(owner: &str) -> Result<Self::Owner, CardParseError>;
+    fn parse_recipient(recipient: &str) -> Result<Self::Recipient, CardParseError>;
+    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError>;
+    fn parse_polymorphic_owner(
+        owner: &str,
+    ) -> Result<<Self::Owner as OwnerPattern>::Polymorphic, CardParseError>;
+    fn parse_polymorphic_recipient(
+        recipient: &str,
+    ) -> Result<<Self::Recipient as RecipientPattern>::Polymorphic, CardParseError>;
+    fn parse_polymorphic_resource(
+        resource: &str,
+    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError>;
+    fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern
+    where
+        Self: Sized;
+    fn into_polymorphic_permission(
+        pattern: PolymorphicClassPermissionPattern<Self>,
+    ) -> PolymorphicPermissionPattern
+    where
+        Self: Sized;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

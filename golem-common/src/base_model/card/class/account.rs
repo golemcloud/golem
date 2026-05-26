@@ -47,132 +47,64 @@ impl PermissionClass for AccountClass {
     type Recipient = AccountRecipientPattern;
     type Resource = AccountResourcePattern;
     const NAME: &'static str = "account";
+
+    fn parse_verb(verb: &str) -> Option<Self::Verb> {
+        match verb {
+            "view" => Some(Self::Verb::View),
+            "update" => Some(Self::Verb::Update),
+            "delete" => Some(Self::Verb::Delete),
+            "set-roles" => Some(Self::Verb::SetRoles),
+            "set-plan" => Some(Self::Verb::SetPlan),
+            "restore" => Some(Self::Verb::Restore),
+            _ => None,
+        }
+    }
+
+    fn parse_owner(owner: &str) -> Result<Self::Owner, CardParseError> {
+        parse_account_owner(Self::NAME, owner)
+    }
+
+    fn parse_recipient(recipient: &str) -> Result<Self::Recipient, CardParseError> {
+        parse_account_recipient(recipient)
+    }
+
+    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
+        Self::parse_resource(Self::NAME, resource)
+    }
+
+    fn parse_polymorphic_owner(
+        owner: &str,
+    ) -> Result<<Self::Owner as OwnerPattern>::Polymorphic, CardParseError> {
+        parse_polymorphic_account_owner(Self::NAME, owner)
+    }
+
+    fn parse_polymorphic_recipient(
+        recipient: &str,
+    ) -> Result<<Self::Recipient as RecipientPattern>::Polymorphic, CardParseError> {
+        parse_polymorphic_account_recipient(recipient)
+    }
+
+    fn parse_polymorphic_resource(
+        resource: &str,
+    ) -> Result<<Self::Resource as ResourcePattern>::Polymorphic, CardParseError> {
+        Self::parse_polymorphic_resource(Self::NAME, resource)
+    }
+
+    fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
+        PermissionPattern::Account(pattern)
+    }
+
+    fn into_polymorphic_permission(
+        pattern: PolymorphicClassPermissionPattern<Self>,
+    ) -> PolymorphicPermissionPattern {
+        PolymorphicPermissionPattern::Account(pattern)
+    }
 }
 
 pub type AccountPermissionPattern = ClassPermissionPattern<AccountClass>;
 pub type PolymorphicAccountPermissionPattern = PolymorphicClassPermissionPattern<AccountClass>;
 
 impl AccountClass {
-    pub(crate) fn parse_permission(
-        owner: &str,
-        recipient: &str,
-        verb: &str,
-        resource: &str,
-    ) -> Result<PermissionPattern, CardParseError> {
-        let owner = parse_account_owner(Self::NAME, owner)?;
-        let recipient = parse_account_recipient(recipient)?;
-        let resource = Self::parse_resource(Self::NAME, resource)?;
-        Ok(PermissionPattern::Account(match verb {
-            "*" => AccountPermissionPattern::Any {
-                owner,
-                recipient,
-                resource,
-            },
-            "view" => AccountPermissionPattern::Verb {
-                verb: AccountVerb::View,
-                owner,
-                recipient,
-                resource,
-            },
-            "update" => AccountPermissionPattern::Verb {
-                verb: AccountVerb::Update,
-                owner,
-                recipient,
-                resource,
-            },
-            "delete" => AccountPermissionPattern::Verb {
-                verb: AccountVerb::Delete,
-                owner,
-                recipient,
-                resource,
-            },
-            "set-roles" => AccountPermissionPattern::Verb {
-                verb: AccountVerb::SetRoles,
-                owner,
-                recipient,
-                resource,
-            },
-            "set-plan" => AccountPermissionPattern::Verb {
-                verb: AccountVerb::SetPlan,
-                owner,
-                recipient,
-                resource,
-            },
-            "restore" => AccountPermissionPattern::Verb {
-                verb: AccountVerb::Restore,
-                owner,
-                recipient,
-                resource,
-            },
-            other => {
-                return Err(CardParseError::UnknownVerb {
-                    class: Self::NAME.to_string(),
-                    verb: other.to_string(),
-                });
-            }
-        }))
-    }
-
-    pub(crate) fn parse_polymorphic_permission(
-        owner: &str,
-        recipient: &str,
-        verb: &str,
-        resource: &str,
-    ) -> Result<PolymorphicPermissionPattern, CardParseError> {
-        let owner = parse_polymorphic_account_owner(Self::NAME, owner)?;
-        let recipient = parse_polymorphic_account_recipient(recipient)?;
-        let resource = Self::parse_polymorphic_resource(Self::NAME, resource)?;
-        Ok(PolymorphicPermissionPattern::Account(match verb {
-            "*" => PolymorphicAccountPermissionPattern::Any {
-                owner,
-                recipient,
-                resource,
-            },
-            "view" => PolymorphicAccountPermissionPattern::Verb {
-                verb: AccountVerb::View,
-                owner,
-                recipient,
-                resource,
-            },
-            "update" => PolymorphicAccountPermissionPattern::Verb {
-                verb: AccountVerb::Update,
-                owner,
-                recipient,
-                resource,
-            },
-            "delete" => PolymorphicAccountPermissionPattern::Verb {
-                verb: AccountVerb::Delete,
-                owner,
-                recipient,
-                resource,
-            },
-            "set-roles" => PolymorphicAccountPermissionPattern::Verb {
-                verb: AccountVerb::SetRoles,
-                owner,
-                recipient,
-                resource,
-            },
-            "set-plan" => PolymorphicAccountPermissionPattern::Verb {
-                verb: AccountVerb::SetPlan,
-                owner,
-                recipient,
-                resource,
-            },
-            "restore" => PolymorphicAccountPermissionPattern::Verb {
-                verb: AccountVerb::Restore,
-                owner,
-                recipient,
-                resource,
-            },
-            other => {
-                return Err(CardParseError::UnknownVerb {
-                    class: Self::NAME.to_string(),
-                    verb: other.to_string(),
-                });
-            }
-        }))
-    }
-
     fn parse_resource(
         class: &str,
         resource: &str,
