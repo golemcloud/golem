@@ -44,7 +44,7 @@ impl Subsumes for FilesystemResourcePattern {
 pub enum PolymorphicFilesystemResourcePattern {
     Concrete(FilesystemResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for FilesystemResourcePattern {

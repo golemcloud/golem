@@ -37,7 +37,7 @@ impl Subsumes for EnvironmentMcpDeploymentResourcePattern {
 pub enum PolymorphicEnvironmentMcpDeploymentResourcePattern {
     Concrete(EnvironmentMcpDeploymentResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for EnvironmentMcpDeploymentResourcePattern {
@@ -51,6 +51,7 @@ pub enum EnvironmentMcpDeploymentVerb {
     Create,
     Update,
     Delete,
+    Restore,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +71,7 @@ impl PermissionClass for EnvironmentMcpDeploymentClass {
             "create" => Some(Self::Verb::Create),
             "update" => Some(Self::Verb::Update),
             "delete" => Some(Self::Verb::Delete),
+            "restore" => Some(Self::Verb::Restore),
             _ => None,
         }
     }

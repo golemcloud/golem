@@ -10,6 +10,9 @@ pub enum AgentResourcePattern {
     Any,
     Empty,
     Method(String),
+    OplogIndex(u64),
+    InvocationId(String),
+    PluginName(String),
 }
 
 impl AgentResourcePattern {
@@ -32,6 +35,9 @@ impl Subsumes for AgentResourcePattern {
             (Self::Any, _) => true,
             (Self::Empty, Self::Empty) => true,
             (Self::Method(a), Self::Method(b)) => a == b,
+            (Self::OplogIndex(a), Self::OplogIndex(b)) => a == b,
+            (Self::InvocationId(a), Self::InvocationId(b)) => a == b,
+            (Self::PluginName(a), Self::PluginName(b)) => a == b,
             _ => false,
         }
     }
@@ -42,7 +48,7 @@ impl Subsumes for AgentResourcePattern {
 pub enum PolymorphicAgentResourcePattern {
     Concrete(AgentResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for AgentResourcePattern {
@@ -54,7 +60,6 @@ impl ResourcePattern for AgentResourcePattern {
 pub enum AgentVerb {
     Invoke,
     View,
-    Create,
     Delete,
     Interrupt,
     Resume,
@@ -81,7 +86,6 @@ impl PermissionClass for AgentClass {
         match verb {
             "invoke" => Some(Self::Verb::Invoke),
             "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
             "delete" => Some(Self::Verb::Delete),
             "interrupt" => Some(Self::Verb::Interrupt),
             "resume" => Some(Self::Verb::Resume),
@@ -140,16 +144,22 @@ pub type AgentPermissionPattern = ClassPermissionPattern<AgentClass>;
 pub type PolymorphicAgentPermissionPattern = PolymorphicClassPermissionPattern<AgentClass>;
 
 impl AgentClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<AgentResourcePattern, CardParseError> {
+    fn parse_resource(class: &str, resource: &str) -> Result<AgentResourcePattern, CardParseError> {
         if resource == "*" {
             Ok(AgentResourcePattern::Any)
         } else if resource.is_empty() {
             Ok(AgentResourcePattern::Empty)
-        } else {
+        } else if let Ok(index) = resource.parse::<u64>() {
+            Ok(AgentResourcePattern::OplogIndex(index))
+        } else if uuid::Uuid::parse_str(resource).is_ok() {
+            Ok(AgentResourcePattern::InvocationId(resource.to_string()))
+        } else if is_identifier(resource) {
             Ok(AgentResourcePattern::Method(resource.to_string()))
+        } else {
+            Err(CardParseError::InvalidResource {
+                class: class.to_string(),
+                resource: resource.to_string(),
+            })
         }
     }
 
@@ -166,4 +176,12 @@ impl AgentClass {
             PolymorphicAgentResourcePattern::Template,
         )
     }
+}
+
+fn is_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }

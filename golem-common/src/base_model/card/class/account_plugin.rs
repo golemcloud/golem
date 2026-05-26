@@ -7,8 +7,9 @@ use crate::base_model::card::parsing::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountPluginResourcePattern {
+    Empty,
     Any,
-    Exact(String),
+    Name(String),
 }
 
 impl AccountPluginResourcePattern {
@@ -16,8 +17,12 @@ impl AccountPluginResourcePattern {
         Self::Any
     }
 
+    pub fn empty() -> Self {
+        Self::Empty
+    }
+
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+        Self::Name(value.into())
     }
 }
 
@@ -25,8 +30,10 @@ impl Subsumes for AccountPluginResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (Self::Empty, Self::Empty) => true,
+            (Self::Name(a), Self::Name(b)) => a == b,
+            (Self::Empty | Self::Name(_), Self::Any) => false,
+            (Self::Empty, Self::Name(_)) | (Self::Name(_), Self::Empty) => false,
         }
     }
 }
@@ -36,7 +43,7 @@ impl Subsumes for AccountPluginResourcePattern {
 pub enum PolymorphicAccountPluginResourcePattern {
     Concrete(AccountPluginResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for AccountPluginResourcePattern {
@@ -47,9 +54,9 @@ impl ResourcePattern for AccountPluginResourcePattern {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountPluginVerb {
     View,
-    Create,
-    Update,
+    Register,
     Delete,
+    Restore,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,9 +73,9 @@ impl PermissionClass for AccountPluginClass {
     fn parse_verb(verb: &str) -> Option<Self::Verb> {
         match verb {
             "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "update" => Some(Self::Verb::Update),
+            "register" => Some(Self::Verb::Register),
             "delete" => Some(Self::Verb::Delete),
+            "restore" => Some(Self::Verb::Restore),
             _ => None,
         }
     }
@@ -123,10 +130,12 @@ impl AccountPluginClass {
         _class: &str,
         resource: &str,
     ) -> Result<AccountPluginResourcePattern, CardParseError> {
-        if resource == "*" {
+        if resource.is_empty() {
+            Ok(AccountPluginResourcePattern::Empty)
+        } else if resource == "*" {
             Ok(AccountPluginResourcePattern::Any)
         } else {
-            Ok(AccountPluginResourcePattern::Exact(resource.to_string()))
+            Ok(AccountPluginResourcePattern::Name(resource.to_string()))
         }
     }
 

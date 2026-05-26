@@ -45,7 +45,7 @@ impl Subsumes for BlobResourcePattern {
 pub enum PolymorphicBlobResourcePattern {
     Concrete(BlobResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for BlobResourcePattern {
@@ -58,6 +58,7 @@ pub enum BlobVerb {
     Read,
     Write,
     Delete,
+    List,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +77,7 @@ impl PermissionClass for BlobClass {
             "read" => Some(Self::Verb::Read),
             "write" => Some(Self::Verb::Write),
             "delete" => Some(Self::Verb::Delete),
+            "list" => Some(Self::Verb::List),
             _ => None,
         }
     }

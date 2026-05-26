@@ -36,7 +36,7 @@ impl Subsumes for AccountOauth2IdentityResourcePattern {
 pub enum PolymorphicAccountOauth2IdentityResourcePattern {
     Concrete(AccountOauth2IdentityResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for AccountOauth2IdentityResourcePattern {
@@ -48,7 +48,7 @@ impl ResourcePattern for AccountOauth2IdentityResourcePattern {
 pub enum AccountOauth2IdentityVerb {
     View,
     Link,
-    Delete,
+    Unlink,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,7 +66,7 @@ impl PermissionClass for AccountOauth2IdentityClass {
         match verb {
             "view" => Some(Self::Verb::View),
             "link" => Some(Self::Verb::Link),
-            "delete" => Some(Self::Verb::Delete),
+            "unlink" => Some(Self::Verb::Unlink),
             _ => None,
         }
     }

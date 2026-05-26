@@ -14,13 +14,7 @@ impl Subsumes for AccountResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicAccountResourcePattern {
-    Concrete(AccountResourcePattern),
-    Slot(SlotVariable),
-    Template(String),
-}
+pub type PolymorphicAccountResourcePattern = AccountResourcePattern;
 
 impl ResourcePattern for AccountResourcePattern {
     type Polymorphic = PolymorphicAccountResourcePattern;
@@ -123,15 +117,6 @@ impl AccountClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicAccountResourcePattern, CardParseError> {
-        if let Ok(resource) = Self::parse_resource(class, resource) {
-            Ok(PolymorphicAccountResourcePattern::Concrete(resource))
-        } else if let Ok(slot) = SlotVariable::parse(resource) {
-            Ok(PolymorphicAccountResourcePattern::Slot(slot))
-        } else {
-            Err(CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            })
-        }
+        Self::parse_resource(class, resource)
     }
 }

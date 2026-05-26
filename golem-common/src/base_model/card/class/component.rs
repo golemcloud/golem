@@ -2,15 +2,25 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_component_owner, parse_environment_recipient,
     parse_polymorphic_component_owner, parse_polymorphic_environment_recipient,
+    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct ComponentResourcePattern;
+pub enum ComponentResourcePattern {
+    Empty,
+    AnyRevision,
+    Revision(u64),
+}
 
 impl Subsumes for ComponentResourcePattern {
-    fn subsumes(&self, _other: &Self) -> bool {
-        true
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Empty, Self::Empty) => true,
+            (Self::AnyRevision, Self::AnyRevision | Self::Revision(_)) => true,
+            (Self::Revision(a), Self::Revision(b)) => a == b,
+            _ => false,
+        }
     }
 }
 
@@ -19,7 +29,7 @@ impl Subsumes for ComponentResourcePattern {
 pub enum PolymorphicComponentResourcePattern {
     Concrete(ComponentResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for ComponentResourcePattern {
@@ -106,7 +116,17 @@ impl ComponentClass {
         resource: &str,
     ) -> Result<ComponentResourcePattern, CardParseError> {
         if resource.is_empty() {
-            Ok(ComponentResourcePattern)
+            Ok(ComponentResourcePattern::Empty)
+        } else if resource == "rev=*" {
+            Ok(ComponentResourcePattern::AnyRevision)
+        } else if let Some(revision) = resource.strip_prefix("rev=") {
+            revision
+                .parse::<u64>()
+                .map(ComponentResourcePattern::Revision)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: class.to_string(),
+                    resource: resource.to_string(),
+                })
         } else {
             Err(CardParseError::InvalidResource {
                 class: class.to_string(),
@@ -119,15 +139,13 @@ impl ComponentClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicComponentResourcePattern, CardParseError> {
-        if let Ok(resource) = Self::parse_resource(class, resource) {
-            Ok(PolymorphicComponentResourcePattern::Concrete(resource))
-        } else if let Ok(slot) = SlotVariable::parse(resource) {
-            Ok(PolymorphicComponentResourcePattern::Slot(slot))
-        } else {
-            Err(CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            })
-        }
+        parse_polymorphic_resource(
+            class,
+            resource,
+            Self::parse_resource,
+            PolymorphicComponentResourcePattern::Concrete,
+            PolymorphicComponentResourcePattern::Slot,
+            PolymorphicComponentResourcePattern::Template,
+        )
     }
 }

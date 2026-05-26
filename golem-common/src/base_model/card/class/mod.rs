@@ -34,6 +34,57 @@ pub trait Subsumes {
     fn subsumes(&self, other: &Self) -> bool;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct ResourceTemplate {
+    pub parts: Vec<ResourceTemplatePart>,
+}
+
+impl ResourceTemplate {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let mut parts = Vec::new();
+        let mut rest = value;
+
+        while let Some(idx) = rest.find('?') {
+            let (literal, suffix) = rest.split_at(idx);
+            if !literal.is_empty() {
+                parts.push(ResourceTemplatePart::Literal(literal.to_string()));
+            }
+
+            let slot_len = suffix
+                .char_indices()
+                .skip(1)
+                .take_while(|(_, c)| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .last()
+                .map(|(idx, c)| idx + c.len_utf8())
+                .unwrap_or(1);
+            let (slot, next) = suffix.split_at(slot_len);
+            parts.push(ResourceTemplatePart::Slot(SlotVariable::parse(slot)?));
+            rest = next;
+        }
+
+        if !rest.is_empty() {
+            parts.push(ResourceTemplatePart::Literal(rest.to_string()));
+        }
+
+        if parts
+            .iter()
+            .any(|part| matches!(part, ResourceTemplatePart::Slot(_)))
+        {
+            Ok(Self { parts })
+        } else {
+            Err(value.to_string())
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum ResourceTemplatePart {
+    Literal(String),
+    Slot(SlotVariable),
+}
+
 pub trait OwnerPattern:
     Subsumes + Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
 {

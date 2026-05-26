@@ -2,15 +2,25 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_environment_owner, parse_environment_recipient,
     parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient,
+    parse_polymorphic_resource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct EnvironmentResourcePattern;
+pub enum EnvironmentResourcePattern {
+    Empty,
+    AnyRevision,
+    Revision(u64),
+}
 
 impl Subsumes for EnvironmentResourcePattern {
-    fn subsumes(&self, _other: &Self) -> bool {
-        true
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Empty, Self::Empty) => true,
+            (Self::AnyRevision, Self::AnyRevision | Self::Revision(_)) => true,
+            (Self::Revision(a), Self::Revision(b)) => a == b,
+            _ => false,
+        }
     }
 }
 
@@ -19,7 +29,7 @@ impl Subsumes for EnvironmentResourcePattern {
 pub enum PolymorphicEnvironmentResourcePattern {
     Concrete(EnvironmentResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for EnvironmentResourcePattern {
@@ -36,7 +46,9 @@ pub enum EnvironmentVerb {
     Restore,
     Deploy,
     Rollback,
+    ViewDeployment,
     ViewDeploymentPlan,
+    ViewAgentTypes,
     WriteDeploymentRecord,
 }
 
@@ -60,7 +72,9 @@ impl PermissionClass for EnvironmentClass {
             "restore" => Some(Self::Verb::Restore),
             "deploy" => Some(Self::Verb::Deploy),
             "rollback" => Some(Self::Verb::Rollback),
+            "view-deployment" => Some(Self::Verb::ViewDeployment),
             "view-deployment-plan" => Some(Self::Verb::ViewDeploymentPlan),
+            "view-agent-types" => Some(Self::Verb::ViewAgentTypes),
             "write-deployment-record" => Some(Self::Verb::WriteDeploymentRecord),
             _ => None,
         }
@@ -117,7 +131,17 @@ impl EnvironmentClass {
         resource: &str,
     ) -> Result<EnvironmentResourcePattern, CardParseError> {
         if resource.is_empty() {
-            Ok(EnvironmentResourcePattern)
+            Ok(EnvironmentResourcePattern::Empty)
+        } else if resource == "rev=*" {
+            Ok(EnvironmentResourcePattern::AnyRevision)
+        } else if let Some(revision) = resource.strip_prefix("rev=") {
+            revision
+                .parse::<u64>()
+                .map(EnvironmentResourcePattern::Revision)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: class.to_string(),
+                    resource: resource.to_string(),
+                })
         } else {
             Err(CardParseError::InvalidResource {
                 class: class.to_string(),
@@ -130,15 +154,13 @@ impl EnvironmentClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicEnvironmentResourcePattern, CardParseError> {
-        if let Ok(resource) = Self::parse_resource(class, resource) {
-            Ok(PolymorphicEnvironmentResourcePattern::Concrete(resource))
-        } else if let Ok(slot) = SlotVariable::parse(resource) {
-            Ok(PolymorphicEnvironmentResourcePattern::Slot(slot))
-        } else {
-            Err(CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            })
-        }
+        parse_polymorphic_resource(
+            class,
+            resource,
+            Self::parse_resource,
+            PolymorphicEnvironmentResourcePattern::Concrete,
+            PolymorphicEnvironmentResourcePattern::Slot,
+            PolymorphicEnvironmentResourcePattern::Template,
+        )
     }
 }

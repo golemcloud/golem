@@ -661,14 +661,19 @@ where
     Parse: Fn(&str, &str) -> Result<U, CardParseError>,
     Concrete: Fn(U) -> T,
     Slot: Fn(SlotVariable) -> T,
-    Template: Fn(String) -> T,
+    Template: Fn(ResourceTemplate) -> T,
 {
     if let Ok(variable) = SlotVariable::parse(resource) {
         return Ok(slot(variable));
     }
 
     if contains_slot_reference(resource) {
-        return Ok(template(resource.to_string()));
+        return Ok(template(ResourceTemplate::parse(resource).map_err(
+            |_| CardParseError::InvalidResource {
+                class: class.to_string(),
+                resource: resource.to_string(),
+            },
+        )?));
     }
 
     match parse_concrete(class, resource) {

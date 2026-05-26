@@ -45,7 +45,7 @@ impl Subsumes for OplogResourcePattern {
 pub enum PolymorphicOplogResourcePattern {
     Concrete(OplogResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for OplogResourcePattern {

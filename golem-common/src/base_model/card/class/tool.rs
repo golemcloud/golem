@@ -36,7 +36,7 @@ impl Subsumes for ToolResourcePattern {
 pub enum PolymorphicToolResourcePattern {
     Concrete(ToolResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for ToolResourcePattern {

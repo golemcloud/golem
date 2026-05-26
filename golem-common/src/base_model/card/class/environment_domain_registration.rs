@@ -37,7 +37,7 @@ impl Subsumes for EnvironmentDomainRegistrationResourcePattern {
 pub enum PolymorphicEnvironmentDomainRegistrationResourcePattern {
     Concrete(EnvironmentDomainRegistrationResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for EnvironmentDomainRegistrationResourcePattern {

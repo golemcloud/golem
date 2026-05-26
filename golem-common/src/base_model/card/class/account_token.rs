@@ -3,12 +3,14 @@ use crate::base_model::card::parsing::{
     CardParseError, parse_account_owner, parse_account_recipient, parse_polymorphic_account_owner,
     parse_polymorphic_account_recipient, parse_polymorphic_resource,
 };
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountTokenResourcePattern {
+    Empty,
     Any,
-    Exact(String),
+    Token(Uuid),
 }
 
 impl AccountTokenResourcePattern {
@@ -16,8 +18,12 @@ impl AccountTokenResourcePattern {
         Self::Any
     }
 
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Exact(value.into())
+    pub fn empty() -> Self {
+        Self::Empty
+    }
+
+    pub fn token(value: Uuid) -> Self {
+        Self::Token(value)
     }
 }
 
@@ -25,8 +31,10 @@ impl Subsumes for AccountTokenResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Exact(a), Self::Exact(b)) => a == b,
-            (Self::Exact(_), Self::Any) => false,
+            (Self::Empty, Self::Empty) => true,
+            (Self::Token(a), Self::Token(b)) => a == b,
+            (Self::Empty | Self::Token(_), Self::Any) => false,
+            (Self::Empty, Self::Token(_)) | (Self::Token(_), Self::Empty) => false,
         }
     }
 }
@@ -36,7 +44,7 @@ impl Subsumes for AccountTokenResourcePattern {
 pub enum PolymorphicAccountTokenResourcePattern {
     Concrete(AccountTokenResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for AccountTokenResourcePattern {
@@ -46,6 +54,7 @@ impl ResourcePattern for AccountTokenResourcePattern {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountTokenVerb {
+    View,
     Create,
     Delete,
 }
@@ -63,6 +72,7 @@ impl PermissionClass for AccountTokenClass {
 
     fn parse_verb(verb: &str) -> Option<Self::Verb> {
         match verb {
+            "view" => Some(Self::Verb::View),
             "create" => Some(Self::Verb::Create),
             "delete" => Some(Self::Verb::Delete),
             _ => None,
@@ -116,13 +126,20 @@ pub type PolymorphicAccountTokenPermissionPattern =
 
 impl AccountTokenClass {
     fn parse_resource(
-        _class: &str,
+        class: &str,
         resource: &str,
     ) -> Result<AccountTokenResourcePattern, CardParseError> {
-        if resource == "*" {
+        if resource.is_empty() {
+            Ok(AccountTokenResourcePattern::Empty)
+        } else if resource == "*" {
             Ok(AccountTokenResourcePattern::Any)
         } else {
-            Ok(AccountTokenResourcePattern::Exact(resource.to_string()))
+            Uuid::parse_str(resource)
+                .map(AccountTokenResourcePattern::Token)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: class.to_string(),
+                    resource: resource.to_string(),
+                })
         }
     }
 

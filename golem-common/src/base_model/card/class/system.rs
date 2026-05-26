@@ -14,13 +14,7 @@ impl Subsumes for SystemResourcePattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicSystemResourcePattern {
-    Concrete(SystemResourcePattern),
-    Slot(SlotVariable),
-    Template(String),
-}
+pub type PolymorphicSystemResourcePattern = SystemResourcePattern;
 
 impl ResourcePattern for SystemResourcePattern {
     type Polymorphic = PolymorphicSystemResourcePattern;
@@ -119,15 +113,6 @@ impl SystemClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicSystemResourcePattern, CardParseError> {
-        if let Ok(resource) = Self::parse_resource(class, resource) {
-            Ok(PolymorphicSystemResourcePattern::Concrete(resource))
-        } else if let Ok(slot) = SlotVariable::parse(resource) {
-            Ok(PolymorphicSystemResourcePattern::Slot(slot))
-        } else {
-            Err(CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            })
-        }
+        Self::parse_resource(class, resource)
     }
 }

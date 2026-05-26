@@ -45,7 +45,7 @@ impl Subsumes for SecretResourcePattern {
 pub enum PolymorphicSecretResourcePattern {
     Concrete(SecretResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for SecretResourcePattern {

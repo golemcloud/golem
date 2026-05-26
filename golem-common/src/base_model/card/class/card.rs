@@ -42,7 +42,7 @@ impl Subsumes for CardResourcePattern {
 pub enum PolymorphicCardResourcePattern {
     Concrete(CardResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for CardResourcePattern {

@@ -45,7 +45,7 @@ impl Subsumes for EnvironmentInitialFilesResourcePattern {
 pub enum PolymorphicEnvironmentInitialFilesResourcePattern {
     Concrete(EnvironmentInitialFilesResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for EnvironmentInitialFilesResourcePattern {
@@ -58,6 +58,7 @@ pub enum EnvironmentInitialFilesVerb {
     View,
     Update,
     Delete,
+    List,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +77,7 @@ impl PermissionClass for EnvironmentInitialFilesClass {
             "view" => Some(Self::Verb::View),
             "update" => Some(Self::Verb::Update),
             "delete" => Some(Self::Verb::Delete),
+            "list" => Some(Self::Verb::List),
             _ => None,
         }
     }

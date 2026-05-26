@@ -37,7 +37,7 @@ impl Subsumes for EnvironmentShareResourcePattern {
 pub enum PolymorphicEnvironmentShareResourcePattern {
     Concrete(EnvironmentShareResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for EnvironmentShareResourcePattern {
@@ -51,6 +51,7 @@ pub enum EnvironmentShareVerb {
     Create,
     Update,
     Delete,
+    Restore,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +71,7 @@ impl PermissionClass for EnvironmentShareClass {
             "create" => Some(Self::Verb::Create),
             "update" => Some(Self::Verb::Update),
             "delete" => Some(Self::Verb::Delete),
+            "restore" => Some(Self::Verb::Restore),
             _ => None,
         }
     }

@@ -37,7 +37,7 @@ impl Subsumes for EnvironmentBlobBucketResourcePattern {
 pub enum PolymorphicEnvironmentBlobBucketResourcePattern {
     Concrete(EnvironmentBlobBucketResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for EnvironmentBlobBucketResourcePattern {
@@ -50,6 +50,7 @@ pub enum EnvironmentBlobBucketVerb {
     View,
     Create,
     Delete,
+    Clear,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +69,7 @@ impl PermissionClass for EnvironmentBlobBucketClass {
             "view" => Some(Self::Verb::View),
             "create" => Some(Self::Verb::Create),
             "delete" => Some(Self::Verb::Delete),
+            "clear" => Some(Self::Verb::Clear),
             _ => None,
         }
     }

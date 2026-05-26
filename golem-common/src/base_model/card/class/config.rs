@@ -44,7 +44,7 @@ impl Subsumes for ConfigResourcePattern {
 pub enum PolymorphicConfigResourcePattern {
     Concrete(ConfigResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for ConfigResourcePattern {

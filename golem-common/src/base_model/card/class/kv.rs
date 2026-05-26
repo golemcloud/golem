@@ -45,7 +45,7 @@ impl Subsumes for KvResourcePattern {
 pub enum PolymorphicKvResourcePattern {
     Concrete(KvResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for KvResourcePattern {
@@ -58,6 +58,7 @@ pub enum KvVerb {
     Read,
     Write,
     Delete,
+    List,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +77,7 @@ impl PermissionClass for KvClass {
             "read" => Some(Self::Verb::Read),
             "write" => Some(Self::Verb::Write),
             "delete" => Some(Self::Verb::Delete),
+            "list" => Some(Self::Verb::List),
             _ => None,
         }
     }

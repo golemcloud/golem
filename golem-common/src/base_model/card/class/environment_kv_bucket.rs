@@ -37,7 +37,7 @@ impl Subsumes for EnvironmentKvBucketResourcePattern {
 pub enum PolymorphicEnvironmentKvBucketResourcePattern {
     Concrete(EnvironmentKvBucketResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for EnvironmentKvBucketResourcePattern {
@@ -50,6 +50,7 @@ pub enum EnvironmentKvBucketVerb {
     View,
     Create,
     Delete,
+    Clear,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +69,7 @@ impl PermissionClass for EnvironmentKvBucketClass {
             "view" => Some(Self::Verb::View),
             "create" => Some(Self::Verb::Create),
             "delete" => Some(Self::Verb::Delete),
+            "clear" => Some(Self::Verb::Clear),
             _ => None,
         }
     }

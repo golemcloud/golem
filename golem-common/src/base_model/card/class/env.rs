@@ -36,7 +36,7 @@ impl Subsumes for EnvResourcePattern {
 pub enum PolymorphicEnvResourcePattern {
     Concrete(EnvResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for EnvResourcePattern {

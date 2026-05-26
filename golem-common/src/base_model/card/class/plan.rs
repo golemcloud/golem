@@ -36,7 +36,7 @@ impl Subsumes for PlanResourcePattern {
 pub enum PolymorphicPlanResourcePattern {
     Concrete(PlanResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for PlanResourcePattern {

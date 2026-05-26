@@ -206,10 +206,7 @@ fn generate_declared_permission_class_parser_tests(r: &mut DynamicTestRegistrati
         ("plan() @ acme : view : plan-a", "plan"),
         ("account(acme) @ acme : view :", "account"),
         ("account.usage(acme) @ acme : view :", "account.usage"),
-        (
-            "account.token(acme) @ acme : create : token-a",
-            "account.token",
-        ),
+        ("account.token(acme) @ acme : create :", "account.token"),
         (
             "account.plugin(acme) @ acme : view : plugin-a",
             "account.plugin",
@@ -425,7 +422,7 @@ fn parses_admin_class_examples() {
         parsed_permission("environment(acme/shop/prod) @ acme/shop/prod : deploy :"),
         PermissionPattern::Environment(EnvironmentPermissionPattern::Verb { verb: EnvironmentVerb::Deploy,
             owner: EnvironmentOwnerPattern(owner),
-            resource: EnvironmentResourcePattern,
+            resource: EnvironmentResourcePattern::Empty,
             ..
         }) if owner == "acme/shop/prod"
     );
@@ -436,6 +433,59 @@ fn parses_admin_class_examples() {
             resource: EnvironmentAgentSecretResourcePattern::Glob(path),
             ..
         }) if path == "cart.*"
+    );
+}
+
+#[test]
+fn parses_spec_specific_resource_shapes() {
+    let credential_id = "550e8400-e29b-41d4-a716-446655440000";
+    assert_matches!(
+        parsed_permission(&format!(
+            "application(acme/shop) @ acme : view-credentials : cred={credential_id}"
+        )),
+        PermissionPattern::Application(ApplicationPermissionPattern::Verb {
+            resource: ApplicationResourcePattern::Credential(id),
+            ..
+        }) if id.to_string() == credential_id
+    );
+
+    assert_matches!(
+        parsed_permission("environment(acme/shop/prod) @ acme/shop/prod : rollback : rev=42"),
+        PermissionPattern::Environment(EnvironmentPermissionPattern::Verb {
+            resource: EnvironmentResourcePattern::Revision(42),
+            ..
+        })
+    );
+
+    assert_matches!(
+        parsed_permission("component(acme/shop/prod/cart-svc) @ acme/shop/prod : view : rev=*"),
+        PermissionPattern::Component(ComponentPermissionPattern::Verb {
+            resource: ComponentResourcePattern::AnyRevision,
+            ..
+        })
+    );
+
+    assert_matches!(
+        parsed_permission(&format!("account.token(acme) @ acme : delete : {credential_id}")),
+        PermissionPattern::AccountToken(AccountTokenPermissionPattern::Verb {
+            resource: AccountTokenResourcePattern::Token(id),
+            ..
+        }) if id.to_string() == credential_id
+    );
+}
+
+#[test]
+fn empty_resource_classes_reject_polymorphic_resource_slots() {
+    assert_matches!(
+        parse_polymorphic_pattern_grant("account(?account) @ ?slot : view : ?resource"),
+        Err(CardParseError::InvalidResource { class, resource })
+            if class == AccountClass::NAME && resource == "?resource"
+    );
+
+    assert_matches!(
+        parse_polymorphic_pattern_grant("system() @ ?slot : create-account : ?resource"),
+        Err(CardParseError::InvalidResource { class, resource })
+            if class == SystemClass::NAME && resource == "?resource"
     );
 }
 
@@ -452,7 +502,7 @@ fn parses_polymorphic_pattern_grant_with_slot_paths() {
             recipient: PolymorphicAgentRecipientPattern::Slot(recipient),
             resource: PolymorphicSecretResourcePattern::Template(resource),
             ..
-        }) if owner == "env" && recipient == RecipientPathSlot::Slot && resource == "billing.?account.*"
+        }) if owner == "env" && recipient == RecipientPathSlot::Slot && resource == ResourceTemplate::parse("billing.?account.*").unwrap()
     );
 }
 
@@ -488,7 +538,7 @@ fn parses_polymorphic_resource_slots_and_templates() {
         PolymorphicPermissionPattern::Card(PolymorphicCardPermissionPattern::Verb { verb: CardVerb::Install,
             resource: PolymorphicCardResourcePattern::Template(target),
             ..
-        }) if target == "acme/shop/?env/*/*"
+        }) if target == ResourceTemplate::parse("acme/shop/?env/*/*").unwrap()
     );
 }
 
@@ -548,7 +598,7 @@ fn generate_hierarchy_slot_parser_tests(r: &mut DynamicTestRegistration) {
                         recipient: PolymorphicAgentRecipientPattern::Slot(recipient),
                         resource: PolymorphicSecretResourcePattern::Template(resource),
                         ..
-                    }) if owner == name && recipient == RecipientPathSlot::Slot && resource == format!("secret.{slot}")
+                    }) if owner == name && recipient == RecipientPathSlot::Slot && resource == ResourceTemplate::parse(&format!("secret.{slot}")).unwrap()
                 );
             }
         );

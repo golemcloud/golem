@@ -45,7 +45,7 @@ impl Subsumes for RdbmsResourcePattern {
 pub enum PolymorphicRdbmsResourcePattern {
     Concrete(RdbmsResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for RdbmsResourcePattern {
@@ -56,7 +56,7 @@ impl ResourcePattern for RdbmsResourcePattern {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum RdbmsVerb {
     Query,
-    Execute,
+    Mutate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,7 +73,7 @@ impl PermissionClass for RdbmsClass {
     fn parse_verb(verb: &str) -> Option<Self::Verb> {
         match verb {
             "query" => Some(Self::Verb::Query),
-            "execute" => Some(Self::Verb::Execute),
+            "mutate" => Some(Self::Verb::Mutate),
             _ => None,
         }
     }

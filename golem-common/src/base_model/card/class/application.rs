@@ -2,15 +2,26 @@ use super::*;
 use crate::base_model::card::parsing::{
     CardParseError, parse_account_recipient, parse_application_owner,
     parse_polymorphic_account_recipient, parse_polymorphic_application_owner,
+    parse_polymorphic_resource,
 };
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct ApplicationResourcePattern;
+pub enum ApplicationResourcePattern {
+    Empty,
+    AnyCredential,
+    Credential(Uuid),
+}
 
 impl Subsumes for ApplicationResourcePattern {
-    fn subsumes(&self, _other: &Self) -> bool {
-        true
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Empty, Self::Empty) => true,
+            (Self::AnyCredential, Self::AnyCredential | Self::Credential(_)) => true,
+            (Self::Credential(a), Self::Credential(b)) => a == b,
+            _ => false,
+        }
     }
 }
 
@@ -19,7 +30,7 @@ impl Subsumes for ApplicationResourcePattern {
 pub enum PolymorphicApplicationResourcePattern {
     Concrete(ApplicationResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for ApplicationResourcePattern {
@@ -38,6 +49,7 @@ pub enum ApplicationVerb {
     RotateCredential,
     RevokeCredential,
     ViewCredentials,
+    ListAllEnvironments,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +74,7 @@ impl PermissionClass for ApplicationClass {
             "rotate-credential" => Some(Self::Verb::RotateCredential),
             "revoke-credential" => Some(Self::Verb::RevokeCredential),
             "view-credentials" => Some(Self::Verb::ViewCredentials),
+            "list-all-environments" => Some(Self::Verb::ListAllEnvironments),
             _ => None,
         }
     }
@@ -117,7 +130,16 @@ impl ApplicationClass {
         resource: &str,
     ) -> Result<ApplicationResourcePattern, CardParseError> {
         if resource.is_empty() {
-            Ok(ApplicationResourcePattern)
+            Ok(ApplicationResourcePattern::Empty)
+        } else if resource == "cred=*" {
+            Ok(ApplicationResourcePattern::AnyCredential)
+        } else if let Some(credential_id) = resource.strip_prefix("cred=") {
+            Uuid::parse_str(credential_id)
+                .map(ApplicationResourcePattern::Credential)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: class.to_string(),
+                    resource: resource.to_string(),
+                })
         } else {
             Err(CardParseError::InvalidResource {
                 class: class.to_string(),
@@ -130,15 +152,13 @@ impl ApplicationClass {
         class: &str,
         resource: &str,
     ) -> Result<PolymorphicApplicationResourcePattern, CardParseError> {
-        if let Ok(resource) = Self::parse_resource(class, resource) {
-            Ok(PolymorphicApplicationResourcePattern::Concrete(resource))
-        } else if let Ok(slot) = SlotVariable::parse(resource) {
-            Ok(PolymorphicApplicationResourcePattern::Slot(slot))
-        } else {
-            Err(CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            })
-        }
+        parse_polymorphic_resource(
+            class,
+            resource,
+            Self::parse_resource,
+            PolymorphicApplicationResourcePattern::Concrete,
+            PolymorphicApplicationResourcePattern::Slot,
+            PolymorphicApplicationResourcePattern::Template,
+        )
     }
 }

@@ -55,7 +55,7 @@ impl Subsumes for NetworkResourcePattern {
 pub enum PolymorphicNetworkResourcePattern {
     Concrete(NetworkResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for NetworkResourcePattern {

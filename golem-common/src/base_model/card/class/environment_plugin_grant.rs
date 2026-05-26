@@ -37,7 +37,7 @@ impl Subsumes for EnvironmentPluginGrantResourcePattern {
 pub enum PolymorphicEnvironmentPluginGrantResourcePattern {
     Concrete(EnvironmentPluginGrantResourcePattern),
     Slot(SlotVariable),
-    Template(String),
+    Template(ResourceTemplate),
 }
 
 impl ResourcePattern for EnvironmentPluginGrantResourcePattern {
