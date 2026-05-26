@@ -8,7 +8,18 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentPluginGrantResourcePattern {
     Any,
-    Name(ResourceIdentifier),
+    Name(EnvironmentPluginGrantName),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct EnvironmentPluginGrantName(pub String);
+
+impl EnvironmentPluginGrantName {
+    fn parse(value: &str) -> Result<Self, String> {
+        parse_environment_plugin_grant_identifier(value).map(Self)
+    }
 }
 
 impl EnvironmentPluginGrantResourcePattern {
@@ -17,7 +28,7 @@ impl EnvironmentPluginGrantResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid plugin name"))
+        Self::Name(EnvironmentPluginGrantName::parse(&value.into()).expect("invalid plugin name"))
     }
 }
 
@@ -106,12 +117,25 @@ impl EnvironmentPluginGrantClass {
         if resource == "*" {
             Ok(EnvironmentPluginGrantResourcePattern::Any)
         } else {
-            ResourceIdentifier::parse(resource)
+            EnvironmentPluginGrantName::parse(resource)
                 .map(EnvironmentPluginGrantResourcePattern::Name)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: EnvironmentPluginGrantClass::NAME.to_string(),
                     resource: resource.to_string(),
                 })
         }
+    }
+}
+
+fn parse_environment_plugin_grant_identifier(value: &str) -> Result<String, String> {
+    let mut chars = value.chars();
+    if chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(value.to_string())
+    } else {
+        Err(value.to_string())
     }
 }

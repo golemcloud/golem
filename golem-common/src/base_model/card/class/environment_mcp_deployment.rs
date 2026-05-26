@@ -8,7 +8,18 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentMcpDeploymentResourcePattern {
     Any,
-    Name(ResourceIdentifier),
+    Name(EnvironmentMcpDeploymentName),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct EnvironmentMcpDeploymentName(pub String);
+
+impl EnvironmentMcpDeploymentName {
+    fn parse(value: &str) -> Result<Self, String> {
+        parse_environment_mcp_deployment_identifier(value).map(Self)
+    }
 }
 
 impl EnvironmentMcpDeploymentResourcePattern {
@@ -17,7 +28,10 @@ impl EnvironmentMcpDeploymentResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid MCP deployment name"))
+        Self::Name(
+            EnvironmentMcpDeploymentName::parse(&value.into())
+                .expect("invalid MCP deployment name"),
+        )
     }
 }
 
@@ -111,12 +125,25 @@ impl EnvironmentMcpDeploymentClass {
         if resource == "*" {
             Ok(EnvironmentMcpDeploymentResourcePattern::Any)
         } else {
-            ResourceIdentifier::parse(resource)
+            EnvironmentMcpDeploymentName::parse(resource)
                 .map(EnvironmentMcpDeploymentResourcePattern::Name)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: EnvironmentMcpDeploymentClass::NAME.to_string(),
                     resource: resource.to_string(),
                 })
         }
+    }
+}
+
+fn parse_environment_mcp_deployment_identifier(value: &str) -> Result<String, String> {
+    let mut chars = value.chars();
+    if chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(value.to_string())
+    } else {
+        Err(value.to_string())
     }
 }

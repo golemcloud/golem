@@ -14,14 +14,32 @@ pub enum EnvironmentDomainRegistrationResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct DomainNamePattern {
-    pub labels: Vec<ResourceIdentifier>,
+    pub labels: Vec<DomainLabel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct DomainLabel(pub String);
+
+impl DomainLabel {
+    fn parse(value: &str) -> Result<Self, String> {
+        let mut chars = value.chars();
+        if chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            Ok(Self(value.to_string()))
+        } else {
+            Err(value.to_string())
+        }
+    }
 }
 
 impl DomainNamePattern {
     fn parse(value: &str) -> Result<Self, String> {
         let labels = value
             .split('.')
-            .map(ResourceIdentifier::parse)
+            .map(DomainLabel::parse)
             .collect::<Result<Vec<_>, _>>()?;
         if labels.is_empty() {
             Err(value.to_string())

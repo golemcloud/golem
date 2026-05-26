@@ -8,7 +8,39 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum SecretResourcePattern {
     Any,
-    Key(DotPathPattern),
+    Key(SecretKeyPathPattern),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct SecretKeyPathPattern {
+    pub segments: Vec<SecretKeySegmentPattern>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum SecretKeySegmentPattern {
+    Literal(String),
+    Star,
+    GlobStar,
+}
+
+impl SecretKeyPathPattern {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        if value.is_empty() {
+            return Err(value.to_string());
+        }
+        Ok(Self {
+            segments: value
+                .split('.')
+                .map(parse_secret_key_segment)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+
+    pub fn subsumes(&self, other: &Self) -> bool {
+        secret_key_segments_subsume(&self.segments, &other.segments)
+    }
 }
 
 impl SecretResourcePattern {
@@ -17,7 +49,7 @@ impl SecretResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Key(DotPathPattern::parse(&value.into()).expect("invalid secret key path"))
+        Self::Key(SecretKeyPathPattern::parse(&value.into()).expect("invalid secret key path"))
     }
 
     pub fn glob(value: impl Into<String>) -> Self {
@@ -108,7 +140,7 @@ impl SecretClass {
         if resource == "*" {
             Ok(SecretResourcePattern::Any)
         } else {
-            DotPathPattern::parse(resource)
+            SecretKeyPathPattern::parse(resource)
                 .map(SecretResourcePattern::Key)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: SecretClass::NAME.to_string(),
@@ -116,4 +148,44 @@ impl SecretClass {
                 })
         }
     }
+}
+
+fn parse_secret_key_segment(value: &str) -> Result<SecretKeySegmentPattern, String> {
+    if value.is_empty() {
+        Err(value.to_string())
+    } else if value == "*" {
+        Ok(SecretKeySegmentPattern::Star)
+    } else if value == "**" {
+        Ok(SecretKeySegmentPattern::GlobStar)
+    } else if value.contains('*') || value.contains('.') {
+        Err(value.to_string())
+    } else {
+        Ok(SecretKeySegmentPattern::Literal(value.to_string()))
+    }
+}
+
+fn secret_key_segments_subsume(
+    left: &[SecretKeySegmentPattern],
+    right: &[SecretKeySegmentPattern],
+) -> bool {
+    if left
+        .first()
+        .is_some_and(|segment| matches!(segment, SecretKeySegmentPattern::GlobStar))
+    {
+        return true;
+    }
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .all(|(left, right)| match (left, right) {
+            (SecretKeySegmentPattern::GlobStar, _) => true,
+            (SecretKeySegmentPattern::Star, SecretKeySegmentPattern::Literal(_)) => true,
+            (SecretKeySegmentPattern::Star, SecretKeySegmentPattern::Star) => true,
+            (SecretKeySegmentPattern::Literal(left), SecretKeySegmentPattern::Literal(right)) => {
+                left == right
+            }
+            _ => false,
+        })
 }

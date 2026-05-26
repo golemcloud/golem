@@ -42,7 +42,9 @@ fn parses_canonical_pattern_grant() {
                 component: "cart".to_string(),
                 agent: "agent".to_string(),
             },
-            resource: FilesystemResourcePattern::Path(SlashPathPattern::parse("/data/**").unwrap()),
+            resource: FilesystemResourcePattern::Path(
+                FilesystemPathPattern::parse("/data/**").unwrap()
+            ),
         })
     );
 }
@@ -77,7 +79,7 @@ fn parses_email_recipient_inside_agent_scope() {
             recipient: AgentRecipientPattern::Agent { account, application, environment, component, agent },
             resource: FilesystemResourcePattern::Path(path),
             ..
-        }) if account == "alice@example.com" && application == "shop" && environment == "prod" && component == "cart-svc" && agent == "CartAgent(\"42\")" && path == SlashPathPattern::parse("/data/**").unwrap()
+        }) if account == "alice@example.com" && application == "shop" && environment == "prod" && component == "cart-svc" && agent == "CartAgent(\"42\")" && path == FilesystemPathPattern::parse("/data/**").unwrap()
     );
 }
 
@@ -300,7 +302,7 @@ fn parses_runtime_class_examples_from_spec() {
             owner: AgentOwnerPattern(owner),
             resource: FilesystemResourcePattern::Path(path),
             ..
-        }) if owner == "acme/shop/prod/cart-svc/CartAgent(\"42\")" && path == SlashPathPattern::parse("/data/**").unwrap()
+        }) if owner == "acme/shop/prod/cart-svc/CartAgent(\"42\")" && path == FilesystemPathPattern::parse("/data/**").unwrap()
     );
 
     assert_matches!(
@@ -315,7 +317,7 @@ fn parses_runtime_class_examples_from_spec() {
     assert_matches!(
         parsed_permission("env(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : HOME"),
         PermissionPattern::Env(EnvPermissionPattern::Verb { verb: EnvVerb::Read,
-            resource: EnvResourcePattern::VarName(ResourceIdentifier(name)),
+            resource: EnvResourcePattern::VarName(EnvVarName(name)),
             ..
         }) if name == "HOME"
     );
@@ -326,7 +328,7 @@ fn parses_runtime_class_examples_from_spec() {
             owner: EnvironmentOwnerPattern(owner),
             resource: SecretResourcePattern::Key(key),
             ..
-        }) if owner == "acme/shop/prod" && key == DotPathPattern::parse("cart.api-key").unwrap()
+        }) if owner == "acme/shop/prod" && key == SecretKeyPathPattern::parse("cart.api-key").unwrap()
     );
 
     assert_matches!(
@@ -344,7 +346,7 @@ fn parses_agent_tool_and_card_examples_from_spec() {
         parsed_permission("agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : add-item"),
         PermissionPattern::Agent(AgentPermissionPattern::Verb { verb: AgentVerb::Invoke,
             owner: AgentOwnerPattern(owner),
-            resource: AgentResourcePattern::Method(ResourceIdentifier(method)),
+            resource: AgentResourcePattern::Method(AgentMethodName(method)),
             ..
         }) if owner == "acme/shop/prod/cart-svc/ShoppingCart(*)" && method == "add-item"
     );
@@ -366,7 +368,7 @@ fn parses_agent_tool_and_card_examples_from_spec() {
             owner: ToolOwnerPattern(owner),
             resource: ToolResourcePattern::Invocation(command),
             ..
-        }) if owner == "acme/shop/prod/cli-tools/grep" && command.command_path == Some(vec![ResourceIdentifier("search".to_string())])
+        }) if owner == "acme/shop/prod/cli-tools/grep" && command.command_path == Some(vec![ToolIdentifier("search".to_string())])
     );
 
     assert_matches!(
@@ -435,7 +437,7 @@ fn parses_admin_class_examples() {
         PermissionPattern::EnvironmentAgentSecret(EnvironmentAgentSecretPermissionPattern::Verb { verb: EnvironmentAgentSecretVerb::Update,
             resource: EnvironmentAgentSecretResourcePattern::Key(path),
             ..
-        }) if path == DotPathPattern::parse("cart.*").unwrap()
+        }) if path == EnvironmentAgentSecretKeyPathPattern::parse("cart.*").unwrap()
     );
 }
 
@@ -504,7 +506,7 @@ fn polymorphic_pattern_grants_keep_resources_monomorphic() {
             recipient: PolymorphicAgentRecipientPattern::Slot(recipient),
             resource: SecretResourcePattern::Key(resource),
             ..
-        }) if owner == "env" && recipient == RecipientPathSlot::Slot && resource == DotPathPattern::parse("billing.account").unwrap()
+        }) if owner == "env" && recipient == RecipientPathSlot::Slot && resource == SecretKeyPathPattern::parse("billing.account").unwrap()
     );
 }
 
@@ -585,7 +587,7 @@ fn generate_hierarchy_slot_parser_tests(r: &mut DynamicTestRegistration) {
                         recipient: PolymorphicAgentRecipientPattern::Slot(recipient),
                         resource: SecretResourcePattern::Key(resource),
                         ..
-                    }) if owner == name && recipient == RecipientPathSlot::Slot && resource == DotPathPattern::parse("secret.key").unwrap()
+                    }) if owner == name && recipient == RecipientPathSlot::Slot && resource == SecretKeyPathPattern::parse("secret.key").unwrap()
                 );
             }
         );

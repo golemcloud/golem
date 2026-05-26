@@ -8,7 +8,27 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvResourcePattern {
     Any,
-    VarName(ResourceIdentifier),
+    VarName(EnvVarName),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct EnvVarName(pub String);
+
+impl EnvVarName {
+    fn parse(value: &str) -> Result<Self, String> {
+        let mut chars = value.chars();
+        if chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            Ok(Self(value.to_string()))
+        } else {
+            Err(value.to_string())
+        }
+    }
 }
 
 impl EnvResourcePattern {
@@ -17,7 +37,7 @@ impl EnvResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::VarName(ResourceIdentifier::parse(&value.into()).expect("invalid env var name"))
+        Self::VarName(EnvVarName::parse(&value.into()).expect("invalid env var name"))
     }
 }
 
@@ -97,7 +117,7 @@ impl EnvClass {
         if resource == "*" {
             Ok(EnvResourcePattern::Any)
         } else {
-            ResourceIdentifier::parse(resource)
+            EnvVarName::parse(resource)
                 .map(EnvResourcePattern::VarName)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: EnvClass::NAME.to_string(),

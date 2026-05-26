@@ -10,18 +10,39 @@ use uuid::Uuid;
 pub enum AgentResourcePattern {
     Any,
     Empty,
-    Method(ResourceIdentifier),
+    Method(AgentMethodName),
     OplogIndex(u64),
     InvocationId(AgentInvocationIdPattern),
-    PluginName(ResourceIdentifier),
+    PluginName(AgentPluginName),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct AgentMethodName(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct AgentPluginName(pub String);
+
+impl AgentMethodName {
+    fn parse(value: &str) -> Result<Self, String> {
+        parse_agent_identifier(value).map(Self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentInvocationIdPattern {
     Uuid(Uuid),
-    Identifier(ResourceIdentifier),
+    Identifier(AgentInvocationIdentifier),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct AgentInvocationIdentifier(pub String);
 
 impl AgentResourcePattern {
     pub fn any() -> Self {
@@ -33,7 +54,7 @@ impl AgentResourcePattern {
     }
 
     pub fn method(method: impl Into<String>) -> Self {
-        Self::Method(ResourceIdentifier::parse(&method.into()).expect("invalid method name"))
+        Self::Method(AgentMethodName::parse(&method.into()).expect("invalid method name"))
     }
 }
 
@@ -144,7 +165,7 @@ impl AgentClass {
             Ok(AgentResourcePattern::InvocationId(
                 AgentInvocationIdPattern::Uuid(uuid),
             ))
-        } else if let Ok(identifier) = ResourceIdentifier::parse(resource) {
+        } else if let Ok(identifier) = AgentMethodName::parse(resource) {
             Ok(AgentResourcePattern::Method(identifier))
         } else {
             Err(CardParseError::InvalidResource {
@@ -152,5 +173,18 @@ impl AgentClass {
                 resource: resource.to_string(),
             })
         }
+    }
+}
+
+fn parse_agent_identifier(value: &str) -> Result<String, String> {
+    let mut chars = value.chars();
+    if chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(value.to_string())
+    } else {
+        Err(value.to_string())
     }
 }

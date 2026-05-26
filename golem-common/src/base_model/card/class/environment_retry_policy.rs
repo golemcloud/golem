@@ -8,7 +8,18 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentRetryPolicyResourcePattern {
     Any,
-    Name(ResourceIdentifier),
+    Name(EnvironmentRetryPolicyName),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct EnvironmentRetryPolicyName(pub String);
+
+impl EnvironmentRetryPolicyName {
+    fn parse(value: &str) -> Result<Self, String> {
+        parse_environment_retry_policy_identifier(value).map(Self)
+    }
 }
 
 impl EnvironmentRetryPolicyResourcePattern {
@@ -17,7 +28,9 @@ impl EnvironmentRetryPolicyResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid retry policy name"))
+        Self::Name(
+            EnvironmentRetryPolicyName::parse(&value.into()).expect("invalid retry policy name"),
+        )
     }
 }
 
@@ -110,12 +123,25 @@ impl EnvironmentRetryPolicyClass {
         if resource == "*" {
             Ok(EnvironmentRetryPolicyResourcePattern::Any)
         } else {
-            ResourceIdentifier::parse(resource)
+            EnvironmentRetryPolicyName::parse(resource)
                 .map(EnvironmentRetryPolicyResourcePattern::Name)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: EnvironmentRetryPolicyClass::NAME.to_string(),
                     resource: resource.to_string(),
                 })
         }
+    }
+}
+
+fn parse_environment_retry_policy_identifier(value: &str) -> Result<String, String> {
+    let mut chars = value.chars();
+    if chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(value.to_string())
+    } else {
+        Err(value.to_string())
     }
 }

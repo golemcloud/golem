@@ -8,7 +8,18 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountPluginResourcePattern {
     Any,
-    Name(ResourceIdentifier),
+    Name(AccountPluginName),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct AccountPluginName(pub String);
+
+impl AccountPluginName {
+    fn parse(value: &str) -> Result<Self, String> {
+        parse_account_plugin_identifier(value).map(Self)
+    }
 }
 
 impl AccountPluginResourcePattern {
@@ -17,7 +28,7 @@ impl AccountPluginResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid plugin name"))
+        Self::Name(AccountPluginName::parse(&value.into()).expect("invalid plugin name"))
     }
 }
 
@@ -107,12 +118,25 @@ impl AccountPluginClass {
         if resource == "*" {
             Ok(AccountPluginResourcePattern::Any)
         } else {
-            ResourceIdentifier::parse(resource)
+            AccountPluginName::parse(resource)
                 .map(AccountPluginResourcePattern::Name)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: AccountPluginClass::NAME.to_string(),
                     resource: resource.to_string(),
                 })
         }
+    }
+}
+
+fn parse_account_plugin_identifier(value: &str) -> Result<String, String> {
+    let mut chars = value.chars();
+    if chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(value.to_string())
+    } else {
+        Err(value.to_string())
     }
 }

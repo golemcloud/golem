@@ -8,7 +8,18 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentBlobBucketResourcePattern {
     Any,
-    Name(ResourceIdentifier),
+    Name(EnvironmentBlobBucketName),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct EnvironmentBlobBucketName(pub String);
+
+impl EnvironmentBlobBucketName {
+    fn parse(value: &str) -> Result<Self, String> {
+        parse_environment_blob_bucket_identifier(value).map(Self)
+    }
 }
 
 impl EnvironmentBlobBucketResourcePattern {
@@ -17,7 +28,9 @@ impl EnvironmentBlobBucketResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid blob bucket name"))
+        Self::Name(
+            EnvironmentBlobBucketName::parse(&value.into()).expect("invalid blob bucket name"),
+        )
     }
 }
 
@@ -108,12 +121,25 @@ impl EnvironmentBlobBucketClass {
         if resource == "*" {
             Ok(EnvironmentBlobBucketResourcePattern::Any)
         } else {
-            ResourceIdentifier::parse(resource)
+            EnvironmentBlobBucketName::parse(resource)
                 .map(EnvironmentBlobBucketResourcePattern::Name)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: EnvironmentBlobBucketClass::NAME.to_string(),
                     resource: resource.to_string(),
                 })
         }
+    }
+}
+
+fn parse_environment_blob_bucket_identifier(value: &str) -> Result<String, String> {
+    let mut chars = value.chars();
+    if chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(value.to_string())
+    } else {
+        Err(value.to_string())
     }
 }

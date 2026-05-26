@@ -15,8 +15,28 @@ pub enum PlanResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PlanIdPattern {
-    Identifier(ResourceIdentifier),
+    Identifier(PlanIdentifier),
     Uuid(Uuid),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct PlanIdentifier(pub String);
+
+impl PlanIdentifier {
+    fn parse(value: &str) -> Result<Self, String> {
+        let mut chars = value.chars();
+        if chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            Ok(Self(value.to_string()))
+        } else {
+            Err(value.to_string())
+        }
+    }
 }
 
 impl PlanResourcePattern {
@@ -124,6 +144,6 @@ fn parse_plan_id(value: &str) -> Result<PlanIdPattern, String> {
     if let Ok(uuid) = Uuid::parse_str(value) {
         Ok(PlanIdPattern::Uuid(uuid))
     } else {
-        ResourceIdentifier::parse(value).map(PlanIdPattern::Identifier)
+        PlanIdentifier::parse(value).map(PlanIdPattern::Identifier)
     }
 }

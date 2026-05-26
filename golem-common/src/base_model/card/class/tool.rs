@@ -14,8 +14,28 @@ pub enum ToolResourcePattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct ToolInvocationPattern {
-    pub command_path: Option<Vec<ResourceIdentifier>>,
+    pub command_path: Option<Vec<ToolIdentifier>>,
     pub args: Vec<ToolArgPattern>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct ToolIdentifier(pub String);
+
+impl ToolIdentifier {
+    fn parse(value: &str) -> Result<Self, String> {
+        let mut chars = value.chars();
+        if chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            Ok(Self(value.to_string()))
+        } else {
+            Err(value.to_string())
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,7 +46,7 @@ pub enum ToolArgPattern {
         value: Option<ToolValuePattern>,
     },
     LongFlag {
-        name: ResourceIdentifier,
+        name: ToolIdentifier,
         value: Option<ToolValuePattern>,
     },
     Positional(ToolValuePattern),
@@ -35,10 +55,15 @@ pub enum ToolArgPattern {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ToolValuePattern {
-    Literal(ResourceLiteral),
+    Literal(ToolValueLiteral),
     Star,
     GlobStar,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct ToolValueLiteral(pub String);
 
 impl ToolResourcePattern {
     pub fn any() -> Self {
@@ -146,7 +171,7 @@ fn parse_tool_invocation_pattern(value: &str) -> Result<ToolInvocationPattern, S
             Some(
                 command
                     .split('.')
-                    .map(ResourceIdentifier::parse)
+                    .map(ToolIdentifier::parse)
                     .collect::<Result<Vec<_>, _>>()?,
             )
         }
@@ -158,7 +183,7 @@ fn parse_tool_invocation_pattern(value: &str) -> Result<ToolInvocationPattern, S
         if let Some(long) = token.strip_prefix("--") {
             let (name, value) = split_flag_value(long, &mut tokens)?;
             args.push(ToolArgPattern::LongFlag {
-                name: ResourceIdentifier::parse(name)?,
+                name: ToolIdentifier::parse(name)?,
                 value,
             });
         } else if let Some(short) = token.strip_prefix('-') {
@@ -199,7 +224,7 @@ fn parse_tool_value_pattern(value: &str) -> Result<ToolValuePattern, String> {
     } else if value == "**" {
         Ok(ToolValuePattern::GlobStar)
     } else {
-        Ok(ToolValuePattern::Literal(ResourceLiteral(
+        Ok(ToolValuePattern::Literal(ToolValueLiteral(
             value.to_string(),
         )))
     }

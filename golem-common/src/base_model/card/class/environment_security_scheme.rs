@@ -8,7 +8,18 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentSecuritySchemeResourcePattern {
     Any,
-    Name(ResourceIdentifier),
+    Name(EnvironmentSecuritySchemeName),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct EnvironmentSecuritySchemeName(pub String);
+
+impl EnvironmentSecuritySchemeName {
+    fn parse(value: &str) -> Result<Self, String> {
+        parse_environment_security_scheme_identifier(value).map(Self)
+    }
 }
 
 impl EnvironmentSecuritySchemeResourcePattern {
@@ -17,7 +28,9 @@ impl EnvironmentSecuritySchemeResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid scheme name"))
+        Self::Name(
+            EnvironmentSecuritySchemeName::parse(&value.into()).expect("invalid scheme name"),
+        )
     }
 }
 
@@ -111,12 +124,25 @@ impl EnvironmentSecuritySchemeClass {
         if resource == "*" {
             Ok(EnvironmentSecuritySchemeResourcePattern::Any)
         } else {
-            ResourceIdentifier::parse(resource)
+            EnvironmentSecuritySchemeName::parse(resource)
                 .map(EnvironmentSecuritySchemeResourcePattern::Name)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: EnvironmentSecuritySchemeClass::NAME.to_string(),
                     resource: resource.to_string(),
                 })
         }
+    }
+}
+
+fn parse_environment_security_scheme_identifier(value: &str) -> Result<String, String> {
+    let mut chars = value.chars();
+    if chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(value.to_string())
+    } else {
+        Err(value.to_string())
     }
 }

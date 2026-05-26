@@ -8,7 +8,18 @@ use crate::base_model::card::parsing::{
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentKvBucketResourcePattern {
     Any,
-    Name(ResourceIdentifier),
+    Name(EnvironmentKvBucketName),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct EnvironmentKvBucketName(pub String);
+
+impl EnvironmentKvBucketName {
+    fn parse(value: &str) -> Result<Self, String> {
+        parse_environment_kv_bucket_identifier(value).map(Self)
+    }
 }
 
 impl EnvironmentKvBucketResourcePattern {
@@ -17,7 +28,7 @@ impl EnvironmentKvBucketResourcePattern {
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(ResourceIdentifier::parse(&value.into()).expect("invalid KV bucket name"))
+        Self::Name(EnvironmentKvBucketName::parse(&value.into()).expect("invalid KV bucket name"))
     }
 }
 
@@ -107,12 +118,25 @@ impl EnvironmentKvBucketClass {
         if resource == "*" {
             Ok(EnvironmentKvBucketResourcePattern::Any)
         } else {
-            ResourceIdentifier::parse(resource)
+            EnvironmentKvBucketName::parse(resource)
                 .map(EnvironmentKvBucketResourcePattern::Name)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: EnvironmentKvBucketClass::NAME.to_string(),
                     resource: resource.to_string(),
                 })
         }
+    }
+}
+
+fn parse_environment_kv_bucket_identifier(value: &str) -> Result<String, String> {
+    let mut chars = value.chars();
+    if chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(value.to_string())
+    } else {
+        Err(value.to_string())
     }
 }
