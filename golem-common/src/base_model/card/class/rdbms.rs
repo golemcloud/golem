@@ -1,4 +1,9 @@
 use super::*;
+use crate::base_model::card::parsing::{
+    CardParseError, parse_agent_recipient, parse_environment_owner,
+    parse_polymorphic_agent_recipient, parse_polymorphic_environment_owner,
+    parse_polymorphic_resource,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -68,3 +73,104 @@ impl PermissionClass for RdbmsClass {
 
 pub type RdbmsPermissionPattern = ClassPermissionPattern<RdbmsClass>;
 pub type PolymorphicRdbmsPermissionPattern = PolymorphicClassPermissionPattern<RdbmsClass>;
+
+impl RdbmsClass {
+    pub(crate) fn parse_permission(
+        owner: &str,
+        recipient: &str,
+        verb: &str,
+        resource: &str,
+    ) -> Result<PermissionPattern, CardParseError> {
+        let owner = parse_environment_owner(Self::NAME, owner)?;
+        let recipient = parse_agent_recipient(recipient)?;
+        let resource = Self::parse_resource(Self::NAME, resource)?;
+        Ok(PermissionPattern::Rdbms(match verb {
+            "*" => RdbmsPermissionPattern::Any {
+                owner,
+                recipient,
+                resource,
+            },
+            "query" => RdbmsPermissionPattern::Verb {
+                verb: RdbmsVerb::Query,
+                owner,
+                recipient,
+                resource,
+            },
+            "execute" => RdbmsPermissionPattern::Verb {
+                verb: RdbmsVerb::Execute,
+                owner,
+                recipient,
+                resource,
+            },
+            other => {
+                return Err(CardParseError::UnknownVerb {
+                    class: Self::NAME.to_string(),
+                    verb: other.to_string(),
+                });
+            }
+        }))
+    }
+
+    pub(crate) fn parse_polymorphic_permission(
+        owner: &str,
+        recipient: &str,
+        verb: &str,
+        resource: &str,
+    ) -> Result<PolymorphicPermissionPattern, CardParseError> {
+        let owner = parse_polymorphic_environment_owner(Self::NAME, owner)?;
+        let recipient = parse_polymorphic_agent_recipient(recipient)?;
+        let resource = Self::parse_polymorphic_resource(Self::NAME, resource)?;
+        Ok(PolymorphicPermissionPattern::Rdbms(match verb {
+            "*" => PolymorphicRdbmsPermissionPattern::Any {
+                owner,
+                recipient,
+                resource,
+            },
+            "query" => PolymorphicRdbmsPermissionPattern::Verb {
+                verb: RdbmsVerb::Query,
+                owner,
+                recipient,
+                resource,
+            },
+            "execute" => PolymorphicRdbmsPermissionPattern::Verb {
+                verb: RdbmsVerb::Execute,
+                owner,
+                recipient,
+                resource,
+            },
+            other => {
+                return Err(CardParseError::UnknownVerb {
+                    class: Self::NAME.to_string(),
+                    verb: other.to_string(),
+                });
+            }
+        }))
+    }
+
+    fn parse_resource(
+        _class: &str,
+        resource: &str,
+    ) -> Result<RdbmsResourcePattern, CardParseError> {
+        if resource == "*" || resource == "**" {
+            Ok(RdbmsResourcePattern::Any)
+        } else if resource.contains('*') {
+            Ok(RdbmsResourcePattern::Glob(resource.to_string()))
+        } else {
+            Ok(RdbmsResourcePattern::Exact(resource.to_string()))
+        }
+    }
+
+    fn parse_polymorphic_resource(
+        class: &str,
+        resource: &str,
+    ) -> Result<PolymorphicRdbmsResourcePattern, CardParseError> {
+        parse_polymorphic_resource(
+            class,
+            resource,
+            Self::parse_resource,
+            PolymorphicRdbmsResourcePattern::Concrete,
+            PolymorphicRdbmsResourcePattern::Slot,
+            PolymorphicRdbmsResourcePattern::Template,
+        )
+    }
+}

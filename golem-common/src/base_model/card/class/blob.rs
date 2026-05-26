@@ -1,4 +1,9 @@
 use super::*;
+use crate::base_model::card::parsing::{
+    CardParseError, parse_agent_recipient, parse_environment_owner,
+    parse_polymorphic_agent_recipient, parse_polymorphic_environment_owner,
+    parse_polymorphic_resource,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -69,3 +74,113 @@ impl PermissionClass for BlobClass {
 
 pub type BlobPermissionPattern = ClassPermissionPattern<BlobClass>;
 pub type PolymorphicBlobPermissionPattern = PolymorphicClassPermissionPattern<BlobClass>;
+
+impl BlobClass {
+    pub(crate) fn parse_permission(
+        owner: &str,
+        recipient: &str,
+        verb: &str,
+        resource: &str,
+    ) -> Result<PermissionPattern, CardParseError> {
+        let owner = parse_environment_owner(Self::NAME, owner)?;
+        let recipient = parse_agent_recipient(recipient)?;
+        let resource = Self::parse_resource(Self::NAME, resource)?;
+        Ok(PermissionPattern::Blob(match verb {
+            "*" => BlobPermissionPattern::Any {
+                owner,
+                recipient,
+                resource,
+            },
+            "read" => BlobPermissionPattern::Verb {
+                verb: BlobVerb::Read,
+                owner,
+                recipient,
+                resource,
+            },
+            "write" => BlobPermissionPattern::Verb {
+                verb: BlobVerb::Write,
+                owner,
+                recipient,
+                resource,
+            },
+            "delete" => BlobPermissionPattern::Verb {
+                verb: BlobVerb::Delete,
+                owner,
+                recipient,
+                resource,
+            },
+            other => {
+                return Err(CardParseError::UnknownVerb {
+                    class: Self::NAME.to_string(),
+                    verb: other.to_string(),
+                });
+            }
+        }))
+    }
+
+    pub(crate) fn parse_polymorphic_permission(
+        owner: &str,
+        recipient: &str,
+        verb: &str,
+        resource: &str,
+    ) -> Result<PolymorphicPermissionPattern, CardParseError> {
+        let owner = parse_polymorphic_environment_owner(Self::NAME, owner)?;
+        let recipient = parse_polymorphic_agent_recipient(recipient)?;
+        let resource = Self::parse_polymorphic_resource(Self::NAME, resource)?;
+        Ok(PolymorphicPermissionPattern::Blob(match verb {
+            "*" => PolymorphicBlobPermissionPattern::Any {
+                owner,
+                recipient,
+                resource,
+            },
+            "read" => PolymorphicBlobPermissionPattern::Verb {
+                verb: BlobVerb::Read,
+                owner,
+                recipient,
+                resource,
+            },
+            "write" => PolymorphicBlobPermissionPattern::Verb {
+                verb: BlobVerb::Write,
+                owner,
+                recipient,
+                resource,
+            },
+            "delete" => PolymorphicBlobPermissionPattern::Verb {
+                verb: BlobVerb::Delete,
+                owner,
+                recipient,
+                resource,
+            },
+            other => {
+                return Err(CardParseError::UnknownVerb {
+                    class: Self::NAME.to_string(),
+                    verb: other.to_string(),
+                });
+            }
+        }))
+    }
+
+    fn parse_resource(_class: &str, resource: &str) -> Result<BlobResourcePattern, CardParseError> {
+        if resource == "*" || resource == "**" {
+            Ok(BlobResourcePattern::Any)
+        } else if resource.contains('*') {
+            Ok(BlobResourcePattern::Glob(resource.to_string()))
+        } else {
+            Ok(BlobResourcePattern::Exact(resource.to_string()))
+        }
+    }
+
+    fn parse_polymorphic_resource(
+        class: &str,
+        resource: &str,
+    ) -> Result<PolymorphicBlobResourcePattern, CardParseError> {
+        parse_polymorphic_resource(
+            class,
+            resource,
+            Self::parse_resource,
+            PolymorphicBlobResourcePattern::Concrete,
+            PolymorphicBlobResourcePattern::Slot,
+            PolymorphicBlobResourcePattern::Template,
+        )
+    }
+}

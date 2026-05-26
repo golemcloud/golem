@@ -1,4 +1,8 @@
 use super::*;
+use crate::base_model::card::parsing::{
+    CardParseError, parse_agent_owner, parse_agent_recipient, parse_polymorphic_agent_owner,
+    parse_polymorphic_agent_recipient, parse_polymorphic_resource,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -59,3 +63,87 @@ impl PermissionClass for EnvClass {
 
 pub type EnvPermissionPattern = ClassPermissionPattern<EnvClass>;
 pub type PolymorphicEnvPermissionPattern = PolymorphicClassPermissionPattern<EnvClass>;
+
+impl EnvClass {
+    pub(crate) fn parse_permission(
+        owner: &str,
+        recipient: &str,
+        verb: &str,
+        resource: &str,
+    ) -> Result<PermissionPattern, CardParseError> {
+        let owner = parse_agent_owner(Self::NAME, owner)?;
+        let recipient = parse_agent_recipient(recipient)?;
+        let resource = Self::parse_resource(Self::NAME, resource)?;
+        Ok(PermissionPattern::Env(match verb {
+            "*" => EnvPermissionPattern::Any {
+                owner,
+                recipient,
+                resource,
+            },
+            "read" => EnvPermissionPattern::Verb {
+                verb: EnvVerb::Read,
+                owner,
+                recipient,
+                resource,
+            },
+            other => {
+                return Err(CardParseError::UnknownVerb {
+                    class: Self::NAME.to_string(),
+                    verb: other.to_string(),
+                });
+            }
+        }))
+    }
+
+    pub(crate) fn parse_polymorphic_permission(
+        owner: &str,
+        recipient: &str,
+        verb: &str,
+        resource: &str,
+    ) -> Result<PolymorphicPermissionPattern, CardParseError> {
+        let owner = parse_polymorphic_agent_owner(Self::NAME, owner)?;
+        let recipient = parse_polymorphic_agent_recipient(recipient)?;
+        let resource = Self::parse_polymorphic_resource(Self::NAME, resource)?;
+        Ok(PolymorphicPermissionPattern::Env(match verb {
+            "*" => PolymorphicEnvPermissionPattern::Any {
+                owner,
+                recipient,
+                resource,
+            },
+            "read" => PolymorphicEnvPermissionPattern::Verb {
+                verb: EnvVerb::Read,
+                owner,
+                recipient,
+                resource,
+            },
+            other => {
+                return Err(CardParseError::UnknownVerb {
+                    class: Self::NAME.to_string(),
+                    verb: other.to_string(),
+                });
+            }
+        }))
+    }
+
+    fn parse_resource(_class: &str, resource: &str) -> Result<EnvResourcePattern, CardParseError> {
+        if resource == "*" {
+            Ok(EnvResourcePattern::Any)
+        } else {
+            Ok(EnvResourcePattern::Exact(resource.to_string()))
+        }
+    }
+
+    fn parse_polymorphic_resource(
+        class: &str,
+        resource: &str,
+    ) -> Result<PolymorphicEnvResourcePattern, CardParseError> {
+        parse_polymorphic_resource(
+            class,
+            resource,
+            Self::parse_resource,
+            PolymorphicEnvResourcePattern::Concrete,
+            PolymorphicEnvResourcePattern::Slot,
+            PolymorphicEnvResourcePattern::Template,
+        )
+    }
+}
