@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::{Card, PatternGrant, RecipientPathPattern};
+use crate::base_model::card::{Card, PatternGrant};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,10 +28,7 @@ impl PatternGrant {
         Ok(self.permission.subsumes(&other.permission))
     }
 
-    pub fn applies_to_recipient(
-        &self,
-        holder: &RecipientPathPattern,
-    ) -> Result<bool, CardAlgebraError> {
+    pub fn applies_to_recipient(&self, holder: &str) -> Result<bool, CardAlgebraError> {
         Ok(self.permission.matches_recipient(holder))
     }
 }
@@ -67,10 +64,7 @@ pub struct EffectiveSurface {
 }
 
 impl EffectiveSurface {
-    pub fn from_cards(
-        cards: &[Card],
-        holder: &RecipientPathPattern,
-    ) -> Result<Self, CardAlgebraError> {
+    pub fn from_cards(cards: &[Card], holder: &str) -> Result<Self, CardAlgebraError> {
         let mut lower_positive = Vec::new();
         let mut lower_negative = Vec::new();
         let mut upper = Vec::new();
@@ -114,7 +108,7 @@ impl EffectiveSurface {
 
     pub fn validates_derivation(
         parent_cards: &[Card],
-        holder: &RecipientPathPattern,
+        holder: &str,
         child_lower: &[PatternGrant],
         child_upper: &[PatternGrant],
     ) -> Result<(), CardAlgebraError> {
@@ -140,7 +134,7 @@ impl EffectiveSurface {
 
 fn filter_by_recipient(
     grants: &[PatternGrant],
-    holder: &RecipientPathPattern,
+    holder: &str,
 ) -> Result<Vec<PatternGrant>, CardAlgebraError> {
     grants
         .iter()
@@ -154,7 +148,7 @@ fn filter_by_recipient(
 
 fn union_lower_allows(
     cards: &[Card],
-    holder: &RecipientPathPattern,
+    holder: &str,
     grant: &PatternGrant,
 ) -> Result<bool, CardAlgebraError> {
     for card in cards {
@@ -171,7 +165,7 @@ fn union_lower_allows(
 
 fn union_upper_allows(
     cards: &[Card],
-    holder: &RecipientPathPattern,
+    holder: &str,
     grant: &PatternGrant,
 ) -> Result<bool, CardAlgebraError> {
     for card in cards {

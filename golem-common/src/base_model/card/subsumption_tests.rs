@@ -68,8 +68,8 @@ fn owner_wildcards_subsume_segments() {
 fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
     let cases = [
         ("acme/shop/prod/*/*", "acme/shop/prod/cart/agent", true),
-        ("acme/*/prod/*/*", "acme/shop/prod/cart/agent", true),
-        ("*/shop/prod/cart/agent", "acme/shop/prod/cart/agent", true),
+        ("acme/shop/*/*/*", "acme/shop/prod/cart/agent", true),
+        ("*/*/*/*/*", "acme/shop/prod/cart/agent", true),
         (
             "acme/shop/prod/cart/agent",
             "acme/shop/prod/cart/agent",
@@ -119,58 +119,76 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
 
 #[test]
 fn invalid_owner_paths_fail_subsumption() {
-    let invalid = AgentOwnerPattern::new("acme//prod/cart/agent");
-    let valid = AgentOwnerPattern::new("acme/shop/prod/cart/agent");
-
-    assert!(!invalid.subsumes(&valid));
+    assert_matches!(
+        AgentOwnerPattern::parse("acme//prod/cart/agent"),
+        Err(path) if path == "acme//prod/cart/agent"
+    );
+    assert_matches!(AgentOwnerPattern::parse("acme/*/prod/*/*"), Err(_));
+    assert_matches!(AgentOwnerPattern::parse("*/shop/prod/cart/agent"), Err(_));
 }
 
 #[test]
 fn recipient_patterns_subsume_only_matching_holder_subtrees() {
-    let account = RecipientPathPattern::parse("acme").unwrap();
-    let account_environments = RecipientPathPattern::parse("acme/*/*").unwrap();
-    let account_agents = RecipientPathPattern::parse("acme/*/*/*/*").unwrap();
-    let application_environments = RecipientPathPattern::parse("acme/shop/*").unwrap();
-    let application_agents = RecipientPathPattern::parse("acme/shop/*/*/*").unwrap();
-    let environment = RecipientPathPattern::parse("acme/shop/prod").unwrap();
-    let agent_type = RecipientPathPattern::parse("acme/shop/prod/cart-svc/*").unwrap();
+    let account = AccountRecipientPattern::parse("acme").unwrap();
+    let account_environments = EnvironmentRecipientPattern::parse("acme/*/*").unwrap();
+    let application_environments = EnvironmentRecipientPattern::parse("acme/shop/*").unwrap();
+    let environment = EnvironmentRecipientPattern::parse("acme/shop/prod").unwrap();
+    let account_agents = AgentRecipientPattern::parse("acme/*/*/*/*").unwrap();
+    let application_agents = AgentRecipientPattern::parse("acme/shop/*/*/*").unwrap();
+    let agent_type = AgentRecipientPattern::parse("acme/shop/prod/cart-svc/*").unwrap();
     let agent =
-        RecipientPathPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(\"42\")").unwrap();
-    let other =
-        RecipientPathPattern::parse("other/shop/prod/cart-svc/ShoppingCart(\"42\")").unwrap();
+        AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(\"42\")").unwrap();
 
-    assert!(account.subsumes(&agent));
-    assert!(account.subsumes(&environment));
+    assert!(account.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
+    assert!(account.matches_holder("acme/shop/prod"));
     assert!(account_environments.subsumes(&environment));
-    assert!(account_environments.subsumes(&agent));
+    assert!(account_environments.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
     assert!(application_environments.subsumes(&environment));
-    assert!(application_environments.subsumes(&agent));
+    assert!(
+        application_environments.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")")
+    );
     assert!(account_agents.subsumes(&agent));
     assert!(application_agents.subsumes(&agent));
-    assert!(!account_agents.subsumes(&environment));
-    assert!(environment.subsumes(&agent));
+    assert!(!account_agents.matches_holder("acme/shop/prod"));
+    assert!(environment.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
     assert!(agent_type.subsumes(&agent));
     assert!(!agent.subsumes(&agent_type));
-    assert!(!account.subsumes(&other));
+    assert!(!account.matches_holder("other/shop/prod/cart-svc/ShoppingCart(\"42\")"));
 }
 
 #[test_gen]
 fn generate_recipient_subsumption_scope_tests(r: &mut DynamicTestRegistration) {
-    let cases = [
-        ("acme", "acme/*/*", true),
-        ("acme/*/*", "acme", false),
-        ("acme", "acme/*/*/*/*", true),
-        ("acme/*/*/*/*", "acme", false),
-        ("acme/*/*", "acme/*/*/*/*", true),
-        ("acme/*/*/*/*", "acme/*/*", false),
+    let environment_cases = [
         ("acme/shop/*", "acme/shop/prod", true),
         ("acme/shop/prod", "acme/shop/*", false),
-        ("acme/shop/*", "acme/shop/prod/*/*", true),
-        ("acme/shop/prod/*/*", "acme/shop/*", false),
+    ];
+
+    for (left, right, expected) in environment_cases {
+        add_test!(
+            r,
+            format!(
+                "environment_recipient_subsumption_{}_{}_{}",
+                test_name(left),
+                if expected {
+                    "subsumes"
+                } else {
+                    "does_not_subsume"
+                },
+                test_name(right)
+            ),
+            TestProperties::unit_test(),
+            || {
+                let left = EnvironmentRecipientPattern::parse(left).unwrap();
+                let right = EnvironmentRecipientPattern::parse(right).unwrap();
+
+                assert_eq!(left.subsumes(&right), expected);
+            }
+        );
+    }
+
+    let agent_cases = [
         ("acme/shop/*/*/*", "acme/shop/prod/*/*", true),
         ("acme/shop/prod/*/*", "acme/shop/*/*/*", false),
-        ("acme/shop/prod", "acme/shop/prod/*/*", true),
-        ("acme/shop/prod/*/*", "acme/shop/prod", false),
         ("acme/shop/prod/*/*", "acme/shop/prod/cart-svc/*", true),
         ("acme/shop/prod/cart-svc/*", "acme/shop/prod/*/*", false),
         (
@@ -185,11 +203,11 @@ fn generate_recipient_subsumption_scope_tests(r: &mut DynamicTestRegistration) {
         ),
     ];
 
-    for (left, right, expected) in cases {
+    for (left, right, expected) in agent_cases {
         add_test!(
             r,
             format!(
-                "recipient_subsumption_{}_{}_{}",
+                "agent_recipient_subsumption_{}_{}_{}",
                 test_name(left),
                 if expected {
                     "subsumes"
@@ -200,8 +218,8 @@ fn generate_recipient_subsumption_scope_tests(r: &mut DynamicTestRegistration) {
             ),
             TestProperties::unit_test(),
             || {
-                let left = RecipientPathPattern::parse(left).unwrap();
-                let right = RecipientPathPattern::parse(right).unwrap();
+                let left = AgentRecipientPattern::parse(left).unwrap();
+                let right = AgentRecipientPattern::parse(right).unwrap();
 
                 assert_eq!(left.subsumes(&right), expected);
             }
@@ -238,15 +256,26 @@ fn generate_recipient_matching_tests(r: &mut DynamicTestRegistration) {
             ),
             TestProperties::unit_test(),
             || {
-                let holder =
-                    RecipientPathPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(\"42\")")
-                        .unwrap();
-                let recipient = RecipientPathPattern::parse(recipient).unwrap();
+                let holder = "acme/shop/prod/cart-svc/ShoppingCart(\"42\")";
 
-                assert_eq!(recipient.matches_holder(&holder), expected);
+                assert_eq!(recipient_matches_holder(recipient, holder), expected);
             }
         );
     }
+}
+
+fn recipient_matches_holder(recipient: &str, holder: &str) -> bool {
+    AgentRecipientPattern::parse(recipient)
+        .map(|recipient| recipient.matches_holder(holder))
+        .or_else(|_| {
+            EnvironmentRecipientPattern::parse(recipient)
+                .map(|recipient| recipient.matches_holder(holder))
+        })
+        .or_else(|_| {
+            AccountRecipientPattern::parse(recipient)
+                .map(|recipient| recipient.matches_holder(holder))
+        })
+        .unwrap()
 }
 
 #[test]
@@ -420,7 +449,7 @@ fn subsumption_requires_same_permission_class() {
 
 #[test]
 fn derivation_must_be_subsumed_by_parent_union() {
-    let holder = RecipientPathPattern::parse("acme/shop/prod/cart/agent").unwrap();
+    let holder = "acme/shop/prod/cart/agent";
     let parent_grant = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
@@ -442,21 +471,21 @@ fn derivation_must_be_subsumed_by_parent_union() {
     assert!(
         EffectiveSurface::validates_derivation(
             std::slice::from_ref(&parent),
-            &holder,
+            holder,
             std::slice::from_ref(&child_grant),
             &[]
         )
         .is_ok()
     );
     assert_matches!(
-        EffectiveSurface::validates_derivation(&[parent], &holder, &[denied_child], &[]),
+        EffectiveSurface::validates_derivation(&[parent], holder, &[denied_child], &[]),
         Err(CardAlgebraError::DerivationNotSubsumed { .. })
     );
 }
 
 #[test]
 fn derivation_checks_upper_bounds_against_parent_upper_surface() {
-    let holder = RecipientPathPattern::parse("acme/shop/prod/cart/agent").unwrap();
+    let holder = "acme/shop/prod/cart/agent";
     let parent_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
@@ -477,14 +506,14 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
     assert!(
         EffectiveSurface::validates_derivation(
             std::slice::from_ref(&parent),
-            &holder,
+            holder,
             &[],
             std::slice::from_ref(&child_upper),
         )
         .is_ok()
     );
     assert_matches!(
-        EffectiveSurface::validates_derivation(&[parent], &holder, &[], &[too_broad_child_upper]),
+        EffectiveSurface::validates_derivation(&[parent], holder, &[], &[too_broad_child_upper]),
         Err(CardAlgebraError::DerivationNotSubsumed { .. })
     );
 }

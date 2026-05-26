@@ -31,5 +31,4 @@ mod tests;
 pub use algebra::*;
 pub use class::*;
 pub use parsing::*;
-pub use recipient::*;
 pub use types::*;

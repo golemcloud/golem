@@ -9,7 +9,7 @@ use crate::base_model::card::parsing::{
 pub enum CardResourcePattern {
     Any,
     Empty,
-    InstallTarget(RecipientPathPattern),
+    InstallTarget(AgentRecipientPattern),
 }
 
 impl CardResourcePattern {
@@ -21,7 +21,7 @@ impl CardResourcePattern {
         Self::Empty
     }
 
-    pub fn install_target(target: RecipientPathPattern) -> Self {
+    pub fn install_target(target: AgentRecipientPattern) -> Self {
         Self::InstallTarget(target)
     }
 }
@@ -112,7 +112,7 @@ impl CardClass {
             Ok(CardResourcePattern::Empty)
         } else {
             Ok(CardResourcePattern::InstallTarget(
-                RecipientPathPattern::parse(resource)
+                AgentRecipientPattern::parse(resource)
                     .map_err(CardParseError::InvalidRecipientPath)?,
             ))
         }

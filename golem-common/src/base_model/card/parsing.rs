@@ -510,150 +510,46 @@ define_recipient_parser!(parse_account_recipient, AccountRecipientPattern);
 define_recipient_parser!(parse_environment_recipient, EnvironmentRecipientPattern);
 define_recipient_parser!(parse_agent_recipient, AgentRecipientPattern);
 
-macro_rules! define_polymorphic_recipient_parser {
-    ($parser:ident, $concrete_parser:ident, $recipient:ident) => {
-        pub(crate) fn $parser(value: &str) -> Result<$recipient, CardParseError> {
-            parse_polymorphic_typed_recipient(
-                value,
-                $concrete_parser,
-                $recipient::Concrete,
-                $recipient::Slot,
-                $recipient::Template,
-            )
-        }
-    };
+pub(crate) fn parse_polymorphic_account_recipient(
+    value: &str,
+) -> Result<PolymorphicAccountRecipientPattern, CardParseError> {
+    AccountRecipientPattern::parse_polymorphic(value).map_err(CardParseError::InvalidRecipientPath)
 }
 
-define_polymorphic_recipient_parser!(
-    parse_polymorphic_account_recipient,
-    parse_account_recipient,
-    PolymorphicAccountRecipientPattern
-);
-define_polymorphic_recipient_parser!(
-    parse_polymorphic_environment_recipient,
-    parse_environment_recipient,
-    PolymorphicEnvironmentRecipientPattern
-);
-define_polymorphic_recipient_parser!(
-    parse_polymorphic_agent_recipient,
-    parse_agent_recipient,
-    PolymorphicAgentRecipientPattern
-);
-
-fn parse_polymorphic_typed_recipient<T, U, Parse, Concrete, Slot, Template>(
+pub(crate) fn parse_polymorphic_environment_recipient(
     value: &str,
-    parse_concrete: Parse,
-    concrete: Concrete,
-    slot: Slot,
-    template: Template,
-) -> Result<T, CardParseError>
-where
-    Parse: Fn(&str) -> Result<U, CardParseError>,
-    Concrete: Fn(U) -> T,
-    Slot: Fn(RecipientPathSlot) -> T,
-    Template: Fn(RecipientPathTemplate) -> T,
-{
-    if let Ok(recipient_slot) = RecipientPathSlot::parse(value) {
-        match recipient_slot {
-            RecipientPathSlot::Slot => return Ok(slot(recipient_slot)),
-            RecipientPathSlot::Env => {
-                let template = RecipientPathTemplate::parse(value)
-                    .map_err(CardParseError::InvalidRecipientPath)?;
-                let validation_path = template.validation_path();
-                parse_concrete(&validation_path)
-                    .map_err(|_| CardParseError::InvalidRecipientPath(value.to_string()))?;
-                return Ok(slot(recipient_slot));
-            }
-        }
-    }
+) -> Result<PolymorphicEnvironmentRecipientPattern, CardParseError> {
+    EnvironmentRecipientPattern::parse_polymorphic(value)
+        .map_err(CardParseError::InvalidRecipientPath)
+}
 
-    if contains_slot_reference(value) {
-        let recipient_template =
-            RecipientPathTemplate::parse(value).map_err(CardParseError::InvalidRecipientPath)?;
-        let validation_path = recipient_template.validation_path();
-        parse_concrete(&validation_path)
-            .map_err(|_| CardParseError::InvalidRecipientPath(value.to_string()))?;
-        return Ok(template(recipient_template));
-    }
-
-    parse_concrete(value).map(concrete)
+pub(crate) fn parse_polymorphic_agent_recipient(
+    value: &str,
+) -> Result<PolymorphicAgentRecipientPattern, CardParseError> {
+    AgentRecipientPattern::parse_polymorphic(value).map_err(CardParseError::InvalidRecipientPath)
 }
 
 macro_rules! define_polymorphic_owner_parser {
-    ($parser:ident, $concrete_parser:ident, $owner:ident) => {
-        pub(crate) fn $parser(class: &str, owner: &str) -> Result<$owner, CardParseError> {
-            parse_polymorphic_owner(
-                class,
-                owner,
-                $concrete_parser,
-                $owner::Concrete,
-                $owner::Slot,
-                $owner::Template,
-            )
+    ($parser:ident, $owner:ident) => {
+        pub(crate) fn $parser(
+            class: &str,
+            owner: &str,
+        ) -> Result<<$owner as OwnerPattern>::Polymorphic, CardParseError> {
+            $owner::parse_polymorphic(owner).map_err(|_| CardParseError::InvalidOwnerPath {
+                class: class.to_string(),
+                owner: owner.to_string(),
+            })
         }
     };
 }
 
-define_polymorphic_owner_parser!(
-    parse_polymorphic_empty_owner,
-    parse_empty_owner,
-    PolymorphicEmptyOwnerPattern
-);
-define_polymorphic_owner_parser!(
-    parse_polymorphic_account_owner,
-    parse_account_owner,
-    PolymorphicAccountOwnerPattern
-);
-define_polymorphic_owner_parser!(
-    parse_polymorphic_application_owner,
-    parse_application_owner,
-    PolymorphicApplicationOwnerPattern
-);
-define_polymorphic_owner_parser!(
-    parse_polymorphic_environment_owner,
-    parse_environment_owner,
-    PolymorphicEnvironmentOwnerPattern
-);
-define_polymorphic_owner_parser!(
-    parse_polymorphic_component_owner,
-    parse_component_owner,
-    PolymorphicComponentOwnerPattern
-);
-define_polymorphic_owner_parser!(
-    parse_polymorphic_agent_owner,
-    parse_agent_owner,
-    PolymorphicAgentOwnerPattern
-);
-define_polymorphic_owner_parser!(
-    parse_polymorphic_tool_owner,
-    parse_tool_owner,
-    PolymorphicToolOwnerPattern
-);
-
-fn parse_polymorphic_owner<T, U, Parse, Concrete, Slot, Template>(
-    class: &str,
-    owner: &str,
-    parse_concrete: Parse,
-    concrete: Concrete,
-    slot: Slot,
-    template: Template,
-) -> Result<T, CardParseError>
-where
-    Parse: Fn(&str, &str) -> Result<U, CardParseError>,
-    Concrete: Fn(U) -> T,
-    Slot: Fn(SlotVariable) -> T,
-    Template: Fn(String) -> T,
-{
-    if let Ok(variable) = SlotVariable::parse(owner) {
-        return Ok(slot(variable));
-    }
-
-    if contains_slot_reference(owner) {
-        return Ok(template(owner.to_string()));
-    }
-
-    parse_concrete(class, owner).map(concrete)
-}
+define_polymorphic_owner_parser!(parse_polymorphic_empty_owner, EmptyOwnerPattern);
+define_polymorphic_owner_parser!(parse_polymorphic_account_owner, AccountOwnerPattern);
+define_polymorphic_owner_parser!(parse_polymorphic_application_owner, ApplicationOwnerPattern);
+define_polymorphic_owner_parser!(parse_polymorphic_environment_owner, EnvironmentOwnerPattern);
+define_polymorphic_owner_parser!(parse_polymorphic_component_owner, ComponentOwnerPattern);
+define_polymorphic_owner_parser!(parse_polymorphic_agent_owner, AgentOwnerPattern);
+define_polymorphic_owner_parser!(parse_polymorphic_tool_owner, ToolOwnerPattern);
 
 pub(crate) fn contains_slot_reference(value: &str) -> bool {
     value

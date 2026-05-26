@@ -21,46 +21,12 @@ use crate::base_model::card::{
     FilesystemVerb, KvPermissionPattern, KvResourcePattern, KvVerb, NetworkPermissionPattern,
     NetworkResourcePattern, NetworkVerb, OplogPermissionPattern, OplogResourcePattern, OplogVerb,
     PermissionPattern, PolymorphicPermissionPattern, PortPattern, RdbmsPermissionPattern,
-    RdbmsResourcePattern, RdbmsVerb, RecipientPathPattern, RecipientPathSlot,
-    RecipientPathTemplate, SecretPermissionPattern, SecretResourcePattern, SecretVerb,
+    RdbmsResourcePattern, RdbmsVerb, SecretPermissionPattern, SecretResourcePattern, SecretVerb,
     ToolOwnerPattern, ToolPermissionPattern, ToolResourcePattern, ToolVerb,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(transparent))]
-pub struct SlotVariable(pub String);
-
-impl SlotVariable {
-    pub fn parse(value: &str) -> Result<Self, String> {
-        let Some(name) = value.strip_prefix('?') else {
-            return Err(value.to_string());
-        };
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
-            return Err(value.to_string());
-        }
-        Ok(Self(name.to_string()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicRecipientPathPattern {
-    Concrete(RecipientPathPattern),
-    Slot(RecipientPathSlot),
-    Template(RecipientPathTemplate),
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -244,7 +210,7 @@ impl PatternGrant {
     pub fn card_install(
         owner: impl Into<AccountOwnerPattern>,
         recipient: impl Into<AgentRecipientPattern>,
-        target: RecipientPathPattern,
+        target: AgentRecipientPattern,
     ) -> Self {
         Self::new(PermissionPattern::Card(CardPermissionPattern::Verb {
             verb: CardVerb::Install,

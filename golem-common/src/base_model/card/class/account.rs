@@ -13,6 +13,7 @@ impl Subsumes for AccountResourcePattern {
         true
     }
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountVerb {
