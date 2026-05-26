@@ -58,15 +58,7 @@ pub trait PermissionClass {
     const NAME: &'static str;
 
     fn parse_verb(verb: &str) -> Option<Self::Verb>;
-    fn parse_owner(owner: &str) -> Result<Self::Owner, CardParseError>;
-    fn parse_recipient(recipient: &str) -> Result<Self::Recipient, CardParseError>;
     fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError>;
-    fn parse_polymorphic_owner(
-        owner: &str,
-    ) -> Result<<Self::Owner as OwnerPattern>::Polymorphic, CardParseError>;
-    fn parse_polymorphic_recipient(
-        recipient: &str,
-    ) -> Result<<Self::Recipient as RecipientPattern>::Polymorphic, CardParseError>;
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern
     where
         Self: Sized;

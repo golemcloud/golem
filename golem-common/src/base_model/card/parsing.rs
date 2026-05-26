@@ -421,8 +421,11 @@ fn parse_class_permission<C: PermissionClass>(
     verb: &str,
     resource: &str,
 ) -> Result<PermissionPattern, CardParseError> {
-    let owner = C::parse_owner(owner)?;
-    let recipient = C::parse_recipient(recipient)?;
+    let owner = C::Owner::parse(owner).map_err(|_| CardParseError::InvalidOwnerPath {
+        class: C::NAME.to_string(),
+        owner: owner.to_string(),
+    })?;
+    let recipient = C::Recipient::parse(recipient).map_err(CardParseError::InvalidRecipientPath)?;
     let resource = C::parse_resource(resource)?;
     let pattern = if verb == "*" {
         ClassPermissionPattern::<C>::Any {
@@ -450,8 +453,13 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
     verb: &str,
     resource: &str,
 ) -> Result<PolymorphicPermissionPattern, CardParseError> {
-    let owner = C::parse_polymorphic_owner(owner)?;
-    let recipient = C::parse_polymorphic_recipient(recipient)?;
+    let owner =
+        C::Owner::parse_polymorphic(owner).map_err(|_| CardParseError::InvalidOwnerPath {
+            class: C::NAME.to_string(),
+            owner: owner.to_string(),
+        })?;
+    let recipient =
+        C::Recipient::parse_polymorphic(recipient).map_err(CardParseError::InvalidRecipientPath)?;
     if contains_slot_reference(resource) {
         return Err(CardParseError::InvalidResource {
             class: C::NAME.to_string(),
@@ -478,78 +486,6 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
     };
     Ok(C::into_polymorphic_permission(pattern))
 }
-
-macro_rules! define_owner_parser {
-    ($parser:ident, $owner:ident) => {
-        pub(crate) fn $parser(class: &str, owner: &str) -> Result<$owner, CardParseError> {
-            $owner::parse(owner).map_err(|_| CardParseError::InvalidOwnerPath {
-                class: class.to_string(),
-                owner: owner.to_string(),
-            })
-        }
-    };
-}
-
-define_owner_parser!(parse_empty_owner, EmptyOwnerPattern);
-define_owner_parser!(parse_account_owner, AccountOwnerPattern);
-define_owner_parser!(parse_application_owner, ApplicationOwnerPattern);
-define_owner_parser!(parse_environment_owner, EnvironmentOwnerPattern);
-define_owner_parser!(parse_component_owner, ComponentOwnerPattern);
-define_owner_parser!(parse_agent_owner, AgentOwnerPattern);
-define_owner_parser!(parse_tool_owner, ToolOwnerPattern);
-
-macro_rules! define_recipient_parser {
-    ($parser:ident, $recipient:ident) => {
-        pub(crate) fn $parser(value: &str) -> Result<$recipient, CardParseError> {
-            $recipient::parse(value).map_err(CardParseError::InvalidRecipientPath)
-        }
-    };
-}
-
-define_recipient_parser!(parse_account_recipient, AccountRecipientPattern);
-define_recipient_parser!(parse_environment_recipient, EnvironmentRecipientPattern);
-define_recipient_parser!(parse_agent_recipient, AgentRecipientPattern);
-
-pub(crate) fn parse_polymorphic_account_recipient(
-    value: &str,
-) -> Result<PolymorphicAccountRecipientPattern, CardParseError> {
-    AccountRecipientPattern::parse_polymorphic(value).map_err(CardParseError::InvalidRecipientPath)
-}
-
-pub(crate) fn parse_polymorphic_environment_recipient(
-    value: &str,
-) -> Result<PolymorphicEnvironmentRecipientPattern, CardParseError> {
-    EnvironmentRecipientPattern::parse_polymorphic(value)
-        .map_err(CardParseError::InvalidRecipientPath)
-}
-
-pub(crate) fn parse_polymorphic_agent_recipient(
-    value: &str,
-) -> Result<PolymorphicAgentRecipientPattern, CardParseError> {
-    AgentRecipientPattern::parse_polymorphic(value).map_err(CardParseError::InvalidRecipientPath)
-}
-
-macro_rules! define_polymorphic_owner_parser {
-    ($parser:ident, $owner:ident) => {
-        pub(crate) fn $parser(
-            class: &str,
-            owner: &str,
-        ) -> Result<<$owner as OwnerPattern>::Polymorphic, CardParseError> {
-            $owner::parse_polymorphic(owner).map_err(|_| CardParseError::InvalidOwnerPath {
-                class: class.to_string(),
-                owner: owner.to_string(),
-            })
-        }
-    };
-}
-
-define_polymorphic_owner_parser!(parse_polymorphic_empty_owner, EmptyOwnerPattern);
-define_polymorphic_owner_parser!(parse_polymorphic_account_owner, AccountOwnerPattern);
-define_polymorphic_owner_parser!(parse_polymorphic_application_owner, ApplicationOwnerPattern);
-define_polymorphic_owner_parser!(parse_polymorphic_environment_owner, EnvironmentOwnerPattern);
-define_polymorphic_owner_parser!(parse_polymorphic_component_owner, ComponentOwnerPattern);
-define_polymorphic_owner_parser!(parse_polymorphic_agent_owner, AgentOwnerPattern);
-define_polymorphic_owner_parser!(parse_polymorphic_tool_owner, ToolOwnerPattern);
 
 pub(crate) fn contains_slot_reference(value: &str) -> bool {
     value

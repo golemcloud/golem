@@ -1,8 +1,5 @@
 use super::*;
-use crate::base_model::card::parsing::{
-    CardParseError, parse_environment_owner, parse_environment_recipient,
-    parse_polymorphic_environment_owner, parse_polymorphic_environment_recipient,
-};
+use crate::base_model::card::parsing::CardParseError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -89,28 +86,8 @@ impl PermissionClass for EnvironmentHttpApiDeploymentClass {
         }
     }
 
-    fn parse_owner(owner: &str) -> Result<Self::Owner, CardParseError> {
-        parse_environment_owner(Self::NAME, owner)
-    }
-
-    fn parse_recipient(recipient: &str) -> Result<Self::Recipient, CardParseError> {
-        parse_environment_recipient(recipient)
-    }
-
     fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
         Self::parse_resource(Self::NAME, resource)
-    }
-
-    fn parse_polymorphic_owner(
-        owner: &str,
-    ) -> Result<<Self::Owner as OwnerPattern>::Polymorphic, CardParseError> {
-        parse_polymorphic_environment_owner(Self::NAME, owner)
-    }
-
-    fn parse_polymorphic_recipient(
-        recipient: &str,
-    ) -> Result<<Self::Recipient as RecipientPattern>::Polymorphic, CardParseError> {
-        parse_polymorphic_environment_recipient(recipient)
     }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
