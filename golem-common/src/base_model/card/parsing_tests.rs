@@ -307,7 +307,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "agent_delete_component",
-            "agent(acme/shop/prod/cart-svc/*) @ acme/shop/prod/cart-svc/* : delete :",
+            "agent(acme/shop/prod/cart-svc/*) @ acme/shop/prod/cart-svc/* : delete : *",
             PermissionPattern::Agent(AgentPermissionPattern::Verb {
                 verb: AgentVerb::Delete,
                 owner: AgentOwnerPattern::ComponentAgents {
@@ -322,7 +322,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     environment: "prod".to_string(),
                     component: "cart-svc".to_string(),
                 },
-                resource: AgentResourcePattern::Empty,
+                resource: AgentResourcePattern::Any,
             }),
         ),
         (
@@ -386,12 +386,12 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "card_derive",
-            "card(acme) @ acme/shop/prod/cart-svc/ShoppingCart(*) : derive :",
+            "card(acme) @ acme/shop/prod/cart-svc/ShoppingCart(*) : derive : *",
             PermissionPattern::Card(CardPermissionPattern::Verb {
                 verb: CardVerb::Derive,
                 owner: account_owner("acme"),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
-                resource: CardResourcePattern::Empty,
+                resource: CardResourcePattern::Any,
             }),
         ),
         (
@@ -507,6 +507,16 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             }),
         ),
         (
+            "application_create_any",
+            "application(acme) @ acme : create : *",
+            PermissionPattern::Application(ApplicationPermissionPattern::Verb {
+                verb: ApplicationVerb::Create,
+                owner: account_owner("acme"),
+                recipient: account_recipient("acme"),
+                resource: ApplicationResourcePattern::Any,
+            }),
+        ),
+        (
             "environment",
             "environment(acme/shop) @ acme/shop/prod : view : prod",
             PermissionPattern::Environment(EnvironmentPermissionPattern::Verb {
@@ -516,6 +526,16 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                 resource: EnvironmentResourcePattern::Environment(EnvironmentName(
                     "prod".to_string(),
                 )),
+            }),
+        ),
+        (
+            "environment_create_any",
+            "environment(acme/shop) @ acme/shop/prod : create : *",
+            PermissionPattern::Environment(EnvironmentPermissionPattern::Verb {
+                verb: EnvironmentVerb::Create,
+                owner: application_owner("acme", "shop"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: EnvironmentResourcePattern::Any,
             }),
         ),
         (
@@ -667,6 +687,16 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                 resource: ComponentResourcePattern::Component(ComponentName(
                     "cart-svc".to_string(),
                 )),
+            }),
+        ),
+        (
+            "component_create_any",
+            "component(acme/shop/prod) @ acme/shop/prod : create : *",
+            PermissionPattern::Component(ComponentPermissionPattern::Verb {
+                verb: ComponentVerb::Create,
+                owner: environment_owner("acme", "shop", "prod"),
+                recipient: environment_recipient("acme", "shop", "prod"),
+                resource: ComponentResourcePattern::Any,
             }),
         ),
         (
@@ -868,6 +898,46 @@ fn rejects_recipients_outside_permission_class_scope() {
             "acme/shop/prod/cart/agent".to_string()
         ))
     );
+}
+
+#[test]
+fn rejects_empty_resource_ids_when_any_resource_is_available() {
+    let cases = [
+        (
+            "agent(acme/shop/prod/cart-svc/*) @ acme/shop/prod/cart-svc/* : delete :",
+            AgentClass::NAME,
+        ),
+        (
+            "card(acme) @ acme/shop/prod/cart-svc/ShoppingCart(*) : derive :",
+            CardClass::NAME,
+        ),
+        (
+            "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke :",
+            ToolClass::NAME,
+        ),
+        (
+            "application(acme) @ acme : create :",
+            ApplicationClass::NAME,
+        ),
+        (
+            "environment(acme/shop) @ acme/shop/prod : create :",
+            EnvironmentClass::NAME,
+        ),
+        (
+            "component(acme/shop/prod) @ acme/shop/prod : create :",
+            ComponentClass::NAME,
+        ),
+    ];
+
+    for (input, class) in cases {
+        assert_eq!(
+            parse_pattern_grant(input),
+            Err(CardParseError::InvalidResource {
+                class: class.to_string(),
+                resource: String::new(),
+            })
+        );
+    }
 }
 
 #[test_gen]

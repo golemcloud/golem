@@ -5,17 +5,12 @@ use crate::base_model::card::parsing::CardParseError;
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum CardResourcePattern {
     Any,
-    Empty,
     InstallTarget(AgentRecipientPattern),
 }
 
 impl CardResourcePattern {
     pub fn any() -> Self {
         Self::Any
-    }
-
-    pub fn empty() -> Self {
-        Self::Empty
     }
 
     pub fn install_target(target: AgentRecipientPattern) -> Self {
@@ -28,7 +23,10 @@ impl ResourcePattern for CardResourcePattern {
         if resource == "*" {
             Ok(CardResourcePattern::Any)
         } else if resource.is_empty() {
-            Ok(CardResourcePattern::Empty)
+            Err(CardParseError::InvalidResource {
+                class: CardClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
         } else {
             Ok(CardResourcePattern::InstallTarget(
                 AgentRecipientPattern::parse(resource)
@@ -40,7 +38,6 @@ impl ResourcePattern for CardResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Empty, Self::Empty) => true,
             (Self::InstallTarget(a), Self::InstallTarget(b)) => a.subsumes(b),
             _ => false,
         }

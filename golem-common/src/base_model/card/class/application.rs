@@ -7,7 +7,7 @@ use nom::combinator::{all_consuming, map};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ApplicationResourcePattern {
-    Empty,
+    Any,
     Application(ApplicationName),
 }
 
@@ -18,8 +18,8 @@ pub struct ApplicationName(pub String);
 
 impl ResourcePattern for ApplicationResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource.is_empty() {
-            Ok(ApplicationResourcePattern::Empty)
+        if resource == "*" {
+            Ok(ApplicationResourcePattern::Any)
         } else {
             parse_application_resource(resource).map_err(|_| CardParseError::InvalidResource {
                 class: ApplicationClass::NAME.to_string(),
@@ -30,9 +30,9 @@ impl ResourcePattern for ApplicationResourcePattern {
 
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Empty, Self::Empty) => true,
+            (Self::Any, _) => true,
             (Self::Application(a), Self::Application(b)) => a == b,
-            _ => false,
+            (Self::Application(_), Self::Any) => false,
         }
     }
 }

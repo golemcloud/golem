@@ -76,8 +76,13 @@ impl ToolResourcePattern {
 
 impl ResourcePattern for ToolResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource.is_empty() {
+        if resource == "*" {
             Ok(ToolResourcePattern::AnyInvocation)
+        } else if resource.is_empty() {
+            Err(CardParseError::InvalidResource {
+                class: ToolClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
         } else {
             parse_tool_invocation_pattern(resource)
                 .map(ToolResourcePattern::Invocation)

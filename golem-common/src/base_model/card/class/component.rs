@@ -8,7 +8,7 @@ use nom::combinator::{all_consuming, map, map_res};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ComponentResourcePattern {
-    Empty,
+    Any,
     Component(ComponentName),
     Revision {
         component: ComponentName,
@@ -23,8 +23,8 @@ pub struct ComponentName(pub String);
 
 impl ResourcePattern for ComponentResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource.is_empty() {
-            Ok(ComponentResourcePattern::Empty)
+        if resource == "*" {
+            Ok(ComponentResourcePattern::Any)
         } else {
             parse_component_resource(resource).map_err(|_| CardParseError::InvalidResource {
                 class: ComponentClass::NAME.to_string(),
@@ -35,7 +35,7 @@ impl ResourcePattern for ComponentResourcePattern {
 
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Empty, Self::Empty) => true,
+            (Self::Any, _) => true,
             (Self::Component(a), Self::Component(b)) => a == b,
             (Self::Component(a), Self::Revision { component: b, .. }) => a == b,
             (
@@ -48,7 +48,8 @@ impl ResourcePattern for ComponentResourcePattern {
                     revision: br,
                 },
             ) => a == b && ar == br,
-            _ => false,
+            (Self::Component(_) | Self::Revision { .. }, Self::Any) => false,
+            (Self::Revision { .. }, Self::Component(_)) => false,
         }
     }
 }

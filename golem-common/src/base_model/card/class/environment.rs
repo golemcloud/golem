@@ -8,7 +8,7 @@ use nom::combinator::{all_consuming, map, map_res};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentResourcePattern {
-    Empty,
+    Any,
     Environment(EnvironmentName),
     Revision {
         environment: EnvironmentName,
@@ -23,8 +23,8 @@ pub struct EnvironmentName(pub String);
 
 impl ResourcePattern for EnvironmentResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource.is_empty() {
-            Ok(EnvironmentResourcePattern::Empty)
+        if resource == "*" {
+            Ok(EnvironmentResourcePattern::Any)
         } else {
             parse_environment_resource(resource).map_err(|_| CardParseError::InvalidResource {
                 class: EnvironmentClass::NAME.to_string(),
@@ -35,7 +35,7 @@ impl ResourcePattern for EnvironmentResourcePattern {
 
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Empty, Self::Empty) => true,
+            (Self::Any, _) => true,
             (Self::Environment(a), Self::Environment(b)) => a == b,
             (Self::Environment(a), Self::Revision { environment: b, .. }) => a == b,
             (
@@ -48,7 +48,8 @@ impl ResourcePattern for EnvironmentResourcePattern {
                     revision: br,
                 },
             ) => a == b && ar == br,
-            _ => false,
+            (Self::Environment(_) | Self::Revision { .. }, Self::Any) => false,
+            (Self::Revision { .. }, Self::Environment(_)) => false,
         }
     }
 }

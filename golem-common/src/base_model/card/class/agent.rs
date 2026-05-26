@@ -6,7 +6,6 @@ use uuid::Uuid;
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentResourcePattern {
     Any,
-    Empty,
     Method(AgentMethodName),
     OplogIndex(u64),
     InvocationId(AgentInvocationIdPattern),
@@ -46,10 +45,6 @@ impl AgentResourcePattern {
         Self::Any
     }
 
-    pub fn empty() -> Self {
-        Self::Empty
-    }
-
     pub fn method(method: impl Into<String>) -> Self {
         Self::Method(AgentMethodName::parse(&method.into()).expect("invalid method name"))
     }
@@ -59,8 +54,6 @@ impl ResourcePattern for AgentResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
         if resource == "*" {
             Ok(AgentResourcePattern::Any)
-        } else if resource.is_empty() {
-            Ok(AgentResourcePattern::Empty)
         } else if let Ok(index) = resource.parse::<u64>() {
             Ok(AgentResourcePattern::OplogIndex(index))
         } else if let Ok(uuid) = Uuid::parse_str(resource) {
@@ -80,7 +73,6 @@ impl ResourcePattern for AgentResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Empty, Self::Empty) => true,
             (Self::Method(a), Self::Method(b)) => a == b,
             (Self::OplogIndex(a), Self::OplogIndex(b)) => a == b,
             (Self::InvocationId(a), Self::InvocationId(b)) => a == b,
