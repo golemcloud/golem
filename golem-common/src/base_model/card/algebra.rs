@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 pub enum CardAlgebraError {
     InvalidOwnerPath(String),
     InvalidRecipientPath(String),
-    DerivationNotSubsumed { grant: PatternGrant },
+    DerivationNotSubsumed { grant: Box<PatternGrant> },
 }
 
 impl PatternGrant {
@@ -115,7 +115,7 @@ impl EffectiveSurface {
         for grant in child_lower {
             if !union_lower_allows(parent_cards, holder, grant)? {
                 return Err(CardAlgebraError::DerivationNotSubsumed {
-                    grant: grant.clone(),
+                    grant: Box::new(grant.clone()),
                 });
             }
         }
@@ -123,7 +123,7 @@ impl EffectiveSurface {
         for grant in child_upper {
             if !union_upper_allows(parent_cards, holder, grant)? {
                 return Err(CardAlgebraError::DerivationNotSubsumed {
-                    grant: grant.clone(),
+                    grant: Box::new(grant.clone()),
                 });
             }
         }

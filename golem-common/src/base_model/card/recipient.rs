@@ -141,7 +141,7 @@ impl RecipientPattern {
 
     fn parse_holder(value: &str) -> Result<Self, String> {
         let segments = parse_holder_segments(value)?;
-        if segments.iter().any(|segment| *segment == "*") {
+        if segments.contains(&"*") {
             return Err(value.to_string());
         }
         Self::parse(value)
@@ -290,7 +290,7 @@ fn valid_suffix_segment(segment: &str) -> bool {
     !segment.is_empty() && segment != "*" && !segment.contains('?')
 }
 
-fn concrete_segment<'a>(segment: &'a str) -> Result<&'a str, String> {
+fn concrete_segment(segment: &str) -> Result<&str, String> {
     if segment.is_empty() || segment.contains('*') || segment.contains('?') {
         Err(segment.to_string())
     } else {
@@ -298,7 +298,7 @@ fn concrete_segment<'a>(segment: &'a str) -> Result<&'a str, String> {
     }
 }
 
-fn application_segment<'a>(segment: &'a str) -> Result<&'a str, String> {
+fn application_segment(segment: &str) -> Result<&str, String> {
     if segment.is_empty() || segment.contains('?') {
         Err(segment.to_string())
     } else {
@@ -306,7 +306,7 @@ fn application_segment<'a>(segment: &'a str) -> Result<&'a str, String> {
     }
 }
 
-fn agent_segment<'a>(segment: &'a str) -> Result<&'a str, String> {
+fn agent_segment(segment: &str) -> Result<&str, String> {
     if segment.is_empty() || segment.contains('?') {
         Err(segment.to_string())
     } else {

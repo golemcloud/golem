@@ -25,6 +25,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Monomorphic grant that can be held in wallets and used for permission checking.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct PatternGrant {
@@ -240,12 +241,15 @@ impl PatternGrant {
     }
 }
 
+/// Polymorphic grant that can monomorphized and installed, but not used for permission checks
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct PolymorphicPatternGrant {
     pub permission: PolymorphicPermissionPattern,
 }
 
+/// Polymorphic as allowed in the manifest. Needs to have the recipient monormorphized before it can be sent
+/// to the server
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct PolymorphicManifestPatternGrant {
