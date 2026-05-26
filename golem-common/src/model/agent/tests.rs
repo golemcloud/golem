@@ -1538,3 +1538,80 @@ fn new_auto_phantom_ephemeral_some() {
         "Ephemeral agent should preserve supplied phantom_id"
     );
 }
+
+mod read_only_config_roundtrip {
+    use crate::base_model::Empty;
+    use crate::base_model::agent::{CachePolicy, CachePolicyTtl, ReadOnlyConfig};
+    use crate::model::agent::bindings;
+    use pretty_assertions::assert_eq;
+    use test_r::test;
+
+    fn all_cache_policies() -> Vec<CachePolicy> {
+        vec![
+            CachePolicy::NoCache(Empty {}),
+            CachePolicy::UntilWrite(Empty {}),
+            CachePolicy::Ttl(CachePolicyTtl {
+                duration_nanos: 1_234_567_890,
+            }),
+        ]
+    }
+
+    #[test]
+    fn cache_policy_protobuf_roundtrip() {
+        for policy in all_cache_policies() {
+            let proto: golem_api_grpc::proto::golem::component::CachePolicy = policy.clone().into();
+            let back: CachePolicy = proto.try_into().expect("protobuf decode");
+            assert_eq!(policy, back);
+        }
+    }
+
+    #[test]
+    fn cache_policy_wit_roundtrip() {
+        for policy in all_cache_policies() {
+            let wit: bindings::golem::agent::common::CachePolicy = policy.clone().into();
+            let back: CachePolicy = wit.into();
+            assert_eq!(policy, back);
+        }
+    }
+
+    #[test]
+    fn read_only_config_protobuf_roundtrip() {
+        for cache_policy in all_cache_policies() {
+            for uses_principal in [false, true] {
+                let cfg = ReadOnlyConfig {
+                    cache_policy: cache_policy.clone(),
+                    uses_principal,
+                };
+                let proto: golem_api_grpc::proto::golem::component::ReadOnlyConfig =
+                    cfg.clone().into();
+                let back: ReadOnlyConfig = proto.try_into().expect("protobuf decode");
+                assert_eq!(cfg, back);
+            }
+        }
+    }
+
+    #[test]
+    fn read_only_config_wit_roundtrip() {
+        for cache_policy in all_cache_policies() {
+            for uses_principal in [false, true] {
+                let cfg = ReadOnlyConfig {
+                    cache_policy: cache_policy.clone(),
+                    uses_principal,
+                };
+                let wit: bindings::golem::agent::common::ReadOnlyConfig = cfg.clone().into();
+                let back: ReadOnlyConfig = wit.into();
+                assert_eq!(cfg, back);
+            }
+        }
+    }
+
+    #[test]
+    fn read_only_config_protobuf_missing_cache_policy_errors() {
+        let proto = golem_api_grpc::proto::golem::component::ReadOnlyConfig {
+            cache_policy: None,
+            uses_principal: false,
+        };
+        let result: Result<ReadOnlyConfig, _> = proto.try_into();
+        assert!(result.is_err());
+    }
+}

@@ -781,6 +781,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                 }],
             }),
             http_endpoint: Vec::new(),
+            read_only: None,
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,

@@ -66,6 +66,21 @@ pub(all) struct HttpMountInfo {
 } derive(Debug, Eq)
 
 ///|
+/// Cache policy parsed from a `#derive.read_only` annotation.
+pub(all) enum ReadOnlyCachePolicy {
+  NoCache
+  UntilWrite
+  Ttl(UInt64)
+} derive(Debug, Eq)
+
+///|
+/// Read-only configuration parsed from a `#derive.read_only` annotation.
+/// `uses_principal` is derived from the method signature, not from user input.
+pub(all) struct ReadOnlyInfo {
+  cache_policy : ReadOnlyCachePolicy
+} derive(Debug, Eq)
+
+///|
 /// Parsed information about a public agent method.
 pub(all) struct MethodInfo {
   name : String
@@ -75,6 +90,7 @@ pub(all) struct MethodInfo {
   return_type : ParamType?
   param_schema_options : Map[String, SchemaOptions]
   http_endpoint : HttpEndpointInfo?
+  read_only : ReadOnlyInfo?
 } derive(Debug)
 
 ///|
@@ -438,6 +454,101 @@ fn parse_uint(s : String) -> UInt? {
   for ch in s {
     if ch >= '0' && ch <= '9' {
       result = result * 10 + (ch.to_int() - '0'.to_int()).reinterpret_as_uint()
+    } else {
+      return None
+    }
+  }
+  Some(result)
+}
+
+///|
+/// Extracts the read-only configuration from a `#derive.read_only` attribute, if present.
+///
+/// Supported forms:
+/// - `#derive.read_only`                                — defaults to `UntilWrite`
+/// - `#derive.read_only(cache="no_cache")`             — `NoCache`
+/// - `#derive.read_only(cache="no-cache")`             — `NoCache`
+/// - `#derive.read_only(cache="until_write")`          — `UntilWrite`
+/// - `#derive.read_only(cache="until-write")`          — `UntilWrite`
+/// - `#derive.read_only(cache="ttl", ttl=<nanos>)`     — `Ttl(nanos)`
+///
+/// Note: `uses_principal` is never accepted as user input — it is derived from the
+/// method signature (presence of a `Principal` parameter).
+fn extract_read_only(
+  attrs : @list.List[@attribute.Attribute],
+) -> ReadOnlyInfo? raise AgentParseError {
+  let mut result : ReadOnlyInfo? = None
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Ident({ qual: Some("derive"), name: "read_only" })) =>
+        result = Some({ cache_policy: UntilWrite })
+      Some(Apply({ qual: Some("derive"), name: "read_only" }, props)) => {
+        let mut explicit_cache : ReadOnlyCachePolicy? = None
+        let mut explicit_ttl : UInt64? = None
+        props.each(fn(prop) {
+          match prop {
+            Labeled("cache", String(s)) =>
+              if s == "no_cache" || s == "no-cache" {
+                explicit_cache = Some(NoCache)
+              } else if s == "until_write" || s == "until-write" {
+                explicit_cache = Some(UntilWrite)
+              } else if s == "ttl" {
+                explicit_cache = Some(Ttl(0))
+              } else {
+                abort(
+                  "invalid cache value '\{s}'. Valid values are: no_cache, until_write, ttl",
+                )
+              }
+            Labeled("ttl", _) => ()
+            _ => ()
+          }
+        })
+        // Second pass to read ttl integer (we accept Labeled("ttl", String) or Labeled("ttl", ...))
+        props.each(fn(prop) {
+          match prop {
+            Labeled("ttl", String(s)) =>
+              match parse_uint64_str(s) {
+                Some(n) => explicit_ttl = Some(n)
+                None =>
+                  abort(
+                    "invalid ttl value '\{s}': must be a positive integer (nanoseconds)",
+                  )
+              }
+            _ => ()
+          }
+        })
+        let policy = match (explicit_cache, explicit_ttl) {
+          (Some(NoCache), None) => NoCache
+          (Some(UntilWrite), None) => UntilWrite
+          (Some(Ttl(_)), Some(n)) => Ttl(n)
+          (Some(Ttl(_)), None) =>
+            abort("cache = \"ttl\" requires a ttl = \"<nanoseconds>\" parameter")
+          (Some(other), Some(_)) => {
+            let _ = other
+            abort("ttl parameter is only valid with cache = \"ttl\"")
+          }
+          (None, Some(n)) => Ttl(n)
+          (None, None) => UntilWrite
+        }
+        result = Some({ cache_policy: policy })
+      }
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+/// Parses a string into a UInt64 value. Returns None on failure or overflow.
+fn parse_uint64_str(s : String) -> UInt64? {
+  if s.length() == 0 {
+    return None
+  }
+  let mut result : UInt64 = 0
+  for ch in s.iter() {
+    if ch >= '0' && ch <= '9' {
+      let digit = (ch.to_int() - '0'.to_int()).to_uint64()
+      result = result * 10 + digit
     } else {
       return None
     }
@@ -1149,6 +1260,7 @@ pub fn parse_agents(
                   let hint = extract_prompt_hint(fun_decl.attrs)
                   let restrictions = extract_schema_restrictions(fun_decl.attrs)
                   let endpoint = build_endpoint_info(fun_decl.attrs)
+                  let read_only = extract_read_only(fun_decl.attrs)
                   match agent_methods.get(name) {
                     Some(methods) =>
                       methods.push({
@@ -1159,6 +1271,7 @@ pub fn parse_agents(
                         return_type,
                         param_schema_options: restrictions,
                         http_endpoint: endpoint,
+                        read_only,
                       })
                     None => ()
                   }
@@ -1296,6 +1409,12 @@ pub fn parse_agents(
       if principal_count > 1 {
         raise AgentParseError(
           "Method '\{meth.name}' of agent '\{agent.name}' has \{principal_count} Principal parameters; at most one is allowed",
+        )
+      }
+      // Validate ephemeral + read-only combination
+      if meth.read_only is Some(_) && agent.mode is Ephemeral {
+        raise AgentParseError(
+          "Method '\{meth.name}' of ephemeral agent '\{agent.name}' is marked as read-only. read-only methods have no effect on ephemeral agents (no shared state to read). Remove the #derive.read_only attribute or make the agent durable.",
         )
       }
     }

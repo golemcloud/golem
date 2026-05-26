@@ -535,6 +535,49 @@ pub struct AgentMethod {
     pub input_schema: DataSchema,
     pub output_schema: DataSchema,
     pub http_endpoint: Vec<HttpEndpointDetails>,
+    #[serde(default)]
+    pub read_only: Option<ReadOnlyConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ReadOnlyConfig {
+    pub cache_policy: CachePolicy,
+    pub uses_principal: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum CachePolicy {
+    #[unit_case]
+    NoCache(Empty),
+    #[unit_case]
+    UntilWrite(Empty),
+    Ttl(CachePolicyTtl),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct CachePolicyTtl {
+    pub duration_nanos: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -614,6 +657,29 @@ impl AgentType {
     pub fn normalized_vec(mut agent_types: Vec<Self>) -> Vec<Self> {
         agent_types.sort_by(|a, b| a.type_name.cmp(&b.type_name));
         agent_types.into_iter().map(Self::normalized).collect()
+    }
+
+    /// Defensive validation that the agent type respects platform-level invariants
+    /// the SDKs are expected to enforce at build time.
+    ///
+    /// Currently this rejects the combination of `mode = Ephemeral` and any method
+    /// carrying a `read_only` marker: read-only methods only make sense on agents
+    /// with persistent state, so allowing them on ephemeral agents indicates a
+    /// build-time misconfiguration that should be caught at registration.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.mode == AgentMode::Ephemeral {
+            for method in &self.methods {
+                if method.read_only.is_some() {
+                    return Err(format!(
+                        "Agent type '{}' is ephemeral but method '{}' is marked as read-only. \
+                         Read-only methods have no benefit on ephemeral agents (no shared state to read from). \
+                         Remove the read-only marker or make the agent durable.",
+                        self.type_name, method.name
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1541,5 +1607,92 @@ impl<MT: AllowedMimeTypes> UnstructuredBinaryExtensions for UnstructuredBinary<M
                     mime_type,
                 }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::*;
+
+    fn mock_method(name: &str, read_only: Option<ReadOnlyConfig>) -> AgentMethod {
+        AgentMethod {
+            name: name.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: Vec::new(),
+            }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: Vec::new(),
+            }),
+            http_endpoint: Vec::new(),
+            read_only,
+        }
+    }
+
+    fn mock_agent_type(mode: AgentMode, methods: Vec<AgentMethod>) -> AgentType {
+        AgentType {
+            type_name: AgentTypeName("Test".to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            constructor: AgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: Vec::new(),
+                }),
+            },
+            methods,
+            dependencies: Vec::new(),
+            mode,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_durable_agent_with_read_only_methods() {
+        let agent = mock_agent_type(
+            AgentMode::Durable,
+            vec![mock_method(
+                "get",
+                Some(ReadOnlyConfig {
+                    cache_policy: CachePolicy::UntilWrite(Empty {}),
+                    uses_principal: false,
+                }),
+            )],
+        );
+        assert!(agent.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_ephemeral_agent_without_read_only_methods() {
+        let agent = mock_agent_type(AgentMode::Ephemeral, vec![mock_method("do", None)]);
+        assert!(agent.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_ephemeral_agent_with_read_only_method() {
+        let agent = mock_agent_type(
+            AgentMode::Ephemeral,
+            vec![mock_method(
+                "get",
+                Some(ReadOnlyConfig {
+                    cache_policy: CachePolicy::UntilWrite(Empty {}),
+                    uses_principal: false,
+                }),
+            )],
+        );
+        let result = agent.validate();
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("ephemeral"));
+        assert!(msg.contains("read-only"));
+        assert!(msg.contains("Test"));
+        assert!(msg.contains("get"));
     }
 }
