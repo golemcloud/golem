@@ -40,9 +40,21 @@ pub enum RecipientPattern {
 pub enum PolymorphicRecipientPattern {
     Concrete(RecipientPattern),
     Account,
+    Environment(PolymorphicEnvironmentRecipientPattern),
+    Agent(PolymorphicAgentRecipientPattern),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PolymorphicEnvironmentRecipientPattern {
     AccountEnvironments,
     ApplicationEnvironments,
     Environment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PolymorphicAgentRecipientPattern {
     AccountAgents,
     ApplicationAgents,
     EnvironmentAgents,
@@ -166,35 +178,47 @@ impl PolymorphicRecipientPattern {
     pub fn parse(value: &str) -> Result<Self, String> {
         match split_leftmost_slot(value)? {
             Some(("?account", rest)) if rest.is_empty() => Ok(Self::Account),
-            Some(("?account", rest)) if rest.as_slice() == ["*", "*"] => {
-                Ok(Self::AccountEnvironments)
-            }
+            Some(("?account", rest)) if rest.as_slice() == ["*", "*"] => Ok(Self::Environment(
+                PolymorphicEnvironmentRecipientPattern::AccountEnvironments,
+            )),
             Some(("?account", rest)) if rest.as_slice() == ["*", "*", "*", "*"] => {
-                Ok(Self::AccountAgents)
+                Ok(Self::Agent(PolymorphicAgentRecipientPattern::AccountAgents))
             }
-            Some(("?app", rest)) if rest.as_slice() == ["*"] => Ok(Self::ApplicationEnvironments),
-            Some(("?app", rest)) if rest.as_slice() == ["*", "*", "*"] => {
-                Ok(Self::ApplicationAgents)
-            }
-            Some(("?env", rest)) if rest.is_empty() => Ok(Self::Environment),
-            Some(("?env", rest)) if rest.as_slice() == ["*", "*"] => Ok(Self::EnvironmentAgents),
+            Some(("?app", rest)) if rest.as_slice() == ["*"] => Ok(Self::Environment(
+                PolymorphicEnvironmentRecipientPattern::ApplicationEnvironments,
+            )),
+            Some(("?app", rest)) if rest.as_slice() == ["*", "*", "*"] => Ok(Self::Agent(
+                PolymorphicAgentRecipientPattern::ApplicationAgents,
+            )),
+            Some(("?env", rest)) if rest.is_empty() => Ok(Self::Environment(
+                PolymorphicEnvironmentRecipientPattern::Environment,
+            )),
+            Some(("?env", rest)) if rest.as_slice() == ["*", "*"] => Ok(Self::Agent(
+                PolymorphicAgentRecipientPattern::EnvironmentAgents,
+            )),
             Some(("?env", rest))
                 if rest.len() == 2
                     && valid_suffix_segment(rest[0])
                     && valid_suffix_segment(rest[1]) =>
             {
-                Ok(Self::EnvironmentAgent {
-                    component: rest[0].to_string(),
-                    agent: rest[1].to_string(),
-                })
+                Ok(Self::Agent(
+                    PolymorphicAgentRecipientPattern::EnvironmentAgent {
+                        component: rest[0].to_string(),
+                        agent: rest[1].to_string(),
+                    },
+                ))
             }
-            Some(("?component", rest)) if rest.as_slice() == ["*"] => Ok(Self::ComponentAgents),
-            Some(("?component", rest)) if rest.len() == 1 && valid_suffix_segment(rest[0]) => {
-                Ok(Self::ComponentAgent {
+            Some(("?component", rest)) if rest.as_slice() == ["*"] => Ok(Self::Agent(
+                PolymorphicAgentRecipientPattern::ComponentAgents,
+            )),
+            Some(("?component", rest)) if rest.len() == 1 && valid_suffix_segment(rest[0]) => Ok(
+                Self::Agent(PolymorphicAgentRecipientPattern::ComponentAgent {
                     agent: rest[0].to_string(),
-                })
+                }),
+            ),
+            Some(("?self", rest)) if rest.is_empty() => {
+                Ok(Self::Agent(PolymorphicAgentRecipientPattern::Self_))
             }
-            Some(("?self", rest)) if rest.is_empty() => Ok(Self::Self_),
             Some(_) => Err(value.to_string()),
             None => RecipientPattern::parse(value).map(Self::Concrete),
         }

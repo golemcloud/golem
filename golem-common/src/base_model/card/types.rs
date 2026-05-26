@@ -19,9 +19,9 @@ use crate::base_model::card::{
     EnvResourcePattern, EnvVerb, FilesystemPermissionPattern, FilesystemResourcePattern,
     FilesystemVerb, KvPermissionPattern, KvResourcePattern, KvVerb, NetworkPermissionPattern,
     NetworkResourcePattern, NetworkVerb, OplogPermissionPattern, OplogResourcePattern, OplogVerb,
-    PermissionPattern, PolymorphicPermissionPattern, PortPattern, RdbmsPermissionPattern,
-    RdbmsResourcePattern, RdbmsVerb, SecretPermissionPattern, SecretResourcePattern, SecretVerb,
-    ToolPermissionPattern, ToolResourcePattern, ToolVerb,
+    PermissionPattern, PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern,
+    PortPattern, RdbmsPermissionPattern, RdbmsResourcePattern, RdbmsVerb, SecretPermissionPattern,
+    SecretResourcePattern, SecretVerb, ToolPermissionPattern, ToolResourcePattern, ToolVerb,
 };
 use crate::model::card::owner::{
     AccountOwnerPattern, AgentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern,
@@ -232,6 +232,12 @@ pub struct PolymorphicPatternGrant {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct PolymorphicManifestPatternGrant {
+    pub permission: PolymorphicManifestPermissionPattern,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Card {
     pub card_id: Uuid,
     pub parent_ids: Vec<Uuid>,
@@ -253,6 +259,19 @@ pub struct PolymorphicCard {
     pub lower_negative: Vec<PolymorphicPatternGrant>,
     pub upper_positive: Vec<PolymorphicPatternGrant>,
     pub upper_negative: Vec<PolymorphicPatternGrant>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub system_card: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolymorphicManifestCard {
+    pub card_id: Uuid,
+    pub parent_ids: Vec<Uuid>,
+    pub lower_positive: Vec<PolymorphicManifestPatternGrant>,
+    pub lower_negative: Vec<PolymorphicManifestPatternGrant>,
+    pub upper_positive: Vec<PolymorphicManifestPatternGrant>,
+    pub upper_negative: Vec<PolymorphicManifestPatternGrant>,
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub system_card: bool,

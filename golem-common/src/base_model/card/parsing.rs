@@ -92,6 +92,14 @@ impl FromStr for PolymorphicPatternGrant {
     }
 }
 
+impl FromStr for PolymorphicManifestPatternGrant {
+    type Err = CardParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        parse_polymorphic_manifest_pattern_grant(value)
+    }
+}
+
 pub fn parse_pattern_grant(value: &str) -> Result<PatternGrant, CardParseError> {
     if !value.contains('@') {
         return Err(CardParseError::MissingAtSeparator);
@@ -150,6 +158,40 @@ pub fn parse_polymorphic_pattern_grant(
 
     Ok(PolymorphicPatternGrant {
         permission: parse_polymorphic_permission(
+            &parts.class,
+            &parts.owner,
+            &parts.recipient,
+            &parts.verb,
+            &parts.resource,
+        )?,
+    })
+}
+
+pub fn parse_polymorphic_manifest_pattern_grant(
+    value: &str,
+) -> Result<PolymorphicManifestPatternGrant, CardParseError> {
+    if !value.contains('@') {
+        return Err(CardParseError::MissingAtSeparator);
+    }
+
+    let (_, parts) = all_consuming(pattern_grant_parts)(value)
+        .map_err(|err| CardParseError::Malformed(err.to_string()))?;
+
+    if parts.class.is_empty() {
+        return Err(CardParseError::MissingClassOpenParen);
+    }
+    if parts.owner.is_empty() && !value.contains("()") {
+        return Err(CardParseError::MissingClassCloseParen);
+    }
+    if parts.recipient.is_empty() {
+        return Err(CardParseError::MissingRecipient);
+    }
+    if parts.verb.is_empty() {
+        return Err(CardParseError::MissingVerb);
+    }
+
+    Ok(PolymorphicManifestPatternGrant {
+        permission: parse_polymorphic_manifest_permission(
             &parts.class,
             &parts.owner,
             &parts.recipient,
@@ -417,6 +459,160 @@ fn parse_polymorphic_permission(
     }
 }
 
+fn parse_polymorphic_manifest_permission(
+    class: &str,
+    owner: &str,
+    recipient: &str,
+    verb: &str,
+    resource: &str,
+) -> Result<PolymorphicManifestPermissionPattern, CardParseError> {
+    match class {
+        FilesystemClass::NAME => parse_polymorphic_manifest_class_permission::<FilesystemClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Filesystem),
+        NetworkClass::NAME => parse_polymorphic_manifest_class_permission::<NetworkClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Network),
+        EnvClass::NAME => parse_polymorphic_manifest_class_permission::<EnvClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Env),
+        OplogClass::NAME => parse_polymorphic_manifest_class_permission::<OplogClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Oplog),
+        ConfigClass::NAME => parse_polymorphic_manifest_class_permission::<ConfigClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Config),
+        SecretClass::NAME => parse_polymorphic_manifest_class_permission::<SecretClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Secret),
+        AgentClass::NAME => parse_polymorphic_manifest_class_permission::<AgentClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Agent),
+        ToolClass::NAME => parse_polymorphic_manifest_class_permission::<ToolClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Tool),
+        KvClass::NAME => {
+            parse_polymorphic_manifest_class_permission::<KvClass>(owner, recipient, verb, resource)
+                .map(PolymorphicManifestPermissionPattern::Kv)
+        }
+        BlobClass::NAME => parse_polymorphic_manifest_class_permission::<BlobClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Blob),
+        RdbmsClass::NAME => parse_polymorphic_manifest_class_permission::<RdbmsClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Rdbms),
+        CardClass::NAME => parse_polymorphic_manifest_class_permission::<CardClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Card),
+        SystemClass::NAME => parse_polymorphic_manifest_class_permission::<SystemClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::System),
+        PlanClass::NAME => parse_polymorphic_manifest_class_permission::<PlanClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Plan),
+        AccountClass::NAME => parse_polymorphic_manifest_class_permission::<AccountClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Account),
+        AccountUsageClass::NAME => {
+            parse_polymorphic_manifest_class_permission::<AccountUsageClass>(
+                owner, recipient, verb, resource,
+            )
+            .map(PolymorphicManifestPermissionPattern::AccountUsage)
+        }
+        AccountTokenClass::NAME => {
+            parse_polymorphic_manifest_class_permission::<AccountTokenClass>(
+                owner, recipient, verb, resource,
+            )
+            .map(PolymorphicManifestPermissionPattern::AccountToken)
+        }
+        AccountPluginClass::NAME => {
+            parse_polymorphic_manifest_class_permission::<AccountPluginClass>(
+                owner, recipient, verb, resource,
+            )
+            .map(PolymorphicManifestPermissionPattern::AccountPlugin)
+        }
+        ApplicationClass::NAME => parse_polymorphic_manifest_class_permission::<ApplicationClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Application),
+        EnvironmentClass::NAME => parse_polymorphic_manifest_class_permission::<EnvironmentClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Environment),
+        EnvironmentShareClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentShareClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentShare),
+        EnvironmentPluginGrantClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentPluginGrantClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentPluginGrant),
+        EnvironmentDomainRegistrationClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentDomainRegistrationClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentDomainRegistration),
+        EnvironmentSecuritySchemeClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentSecuritySchemeClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentSecurityScheme),
+        EnvironmentHttpApiDeploymentClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentHttpApiDeploymentClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentHttpApiDeployment),
+        EnvironmentMcpDeploymentClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentMcpDeploymentClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentMcpDeployment),
+        EnvironmentAgentSecretClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentAgentSecretClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentAgentSecret),
+        EnvironmentResourceDefinitionClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentResourceDefinitionClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentResourceDefinition),
+        EnvironmentRetryPolicyClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentRetryPolicyClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentRetryPolicy),
+        ComponentClass::NAME => parse_polymorphic_manifest_class_permission::<ComponentClass>(
+            owner, recipient, verb, resource,
+        )
+        .map(PolymorphicManifestPermissionPattern::Component),
+        AccountOauth2IdentityClass::NAME => parse_polymorphic_manifest_class_permission::<
+            AccountOauth2IdentityClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::AccountOauth2Identity),
+        EnvironmentInitialFilesClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentInitialFilesClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentInitialFiles),
+        EnvironmentKvBucketClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentKvBucketClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentKvBucket),
+        EnvironmentBlobBucketClass::NAME => parse_polymorphic_manifest_class_permission::<
+            EnvironmentBlobBucketClass,
+        >(owner, recipient, verb, resource)
+        .map(PolymorphicManifestPermissionPattern::EnvironmentBlobBucket),
+        _ => Err(CardParseError::UnknownClass(class.to_string())),
+    }
+}
+
 fn parse_class_permission<C: PermissionClass>(
     owner: &str,
     recipient: &str,
@@ -461,8 +657,8 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
             class: C::NAME.to_string(),
             owner: owner.to_string(),
         })?;
-    let recipient = PolymorphicRecipientPattern::parse(recipient)
-        .map_err(CardParseError::InvalidRecipientPath)?;
+    let recipient =
+        RecipientPattern::parse(recipient).map_err(CardParseError::InvalidRecipientPath)?;
     if contains_slot_reference(resource) {
         return Err(CardParseError::InvalidResource {
             class: C::NAME.to_string(),
@@ -488,6 +684,45 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
         }
     };
     Ok(C::into_polymorphic_permission(pattern))
+}
+
+fn parse_polymorphic_manifest_class_permission<C: PermissionClass>(
+    owner: &str,
+    recipient: &str,
+    verb: &str,
+    resource: &str,
+) -> Result<PolymorphicManifestClassPermissionPattern<C>, CardParseError> {
+    let owner =
+        C::Owner::parse_polymorphic(owner).map_err(|_| CardParseError::InvalidOwnerPath {
+            class: C::NAME.to_string(),
+            owner: owner.to_string(),
+        })?;
+    let recipient = PolymorphicRecipientPattern::parse(recipient)
+        .map_err(CardParseError::InvalidRecipientPath)?;
+    if contains_slot_reference(resource) {
+        return Err(CardParseError::InvalidResource {
+            class: C::NAME.to_string(),
+            resource: resource.to_string(),
+        });
+    }
+    let resource = C::Resource::parse_resource(resource)?;
+    if verb == "*" {
+        Ok(PolymorphicManifestClassPermissionPattern::<C>::Any {
+            owner,
+            recipient,
+            resource,
+        })
+    } else {
+        Ok(PolymorphicManifestClassPermissionPattern::<C>::Verb {
+            verb: C::Verb::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
+                class: C::NAME.to_string(),
+                verb: verb.to_string(),
+            })?,
+            owner,
+            recipient,
+            resource,
+        })
+    }
 }
 
 pub(crate) fn contains_slot_reference(value: &str) -> bool {
