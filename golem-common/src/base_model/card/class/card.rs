@@ -88,6 +88,3 @@ impl PermissionClass for CardClass {
         PolymorphicPermissionPattern::Card(pattern)
     }
 }
-
-pub type CardPermissionPattern = ClassPermissionPattern<CardClass>;
-pub type PolymorphicCardPermissionPattern = PolymorphicClassPermissionPattern<CardClass>;

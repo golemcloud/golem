@@ -95,10 +95,6 @@ impl PermissionClass for EnvironmentPluginGrantClass {
     }
 }
 
-pub type EnvironmentPluginGrantPermissionPattern =
-    ClassPermissionPattern<EnvironmentPluginGrantClass>;
-pub type PolymorphicEnvironmentPluginGrantPermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentPluginGrantClass>;
 
 fn parse_environment_plugin_grant_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

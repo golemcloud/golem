@@ -108,6 +108,3 @@ impl PermissionClass for KvClass {
         PolymorphicPermissionPattern::Kv(pattern)
     }
 }
-
-pub type KvPermissionPattern = ClassPermissionPattern<KvClass>;
-pub type PolymorphicKvPermissionPattern = PolymorphicClassPermissionPattern<KvClass>;

@@ -32,12 +32,12 @@ fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> Patt
     )
 }
 
-fn fs_permission(permission: FilesystemPermissionPattern) -> PatternGrant {
+fn fs_permission(permission: ClassPermissionPattern<FilesystemClass>) -> PatternGrant {
     PatternGrant::new(PermissionPattern::Filesystem(permission))
 }
 
 fn network(recipient: &str, resource: NetworkResourcePattern) -> PatternGrant {
-    PatternGrant::new(PermissionPattern::Network(NetworkPermissionPattern::Verb {
+    PatternGrant::new(PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
         verb: NetworkVerb::Connect,
         owner: EmptyOwnerPattern,
         recipient: AgentRecipientPattern::parse(recipient).unwrap(),
@@ -694,18 +694,18 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
 
 #[test]
 fn verb_wildcard_subsumes_class_verbs_only() {
-    let any_filesystem = fs_permission(FilesystemPermissionPattern::Any {
+    let any_filesystem = fs_permission(ClassPermissionPattern::<FilesystemClass>::Any {
         owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: FilesystemResourcePattern::glob("/data/**"),
     });
-    let read_file = fs_permission(FilesystemPermissionPattern::Verb {
+    let read_file = fs_permission(ClassPermissionPattern::<FilesystemClass>::Verb {
         verb: FilesystemVerb::Read,
         owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: FilesystemResourcePattern::exact("/data/file.txt"),
     });
-    let write_file = fs_permission(FilesystemPermissionPattern::Verb {
+    let write_file = fs_permission(ClassPermissionPattern::<FilesystemClass>::Verb {
         verb: FilesystemVerb::Write,
         owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),

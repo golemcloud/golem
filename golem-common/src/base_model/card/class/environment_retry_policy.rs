@@ -101,10 +101,6 @@ impl PermissionClass for EnvironmentRetryPolicyClass {
     }
 }
 
-pub type EnvironmentRetryPolicyPermissionPattern =
-    ClassPermissionPattern<EnvironmentRetryPolicyClass>;
-pub type PolymorphicEnvironmentRetryPolicyPermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentRetryPolicyClass>;
 
 fn parse_environment_retry_policy_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

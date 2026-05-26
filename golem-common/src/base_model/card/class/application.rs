@@ -84,9 +84,6 @@ impl PermissionClass for ApplicationClass {
     }
 }
 
-pub type ApplicationPermissionPattern = ClassPermissionPattern<ApplicationClass>;
-pub type PolymorphicApplicationPermissionPattern =
-    PolymorphicClassPermissionPattern<ApplicationClass>;
 
 fn parse_application_resource(resource: &str) -> Result<ApplicationResourcePattern, String> {
     all_consuming(application_resource)(resource)

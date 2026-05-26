@@ -141,7 +141,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "filesystem_canonical",
             "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : /data/**",
-            PermissionPattern::Filesystem(FilesystemPermissionPattern::Verb {
+            PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass>::Verb {
                 verb: FilesystemVerb::Read,
                 owner: agent_owner(
                     "acme",
@@ -157,7 +157,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "filesystem_email_recipient",
             "filesystem(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ alice@example.com/shop/prod/cart-svc/CartAgent(\"42\") : read : /data/**",
-            PermissionPattern::Filesystem(FilesystemPermissionPattern::Verb {
+            PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass>::Verb {
                 verb: FilesystemVerb::Read,
                 owner: agent_owner(
                     "acme",
@@ -179,7 +179,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "filesystem_any_verb",
             "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : * : /data/**",
-            PermissionPattern::Filesystem(FilesystemPermissionPattern::Any {
+            PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass>::Any {
                 owner: agent_owner(
                     "acme",
                     "shop",
@@ -194,7 +194,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "network",
             "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : api.internal:8080",
-            PermissionPattern::Network(NetworkPermissionPattern::Verb {
+            PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
                 verb: NetworkVerb::Connect,
                 owner: EmptyOwnerPattern,
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
@@ -207,7 +207,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "network_any_resource",
             "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : *",
-            PermissionPattern::Network(NetworkPermissionPattern::Verb {
+            PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
                 verb: NetworkVerb::Connect,
                 owner: EmptyOwnerPattern,
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
@@ -217,7 +217,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "network_host_any_port",
             "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : api.internal",
-            PermissionPattern::Network(NetworkPermissionPattern::Verb {
+            PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
                 verb: NetworkVerb::Connect,
                 owner: EmptyOwnerPattern,
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
@@ -230,7 +230,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "network_port_range",
             "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : api.internal:8080-9000",
-            PermissionPattern::Network(NetworkPermissionPattern::Verb {
+            PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
                 verb: NetworkVerb::Connect,
                 owner: EmptyOwnerPattern,
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
@@ -246,7 +246,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "env",
             "env(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : HOME",
-            PermissionPattern::Env(EnvPermissionPattern::Verb {
+            PermissionPattern::Env(ClassPermissionPattern::<EnvClass>::Verb {
                 verb: EnvVerb::Read,
                 owner: agent_owner(
                     "acme",
@@ -262,7 +262,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "oplog_any",
             "oplog(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : *",
-            PermissionPattern::Oplog(OplogPermissionPattern::Verb {
+            PermissionPattern::Oplog(ClassPermissionPattern::<OplogClass>::Verb {
                 verb: OplogVerb::Read,
                 owner: agent_owner(
                     "acme",
@@ -278,7 +278,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "oplog_range_with_colons",
             "oplog(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : start=1000:end=2000",
-            PermissionPattern::Oplog(OplogPermissionPattern::Verb {
+            PermissionPattern::Oplog(ClassPermissionPattern::<OplogClass>::Verb {
                 verb: OplogVerb::Read,
                 owner: agent_owner(
                     "acme",
@@ -297,7 +297,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "config",
             "config(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : model.retry-count",
-            PermissionPattern::Config(ConfigPermissionPattern::Verb {
+            PermissionPattern::Config(ClassPermissionPattern::<ConfigClass>::Verb {
                 verb: ConfigVerb::Read,
                 owner: agent_owner(
                     "acme",
@@ -318,7 +318,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "secret_hold",
             "secret(acme/shop/prod) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : hold : cart.api-key",
-            PermissionPattern::Secret(SecretPermissionPattern::Verb {
+            PermissionPattern::Secret(ClassPermissionPattern::<SecretClass>::Verb {
                 verb: SecretVerb::Hold,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
@@ -331,7 +331,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "secret_reveal_agent_type",
             "secret(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : reveal : cart.api-key",
-            PermissionPattern::Secret(SecretPermissionPattern::Verb {
+            PermissionPattern::Secret(ClassPermissionPattern::<SecretClass>::Verb {
                 verb: SecretVerb::Reveal,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
@@ -344,7 +344,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "agent_invoke",
             "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : add-item",
-            PermissionPattern::Agent(AgentPermissionPattern::Verb {
+            PermissionPattern::Agent(ClassPermissionPattern::<AgentClass>::Verb {
                 verb: AgentVerb::Invoke,
                 owner: agent_owner(
                     "acme",
@@ -360,7 +360,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "agent_delete_component",
             "agent(acme/shop/prod/cart-svc/*) @ acme/shop/prod/cart-svc/* : delete : *",
-            PermissionPattern::Agent(AgentPermissionPattern::Verb {
+            PermissionPattern::Agent(ClassPermissionPattern::<AgentClass>::Verb {
                 verb: AgentVerb::Delete,
                 owner: AgentOwnerPattern::ComponentAgents {
                     account: "acme".to_string(),
@@ -381,7 +381,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "agent_cancel_invocation_uuid",
             "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart(*) : cancel-invocation : 550e8400-e29b-41d4-a716-446655440000",
-            PermissionPattern::Agent(AgentPermissionPattern::Verb {
+            PermissionPattern::Agent(ClassPermissionPattern::<AgentClass>::Verb {
                 verb: AgentVerb::CancelInvocation,
                 owner: agent_owner(
                     "acme",
@@ -399,7 +399,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "agent_revert_oplog_index",
             "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart(*) : revert : 42",
-            PermissionPattern::Agent(AgentPermissionPattern::Verb {
+            PermissionPattern::Agent(ClassPermissionPattern::<AgentClass>::Verb {
                 verb: AgentVerb::Revert,
                 owner: agent_owner(
                     "acme",
@@ -415,7 +415,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "tool",
             "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : search",
-            PermissionPattern::Tool(ToolPermissionPattern::Verb {
+            PermissionPattern::Tool(ClassPermissionPattern::<ToolClass>::Verb {
                 verb: ToolVerb::Invoke,
                 owner: ToolOwnerPattern::Tool {
                     account: "acme".to_string(),
@@ -434,7 +434,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "tool_with_flags_and_args",
             "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : search.files --pattern=* --path=src/** -in README.md",
-            PermissionPattern::Tool(ToolPermissionPattern::Verb {
+            PermissionPattern::Tool(ClassPermissionPattern::<ToolClass>::Verb {
                 verb: ToolVerb::Invoke,
                 owner: ToolOwnerPattern::Tool {
                     account: "acme".to_string(),
@@ -474,7 +474,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "kv",
             "kv(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : my-store.user-*",
-            PermissionPattern::Kv(KvPermissionPattern::Verb {
+            PermissionPattern::Kv(ClassPermissionPattern::<KvClass>::Verb {
                 verb: KvVerb::Read,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
@@ -487,7 +487,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "blob",
             "blob(acme/shop/prod) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : my-bucket.models/*.bin",
-            PermissionPattern::Blob(BlobPermissionPattern::Verb {
+            PermissionPattern::Blob(ClassPermissionPattern::<BlobClass>::Verb {
                 verb: BlobVerb::Read,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
@@ -500,7 +500,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "rdbms",
             "rdbms(acme/shop/prod) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : query : orders.public.orders",
-            PermissionPattern::Rdbms(RdbmsPermissionPattern::Verb {
+            PermissionPattern::Rdbms(ClassPermissionPattern::<RdbmsClass>::Verb {
                 verb: RdbmsVerb::Query,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
@@ -514,7 +514,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "card_derive",
             "card(acme) @ acme/shop/prod/cart-svc/ShoppingCart(*) : derive : *",
-            PermissionPattern::Card(CardPermissionPattern::Verb {
+            PermissionPattern::Card(ClassPermissionPattern::<CardClass>::Verb {
                 verb: CardVerb::Derive,
                 owner: account_owner("acme"),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
@@ -524,7 +524,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "card_install",
             "card(acme) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : install : acme/shop/prod/cart-svc/ShoppingCart(*)",
-            PermissionPattern::Card(CardPermissionPattern::Verb {
+            PermissionPattern::Card(ClassPermissionPattern::<CardClass>::Verb {
                 verb: CardVerb::Install,
                 owner: account_owner("acme"),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
@@ -540,7 +540,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "system",
             "system() @ acme : create-account :",
-            PermissionPattern::System(SystemPermissionPattern::Verb {
+            PermissionPattern::System(ClassPermissionPattern::<SystemClass>::Verb {
                 verb: SystemVerb::CreateAccount,
                 owner: EmptyOwnerPattern,
                 recipient: account_recipient("acme"),
@@ -550,7 +550,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "system_email_recipient",
             "system() @ alice@example.com : create-account :",
-            PermissionPattern::System(SystemPermissionPattern::Verb {
+            PermissionPattern::System(ClassPermissionPattern::<SystemClass>::Verb {
                 verb: SystemVerb::CreateAccount,
                 owner: EmptyOwnerPattern,
                 recipient: account_recipient("alice@example.com"),
@@ -560,7 +560,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "plan",
             "plan() @ acme : view : plan-a",
-            PermissionPattern::Plan(PlanPermissionPattern::Verb {
+            PermissionPattern::Plan(ClassPermissionPattern::<PlanClass>::Verb {
                 verb: PlanVerb::View,
                 owner: EmptyOwnerPattern,
                 recipient: account_recipient("acme"),
@@ -572,7 +572,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "plan_any",
             "plan() @ acme : create : *",
-            PermissionPattern::Plan(PlanPermissionPattern::Verb {
+            PermissionPattern::Plan(ClassPermissionPattern::<PlanClass>::Verb {
                 verb: PlanVerb::Create,
                 owner: EmptyOwnerPattern,
                 recipient: account_recipient("acme"),
@@ -582,7 +582,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "account",
             "account(acme) @ acme : view :",
-            PermissionPattern::Account(AccountPermissionPattern::Verb {
+            PermissionPattern::Account(ClassPermissionPattern::<AccountClass>::Verb {
                 verb: AccountVerb::View,
                 owner: account_owner("acme"),
                 recipient: account_recipient("acme"),
@@ -592,7 +592,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "account_usage",
             "account.usage(acme) @ acme : view :",
-            PermissionPattern::AccountUsage(AccountUsagePermissionPattern::Verb {
+            PermissionPattern::AccountUsage(ClassPermissionPattern::<AccountUsageClass>::Verb {
                 verb: AccountUsageVerb::View,
                 owner: account_owner("acme"),
                 recipient: account_recipient("acme"),
@@ -602,7 +602,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "account_token",
             "account.token(acme) @ acme : view : 550e8400-e29b-41d4-a716-446655440000",
-            PermissionPattern::AccountToken(AccountTokenPermissionPattern::Verb {
+            PermissionPattern::AccountToken(ClassPermissionPattern::<AccountTokenClass>::Verb {
                 verb: AccountTokenVerb::View,
                 owner: account_owner("acme"),
                 recipient: account_recipient("acme"),
@@ -612,7 +612,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "account_token_delete",
             "account.token(acme) @ acme : delete : 550e8400-e29b-41d4-a716-446655440000",
-            PermissionPattern::AccountToken(AccountTokenPermissionPattern::Verb {
+            PermissionPattern::AccountToken(ClassPermissionPattern::<AccountTokenClass>::Verb {
                 verb: AccountTokenVerb::Delete,
                 owner: account_owner("acme"),
                 recipient: account_recipient("acme"),
@@ -622,7 +622,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "account_token_create_any",
             "account.token(acme) @ acme : create : *",
-            PermissionPattern::AccountToken(AccountTokenPermissionPattern::Verb {
+            PermissionPattern::AccountToken(ClassPermissionPattern::<AccountTokenClass>::Verb {
                 verb: AccountTokenVerb::Create,
                 owner: account_owner("acme"),
                 recipient: account_recipient("acme"),
@@ -632,7 +632,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "account_plugin",
             "account.plugin(acme) @ acme : view : plugin-a",
-            PermissionPattern::AccountPlugin(AccountPluginPermissionPattern::Verb {
+            PermissionPattern::AccountPlugin(ClassPermissionPattern::<AccountPluginClass>::Verb {
                 verb: AccountPluginVerb::View,
                 owner: account_owner("acme"),
                 recipient: account_recipient("acme"),
@@ -644,7 +644,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "application",
             "application(acme) @ acme : view : shop",
-            PermissionPattern::Application(ApplicationPermissionPattern::Verb {
+            PermissionPattern::Application(ClassPermissionPattern::<ApplicationClass>::Verb {
                 verb: ApplicationVerb::View,
                 owner: account_owner("acme"),
                 recipient: account_recipient("acme"),
@@ -656,7 +656,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "application_create_any",
             "application(acme) @ acme : create : *",
-            PermissionPattern::Application(ApplicationPermissionPattern::Verb {
+            PermissionPattern::Application(ClassPermissionPattern::<ApplicationClass>::Verb {
                 verb: ApplicationVerb::Create,
                 owner: account_owner("acme"),
                 recipient: account_recipient("acme"),
@@ -666,7 +666,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "environment",
             "environment(acme/shop) @ acme/shop/prod : view : prod",
-            PermissionPattern::Environment(EnvironmentPermissionPattern::Verb {
+            PermissionPattern::Environment(ClassPermissionPattern::<EnvironmentClass>::Verb {
                 verb: EnvironmentVerb::View,
                 owner: application_owner("acme", "shop"),
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -678,7 +678,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "environment_create_any",
             "environment(acme/shop) @ acme/shop/prod : create : *",
-            PermissionPattern::Environment(EnvironmentPermissionPattern::Verb {
+            PermissionPattern::Environment(ClassPermissionPattern::<EnvironmentClass>::Verb {
                 verb: EnvironmentVerb::Create,
                 owner: application_owner("acme", "shop"),
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -688,7 +688,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "environment_rollback_revision",
             "environment(acme/shop) @ acme/shop/prod : rollback : prod@rev=42",
-            PermissionPattern::Environment(EnvironmentPermissionPattern::Verb {
+            PermissionPattern::Environment(ClassPermissionPattern::<EnvironmentClass>::Verb {
                 verb: EnvironmentVerb::Rollback,
                 owner: application_owner("acme", "shop"),
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -701,7 +701,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "environment_share",
             "environment.share(acme/shop/prod) @ acme/shop/prod : view : 550e8400-e29b-41d4-a716-446655440000",
-            PermissionPattern::EnvironmentShare(EnvironmentSharePermissionPattern::Verb {
+            PermissionPattern::EnvironmentShare(ClassPermissionPattern::<EnvironmentShareClass>::Verb {
                 verb: EnvironmentShareVerb::View,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -712,7 +712,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "environment_plugin_grant",
             "environment.plugin-grant(acme/shop/prod) @ acme/shop/prod : view : plugin-a",
             PermissionPattern::EnvironmentPluginGrant(
-                EnvironmentPluginGrantPermissionPattern::Verb {
+                ClassPermissionPattern::<EnvironmentPluginGrantClass>::Verb {
                     verb: EnvironmentPluginGrantVerb::View,
                     owner: environment_owner("acme", "shop", "prod"),
                     recipient: environment_recipient("acme", "shop", "prod"),
@@ -726,7 +726,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "environment_domain_registration",
             "environment.domain-registration(acme/shop/prod) @ acme/shop/prod : view : domain-a",
             PermissionPattern::EnvironmentDomainRegistration(
-                EnvironmentDomainRegistrationPermissionPattern::Verb {
+                ClassPermissionPattern::<EnvironmentDomainRegistrationClass>::Verb {
                     verb: EnvironmentDomainRegistrationVerb::View,
                     owner: environment_owner("acme", "shop", "prod"),
                     recipient: environment_recipient("acme", "shop", "prod"),
@@ -742,7 +742,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "environment_security_scheme",
             "environment.security-scheme(acme/shop/prod) @ acme/shop/prod : view : scheme-a",
             PermissionPattern::EnvironmentSecurityScheme(
-                EnvironmentSecuritySchemePermissionPattern::Verb {
+                ClassPermissionPattern::<EnvironmentSecuritySchemeClass>::Verb {
                     verb: EnvironmentSecuritySchemeVerb::View,
                     owner: environment_owner("acme", "shop", "prod"),
                     recipient: environment_recipient("acme", "shop", "prod"),
@@ -756,7 +756,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "environment_http_api_deployment",
             "environment.http-api-deployment(acme/shop/prod) @ acme/shop/prod : view : api./v1/**",
             PermissionPattern::EnvironmentHttpApiDeployment(
-                EnvironmentHttpApiDeploymentPermissionPattern::Verb {
+                ClassPermissionPattern::<EnvironmentHttpApiDeploymentClass>::Verb {
                     verb: EnvironmentHttpApiDeploymentVerb::View,
                     owner: environment_owner("acme", "shop", "prod"),
                     recipient: environment_recipient("acme", "shop", "prod"),
@@ -771,7 +771,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "environment_mcp_deployment",
             "environment.mcp-deployment(acme/shop/prod) @ acme/shop/prod : view : mcp-a",
             PermissionPattern::EnvironmentMcpDeployment(
-                EnvironmentMcpDeploymentPermissionPattern::Verb {
+                ClassPermissionPattern::<EnvironmentMcpDeploymentClass>::Verb {
                     verb: EnvironmentMcpDeploymentVerb::View,
                     owner: environment_owner("acme", "shop", "prod"),
                     recipient: environment_recipient("acme", "shop", "prod"),
@@ -785,7 +785,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "environment_agent_secret",
             "environment.agent-secret(acme/shop/prod) @ acme/shop/prod : update : cart.*",
             PermissionPattern::EnvironmentAgentSecret(
-                EnvironmentAgentSecretPermissionPattern::Verb {
+                ClassPermissionPattern::<EnvironmentAgentSecretClass>::Verb {
                     verb: EnvironmentAgentSecretVerb::Update,
                     owner: environment_owner("acme", "shop", "prod"),
                     recipient: environment_recipient("acme", "shop", "prod"),
@@ -800,7 +800,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "environment_resource_definition",
             "environment.resource-definition(acme/shop/prod) @ acme/shop/prod : view : resource-a",
             PermissionPattern::EnvironmentResourceDefinition(
-                EnvironmentResourceDefinitionPermissionPattern::Verb {
+                ClassPermissionPattern::<EnvironmentResourceDefinitionClass>::Verb {
                     verb: EnvironmentResourceDefinitionVerb::View,
                     owner: environment_owner("acme", "shop", "prod"),
                     recipient: environment_recipient("acme", "shop", "prod"),
@@ -814,7 +814,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "environment_retry_policy",
             "environment.retry-policy(acme/shop/prod) @ acme/shop/prod : view : retry-a",
             PermissionPattern::EnvironmentRetryPolicy(
-                EnvironmentRetryPolicyPermissionPattern::Verb {
+                ClassPermissionPattern::<EnvironmentRetryPolicyClass>::Verb {
                     verb: EnvironmentRetryPolicyVerb::View,
                     owner: environment_owner("acme", "shop", "prod"),
                     recipient: environment_recipient("acme", "shop", "prod"),
@@ -827,7 +827,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "component",
             "component(acme/shop/prod) @ acme/shop/prod : view : cart-svc",
-            PermissionPattern::Component(ComponentPermissionPattern::Verb {
+            PermissionPattern::Component(ClassPermissionPattern::<ComponentClass>::Verb {
                 verb: ComponentVerb::View,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -839,7 +839,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "component_create_any",
             "component(acme/shop/prod) @ acme/shop/prod : create : *",
-            PermissionPattern::Component(ComponentPermissionPattern::Verb {
+            PermissionPattern::Component(ClassPermissionPattern::<ComponentClass>::Verb {
                 verb: ComponentVerb::Create,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -849,7 +849,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "component_revision",
             "component(acme/shop/prod) @ acme/shop/prod : view : cart-svc@rev=42",
-            PermissionPattern::Component(ComponentPermissionPattern::Verb {
+            PermissionPattern::Component(ClassPermissionPattern::<ComponentClass>::Verb {
                 verb: ComponentVerb::View,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -863,7 +863,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "account_oauth2_identity",
             "account.oauth2-identity(acme) @ acme : view : google/12345",
             PermissionPattern::AccountOauth2Identity(
-                AccountOauth2IdentityPermissionPattern::Verb {
+                ClassPermissionPattern::<AccountOauth2IdentityClass>::Verb {
                     verb: AccountOauth2IdentityVerb::View,
                     owner: account_owner("acme"),
                     recipient: account_recipient("acme"),
@@ -878,7 +878,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "environment_initial_files",
             "environment.initial-files(acme/shop/prod/cart-svc) @ acme/shop/prod : view : /etc/*",
             PermissionPattern::EnvironmentInitialFiles(
-                EnvironmentInitialFilesPermissionPattern::Verb {
+                ClassPermissionPattern::<EnvironmentInitialFilesClass>::Verb {
                     verb: EnvironmentInitialFilesVerb::View,
                     owner: ComponentOwnerPattern::Component {
                         account: "acme".to_string(),
@@ -903,7 +903,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         (
             "environment_kv_bucket",
             "environment.kv-bucket(acme/shop/prod) @ acme/shop/prod : view : bucket-a",
-            PermissionPattern::EnvironmentKvBucket(EnvironmentKvBucketPermissionPattern::Verb {
+            PermissionPattern::EnvironmentKvBucket(ClassPermissionPattern::<EnvironmentKvBucketClass>::Verb {
                 verb: EnvironmentKvBucketVerb::View,
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -916,7 +916,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             "environment_blob_bucket",
             "environment.blob-bucket(acme/shop/prod) @ acme/shop/prod : view : bucket-a",
             PermissionPattern::EnvironmentBlobBucket(
-                EnvironmentBlobBucketPermissionPattern::Verb {
+                ClassPermissionPattern::<EnvironmentBlobBucketClass>::Verb {
                     verb: EnvironmentBlobBucketVerb::View,
                     owner: environment_owner("acme", "shop", "prod"),
                     recipient: environment_recipient("acme", "shop", "prod"),
@@ -1105,7 +1105,7 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
             "environment_polymorphic_owner_concrete_environment_recipient",
             "environment(?env) @ acme/shop/prod : view : prod",
             PolymorphicPermissionPattern::Environment(
-                PolymorphicEnvironmentPermissionPattern::Verb {
+                PolymorphicClassPermissionPattern::<EnvironmentClass>::Verb {
                     verb: EnvironmentVerb::View,
                     owner: PolymorphicApplicationOwnerPattern::Env,
                     recipient: environment_recipient("acme", "shop", "prod"),
@@ -1118,7 +1118,7 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
         (
             "component_polymorphic_owner_concrete_environment_recipient",
             "component(?env) @ acme/shop/prod : view : cart-svc@rev=42",
-            PolymorphicPermissionPattern::Component(PolymorphicComponentPermissionPattern::Verb {
+            PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern::<ComponentClass>::Verb {
                 verb: ComponentVerb::View,
                 owner: PolymorphicEnvironmentOwnerPattern::Env,
                 recipient: environment_recipient("acme", "shop", "prod"),
@@ -1131,7 +1131,7 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
         (
             "env_self_owner_concrete_agent_recipient",
             "env(?self) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : HOME",
-            PolymorphicPermissionPattern::Env(PolymorphicEnvPermissionPattern::Verb {
+            PolymorphicPermissionPattern::Env(PolymorphicClassPermissionPattern::<EnvClass>::Verb {
                 verb: EnvVerb::Read,
                 owner: PolymorphicAgentOwnerPattern::Self_,
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
@@ -1141,7 +1141,7 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
         (
             "secret_polymorphic_owner_concrete_agent_recipient",
             "secret(?env) @ acme/shop/prod/cart-svc/ShoppingCart(*) : reveal : billing.account",
-            PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Verb {
+            PolymorphicPermissionPattern::Secret(PolymorphicClassPermissionPattern::<SecretClass>::Verb {
                 verb: SecretVerb::Reveal,
                 owner: PolymorphicEnvironmentOwnerPattern::Env,
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
@@ -1154,7 +1154,7 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
         (
             "agent_env_owner_template_concrete_agent_recipient",
             "agent(?env/payment-svc/PaymentAgent(*)) @ acme/shop/prod/payment-svc/PaymentAgent(*) : invoke : charge",
-            PolymorphicPermissionPattern::Agent(PolymorphicAgentPermissionPattern::Verb {
+            PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern::<AgentClass>::Verb {
                 verb: AgentVerb::Invoke,
                 owner: PolymorphicAgentOwnerPattern::EnvAgent {
                     component: "payment-svc".to_string(),

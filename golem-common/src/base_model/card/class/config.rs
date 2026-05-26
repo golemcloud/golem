@@ -116,8 +116,6 @@ impl PermissionClass for ConfigClass {
     }
 }
 
-pub type ConfigPermissionPattern = ClassPermissionPattern<ConfigClass>;
-pub type PolymorphicConfigPermissionPattern = PolymorphicClassPermissionPattern<ConfigClass>;
 
 fn parse_config_key_segment(value: &str) -> Result<ConfigKeySegmentPattern, String> {
     if value.is_empty() {

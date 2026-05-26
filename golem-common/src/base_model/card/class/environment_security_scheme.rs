@@ -102,10 +102,6 @@ impl PermissionClass for EnvironmentSecuritySchemeClass {
     }
 }
 
-pub type EnvironmentSecuritySchemePermissionPattern =
-    ClassPermissionPattern<EnvironmentSecuritySchemeClass>;
-pub type PolymorphicEnvironmentSecuritySchemePermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentSecuritySchemeClass>;
 
 fn parse_environment_security_scheme_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

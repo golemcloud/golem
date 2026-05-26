@@ -114,8 +114,3 @@ impl PermissionClass for EnvironmentHttpApiDeploymentClass {
         PolymorphicPermissionPattern::EnvironmentHttpApiDeployment(pattern)
     }
 }
-
-pub type EnvironmentHttpApiDeploymentPermissionPattern =
-    ClassPermissionPattern<EnvironmentHttpApiDeploymentClass>;
-pub type PolymorphicEnvironmentHttpApiDeploymentPermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentHttpApiDeploymentClass>;

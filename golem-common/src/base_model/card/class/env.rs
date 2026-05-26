@@ -99,6 +99,3 @@ impl PermissionClass for EnvClass {
         PolymorphicPermissionPattern::Env(pattern)
     }
 }
-
-pub type EnvPermissionPattern = ClassPermissionPattern<EnvClass>;
-pub type PolymorphicEnvPermissionPattern = PolymorphicClassPermissionPattern<EnvClass>;

@@ -108,6 +108,3 @@ impl PermissionClass for BlobClass {
         PolymorphicPermissionPattern::Blob(pattern)
     }
 }
-
-pub type BlobPermissionPattern = ClassPermissionPattern<BlobClass>;
-pub type PolymorphicBlobPermissionPattern = PolymorphicClassPermissionPattern<BlobClass>;

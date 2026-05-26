@@ -99,10 +99,6 @@ impl PermissionClass for EnvironmentBlobBucketClass {
     }
 }
 
-pub type EnvironmentBlobBucketPermissionPattern =
-    ClassPermissionPattern<EnvironmentBlobBucketClass>;
-pub type PolymorphicEnvironmentBlobBucketPermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentBlobBucketClass>;
 
 fn parse_environment_blob_bucket_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

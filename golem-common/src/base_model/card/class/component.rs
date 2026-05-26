@@ -99,8 +99,6 @@ impl PermissionClass for ComponentClass {
     }
 }
 
-pub type ComponentPermissionPattern = ClassPermissionPattern<ComponentClass>;
-pub type PolymorphicComponentPermissionPattern = PolymorphicClassPermissionPattern<ComponentClass>;
 
 fn parse_component_resource(resource: &str) -> Result<ComponentResourcePattern, String> {
     all_consuming(component_resource)(resource)

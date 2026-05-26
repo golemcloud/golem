@@ -103,10 +103,6 @@ impl PermissionClass for EnvironmentMcpDeploymentClass {
     }
 }
 
-pub type EnvironmentMcpDeploymentPermissionPattern =
-    ClassPermissionPattern<EnvironmentMcpDeploymentClass>;
-pub type PolymorphicEnvironmentMcpDeploymentPermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentMcpDeploymentClass>;
 
 fn parse_environment_mcp_deployment_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

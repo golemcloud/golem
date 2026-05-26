@@ -127,10 +127,6 @@ impl PermissionClass for EnvironmentAgentSecretClass {
     }
 }
 
-pub type EnvironmentAgentSecretPermissionPattern =
-    ClassPermissionPattern<EnvironmentAgentSecretClass>;
-pub type PolymorphicEnvironmentAgentSecretPermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentAgentSecretClass>;
 
 fn parse_environment_agent_secret_key_segment(
     value: &str,

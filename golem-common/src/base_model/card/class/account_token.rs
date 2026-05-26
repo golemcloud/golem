@@ -84,7 +84,3 @@ impl PermissionClass for AccountTokenClass {
         PolymorphicPermissionPattern::AccountToken(pattern)
     }
 }
-
-pub type AccountTokenPermissionPattern = ClassPermissionPattern<AccountTokenClass>;
-pub type PolymorphicAccountTokenPermissionPattern =
-    PolymorphicClassPermissionPattern<AccountTokenClass>;

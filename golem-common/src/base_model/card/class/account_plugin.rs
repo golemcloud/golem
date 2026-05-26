@@ -97,9 +97,6 @@ impl PermissionClass for AccountPluginClass {
     }
 }
 
-pub type AccountPluginPermissionPattern = ClassPermissionPattern<AccountPluginClass>;
-pub type PolymorphicAccountPluginPermissionPattern =
-    PolymorphicClassPermissionPattern<AccountPluginClass>;
 
 fn parse_account_plugin_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

@@ -113,8 +113,6 @@ impl PermissionClass for PlanClass {
     }
 }
 
-pub type PlanPermissionPattern = ClassPermissionPattern<PlanClass>;
-pub type PolymorphicPlanPermissionPattern = PolymorphicClassPermissionPattern<PlanClass>;
 
 fn parse_plan_id(value: &str) -> Result<PlanIdPattern, String> {
     if let Ok(uuid) = Uuid::parse_str(value) {

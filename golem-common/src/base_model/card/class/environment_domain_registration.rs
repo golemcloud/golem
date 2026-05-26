@@ -122,8 +122,3 @@ impl PermissionClass for EnvironmentDomainRegistrationClass {
         PolymorphicPermissionPattern::EnvironmentDomainRegistration(pattern)
     }
 }
-
-pub type EnvironmentDomainRegistrationPermissionPattern =
-    ClassPermissionPattern<EnvironmentDomainRegistrationClass>;
-pub type PolymorphicEnvironmentDomainRegistrationPermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentDomainRegistrationClass>;

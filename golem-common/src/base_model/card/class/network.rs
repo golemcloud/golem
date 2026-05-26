@@ -149,8 +149,6 @@ impl PermissionClass for NetworkClass {
     }
 }
 
-pub type NetworkPermissionPattern = ClassPermissionPattern<NetworkClass>;
-pub type PolymorphicNetworkPermissionPattern = PolymorphicClassPermissionPattern<NetworkClass>;
 
 fn parse_port_pattern(port: &str) -> Result<PortPattern, CardParseError> {
     if let Some((start, end)) = port.split_once('-') {

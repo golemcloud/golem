@@ -102,6 +102,3 @@ impl PermissionClass for OplogClass {
         PolymorphicPermissionPattern::Oplog(pattern)
     }
 }
-
-pub type OplogPermissionPattern = ClassPermissionPattern<OplogClass>;
-pub type PolymorphicOplogPermissionPattern = PolymorphicClassPermissionPattern<OplogClass>;

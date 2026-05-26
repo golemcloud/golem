@@ -88,7 +88,3 @@ impl PermissionClass for EnvironmentShareClass {
         PolymorphicPermissionPattern::EnvironmentShare(pattern)
     }
 }
-
-pub type EnvironmentSharePermissionPattern = ClassPermissionPattern<EnvironmentShareClass>;
-pub type PolymorphicEnvironmentSharePermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentShareClass>;

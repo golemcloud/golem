@@ -121,10 +121,6 @@ impl PermissionClass for EnvironmentInitialFilesClass {
     }
 }
 
-pub type EnvironmentInitialFilesPermissionPattern =
-    ClassPermissionPattern<EnvironmentInitialFilesClass>;
-pub type PolymorphicEnvironmentInitialFilesPermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentInitialFilesClass>;
 
 fn parse_environment_initial_files_path_segment(
     value: &str,

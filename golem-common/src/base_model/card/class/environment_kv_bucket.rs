@@ -97,9 +97,6 @@ impl PermissionClass for EnvironmentKvBucketClass {
     }
 }
 
-pub type EnvironmentKvBucketPermissionPattern = ClassPermissionPattern<EnvironmentKvBucketClass>;
-pub type PolymorphicEnvironmentKvBucketPermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentKvBucketClass>;
 
 fn parse_environment_kv_bucket_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

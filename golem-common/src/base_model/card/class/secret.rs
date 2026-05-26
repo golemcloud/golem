@@ -120,8 +120,6 @@ impl PermissionClass for SecretClass {
     }
 }
 
-pub type SecretPermissionPattern = ClassPermissionPattern<SecretClass>;
-pub type PolymorphicSecretPermissionPattern = PolymorphicClassPermissionPattern<SecretClass>;
 
 fn parse_secret_key_segment(value: &str) -> Result<SecretKeySegmentPattern, String> {
     if value.is_empty() {

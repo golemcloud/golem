@@ -66,6 +66,3 @@ impl PermissionClass for SystemClass {
         PolymorphicPermissionPattern::System(pattern)
     }
 }
-
-pub type SystemPermissionPattern = ClassPermissionPattern<SystemClass>;
-pub type PolymorphicSystemPermissionPattern = PolymorphicClassPermissionPattern<SystemClass>;

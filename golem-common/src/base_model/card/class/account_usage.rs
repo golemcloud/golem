@@ -60,7 +60,3 @@ impl PermissionClass for AccountUsageClass {
         PolymorphicPermissionPattern::AccountUsage(pattern)
     }
 }
-
-pub type AccountUsagePermissionPattern = ClassPermissionPattern<AccountUsageClass>;
-pub type PolymorphicAccountUsagePermissionPattern =
-    PolymorphicClassPermissionPattern<AccountUsageClass>;

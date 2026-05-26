@@ -141,8 +141,6 @@ impl PermissionClass for AgentClass {
     }
 }
 
-pub type AgentPermissionPattern = ClassPermissionPattern<AgentClass>;
-pub type PolymorphicAgentPermissionPattern = PolymorphicClassPermissionPattern<AgentClass>;
 
 fn parse_agent_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

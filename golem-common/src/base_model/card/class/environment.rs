@@ -111,9 +111,6 @@ impl PermissionClass for EnvironmentClass {
     }
 }
 
-pub type EnvironmentPermissionPattern = ClassPermissionPattern<EnvironmentClass>;
-pub type PolymorphicEnvironmentPermissionPattern =
-    PolymorphicClassPermissionPattern<EnvironmentClass>;
 
 fn parse_environment_resource(resource: &str) -> Result<EnvironmentResourcePattern, String> {
     all_consuming(environment_resource)(resource)

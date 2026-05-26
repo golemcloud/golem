@@ -121,9 +121,6 @@ impl PermissionClass for FilesystemClass {
     }
 }
 
-pub type FilesystemPermissionPattern = ClassPermissionPattern<FilesystemClass>;
-pub type PolymorphicFilesystemPermissionPattern =
-    PolymorphicClassPermissionPattern<FilesystemClass>;
 
 fn parse_filesystem_path_segment(value: &str) -> Result<FilesystemPathSegmentPattern, String> {
     if value.is_empty() {

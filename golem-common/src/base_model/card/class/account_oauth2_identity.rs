@@ -112,8 +112,3 @@ impl PermissionClass for AccountOauth2IdentityClass {
         PolymorphicPermissionPattern::AccountOauth2Identity(pattern)
     }
 }
-
-pub type AccountOauth2IdentityPermissionPattern =
-    ClassPermissionPattern<AccountOauth2IdentityClass>;
-pub type PolymorphicAccountOauth2IdentityPermissionPattern =
-    PolymorphicClassPermissionPattern<AccountOauth2IdentityClass>;

@@ -69,6 +69,3 @@ impl PermissionClass for AccountClass {
         PolymorphicPermissionPattern::Account(pattern)
     }
 }
-
-pub type AccountPermissionPattern = ClassPermissionPattern<AccountClass>;
-pub type PolymorphicAccountPermissionPattern = PolymorphicClassPermissionPattern<AccountClass>;

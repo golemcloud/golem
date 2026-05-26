@@ -116,8 +116,6 @@ impl PermissionClass for RdbmsClass {
     }
 }
 
-pub type RdbmsPermissionPattern = ClassPermissionPattern<RdbmsClass>;
-pub type PolymorphicRdbmsPermissionPattern = PolymorphicClassPermissionPattern<RdbmsClass>;
 
 fn component_subsumes(left: &str, right: &str) -> bool {
     left == "*" || left == right
