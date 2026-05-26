@@ -40,6 +40,10 @@ fn network(recipient: &str, resource: NetworkResourcePattern) -> PatternGrant {
     }))
 }
 
+fn fixed_uuid() -> Uuid {
+    Uuid::from_u128(0x550e8400e29b41d4a716446655440000)
+}
+
 fn card(lower_positive: Vec<PatternGrant>, upper_positive: Vec<PatternGrant>) -> Card {
     Card {
         card_id: Uuid::new_v4(),
@@ -91,6 +95,18 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
             "acme/shop/prod/cart/CartAgent(*)",
             false,
         ),
+        (
+            "acme/shop/prod/cart/ShoppingCart(*)",
+            "acme/shop/prod/cart/ShoppingCart(\"42\")",
+            true,
+        ),
+        (
+            "acme/shop/prod/cart/ShoppingCart(*)",
+            "acme/shop/prod/cart/Order(\"42\")",
+            false,
+        ),
+        ("acme/shop/prod/cart/*", "acme/shop/prod/other/agent", false),
+        ("acme/*/*/*/*", "other/shop/prod/cart/agent", false),
     ];
 
     for (left, right, expected) in cases {
@@ -159,6 +175,9 @@ fn recipient_patterns_subsume_only_matching_holder_subtrees() {
 #[test_gen]
 fn generate_recipient_subsumption_scope_tests(r: &mut DynamicTestRegistration) {
     let environment_cases = [
+        ("*", "acme/shop/prod", true),
+        ("acme/*/*", "acme/shop/prod", true),
+        ("acme/*/*", "other/shop/prod", false),
         ("acme/shop/*", "acme/shop/prod", true),
         ("acme/shop/prod", "acme/shop/*", false),
     ];
@@ -187,6 +206,17 @@ fn generate_recipient_subsumption_scope_tests(r: &mut DynamicTestRegistration) {
     }
 
     let agent_cases = [
+        ("*", "acme/shop/prod/cart-svc/ShoppingCart(\"42\")", true),
+        (
+            "acme/*/*/*/*",
+            "acme/shop/prod/cart-svc/ShoppingCart(\"42\")",
+            true,
+        ),
+        (
+            "acme/*/*/*/*",
+            "other/shop/prod/cart-svc/ShoppingCart(\"42\")",
+            false,
+        ),
         ("acme/shop/*/*/*", "acme/shop/prod/*/*", true),
         ("acme/shop/prod/*/*", "acme/shop/*/*/*", false),
         ("acme/shop/prod/*/*", "acme/shop/prod/cart-svc/*", true),
@@ -354,6 +384,306 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
                 assert_eq!(left.subsumes(&right).unwrap(), expected);
             }
         );
+    }
+}
+
+#[test_gen]
+fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
+    let application_cases = [
+        (
+            "application_any_subsumes_named",
+            ApplicationResourcePattern::Any,
+            ApplicationResourcePattern::Application(ApplicationName("shop".to_string())),
+            true,
+        ),
+        (
+            "application_named_does_not_subsume_any",
+            ApplicationResourcePattern::Application(ApplicationName("shop".to_string())),
+            ApplicationResourcePattern::Any,
+            false,
+        ),
+        (
+            "application_named_requires_same_name",
+            ApplicationResourcePattern::Application(ApplicationName("shop".to_string())),
+            ApplicationResourcePattern::Application(ApplicationName("admin".to_string())),
+            false,
+        ),
+    ];
+
+    for (name, left, right, expected) in application_cases {
+        let left = std::sync::Arc::new(left);
+        let right = std::sync::Arc::new(right);
+        add_test!(r, name, TestProperties::unit_test(), || {
+            assert_eq!(left.as_ref().subsumes(right.as_ref()), expected);
+        });
+    }
+
+    let environment_cases = [
+        (
+            "environment_any_subsumes_revision",
+            EnvironmentResourcePattern::Any,
+            EnvironmentResourcePattern::Revision {
+                environment: EnvironmentName("prod".to_string()),
+                revision: 42,
+            },
+            true,
+        ),
+        (
+            "environment_name_subsumes_own_revision",
+            EnvironmentResourcePattern::Environment(EnvironmentName("prod".to_string())),
+            EnvironmentResourcePattern::Revision {
+                environment: EnvironmentName("prod".to_string()),
+                revision: 42,
+            },
+            true,
+        ),
+        (
+            "environment_revision_does_not_subsume_name",
+            EnvironmentResourcePattern::Revision {
+                environment: EnvironmentName("prod".to_string()),
+                revision: 42,
+            },
+            EnvironmentResourcePattern::Environment(EnvironmentName("prod".to_string())),
+            false,
+        ),
+        (
+            "environment_revision_requires_same_revision",
+            EnvironmentResourcePattern::Revision {
+                environment: EnvironmentName("prod".to_string()),
+                revision: 42,
+            },
+            EnvironmentResourcePattern::Revision {
+                environment: EnvironmentName("prod".to_string()),
+                revision: 43,
+            },
+            false,
+        ),
+    ];
+
+    for (name, left, right, expected) in environment_cases {
+        let left = std::sync::Arc::new(left);
+        let right = std::sync::Arc::new(right);
+        add_test!(r, name, TestProperties::unit_test(), || {
+            assert_eq!(left.as_ref().subsumes(right.as_ref()), expected);
+        });
+    }
+
+    let component_cases = [
+        (
+            "component_any_subsumes_revision",
+            ComponentResourcePattern::Any,
+            ComponentResourcePattern::Revision {
+                component: ComponentName("cart-svc".to_string()),
+                revision: 42,
+            },
+            true,
+        ),
+        (
+            "component_name_subsumes_own_revision",
+            ComponentResourcePattern::Component(ComponentName("cart-svc".to_string())),
+            ComponentResourcePattern::Revision {
+                component: ComponentName("cart-svc".to_string()),
+                revision: 42,
+            },
+            true,
+        ),
+        (
+            "component_revision_does_not_subsume_name",
+            ComponentResourcePattern::Revision {
+                component: ComponentName("cart-svc".to_string()),
+                revision: 42,
+            },
+            ComponentResourcePattern::Component(ComponentName("cart-svc".to_string())),
+            false,
+        ),
+        (
+            "component_name_requires_same_name",
+            ComponentResourcePattern::Component(ComponentName("cart-svc".to_string())),
+            ComponentResourcePattern::Revision {
+                component: ComponentName("checkout-svc".to_string()),
+                revision: 42,
+            },
+            false,
+        ),
+    ];
+
+    for (name, left, right, expected) in component_cases {
+        let left = std::sync::Arc::new(left);
+        let right = std::sync::Arc::new(right);
+        add_test!(r, name, TestProperties::unit_test(), || {
+            assert_eq!(left.as_ref().subsumes(right.as_ref()), expected);
+        });
+    }
+
+    let agent_cases = [
+        (
+            "agent_any_subsumes_method",
+            AgentResourcePattern::Any,
+            AgentResourcePattern::Method(AgentMethodName("charge".to_string())),
+            true,
+        ),
+        (
+            "agent_method_does_not_subsume_any",
+            AgentResourcePattern::Method(AgentMethodName("charge".to_string())),
+            AgentResourcePattern::Any,
+            false,
+        ),
+        (
+            "agent_invocation_uuid_requires_same_uuid",
+            AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Uuid(fixed_uuid())),
+            AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Uuid(Uuid::nil())),
+            false,
+        ),
+        (
+            "agent_oplog_index_requires_same_index",
+            AgentResourcePattern::OplogIndex(42),
+            AgentResourcePattern::OplogIndex(42),
+            true,
+        ),
+    ];
+
+    for (name, left, right, expected) in agent_cases {
+        let left = std::sync::Arc::new(left);
+        let right = std::sync::Arc::new(right);
+        add_test!(r, name, TestProperties::unit_test(), || {
+            assert_eq!(left.as_ref().subsumes(right.as_ref()), expected);
+        });
+    }
+
+    let tool_cases = [
+        (
+            "tool_any_subsumes_invocation",
+            ToolResourcePattern::AnyInvocation,
+            ToolResourcePattern::Invocation(ToolInvocationPattern {
+                command_path: Some(vec![ToolIdentifier("search".to_string())]),
+                args: Vec::new(),
+            }),
+            true,
+        ),
+        (
+            "tool_invocation_does_not_subsume_any",
+            ToolResourcePattern::Invocation(ToolInvocationPattern {
+                command_path: Some(vec![ToolIdentifier("search".to_string())]),
+                args: Vec::new(),
+            }),
+            ToolResourcePattern::AnyInvocation,
+            false,
+        ),
+        (
+            "tool_invocation_requires_exact_args",
+            ToolResourcePattern::Invocation(ToolInvocationPattern {
+                command_path: Some(vec![ToolIdentifier("search".to_string())]),
+                args: vec![ToolArgPattern::LongFlag {
+                    name: ToolIdentifier("pattern".to_string()),
+                    value: Some(ToolValuePattern::Star),
+                }],
+            }),
+            ToolResourcePattern::Invocation(ToolInvocationPattern {
+                command_path: Some(vec![ToolIdentifier("search".to_string())]),
+                args: vec![ToolArgPattern::LongFlag {
+                    name: ToolIdentifier("pattern".to_string()),
+                    value: Some(ToolValuePattern::Literal(ToolValueLiteral(
+                        "cart".to_string(),
+                    ))),
+                }],
+            }),
+            false,
+        ),
+    ];
+
+    for (name, left, right, expected) in tool_cases {
+        let left = std::sync::Arc::new(left);
+        let right = std::sync::Arc::new(right);
+        add_test!(r, name, TestProperties::unit_test(), || {
+            assert_eq!(left.as_ref().subsumes(right.as_ref()), expected);
+        });
+    }
+
+    let plan_cases = [
+        (
+            "plan_any_subsumes_named",
+            PlanResourcePattern::Any,
+            PlanResourcePattern::Plan(PlanIdPattern::Identifier(PlanIdentifier(
+                "plan-a".to_string(),
+            ))),
+            true,
+        ),
+        (
+            "plan_named_does_not_subsume_any",
+            PlanResourcePattern::Plan(PlanIdPattern::Identifier(PlanIdentifier(
+                "plan-a".to_string(),
+            ))),
+            PlanResourcePattern::Any,
+            false,
+        ),
+    ];
+
+    for (name, left, right, expected) in plan_cases {
+        let left = std::sync::Arc::new(left);
+        let right = std::sync::Arc::new(right);
+        add_test!(r, name, TestProperties::unit_test(), || {
+            assert_eq!(left.as_ref().subsumes(right.as_ref()), expected);
+        });
+    }
+
+    let account_token_cases = [
+        (
+            "account_token_any_subsumes_token",
+            AccountTokenResourcePattern::Any,
+            AccountTokenResourcePattern::Token(fixed_uuid()),
+            true,
+        ),
+        (
+            "account_token_token_does_not_subsume_any",
+            AccountTokenResourcePattern::Token(fixed_uuid()),
+            AccountTokenResourcePattern::Any,
+            false,
+        ),
+    ];
+
+    for (name, left, right, expected) in account_token_cases {
+        let left = std::sync::Arc::new(left);
+        let right = std::sync::Arc::new(right);
+        add_test!(r, name, TestProperties::unit_test(), || {
+            assert_eq!(left.as_ref().subsumes(right.as_ref()), expected);
+        });
+    }
+
+    let card_cases = [
+        (
+            "card_any_subsumes_install_target",
+            CardResourcePattern::Any,
+            CardResourcePattern::InstallTarget(
+                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(*)").unwrap(),
+            ),
+            true,
+        ),
+        (
+            "card_install_target_subsumes_narrower_target",
+            CardResourcePattern::InstallTarget(
+                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/*").unwrap(),
+            ),
+            CardResourcePattern::InstallTarget(
+                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(*)").unwrap(),
+            ),
+            true,
+        ),
+        (
+            "card_install_target_does_not_subsume_any",
+            CardResourcePattern::InstallTarget(
+                AgentRecipientPattern::parse("acme/shop/prod/cart-svc/*").unwrap(),
+            ),
+            CardResourcePattern::Any,
+            false,
+        ),
+    ];
+
+    for (name, left, right, expected) in card_cases {
+        let left = std::sync::Arc::new(left);
+        let right = std::sync::Arc::new(right);
+        add_test!(r, name, TestProperties::unit_test(), || {
+            assert_eq!(left.as_ref().subsumes(right.as_ref()), expected);
+        });
     }
 }
 
