@@ -8,10 +8,6 @@ pub enum AccountOwnerPattern {
 }
 
 impl AccountOwnerPattern {
-    pub fn new(path: impl Into<String>) -> Self {
-        Self::parse(&path.into()).expect("invalid owner path")
-    }
-
     pub fn parse(value: &str) -> Result<Self, String> {
         match parse_segments(value)?.as_slice() {
             ["*"] => Ok(Self::Any),
@@ -20,18 +16,6 @@ impl AccountOwnerPattern {
             }),
             _ => Err(value.to_string()),
         }
-    }
-}
-
-impl From<String> for AccountOwnerPattern {
-    fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<&str> for AccountOwnerPattern {
-    fn from(value: &str) -> Self {
-        Self::new(value)
     }
 }
 

@@ -25,10 +25,6 @@ pub enum ComponentOwnerPattern {
 }
 
 impl ComponentOwnerPattern {
-    pub fn new(path: impl Into<String>) -> Self {
-        Self::parse(&path.into()).expect("invalid owner path")
-    }
-
     pub fn parse(value: &str) -> Result<Self, String> {
         match parse_segments(value)?.as_slice() {
             ["*", "*", "*", "*"] => Ok(Self::AnyComponents),
@@ -101,17 +97,6 @@ impl ComponentOwnerPattern {
             | Self::AccountComponents { .. }
             | Self::ApplicationComponents { .. } => None,
         }
-    }
-}
-
-impl From<String> for ComponentOwnerPattern {
-    fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-impl From<&str> for ComponentOwnerPattern {
-    fn from(value: &str) -> Self {
-        Self::new(value)
     }
 }
 

@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PatternGrant {
     PatternGrant::filesystem_read_pattern(
-        owner,
+        AgentOwnerPattern::parse(owner).unwrap(),
         AgentRecipientPattern::parse(recipient).unwrap(),
         resource,
     )

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use pretty_assertions::{assert_eq, assert_matches};
+use pretty_assertions::assert_eq;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
 
@@ -34,7 +34,13 @@ fn parses_canonical_pattern_grant() {
         grant.permission,
         PermissionPattern::Filesystem(FilesystemPermissionPattern::Verb {
             verb: FilesystemVerb::Read,
-            owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+            owner: AgentOwnerPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart".to_string(),
+                agent: AgentOwnerLeafPattern::Agent("agent".to_string()),
+            },
             recipient: AgentRecipientPattern::Agent {
                 account: "acme".to_string(),
                 application: "shop".to_string(),
@@ -42,9 +48,12 @@ fn parses_canonical_pattern_grant() {
                 component: "cart".to_string(),
                 agent: "agent".to_string(),
             },
-            resource: FilesystemResourcePattern::Path(
-                FilesystemPathPattern::parse("/data/**").unwrap()
-            ),
+            resource: FilesystemResourcePattern::Path(FilesystemPathPattern {
+                segments: vec![
+                    FilesystemPathSegmentPattern::Literal("data".to_string()),
+                    FilesystemPathSegmentPattern::GlobStar,
+                ],
+            }),
         })
     );
 }
@@ -73,13 +82,31 @@ fn parses_email_recipient_inside_agent_scope() {
     )
     .unwrap();
 
-    assert_matches!(
+    assert_eq!(
         grant.permission,
-        PermissionPattern::Filesystem(FilesystemPermissionPattern::Verb { verb: FilesystemVerb::Read,
-            recipient: AgentRecipientPattern::Agent { account, application, environment, component, agent },
-            resource: FilesystemResourcePattern::Path(path),
-            ..
-        }) if account == "alice@example.com" && application == "shop" && environment == "prod" && component == "cart-svc" && agent == "CartAgent(\"42\")" && path == FilesystemPathPattern::parse("/data/**").unwrap()
+        PermissionPattern::Filesystem(FilesystemPermissionPattern::Verb {
+            verb: FilesystemVerb::Read,
+            owner: AgentOwnerPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: AgentOwnerLeafPattern::Agent("CartAgent(\"42\")".to_string()),
+            },
+            recipient: AgentRecipientPattern::Agent {
+                account: "alice@example.com".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "CartAgent(\"42\")".to_string(),
+            },
+            resource: FilesystemResourcePattern::Path(FilesystemPathPattern {
+                segments: vec![
+                    FilesystemPathSegmentPattern::Literal("data".to_string()),
+                    FilesystemPathSegmentPattern::GlobStar,
+                ],
+            }),
+        })
     );
 }
 
@@ -94,7 +121,13 @@ fn parses_resource_ids_with_colons() {
         grant.permission,
         PermissionPattern::Oplog(OplogPermissionPattern::Verb {
             verb: OplogVerb::Read,
-            owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+            owner: AgentOwnerPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart".to_string(),
+                agent: AgentOwnerLeafPattern::Agent("agent".to_string()),
+            },
             recipient: AgentRecipientPattern::Agent {
                 account: "acme".to_string(),
                 application: "shop".to_string(),
@@ -116,40 +149,116 @@ fn rejects_unknown_verbs_for_class() {
         "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : query : /data/**",
     );
 
-    assert_matches!(
+    assert_eq!(
         result,
-        Err(CardParseError::UnknownVerb { class, verb }) if class == "filesystem" && verb == "query"
+        Err(CardParseError::UnknownVerb {
+            class: "filesystem".to_string(),
+            verb: "query".to_string(),
+        })
     );
 }
 
 #[test]
 fn rejects_malformed_grants() {
-    assert_matches!(
+    assert_eq!(
         parse_pattern_grant("filesystem(acme) : read : /data/**"),
         Err(CardParseError::MissingAtSeparator)
     );
-    assert_matches!(
+    assert_eq!(
         parse_pattern_grant("filesystem(acme) @ acme : query : /data/**"),
-        Err(CardParseError::InvalidOwnerPath { class, owner })
-            if class == "filesystem" && owner == "acme"
+        Err(CardParseError::InvalidOwnerPath {
+            class: "filesystem".to_string(),
+            owner: "acme".to_string(),
+        })
     );
-    assert_matches!(
+    assert_eq!(
         parse_pattern_grant("system(acme) @ acme : create-account :"),
-        Err(CardParseError::InvalidOwnerPath { class, owner })
-            if class == "system" && owner == "acme"
+        Err(CardParseError::InvalidOwnerPath {
+            class: "system".to_string(),
+            owner: "acme".to_string(),
+        })
     );
-    assert_matches!(
+    assert_eq!(
         parse_pattern_grant("system() @ acme : create-account : not-empty"),
-        Err(CardParseError::InvalidResource { class, resource })
-            if class == "system" && resource == "not-empty"
+        Err(CardParseError::InvalidResource {
+            class: "system".to_string(),
+            resource: "not-empty".to_string(),
+        })
     );
-    assert_matches!(
-        parse_pattern_grant("card(acme) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : install : acme/shop"),
-        Err(CardParseError::InvalidRecipientPath(path)) if path == "acme/shop"
+    assert_eq!(
+        parse_pattern_grant(
+            "card(acme) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : install : acme/shop"
+        ),
+        Err(CardParseError::InvalidRecipientPath(
+            "acme/shop".to_string()
+        ))
     );
-    assert_matches!(
+    assert_eq!(
         parse_pattern_grant("unknown(acme) @ acme : view :"),
-        Err(CardParseError::UnknownClass(class)) if class == "unknown"
+        Err(CardParseError::UnknownClass("unknown".to_string()))
+    );
+}
+
+#[test]
+fn rejects_removed_application_credential_and_restore_forms() {
+    let credential_id = "550e8400-e29b-41d4-a716-446655440000";
+
+    assert_eq!(
+        parse_pattern_grant("application(acme/shop) @ acme : view :"),
+        Err(CardParseError::InvalidOwnerPath {
+            class: ApplicationClass::NAME.to_string(),
+            owner: "acme/shop".to_string(),
+        })
+    );
+    assert_eq!(
+        parse_pattern_grant(&format!(
+            "application(acme) @ acme : view-credentials : cred={credential_id}"
+        )),
+        Err(CardParseError::UnknownVerb {
+            class: ApplicationClass::NAME.to_string(),
+            verb: "view-credentials".to_string(),
+        })
+    );
+    assert_eq!(
+        parse_pattern_grant("account(acme) @ acme : restore :"),
+        Err(CardParseError::UnknownVerb {
+            class: AccountClass::NAME.to_string(),
+            verb: "restore".to_string(),
+        })
+    );
+    assert_eq!(
+        parse_pattern_grant("application(acme) @ acme : restore : shop"),
+        Err(CardParseError::UnknownVerb {
+            class: ApplicationClass::NAME.to_string(),
+            verb: "restore".to_string(),
+        })
+    );
+    assert_eq!(
+        parse_pattern_grant("environment(acme/shop) @ acme/shop/prod : restore : prod"),
+        Err(CardParseError::UnknownVerb {
+            class: EnvironmentClass::NAME.to_string(),
+            verb: "restore".to_string(),
+        })
+    );
+}
+
+#[test]
+fn rejects_recipients_outside_permission_class_scope() {
+    assert_eq!(
+        parse_pattern_grant("system() @ acme/shop/prod/cart/agent : create-account :"),
+        Err(CardParseError::InvalidRecipientPath(
+            "acme/shop/prod/cart/agent".to_string()
+        ))
+    );
+    assert_eq!(
+        parse_pattern_grant("filesystem(acme/shop/prod/cart/agent) @ acme : read : /data/**"),
+        Err(CardParseError::InvalidRecipientPath("acme".to_string()))
+    );
+    assert_eq!(
+        parse_pattern_grant("environment(acme/shop) @ acme/shop/prod/cart/agent : deploy : prod"),
+        Err(CardParseError::InvalidRecipientPath(
+            "acme/shop/prod/cart/agent".to_string()
+        ))
     );
 }
 
@@ -294,201 +403,431 @@ fn generate_declared_permission_class_parser_tests(r: &mut DynamicTestRegistrati
 
 #[test]
 fn parses_runtime_class_examples_from_spec() {
-    assert_matches!(
+    assert_eq!(
         parsed_permission(
             "filesystem(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : /data/**"
         ),
-        PermissionPattern::Filesystem(FilesystemPermissionPattern::Verb { verb: FilesystemVerb::Read,
-            owner,
-            resource: FilesystemResourcePattern::Path(path),
-            ..
-        }) if owner == AgentOwnerPattern::new("acme/shop/prod/cart-svc/CartAgent(\"42\")") && path == FilesystemPathPattern::parse("/data/**").unwrap()
+        PermissionPattern::Filesystem(FilesystemPermissionPattern::Verb {
+            verb: FilesystemVerb::Read,
+            owner: AgentOwnerPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: AgentOwnerLeafPattern::Agent("CartAgent(\"42\")".to_string()),
+            },
+            recipient: AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "CartAgent(\"42\")".to_string(),
+            },
+            resource: FilesystemResourcePattern::Path(FilesystemPathPattern {
+                segments: vec![
+                    FilesystemPathSegmentPattern::Literal("data".to_string()),
+                    FilesystemPathSegmentPattern::GlobStar,
+                ],
+            }),
+        })
     );
 
-    assert_matches!(
-        parsed_permission("network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : api.internal:8080-9000"),
-        PermissionPattern::Network(NetworkPermissionPattern::Verb { verb: NetworkVerb::Connect,
+    assert_eq!(
+        parsed_permission(
+            "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : api.internal:8080-9000"
+        ),
+        PermissionPattern::Network(NetworkPermissionPattern::Verb {
+            verb: NetworkVerb::Connect,
             owner: EmptyOwnerPattern,
-            resource: NetworkResourcePattern::HostPort { host, ports },
-            ..
-        }) if host == "api.internal" && matches!(ports, PortPattern::Range { start: 8080, end: 9000 })
+            recipient: AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "CartAgent(\"42\")".to_string(),
+            },
+            resource: NetworkResourcePattern::HostPort {
+                host: "api.internal".to_string(),
+                ports: PortPattern::Range {
+                    start: 8080,
+                    end: 9000,
+                },
+            },
+        })
     );
 
-    assert_matches!(
-        parsed_permission("env(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : HOME"),
-        PermissionPattern::Env(EnvPermissionPattern::Verb { verb: EnvVerb::Read,
-            resource: EnvResourcePattern::VarName(EnvVarName(name)),
-            ..
-        }) if name == "HOME"
+    assert_eq!(
+        parsed_permission(
+            "env(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : HOME"
+        ),
+        PermissionPattern::Env(EnvPermissionPattern::Verb {
+            verb: EnvVerb::Read,
+            owner: AgentOwnerPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: AgentOwnerLeafPattern::Agent("CartAgent(\"42\")".to_string()),
+            },
+            recipient: AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "CartAgent(\"42\")".to_string(),
+            },
+            resource: EnvResourcePattern::VarName(EnvVarName("HOME".to_string())),
+        })
     );
 
-    assert_matches!(
-        parsed_permission("secret(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : reveal : cart.api-key"),
-        PermissionPattern::Secret(SecretPermissionPattern::Verb { verb: SecretVerb::Reveal,
-            owner,
-            resource: SecretResourcePattern::Key(key),
-            ..
-        }) if owner == EnvironmentOwnerPattern::new("acme/shop/prod") && key == SecretKeyPathPattern::parse("cart.api-key").unwrap()
+    assert_eq!(
+        parsed_permission(
+            "secret(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : reveal : cart.api-key"
+        ),
+        PermissionPattern::Secret(SecretPermissionPattern::Verb {
+            verb: SecretVerb::Reveal,
+            owner: EnvironmentOwnerPattern::Environment {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+            },
+            recipient: AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "ShoppingCart(*)".to_string(),
+            },
+            resource: SecretResourcePattern::Key(SecretKeyPathPattern {
+                segments: vec![
+                    SecretKeySegmentPattern::Literal("cart".to_string()),
+                    SecretKeySegmentPattern::Literal("api-key".to_string()),
+                ],
+            }),
+        })
     );
 
-    assert_matches!(
-        parsed_permission("kv(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : my-store.user-*"),
-        PermissionPattern::Kv(KvPermissionPattern::Verb { verb: KvVerb::Read,
-            resource: KvResourcePattern::StoreKey { store, key_pattern },
-            ..
-        }) if store == "my-store" && key_pattern == "user-*"
+    assert_eq!(
+        parsed_permission(
+            "kv(acme/shop/prod) @ acme/shop/prod/cart-svc/ShoppingCart(*) : read : my-store.user-*"
+        ),
+        PermissionPattern::Kv(KvPermissionPattern::Verb {
+            verb: KvVerb::Read,
+            owner: EnvironmentOwnerPattern::Environment {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+            },
+            recipient: AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "ShoppingCart(*)".to_string(),
+            },
+            resource: KvResourcePattern::StoreKey {
+                store: "my-store".to_string(),
+                key_pattern: "user-*".to_string(),
+            },
+        })
     );
 }
 
 #[test]
 fn parses_agent_tool_and_card_examples_from_spec() {
-    assert_matches!(
-        parsed_permission("agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : add-item"),
-        PermissionPattern::Agent(AgentPermissionPattern::Verb { verb: AgentVerb::Invoke,
-            owner,
-            resource: AgentResourcePattern::Method(AgentMethodName(method)),
-            ..
-        }) if owner == AgentOwnerPattern::new("acme/shop/prod/cart-svc/ShoppingCart(*)") && method == "add-item"
+    assert_eq!(
+        parsed_permission(
+            "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : add-item"
+        ),
+        PermissionPattern::Agent(AgentPermissionPattern::Verb {
+            verb: AgentVerb::Invoke,
+            owner: AgentOwnerPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: AgentOwnerLeafPattern::AgentTypeWildcard("ShoppingCart".to_string()),
+            },
+            recipient: AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "ShoppingCart(*)".to_string(),
+            },
+            resource: AgentResourcePattern::Method(AgentMethodName("add-item".to_string())),
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parsed_permission(
             "agent(acme/shop/prod/cart-svc/*) @ acme/shop/prod/cart-svc/* : delete :"
         ),
         PermissionPattern::Agent(AgentPermissionPattern::Verb {
             verb: AgentVerb::Delete,
+            owner: AgentOwnerPattern::ComponentAgents {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+            },
+            recipient: AgentRecipientPattern::ComponentAgents {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+            },
             resource: AgentResourcePattern::Empty,
-            ..
         })
     );
 
-    assert_matches!(
-        parsed_permission("tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : search"),
-        PermissionPattern::Tool(ToolPermissionPattern::Verb { verb: ToolVerb::Invoke,
-            owner,
-            resource: ToolResourcePattern::Invocation(command),
-            ..
-        }) if owner == ToolOwnerPattern::new("acme/shop/prod/cli-tools/grep") && command.command_path == Some(vec![ToolIdentifier("search".to_string())])
+    assert_eq!(
+        parsed_permission(
+            "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart-svc/ShoppingCart(*) : invoke : search"
+        ),
+        PermissionPattern::Tool(ToolPermissionPattern::Verb {
+            verb: ToolVerb::Invoke,
+            owner: ToolOwnerPattern::Tool {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cli-tools".to_string(),
+                tool: "grep".to_string(),
+            },
+            recipient: AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "ShoppingCart(*)".to_string(),
+            },
+            resource: ToolResourcePattern::Invocation(ToolInvocationPattern {
+                command_path: Some(vec![ToolIdentifier("search".to_string())]),
+                args: Vec::new(),
+            }),
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parsed_permission("card(acme) @ acme/shop/prod/cart-svc/ShoppingCart(*) : derive :"),
-        PermissionPattern::Card(CardPermissionPattern::Verb { verb: CardVerb::Derive,
-            owner,
+        PermissionPattern::Card(CardPermissionPattern::Verb {
+            verb: CardVerb::Derive,
+            owner: AccountOwnerPattern::Account {
+                account: "acme".to_string(),
+            },
+            recipient: AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "ShoppingCart(*)".to_string(),
+            },
             resource: CardResourcePattern::Empty,
-            ..
-        }) if owner == AccountOwnerPattern::new("acme")
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parsed_permission(
             "card(acme) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : install : acme/shop/prod/cart-svc/ShoppingCart(*)"
         ),
         PermissionPattern::Card(CardPermissionPattern::Verb {
             verb: CardVerb::Install,
-            resource: CardResourcePattern::InstallTarget(AgentRecipientPattern::Agent { .. }),
-            ..
+            owner: AccountOwnerPattern::Account {
+                account: "acme".to_string(),
+            },
+            recipient: AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "CartAgent(\"42\")".to_string(),
+            },
+            resource: CardResourcePattern::InstallTarget(AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "ShoppingCart(*)".to_string(),
+            }),
         })
     );
 }
 
 #[test]
 fn parses_admin_class_examples() {
-    assert_matches!(
+    assert_eq!(
         parsed_permission("system() @ acme : create-account :"),
         PermissionPattern::System(SystemPermissionPattern::Verb {
             verb: SystemVerb::CreateAccount,
             owner: EmptyOwnerPattern,
+            recipient: AccountRecipientPattern::Account {
+                account: "acme".to_string(),
+            },
             resource: SystemResourcePattern,
-            ..
         })
     );
 
-    assert_matches!(
+    assert_eq!(
         parsed_permission("plan() @ acme : view : *"),
         PermissionPattern::Plan(PlanPermissionPattern::Verb {
             verb: PlanVerb::View,
             owner: EmptyOwnerPattern,
+            recipient: AccountRecipientPattern::Account {
+                account: "acme".to_string(),
+            },
             resource: PlanResourcePattern::Any,
-            ..
         })
     );
 
-    assert_matches!(
+    assert_eq!(
         parsed_permission("account(acme) @ acme : set-plan :"),
-        PermissionPattern::Account(AccountPermissionPattern::Verb { verb: AccountVerb::SetPlan,
-            owner,
+        PermissionPattern::Account(AccountPermissionPattern::Verb {
+            verb: AccountVerb::SetPlan,
+            owner: AccountOwnerPattern::Account {
+                account: "acme".to_string(),
+            },
+            recipient: AccountRecipientPattern::Account {
+                account: "acme".to_string(),
+            },
             resource: AccountResourcePattern,
-            ..
-        }) if owner == AccountOwnerPattern::new("acme")
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parsed_permission("environment(acme/shop) @ acme/shop/prod : deploy : prod"),
-        PermissionPattern::Environment(EnvironmentPermissionPattern::Verb { verb: EnvironmentVerb::Deploy,
-            owner,
-            resource: EnvironmentResourcePattern::Environment(environment),
-            ..
-        }) if owner == ApplicationOwnerPattern::new("acme/shop") && environment == EnvironmentName("prod".to_string())
+        PermissionPattern::Environment(EnvironmentPermissionPattern::Verb {
+            verb: EnvironmentVerb::Deploy,
+            owner: ApplicationOwnerPattern::Application {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+            },
+            recipient: EnvironmentRecipientPattern::Environment {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+            },
+            resource: EnvironmentResourcePattern::Environment(EnvironmentName("prod".to_string())),
+        })
     );
 
-    assert_matches!(
-        parsed_permission("environment.agent-secret(acme/shop/prod) @ acme/shop/prod : update : cart.*"),
-        PermissionPattern::EnvironmentAgentSecret(EnvironmentAgentSecretPermissionPattern::Verb { verb: EnvironmentAgentSecretVerb::Update,
-            resource: EnvironmentAgentSecretResourcePattern::Key(path),
-            ..
-        }) if path == EnvironmentAgentSecretKeyPathPattern::parse("cart.*").unwrap()
+    assert_eq!(
+        parsed_permission(
+            "environment.agent-secret(acme/shop/prod) @ acme/shop/prod : update : cart.*"
+        ),
+        PermissionPattern::EnvironmentAgentSecret(EnvironmentAgentSecretPermissionPattern::Verb {
+            verb: EnvironmentAgentSecretVerb::Update,
+            owner: EnvironmentOwnerPattern::Environment {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+            },
+            recipient: EnvironmentRecipientPattern::Environment {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+            },
+            resource: EnvironmentAgentSecretResourcePattern::Key(
+                EnvironmentAgentSecretKeyPathPattern {
+                    segments: vec![
+                        EnvironmentAgentSecretKeySegmentPattern::Literal("cart".to_string()),
+                        EnvironmentAgentSecretKeySegmentPattern::Star,
+                    ],
+                }
+            ),
+        })
     );
 }
 
 #[test]
 fn parses_spec_specific_resource_shapes() {
     let credential_id = "550e8400-e29b-41d4-a716-446655440000";
-    assert_matches!(
+    assert_eq!(
         parsed_permission("application(acme) @ acme : view : shop"),
         PermissionPattern::Application(ApplicationPermissionPattern::Verb {
-            resource: ApplicationResourcePattern::Application(application),
-            ..
-        }) if application == ApplicationName("shop".to_string())
+            verb: ApplicationVerb::View,
+            owner: AccountOwnerPattern::Account {
+                account: "acme".to_string(),
+            },
+            recipient: AccountRecipientPattern::Account {
+                account: "acme".to_string(),
+            },
+            resource: ApplicationResourcePattern::Application(ApplicationName("shop".to_string())),
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parsed_permission("environment(acme/shop) @ acme/shop/prod : rollback : prod@rev=42"),
         PermissionPattern::Environment(EnvironmentPermissionPattern::Verb {
-            resource: EnvironmentResourcePattern::Revision { environment, revision: 42 },
-            ..
-        }) if environment == EnvironmentName("prod".to_string())
+            verb: EnvironmentVerb::Rollback,
+            owner: ApplicationOwnerPattern::Application {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+            },
+            recipient: EnvironmentRecipientPattern::Environment {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+            },
+            resource: EnvironmentResourcePattern::Revision {
+                environment: EnvironmentName("prod".to_string()),
+                revision: 42,
+            },
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parsed_permission("component(acme/shop/prod) @ acme/shop/prod : view : cart-svc"),
         PermissionPattern::Component(ComponentPermissionPattern::Verb {
-            resource: ComponentResourcePattern::Component(component),
-            ..
-        }) if component == ComponentName("cart-svc".to_string())
+            verb: ComponentVerb::View,
+            owner: EnvironmentOwnerPattern::Environment {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+            },
+            recipient: EnvironmentRecipientPattern::Environment {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+            },
+            resource: ComponentResourcePattern::Component(ComponentName("cart-svc".to_string())),
+        })
     );
 
-    assert_matches!(
-        parsed_permission(&format!("account.token(acme) @ acme : delete : {credential_id}")),
+    assert_eq!(
+        parsed_permission(&format!(
+            "account.token(acme) @ acme : delete : {credential_id}"
+        )),
         PermissionPattern::AccountToken(AccountTokenPermissionPattern::Verb {
-            resource: AccountTokenResourcePattern::Token(id),
-            ..
-        }) if id.to_string() == credential_id
+            verb: AccountTokenVerb::Delete,
+            owner: AccountOwnerPattern::Account {
+                account: "acme".to_string(),
+            },
+            recipient: AccountRecipientPattern::Account {
+                account: "acme".to_string(),
+            },
+            resource: AccountTokenResourcePattern::Token(uuid::Uuid::from_u128(
+                0x550e8400e29b41d4a716446655440000,
+            )),
+        })
     );
 }
 
 #[test]
 fn empty_resource_classes_reject_polymorphic_resource_slots() {
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("account(acme) @ ?account : view : ?resource"),
-        Err(CardParseError::InvalidResource { class, resource })
-            if class == AccountClass::NAME && resource == "?resource"
+        Err(CardParseError::InvalidResource {
+            class: AccountClass::NAME.to_string(),
+            resource: "?resource".to_string(),
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("system() @ ?account : create-account : ?resource"),
-        Err(CardParseError::InvalidResource { class, resource })
-            if class == SystemClass::NAME && resource == "?resource"
+        Err(CardParseError::InvalidResource {
+            class: SystemClass::NAME.to_string(),
+            resource: "?resource".to_string(),
+        })
     );
 }
 
@@ -497,35 +836,46 @@ fn polymorphic_pattern_grants_keep_resources_monomorphic() {
     let grant =
         parse_polymorphic_pattern_grant("secret(?env) @ ?self : reveal : billing.account").unwrap();
 
-    assert_matches!(
+    assert_eq!(
         grant.permission,
-        PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Verb { verb: SecretVerb::Reveal,
+        PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Verb {
+            verb: SecretVerb::Reveal,
             owner: PolymorphicEnvironmentOwnerPattern::Env,
             recipient: PolymorphicAgentRecipientPattern::Self_,
-            resource: SecretResourcePattern::Key(resource),
-            ..
-        }) if resource == SecretKeyPathPattern::parse("billing.account").unwrap()
+            resource: SecretResourcePattern::Key(SecretKeyPathPattern {
+                segments: vec![
+                    SecretKeySegmentPattern::Literal("billing".to_string()),
+                    SecretKeySegmentPattern::Literal("account".to_string()),
+                ],
+            }),
+        })
     );
 }
 
 #[test]
 fn rejects_polymorphic_resource_slots_and_templates() {
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("env(?self) @ ?self : read : ?env_var"),
-        Err(CardParseError::InvalidResource { class, resource })
-            if class == EnvClass::NAME && resource == "?env_var"
+        Err(CardParseError::InvalidResource {
+            class: EnvClass::NAME.to_string(),
+            resource: "?env_var".to_string(),
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("card(acme) @ ?self : install : ?self"),
-        Err(CardParseError::InvalidResource { class, resource })
-            if class == CardClass::NAME && resource == "?self"
+        Err(CardParseError::InvalidResource {
+            class: CardClass::NAME.to_string(),
+            resource: "?self".to_string(),
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("secret(?env) @ ?self : reveal : secret.?self"),
-        Err(CardParseError::InvalidResource { class, resource })
-            if class == SecretClass::NAME && resource == "secret.?self"
+        Err(CardParseError::InvalidResource {
+            class: SecretClass::NAME.to_string(),
+            resource: "secret.?self".to_string(),
+        })
     );
 }
 
@@ -536,12 +886,22 @@ fn parses_polymorphic_recipient_templates_and_concrete_paths() {
     )
     .unwrap();
 
-    assert_matches!(
+    assert_eq!(
         grant.permission,
-        PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Verb { verb: SecretVerb::Hold,
-            recipient: PolymorphicAgentRecipientPattern::EnvironmentAgent { component, agent },
-            ..
-        }) if component == "cart-svc" && agent == "ShoppingCart(*)"
+        PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Verb {
+            verb: SecretVerb::Hold,
+            owner: PolymorphicEnvironmentOwnerPattern::Env,
+            recipient: PolymorphicAgentRecipientPattern::EnvironmentAgent {
+                component: "cart-svc".to_string(),
+                agent: "ShoppingCart(*)".to_string(),
+            },
+            resource: SecretResourcePattern::Key(SecretKeyPathPattern {
+                segments: vec![
+                    SecretKeySegmentPattern::Literal("cart".to_string()),
+                    SecretKeySegmentPattern::Literal("api-key".to_string()),
+                ],
+            }),
+        })
     );
 
     let grant = parse_polymorphic_pattern_grant(
@@ -549,14 +909,24 @@ fn parses_polymorphic_recipient_templates_and_concrete_paths() {
     )
     .unwrap();
 
-    assert_matches!(
+    assert_eq!(
         grant.permission,
         PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Verb {
             verb: SecretVerb::Hold,
-            recipient: PolymorphicAgentRecipientPattern::Concrete(
-                AgentRecipientPattern::Agent { .. }
-            ),
-            ..
+            owner: PolymorphicEnvironmentOwnerPattern::Env,
+            recipient: PolymorphicAgentRecipientPattern::Concrete(AgentRecipientPattern::Agent {
+                account: "acme".to_string(),
+                application: "shop".to_string(),
+                environment: "prod".to_string(),
+                component: "cart-svc".to_string(),
+                agent: "ShoppingCart(*)".to_string(),
+            }),
+            resource: SecretResourcePattern::Key(SecretKeyPathPattern {
+                segments: vec![
+                    SecretKeySegmentPattern::Literal("cart".to_string()),
+                    SecretKeySegmentPattern::Literal("api-key".to_string()),
+                ],
+            }),
         })
     );
 }
@@ -582,31 +952,39 @@ fn generate_polymorphic_owner_slot_parser_tests(r: &mut DynamicTestRegistration)
 
 #[test]
 fn rejects_undeclared_polymorphic_owner_slots() {
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("account(?account) @ ?account : view :"),
-        Err(CardParseError::InvalidOwnerPath { class, owner })
-            if class == AccountClass::NAME && owner == "?account"
+        Err(CardParseError::InvalidOwnerPath {
+            class: AccountClass::NAME.to_string(),
+            owner: "?account".to_string(),
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("application(?app) @ ?account : view :"),
-        Err(CardParseError::InvalidOwnerPath { class, owner })
-            if class == ApplicationClass::NAME && owner == "?app"
+        Err(CardParseError::InvalidOwnerPath {
+            class: ApplicationClass::NAME.to_string(),
+            owner: "?app".to_string(),
+        })
     );
 
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("component(?component) @ ?env : view : cart-svc"),
-        Err(CardParseError::InvalidOwnerPath { class, owner })
-            if class == ComponentClass::NAME && owner == "?component"
+        Err(CardParseError::InvalidOwnerPath {
+            class: ComponentClass::NAME.to_string(),
+            owner: "?component".to_string(),
+        })
     );
 }
 
 #[test]
 fn rejects_polymorphic_owner_slots_with_wrong_scope() {
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("filesystem(?env) @ ?self : read : /data/**"),
-        Err(CardParseError::InvalidOwnerPath { class, owner })
-            if class == FilesystemClass::NAME && owner == "?env"
+        Err(CardParseError::InvalidOwnerPath {
+            class: FilesystemClass::NAME.to_string(),
+            owner: "?env".to_string(),
+        })
     );
 }
 
@@ -617,12 +995,17 @@ fn parses_polymorphic_owner_templates() {
     )
     .unwrap();
 
-    assert_matches!(
+    assert_eq!(
         grant.permission,
-        PolymorphicPermissionPattern::Agent(PolymorphicAgentPermissionPattern::Verb { verb: AgentVerb::Invoke,
-            owner: PolymorphicAgentOwnerPattern::EnvAgent { component, agent },
-            ..
-        }) if component == "payment-svc" && agent == AgentOwnerLeafPattern::AgentTypeWildcard("PaymentAgent".to_string())
+        PolymorphicPermissionPattern::Agent(PolymorphicAgentPermissionPattern::Verb {
+            verb: AgentVerb::Invoke,
+            owner: PolymorphicAgentOwnerPattern::EnvAgent {
+                component: "payment-svc".to_string(),
+                agent: AgentOwnerLeafPattern::AgentTypeWildcard("PaymentAgent".to_string()),
+            },
+            recipient: PolymorphicAgentRecipientPattern::Self_,
+            resource: AgentResourcePattern::Method(AgentMethodName("charge".to_string())),
+        })
     );
 }
 
@@ -630,32 +1013,40 @@ fn parses_polymorphic_owner_templates() {
 fn parses_only_declared_polymorphic_recipient_slots() {
     let grant = parse_polymorphic_pattern_grant("environment(?env) @ ?env : view : prod").unwrap();
 
-    assert_matches!(
+    assert_eq!(
         grant.permission,
         PolymorphicPermissionPattern::Environment(PolymorphicEnvironmentPermissionPattern::Verb {
             verb: EnvironmentVerb::View,
+            owner: PolymorphicApplicationOwnerPattern::Env,
             recipient: PolymorphicEnvironmentRecipientPattern::Environment,
-            ..
+            resource: EnvironmentResourcePattern::Environment(EnvironmentName("prod".to_string())),
         })
     );
 
     let grant =
         parse_polymorphic_pattern_grant("secret(?env) @ ?self : reveal : billing.*").unwrap();
-    assert_matches!(
+    assert_eq!(
         grant.permission,
         PolymorphicPermissionPattern::Secret(PolymorphicSecretPermissionPattern::Verb {
+            verb: SecretVerb::Reveal,
+            owner: PolymorphicEnvironmentOwnerPattern::Env,
             recipient: PolymorphicAgentRecipientPattern::Self_,
-            ..
+            resource: SecretResourcePattern::Key(SecretKeyPathPattern {
+                segments: vec![
+                    SecretKeySegmentPattern::Literal("billing".to_string()),
+                    SecretKeySegmentPattern::Star,
+                ],
+            }),
         })
     );
 
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("secret(?env) @ ?account : reveal : billing.*"),
-        Err(CardParseError::InvalidRecipientPath(path)) if path == "?account"
+        Err(CardParseError::InvalidRecipientPath("?account".to_string()))
     );
-    assert_matches!(
+    assert_eq!(
         parse_polymorphic_pattern_grant("secret(?env) @ ?env : reveal : billing.*"),
-        Err(CardParseError::InvalidRecipientPath(path)) if path == "?env"
+        Err(CardParseError::InvalidRecipientPath("?env".to_string()))
     );
 }
 
@@ -663,9 +1054,11 @@ fn parses_only_declared_polymorphic_recipient_slots() {
 fn concrete_parser_rejects_slot_variables() {
     let result = parse_pattern_grant("secret(?env) @ ?self : reveal : billing.*");
 
-    assert_matches!(
+    assert_eq!(
         result,
-        Err(CardParseError::SlotVariableInConcreteGrant(value)) if value == "?env"
+        Err(CardParseError::SlotVariableInConcreteGrant(
+            "?env".to_string()
+        ))
     );
 }
 

@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PatternGrant {
     PatternGrant::filesystem_read_pattern(
-        owner,
+        AgentOwnerPattern::parse(owner).unwrap(),
         AgentRecipientPattern::parse(recipient).unwrap(),
         resource,
     )
@@ -57,8 +57,8 @@ fn card(lower_positive: Vec<PatternGrant>, upper_positive: Vec<PatternGrant>) ->
 
 #[test]
 fn owner_wildcards_subsume_segments() {
-    let broad = AgentOwnerPattern::new("acme/shop/prod/*/*");
-    let narrow = AgentOwnerPattern::new("acme/shop/prod/cart/agent");
+    let broad = AgentOwnerPattern::parse("acme/shop/prod/*/*").unwrap();
+    let narrow = AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap();
 
     assert!(broad.subsumes(&narrow));
     assert!(!narrow.subsumes(&broad));
@@ -108,8 +108,8 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
             ),
             TestProperties::unit_test(),
             || {
-                let left = AgentOwnerPattern::new(left);
-                let right = AgentOwnerPattern::new(right);
+                let left = AgentOwnerPattern::parse(left).unwrap();
+                let right = AgentOwnerPattern::parse(right).unwrap();
 
                 assert_eq!(left.subsumes(&right), expected);
             }
@@ -360,19 +360,19 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
 #[test]
 fn verb_wildcard_subsumes_class_verbs_only() {
     let any_filesystem = fs_permission(FilesystemPermissionPattern::Any {
-        owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: FilesystemResourcePattern::glob("/data/**"),
     });
     let read_file = fs_permission(FilesystemPermissionPattern::Verb {
         verb: FilesystemVerb::Read,
-        owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: FilesystemResourcePattern::exact("/data/file.txt"),
     });
     let write_file = fs_permission(FilesystemPermissionPattern::Verb {
         verb: FilesystemVerb::Write,
-        owner: AgentOwnerPattern::new("acme/shop/prod/cart/agent"),
+        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: FilesystemResourcePattern::exact("/data/file.txt"),
     });
@@ -414,12 +414,12 @@ fn network_resource_subsumption_checks_host_and_ports() {
 #[test]
 fn oplog_ranges_subsume_inner_ranges() {
     let broad = PatternGrant::oplog_read(
-        "acme/shop/prod/cart/agent",
+        AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         OplogResourcePattern::range(Some(100), Some(500)),
     );
     let narrow = PatternGrant::oplog_read(
-        "acme/shop/prod/cart/agent",
+        AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         OplogResourcePattern::range(Some(200), Some(300)),
     );
