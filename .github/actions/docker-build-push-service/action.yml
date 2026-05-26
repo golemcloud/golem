@@ -18,6 +18,15 @@ runs:
       uses: docker/metadata-action@v5
       with:
         images: ${{ inputs.image-name }}
+        # Disable the default `latest=auto` flavor and add `:latest` explicitly
+        # only when the tag's commit is on `main` (see `docker-publish-setup`).
+        # This prevents bug-fix releases from a maintenance branch (e.g.
+        # v1.5.4 tagged after v1.6.0 has shipped) from overwriting `:latest`.
+        flavor: |
+          latest=false
+        tags: |
+          type=ref,event=tag
+          type=raw,value=latest,enable=${{ env.PUBLISH_LATEST_TAG == 'true' }}
     - name: Build and push image
       uses: useblacksmith/build-push-action@v1
       with:

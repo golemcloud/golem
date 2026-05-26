@@ -42,6 +42,29 @@ runs:
           COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
           echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
         fi
+    # `:latest` should track releases from `main` only. Tags that originate from
+    # a maintenance branch (e.g. a 1.5.x bug-fix tagged after 1.6 has shipped on
+    # main) must publish their `:vX.Y.Z` image without overwriting `:latest`.
+    # We use the GitHub compare API so this works regardless of how shallow the
+    # local clone is.
+    - name: Determine whether to publish ':latest'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        publish_latest=false
+        if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
+          status=$(gh api \
+            "repos/${{ github.repository }}/compare/main...${{ github.sha }}" \
+            --jq '.status' 2>/dev/null || echo "unknown")
+          case "$status" in
+            identical|behind)
+              publish_latest=true
+              ;;
+          esac
+          echo "Tag commit ${{ github.sha }} status vs main: ${status} -> publish ':latest'=${publish_latest}"
+        fi
+        echo "PUBLISH_LATEST_TAG=${publish_latest}" >> $GITHUB_ENV
     - uses: jpribyl/action-docker-layer-caching@v0.1.1
       continue-on-error: true
     - name: Log in to Docker Hub
