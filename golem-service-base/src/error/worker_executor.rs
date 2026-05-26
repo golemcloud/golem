@@ -969,6 +969,12 @@ pub enum GolemSpecificWasmTrap {
         resource_name: ResourceName,
         timestamp: Timestamp,
     },
+    /// A read-only agent method attempted to perform a side effect (outgoing HTTP or RPC)
+    /// while the worker context's invocation strictness mode was set to `ReadOnly`.
+    WorkerReadOnlyViolation {
+        method: String,
+        host_function: String,
+    },
 }
 
 impl Display for GolemSpecificWasmTrap {
@@ -1014,6 +1020,15 @@ impl Display for GolemSpecificWasmTrap {
                 write!(
                     f,
                     "Agent was throttled by quota {environment_id}/{resource_name} with throttle enforcement action"
+                )
+            }
+            Self::WorkerReadOnlyViolation {
+                method,
+                host_function,
+            } => {
+                write!(
+                    f,
+                    "Read-only agent method '{method}' attempted side effect via '{host_function}'"
                 )
             }
         }
@@ -1070,5 +1085,30 @@ mod service {
         fn from(value: WorkerExecutorError) -> Self {
             Self::trap(value)
         }
+    }
+}
+
+#[cfg(test)]
+mod read_only_violation_trap_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn trap_display_includes_method_and_host_function() {
+        let trap = GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+            method: "lookup".to_string(),
+            host_function: "http::outgoing_handler::handle".to_string(),
+        };
+
+        let rendered = trap.to_string();
+
+        assert!(
+            rendered.contains("lookup"),
+            "expected method name in display, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("http::outgoing_handler::handle"),
+            "expected host function in display, got: {rendered}"
+        );
     }
 }

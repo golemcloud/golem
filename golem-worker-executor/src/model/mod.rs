@@ -24,6 +24,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{
     AgentError, AgentTerminatedByQuotaError, EphemeralCannotSuspendError, PersistenceLevel,
+    ReadOnlyViolationError,
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -409,6 +410,17 @@ impl TrapType {
                                 retry_from,
                                 semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                             },
+                        },
+                        Some(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+                            method,
+                            host_function,
+                        }) => TrapType::Error {
+                            error: AgentError::ReadOnlyViolation(ReadOnlyViolationError {
+                                method: method.clone(),
+                                host_function: host_function.clone(),
+                            }),
+                            retry_from,
+                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                         },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {

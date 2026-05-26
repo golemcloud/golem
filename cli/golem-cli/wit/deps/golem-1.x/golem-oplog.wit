@@ -445,6 +445,11 @@ interface oplog {
         reason: string
     }
 
+    record read-only-violation {
+        method: string,
+        host-function: string
+    }
+
     /// Describes the error that occurred in the agent
     variant worker-error {
         unknown(string),
@@ -464,7 +469,8 @@ interface oplog {
         agent-terminated-by-quota(agent-terminated-by-quota-error),
         ephemeral-sleep-too-long(ephemeral-sleep-too-long),
         ephemeral-fuel-exhausted(ephemeral-fuel-exhausted),
-        ephemeral-cannot-suspend(ephemeral-cannot-suspend)
+        ephemeral-cannot-suspend(ephemeral-cannot-suspend),
+        read-only-violation(read-only-violation)
     }
 
     record raw-create-parameters {

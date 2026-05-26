@@ -329,6 +329,19 @@ pub trait InvocationHooks {
     /// Gets the retry point that should be associated with a current error. Errors are grouped
     /// by this information. The current oplog index is a good default.
     async fn get_current_retry_point(&self) -> OplogIndex;
+
+    /// Switches the invocation strictness mode to `ReadOnly` for the duration of a single agent
+    /// method invocation. Under read-only strictness, outgoing HTTP and RPC host calls trap
+    /// with `AgentError::ReadOnlyViolation` before any oplog entry is written.
+    ///
+    /// `method_name` is captured for diagnostic purposes and surfaced in the trap payload.
+    /// Each call must be paired with [`InvocationHooks::exit_read_only_mode`].
+    fn enter_read_only_mode(&mut self, method_name: String);
+
+    /// Restores the invocation strictness mode to `Normal` after a previous
+    /// [`InvocationHooks::enter_read_only_mode`] call. Calling this without a matching enter is
+    /// a no-op other than a `warn!` trace.
+    fn exit_read_only_mode(&mut self);
 }
 
 #[async_trait]

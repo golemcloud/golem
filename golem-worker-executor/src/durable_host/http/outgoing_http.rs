@@ -217,6 +217,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
         self.observe_function_call("http::outgoing_handler", "handle");
 
+        // Trap immediately if the invocation is restricted to read-only side effects.
+        // This must run before any durability machinery so that no oplog entry is written
+        // for a denied outgoing HTTP call.
+        self.check_read_only_allows("http::outgoing_handler::handle")
+            .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
+
         // Check the per-invocation HTTP call limit before initiating the call.
         // Only counted in live mode; replay is a no-op.
         self.state

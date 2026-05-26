@@ -52,6 +52,7 @@ use crate::model::oplog::public_oplog_entry::{
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, OplogEntry, PersistenceLevel,
+    ReadOnlyViolationError,
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
@@ -146,6 +147,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
                     reason: inner.reason,
                 }))
             }
+            Error::ReadOnlyViolation(inner) => {
+                Ok(Self::ReadOnlyViolation(ReadOnlyViolationError {
+                    method: inner.method,
+                    host_function: inner.host_function,
+                }))
+            }
         }
     }
 }
@@ -216,6 +223,13 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
             AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError { reason }) => {
                 Error::EphemeralCannotSuspend(grpc_worker::EphemeralCannotSuspend { reason })
             }
+            AgentError::ReadOnlyViolation(ReadOnlyViolationError {
+                method,
+                host_function,
+            }) => Error::ReadOnlyViolation(grpc_worker::ReadOnlyViolation {
+                method,
+                host_function,
+            }),
         };
         Self { error: Some(error) }
     }
@@ -3562,6 +3576,34 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 timestamp,
                 name: p.name,
             }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod read_only_violation_roundtrip {
+    use crate::model::oplog::{AgentError, ReadOnlyViolationError};
+    use proptest::prelude::*;
+    use test_r::test;
+
+    fn read_only_violation_strat() -> impl Strategy<Value = ReadOnlyViolationError> {
+        (any::<String>(), any::<String>()).prop_map(|(method, host_function)| {
+            ReadOnlyViolationError {
+                method,
+                host_function,
+            }
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn agent_error_read_only_violation_protobuf_roundtrip(
+            err in read_only_violation_strat(),
+        ) {
+            let original = AgentError::ReadOnlyViolation(err);
+            let proto: golem_api_grpc::proto::golem::worker::AgentError = original.clone().into();
+            let roundtrip: AgentError = proto.try_into().unwrap();
+            prop_assert_eq!(roundtrip, original);
         }
     }
 }
