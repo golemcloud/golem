@@ -31,7 +31,20 @@ impl EnvironmentRetryPolicyResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentRetryPolicyResourcePattern {
+impl ResourcePattern for EnvironmentRetryPolicyResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvironmentRetryPolicyResourcePattern::Any)
+        } else {
+            EnvironmentRetryPolicyName::parse(resource)
+                .map(EnvironmentRetryPolicyResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentRetryPolicyClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -49,6 +62,18 @@ pub enum EnvironmentRetryPolicyVerb {
     Delete,
     Restore,
 }
+impl VerbPattern for EnvironmentRetryPolicyVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
+            "restore" => Some(Self::Restore),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -60,21 +85,6 @@ impl PermissionClass for EnvironmentRetryPolicyClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentRetryPolicyResourcePattern;
     const NAME: &'static str = "environment.retry-policy";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "update" => Some(Self::Verb::Update),
-            "delete" => Some(Self::Verb::Delete),
-            "restore" => Some(Self::Verb::Restore),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentRetryPolicy(pattern)
@@ -91,24 +101,6 @@ pub type EnvironmentRetryPolicyPermissionPattern =
     ClassPermissionPattern<EnvironmentRetryPolicyClass>;
 pub type PolymorphicEnvironmentRetryPolicyPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentRetryPolicyClass>;
-
-impl EnvironmentRetryPolicyClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentRetryPolicyResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvironmentRetryPolicyResourcePattern::Any)
-        } else {
-            EnvironmentRetryPolicyName::parse(resource)
-                .map(EnvironmentRetryPolicyResourcePattern::Name)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: EnvironmentRetryPolicyClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_environment_retry_policy_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

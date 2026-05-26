@@ -45,7 +45,14 @@ impl RdbmsResourcePattern {
     }
 }
 
-impl Subsumes for RdbmsResourcePattern {
+impl ResourcePattern for RdbmsResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        RdbmsResourcePattern::parse_value(resource).map_err(|_| CardParseError::InvalidResource {
+            class: RdbmsClass::NAME.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (
@@ -73,6 +80,15 @@ pub enum RdbmsVerb {
     Query,
     Mutate,
 }
+impl VerbPattern for RdbmsVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "query" => Some(Self::Query),
+            "mutate" => Some(Self::Mutate),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -84,18 +100,6 @@ impl PermissionClass for RdbmsClass {
     type Recipient = AgentRecipientPattern;
     type Resource = RdbmsResourcePattern;
     const NAME: &'static str = "rdbms";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "query" => Some(Self::Verb::Query),
-            "mutate" => Some(Self::Verb::Mutate),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Rdbms(pattern)
@@ -110,18 +114,6 @@ impl PermissionClass for RdbmsClass {
 
 pub type RdbmsPermissionPattern = ClassPermissionPattern<RdbmsClass>;
 pub type PolymorphicRdbmsPermissionPattern = PolymorphicClassPermissionPattern<RdbmsClass>;
-
-impl RdbmsClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<RdbmsResourcePattern, CardParseError> {
-        RdbmsResourcePattern::parse_value(resource).map_err(|_| CardParseError::InvalidResource {
-            class: RdbmsClass::NAME.to_string(),
-            resource: resource.to_string(),
-        })
-    }
-}
 
 fn component_subsumes(left: &str, right: &str) -> bool {
     left == "*" || left == right

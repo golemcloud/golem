@@ -57,7 +57,16 @@ impl FilesystemResourcePattern {
     }
 }
 
-impl Subsumes for FilesystemResourcePattern {
+impl ResourcePattern for FilesystemResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        FilesystemPathPattern::parse(resource)
+            .map(FilesystemResourcePattern::Path)
+            .map_err(|_| CardParseError::InvalidResource {
+                class: FilesystemClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Path(a), Self::Path(b)) => a.subsumes(b),
@@ -73,6 +82,18 @@ pub enum FilesystemVerb {
     Stat,
     Delete,
 }
+impl VerbPattern for FilesystemVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "read" => Some(Self::Read),
+            "write" => Some(Self::Write),
+            "list" => Some(Self::List),
+            "stat" => Some(Self::Stat),
+            "delete" => Some(Self::Delete),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -84,21 +105,6 @@ impl PermissionClass for FilesystemClass {
     type Recipient = AgentRecipientPattern;
     type Resource = FilesystemResourcePattern;
     const NAME: &'static str = "filesystem";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "read" => Some(Self::Verb::Read),
-            "write" => Some(Self::Verb::Write),
-            "list" => Some(Self::Verb::List),
-            "stat" => Some(Self::Verb::Stat),
-            "delete" => Some(Self::Verb::Delete),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Filesystem(pattern)
@@ -114,20 +120,6 @@ impl PermissionClass for FilesystemClass {
 pub type FilesystemPermissionPattern = ClassPermissionPattern<FilesystemClass>;
 pub type PolymorphicFilesystemPermissionPattern =
     PolymorphicClassPermissionPattern<FilesystemClass>;
-
-impl FilesystemClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<FilesystemResourcePattern, CardParseError> {
-        FilesystemPathPattern::parse(resource)
-            .map(FilesystemResourcePattern::Path)
-            .map_err(|_| CardParseError::InvalidResource {
-                class: FilesystemClass::NAME.to_string(),
-                resource: resource.to_string(),
-            })
-    }
-}
 
 fn parse_filesystem_path_segment(value: &str) -> Result<FilesystemPathSegmentPattern, String> {
     if value.is_empty() {

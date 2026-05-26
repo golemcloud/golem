@@ -14,12 +14,6 @@ impl EmptyOwnerPattern {
     }
 }
 
-impl Subsumes for EmptyOwnerPattern {
-    fn subsumes(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicEmptyOwnerPattern {
@@ -41,5 +35,9 @@ impl OwnerPattern for EmptyOwnerPattern {
         } else {
             Self::parse(value).map(PolymorphicEmptyOwnerPattern::Concrete)
         }
+    }
+
+    fn subsumes(&self, _other: &Self) -> bool {
+        true
     }
 }

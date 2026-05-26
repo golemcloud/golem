@@ -19,7 +19,20 @@ impl AccountTokenResourcePattern {
     }
 }
 
-impl Subsumes for AccountTokenResourcePattern {
+impl ResourcePattern for AccountTokenResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(AccountTokenResourcePattern::Any)
+        } else {
+            Uuid::parse_str(resource)
+                .map(AccountTokenResourcePattern::Token)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: AccountTokenClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -35,6 +48,16 @@ pub enum AccountTokenVerb {
     Create,
     Delete,
 }
+impl VerbPattern for AccountTokenVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "delete" => Some(Self::Delete),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -46,19 +69,6 @@ impl PermissionClass for AccountTokenClass {
     type Recipient = AccountRecipientPattern;
     type Resource = AccountTokenResourcePattern;
     const NAME: &'static str = "account.token";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "delete" => Some(Self::Verb::Delete),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::AccountToken(pattern)
@@ -74,21 +84,3 @@ impl PermissionClass for AccountTokenClass {
 pub type AccountTokenPermissionPattern = ClassPermissionPattern<AccountTokenClass>;
 pub type PolymorphicAccountTokenPermissionPattern =
     PolymorphicClassPermissionPattern<AccountTokenClass>;
-
-impl AccountTokenClass {
-    fn parse_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<AccountTokenResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(AccountTokenResourcePattern::Any)
-        } else {
-            Uuid::parse_str(resource)
-                .map(AccountTokenResourcePattern::Token)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: class.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}

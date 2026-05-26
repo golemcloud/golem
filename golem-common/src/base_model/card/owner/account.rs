@@ -35,16 +35,6 @@ impl From<&str> for AccountOwnerPattern {
     }
 }
 
-impl Subsumes for AccountOwnerPattern {
-    fn subsumes(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Any, _) => true,
-            (Self::Account { account: a }, Self::Account { account: b }) => a == b,
-            (Self::Account { .. }, Self::Any) => false,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicAccountOwnerPattern {
@@ -66,5 +56,13 @@ impl OwnerPattern for AccountOwnerPattern {
             PrefixOwnerSlot::Env => PolymorphicAccountOwnerPattern::Env,
             PrefixOwnerSlot::Self_ => PolymorphicAccountOwnerPattern::Self_,
         })
+    }
+
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Account { account: a }, Self::Account { account: b }) => a == b,
+            (Self::Account { .. }, Self::Any) => false,
+        }
     }
 }

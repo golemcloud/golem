@@ -28,7 +28,30 @@ impl AccountOauth2IdentityResourcePattern {
     }
 }
 
-impl Subsumes for AccountOauth2IdentityResourcePattern {
+impl ResourcePattern for AccountOauth2IdentityResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(AccountOauth2IdentityResourcePattern::Any)
+        } else if let Some((provider, external_id)) = resource.split_once('/') {
+            if provider.is_empty() || external_id.is_empty() {
+                Err(CardParseError::InvalidResource {
+                    class: AccountOauth2IdentityClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+            } else {
+                Ok(AccountOauth2IdentityResourcePattern::Identity {
+                    provider: provider.to_string(),
+                    external_id: external_id.to_string(),
+                })
+            }
+        } else {
+            Err(CardParseError::InvalidResource {
+                class: AccountOauth2IdentityClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -53,6 +76,16 @@ pub enum AccountOauth2IdentityVerb {
     Link,
     Unlink,
 }
+impl VerbPattern for AccountOauth2IdentityVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "link" => Some(Self::Link),
+            "unlink" => Some(Self::Unlink),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -64,19 +97,6 @@ impl PermissionClass for AccountOauth2IdentityClass {
     type Recipient = AccountRecipientPattern;
     type Resource = AccountOauth2IdentityResourcePattern;
     const NAME: &'static str = "account.oauth2-identity";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "link" => Some(Self::Verb::Link),
-            "unlink" => Some(Self::Verb::Unlink),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::AccountOauth2Identity(pattern)
@@ -93,31 +113,3 @@ pub type AccountOauth2IdentityPermissionPattern =
     ClassPermissionPattern<AccountOauth2IdentityClass>;
 pub type PolymorphicAccountOauth2IdentityPermissionPattern =
     PolymorphicClassPermissionPattern<AccountOauth2IdentityClass>;
-
-impl AccountOauth2IdentityClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<AccountOauth2IdentityResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(AccountOauth2IdentityResourcePattern::Any)
-        } else if let Some((provider, external_id)) = resource.split_once('/') {
-            if provider.is_empty() || external_id.is_empty() {
-                Err(CardParseError::InvalidResource {
-                    class: AccountOauth2IdentityClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-            } else {
-                Ok(AccountOauth2IdentityResourcePattern::Identity {
-                    provider: provider.to_string(),
-                    external_id: external_id.to_string(),
-                })
-            }
-        } else {
-            Err(CardParseError::InvalidResource {
-                class: AccountOauth2IdentityClass::NAME.to_string(),
-                resource: resource.to_string(),
-            })
-        }
-    }
-}

@@ -23,7 +23,20 @@ impl CardResourcePattern {
     }
 }
 
-impl Subsumes for CardResourcePattern {
+impl ResourcePattern for CardResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(CardResourcePattern::Any)
+        } else if resource.is_empty() {
+            Ok(CardResourcePattern::Empty)
+        } else {
+            Ok(CardResourcePattern::InstallTarget(
+                AgentRecipientPattern::parse(resource)
+                    .map_err(CardParseError::InvalidRecipientPath)?,
+            ))
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -41,6 +54,17 @@ pub enum CardVerb {
     Inspect,
     Install,
 }
+impl VerbPattern for CardVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "derive" => Some(Self::Derive),
+            "revoke" => Some(Self::Revoke),
+            "inspect" => Some(Self::Inspect),
+            "install" => Some(Self::Install),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -52,20 +76,6 @@ impl PermissionClass for CardClass {
     type Recipient = AgentRecipientPattern;
     type Resource = CardResourcePattern;
     const NAME: &'static str = "card";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "derive" => Some(Self::Verb::Derive),
-            "revoke" => Some(Self::Verb::Revoke),
-            "inspect" => Some(Self::Verb::Inspect),
-            "install" => Some(Self::Verb::Install),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Card(pattern)
@@ -80,18 +90,3 @@ impl PermissionClass for CardClass {
 
 pub type CardPermissionPattern = ClassPermissionPattern<CardClass>;
 pub type PolymorphicCardPermissionPattern = PolymorphicClassPermissionPattern<CardClass>;
-
-impl CardClass {
-    fn parse_resource(_class: &str, resource: &str) -> Result<CardResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(CardResourcePattern::Any)
-        } else if resource.is_empty() {
-            Ok(CardResourcePattern::Empty)
-        } else {
-            Ok(CardResourcePattern::InstallTarget(
-                AgentRecipientPattern::parse(resource)
-                    .map_err(CardParseError::InvalidRecipientPath)?,
-            ))
-        }
-    }
-}

@@ -57,7 +57,20 @@ impl EnvironmentAgentSecretResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentAgentSecretResourcePattern {
+impl ResourcePattern for EnvironmentAgentSecretResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvironmentAgentSecretResourcePattern::Any)
+        } else {
+            EnvironmentAgentSecretKeyPathPattern::parse(resource)
+                .map(EnvironmentAgentSecretResourcePattern::Key)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentAgentSecretClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -75,6 +88,18 @@ pub enum EnvironmentAgentSecretVerb {
     Delete,
     Restore,
 }
+impl VerbPattern for EnvironmentAgentSecretVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
+            "restore" => Some(Self::Restore),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -86,21 +111,6 @@ impl PermissionClass for EnvironmentAgentSecretClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentAgentSecretResourcePattern;
     const NAME: &'static str = "environment.agent-secret";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "update" => Some(Self::Verb::Update),
-            "delete" => Some(Self::Verb::Delete),
-            "restore" => Some(Self::Verb::Restore),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentAgentSecret(pattern)
@@ -117,24 +127,6 @@ pub type EnvironmentAgentSecretPermissionPattern =
     ClassPermissionPattern<EnvironmentAgentSecretClass>;
 pub type PolymorphicEnvironmentAgentSecretPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentAgentSecretClass>;
-
-impl EnvironmentAgentSecretClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentAgentSecretResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvironmentAgentSecretResourcePattern::Any)
-        } else {
-            EnvironmentAgentSecretKeyPathPattern::parse(resource)
-                .map(EnvironmentAgentSecretResourcePattern::Key)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: EnvironmentAgentSecretClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_environment_agent_secret_key_segment(
     value: &str,

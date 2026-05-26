@@ -20,16 +20,6 @@ impl AccountRecipientPattern {
     }
 }
 
-impl Subsumes for AccountRecipientPattern {
-    fn subsumes(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Any, _) => true,
-            (Self::Account { account: a }, Self::Account { account: b }) => a == b,
-            (Self::Account { .. }, Self::Any) => false,
-        }
-    }
-}
-
 impl RecipientPattern for AccountRecipientPattern {
     type Polymorphic = PolymorphicAccountRecipientPattern;
 
@@ -62,6 +52,14 @@ impl RecipientPattern for AccountRecipientPattern {
         match self {
             Self::Any => true,
             Self::Account { account } => segments.first().is_some_and(|holder| account == holder),
+        }
+    }
+
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Account { account: a }, Self::Account { account: b }) => a == b,
+            (Self::Account { .. }, Self::Any) => false,
         }
     }
 }

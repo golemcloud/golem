@@ -5,7 +5,18 @@ use crate::base_model::card::parsing::CardParseError;
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct AccountUsageResourcePattern;
 
-impl Subsumes for AccountUsageResourcePattern {
+impl ResourcePattern for AccountUsageResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource.is_empty() {
+            Ok(AccountUsageResourcePattern)
+        } else {
+            Err(CardParseError::InvalidResource {
+                class: AccountUsageClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
+        }
+    }
+
     fn subsumes(&self, _other: &Self) -> bool {
         true
     }
@@ -14,6 +25,14 @@ impl Subsumes for AccountUsageResourcePattern {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountUsageVerb {
     View,
+}
+impl VerbPattern for AccountUsageVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,17 +45,6 @@ impl PermissionClass for AccountUsageClass {
     type Recipient = AccountRecipientPattern;
     type Resource = AccountUsageResourcePattern;
     const NAME: &'static str = "account.usage";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::AccountUsage(pattern)
@@ -52,19 +60,3 @@ impl PermissionClass for AccountUsageClass {
 pub type AccountUsagePermissionPattern = ClassPermissionPattern<AccountUsageClass>;
 pub type PolymorphicAccountUsagePermissionPattern =
     PolymorphicClassPermissionPattern<AccountUsageClass>;
-
-impl AccountUsageClass {
-    fn parse_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<AccountUsageResourcePattern, CardParseError> {
-        if resource.is_empty() {
-            Ok(AccountUsageResourcePattern)
-        } else {
-            Err(CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            })
-        }
-    }
-}

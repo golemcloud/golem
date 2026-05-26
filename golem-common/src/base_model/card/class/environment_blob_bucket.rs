@@ -31,7 +31,20 @@ impl EnvironmentBlobBucketResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentBlobBucketResourcePattern {
+impl ResourcePattern for EnvironmentBlobBucketResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvironmentBlobBucketResourcePattern::Any)
+        } else {
+            EnvironmentBlobBucketName::parse(resource)
+                .map(EnvironmentBlobBucketResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentBlobBucketClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -48,6 +61,17 @@ pub enum EnvironmentBlobBucketVerb {
     Delete,
     Clear,
 }
+impl VerbPattern for EnvironmentBlobBucketVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "delete" => Some(Self::Delete),
+            "clear" => Some(Self::Clear),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -59,20 +83,6 @@ impl PermissionClass for EnvironmentBlobBucketClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentBlobBucketResourcePattern;
     const NAME: &'static str = "environment.blob-bucket";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "delete" => Some(Self::Verb::Delete),
-            "clear" => Some(Self::Verb::Clear),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentBlobBucket(pattern)
@@ -89,24 +99,6 @@ pub type EnvironmentBlobBucketPermissionPattern =
     ClassPermissionPattern<EnvironmentBlobBucketClass>;
 pub type PolymorphicEnvironmentBlobBucketPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentBlobBucketClass>;
-
-impl EnvironmentBlobBucketClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentBlobBucketResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvironmentBlobBucketResourcePattern::Any)
-        } else {
-            EnvironmentBlobBucketName::parse(resource)
-                .map(EnvironmentBlobBucketResourcePattern::Name)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: EnvironmentBlobBucketClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_environment_blob_bucket_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

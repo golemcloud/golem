@@ -115,7 +115,38 @@ impl From<&str> for ComponentOwnerPattern {
     }
 }
 
-impl Subsumes for ComponentOwnerPattern {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PolymorphicComponentOwnerPattern {
+    Concrete(ComponentOwnerPattern),
+    EnvComponents,
+    EnvComponent { component: String },
+    Self_,
+}
+
+impl OwnerPattern for ComponentOwnerPattern {
+    type Polymorphic = PolymorphicComponentOwnerPattern;
+
+    fn parse(value: &str) -> Result<Self, String> {
+        Self::parse(value)
+    }
+
+    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
+        match split_leftmost_owner_slot(value)? {
+            Some(("?env", rest)) if rest.as_slice() == ["*"] => {
+                Ok(PolymorphicComponentOwnerPattern::EnvComponents)
+            }
+            Some(("?env", rest)) if rest.len() == 1 => {
+                Ok(PolymorphicComponentOwnerPattern::EnvComponent {
+                    component: parse_concrete_segment(rest[0])?.to_string(),
+                })
+            }
+            Some(("?self", rest)) if rest.is_empty() => Ok(PolymorphicComponentOwnerPattern::Self_),
+            Some(_) => Err(value.to_string()),
+            None => Self::parse(value).map(PolymorphicComponentOwnerPattern::Concrete),
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::AnyComponents, _) => true,
@@ -156,39 +187,6 @@ impl Subsumes for ComponentOwnerPattern {
                 },
             ) => aa == ba && ap == bp && ae == be && ac == bc,
             (Self::Component { .. }, _) => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicComponentOwnerPattern {
-    Concrete(ComponentOwnerPattern),
-    EnvComponents,
-    EnvComponent { component: String },
-    Self_,
-}
-
-impl OwnerPattern for ComponentOwnerPattern {
-    type Polymorphic = PolymorphicComponentOwnerPattern;
-
-    fn parse(value: &str) -> Result<Self, String> {
-        Self::parse(value)
-    }
-
-    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
-        match split_leftmost_owner_slot(value)? {
-            Some(("?env", rest)) if rest.as_slice() == ["*"] => {
-                Ok(PolymorphicComponentOwnerPattern::EnvComponents)
-            }
-            Some(("?env", rest)) if rest.len() == 1 => {
-                Ok(PolymorphicComponentOwnerPattern::EnvComponent {
-                    component: parse_concrete_segment(rest[0])?.to_string(),
-                })
-            }
-            Some(("?self", rest)) if rest.is_empty() => Ok(PolymorphicComponentOwnerPattern::Self_),
-            Some(_) => Err(value.to_string()),
-            None => Self::parse(value).map(PolymorphicComponentOwnerPattern::Concrete),
         }
     }
 }

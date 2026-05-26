@@ -54,7 +54,20 @@ impl SecretResourcePattern {
     }
 }
 
-impl Subsumes for SecretResourcePattern {
+impl ResourcePattern for SecretResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(SecretResourcePattern::Any)
+        } else {
+            SecretKeyPathPattern::parse(resource)
+                .map(SecretResourcePattern::Key)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: SecretClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -70,6 +83,16 @@ pub enum SecretVerb {
     Mint,
     Reveal,
 }
+impl VerbPattern for SecretVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "hold" => Some(Self::Hold),
+            "mint" => Some(Self::Mint),
+            "reveal" => Some(Self::Reveal),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -81,19 +104,6 @@ impl PermissionClass for SecretClass {
     type Recipient = AgentRecipientPattern;
     type Resource = SecretResourcePattern;
     const NAME: &'static str = "secret";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "hold" => Some(Self::Verb::Hold),
-            "mint" => Some(Self::Verb::Mint),
-            "reveal" => Some(Self::Verb::Reveal),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Secret(pattern)
@@ -108,24 +118,6 @@ impl PermissionClass for SecretClass {
 
 pub type SecretPermissionPattern = ClassPermissionPattern<SecretClass>;
 pub type PolymorphicSecretPermissionPattern = PolymorphicClassPermissionPattern<SecretClass>;
-
-impl SecretClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<SecretResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(SecretResourcePattern::Any)
-        } else {
-            SecretKeyPathPattern::parse(resource)
-                .map(SecretResourcePattern::Key)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: SecretClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_secret_key_segment(value: &str) -> Result<SecretKeySegmentPattern, String> {
     if value.is_empty() {

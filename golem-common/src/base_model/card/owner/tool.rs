@@ -161,7 +161,41 @@ impl From<&str> for ToolOwnerPattern {
     }
 }
 
-impl Subsumes for ToolOwnerPattern {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PolymorphicToolOwnerPattern {
+    Concrete(ToolOwnerPattern),
+    EnvTools,
+    EnvComponentTools { component: String },
+    EnvTool { component: String, tool: String },
+}
+
+impl OwnerPattern for ToolOwnerPattern {
+    type Polymorphic = PolymorphicToolOwnerPattern;
+
+    fn parse(value: &str) -> Result<Self, String> {
+        Self::parse(value)
+    }
+
+    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
+        match split_leftmost_owner_slot(value)? {
+            Some(("?env", rest)) if rest.as_slice() == ["*", "*"] => {
+                Ok(PolymorphicToolOwnerPattern::EnvTools)
+            }
+            Some(("?env", rest)) if rest.len() == 2 && rest[1] == "*" => {
+                Ok(PolymorphicToolOwnerPattern::EnvComponentTools {
+                    component: parse_concrete_segment(rest[0])?.to_string(),
+                })
+            }
+            Some(("?env", rest)) if rest.len() == 2 => Ok(PolymorphicToolOwnerPattern::EnvTool {
+                component: parse_concrete_segment(rest[0])?.to_string(),
+                tool: parse_concrete_segment(rest[1])?.to_string(),
+            }),
+            Some(_) => Err(value.to_string()),
+            None => Self::parse(value).map(PolymorphicToolOwnerPattern::Concrete),
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::AnyTools, _) => true,
@@ -215,42 +249,6 @@ impl Subsumes for ToolOwnerPattern {
                 },
             ) => aa == ba && ap == bp && ae == be && ac == bc && at == bt,
             (Self::Tool { .. }, _) => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicToolOwnerPattern {
-    Concrete(ToolOwnerPattern),
-    EnvTools,
-    EnvComponentTools { component: String },
-    EnvTool { component: String, tool: String },
-}
-
-impl OwnerPattern for ToolOwnerPattern {
-    type Polymorphic = PolymorphicToolOwnerPattern;
-
-    fn parse(value: &str) -> Result<Self, String> {
-        Self::parse(value)
-    }
-
-    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
-        match split_leftmost_owner_slot(value)? {
-            Some(("?env", rest)) if rest.as_slice() == ["*", "*"] => {
-                Ok(PolymorphicToolOwnerPattern::EnvTools)
-            }
-            Some(("?env", rest)) if rest.len() == 2 && rest[1] == "*" => {
-                Ok(PolymorphicToolOwnerPattern::EnvComponentTools {
-                    component: parse_concrete_segment(rest[0])?.to_string(),
-                })
-            }
-            Some(("?env", rest)) if rest.len() == 2 => Ok(PolymorphicToolOwnerPattern::EnvTool {
-                component: parse_concrete_segment(rest[0])?.to_string(),
-                tool: parse_concrete_segment(rest[1])?.to_string(),
-            }),
-            Some(_) => Err(value.to_string()),
-            None => Self::parse(value).map(PolymorphicToolOwnerPattern::Concrete),
         }
     }
 }

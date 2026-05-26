@@ -31,34 +31,32 @@ pub trait CardBinaryCodec {}
 #[cfg(not(feature = "full"))]
 impl<T> CardBinaryCodec for T {}
 
-pub trait Subsumes {
+pub trait VerbPattern:
+    Debug + Copy + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
+{
+    fn parse_verb(verb: &str) -> Option<Self>
+    where
+        Self: Sized;
+}
+
+pub trait ResourcePattern:
+    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
+{
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError>
+    where
+        Self: Sized;
+
     fn subsumes(&self, other: &Self) -> bool;
 }
 
 pub trait PermissionClass {
-    type Verb: Debug
-        + Copy
-        + Clone
-        + PartialEq
-        + Eq
-        + Serialize
-        + for<'de> Deserialize<'de>
-        + CardBinaryCodec;
+    type Verb: VerbPattern;
     type Owner: OwnerPattern;
     type Recipient: RecipientPattern;
-    type Resource: Subsumes
-        + Debug
-        + Clone
-        + PartialEq
-        + Eq
-        + Serialize
-        + for<'de> Deserialize<'de>
-        + CardBinaryCodec;
+    type Resource: ResourcePattern;
 
     const NAME: &'static str;
 
-    fn parse_verb(verb: &str) -> Option<Self::Verb>;
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError>;
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern
     where
         Self: Sized;
@@ -89,8 +87,8 @@ pub enum ClassPermissionPattern<C: PermissionClass> {
     },
 }
 
-impl<C: PermissionClass> Subsumes for ClassPermissionPattern<C> {
-    fn subsumes(&self, other: &Self) -> bool {
+impl<C: PermissionClass> ClassPermissionPattern<C> {
+    pub fn subsumes(&self, other: &Self) -> bool {
         let (self_verb, self_owner, self_recipient, self_resource) = self.parts();
         let (other_verb, other_owner, other_recipient, other_resource) = other.parts();
         self_owner.subsumes(other_owner)
@@ -98,9 +96,7 @@ impl<C: PermissionClass> Subsumes for ClassPermissionPattern<C> {
             && (self_verb.is_none() || self_verb == other_verb)
             && self_resource.subsumes(other_resource)
     }
-}
 
-impl<C: PermissionClass> ClassPermissionPattern<C> {
     pub fn matches_holder(&self, holder: &str) -> bool {
         let (_, _, recipient, _) = self.parts();
         recipient.matches_holder(holder)

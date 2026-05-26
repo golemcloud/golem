@@ -32,7 +32,20 @@ impl EnvironmentResourceDefinitionResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentResourceDefinitionResourcePattern {
+impl ResourcePattern for EnvironmentResourceDefinitionResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvironmentResourceDefinitionResourcePattern::Any)
+        } else {
+            EnvironmentResourceDefinitionName::parse(resource)
+                .map(EnvironmentResourceDefinitionResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentResourceDefinitionClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -51,6 +64,18 @@ pub enum EnvironmentResourceDefinitionVerb {
     Delete,
     Restore,
 }
+impl VerbPattern for EnvironmentResourceDefinitionVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
+            "restore" => Some(Self::Restore),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -62,21 +87,6 @@ impl PermissionClass for EnvironmentResourceDefinitionClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentResourceDefinitionResourcePattern;
     const NAME: &'static str = "environment.resource-definition";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "update" => Some(Self::Verb::Update),
-            "delete" => Some(Self::Verb::Delete),
-            "restore" => Some(Self::Verb::Restore),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentResourceDefinition(pattern)
@@ -93,24 +103,6 @@ pub type EnvironmentResourceDefinitionPermissionPattern =
     ClassPermissionPattern<EnvironmentResourceDefinitionClass>;
 pub type PolymorphicEnvironmentResourceDefinitionPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentResourceDefinitionClass>;
-
-impl EnvironmentResourceDefinitionClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentResourceDefinitionResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvironmentResourceDefinitionResourcePattern::Any)
-        } else {
-            EnvironmentResourceDefinitionName::parse(resource)
-                .map(EnvironmentResourceDefinitionResourcePattern::Name)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: EnvironmentResourceDefinitionClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_environment_resource_definition_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

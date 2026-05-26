@@ -74,7 +74,20 @@ impl ToolResourcePattern {
     }
 }
 
-impl Subsumes for ToolResourcePattern {
+impl ResourcePattern for ToolResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource.is_empty() {
+            Ok(ToolResourcePattern::AnyInvocation)
+        } else {
+            parse_tool_invocation_pattern(resource)
+                .map(ToolResourcePattern::Invocation)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: ToolClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::AnyInvocation, _) => true,
@@ -88,6 +101,14 @@ impl Subsumes for ToolResourcePattern {
 pub enum ToolVerb {
     Invoke,
 }
+impl VerbPattern for ToolVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "invoke" => Some(Self::Invoke),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -99,17 +120,6 @@ impl PermissionClass for ToolClass {
     type Recipient = AgentRecipientPattern;
     type Resource = ToolResourcePattern;
     const NAME: &'static str = "tool";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "invoke" => Some(Self::Verb::Invoke),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Tool(pattern)
@@ -124,21 +134,6 @@ impl PermissionClass for ToolClass {
 
 pub type ToolPermissionPattern = ClassPermissionPattern<ToolClass>;
 pub type PolymorphicToolPermissionPattern = PolymorphicClassPermissionPattern<ToolClass>;
-
-impl ToolClass {
-    fn parse_resource(_class: &str, resource: &str) -> Result<ToolResourcePattern, CardParseError> {
-        if resource.is_empty() {
-            Ok(ToolResourcePattern::AnyInvocation)
-        } else {
-            parse_tool_invocation_pattern(resource)
-                .map(ToolResourcePattern::Invocation)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: ToolClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_tool_invocation_pattern(value: &str) -> Result<ToolInvocationPattern, String> {
     let mut tokens = value.split_whitespace().peekable();

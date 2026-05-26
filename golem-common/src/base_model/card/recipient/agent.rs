@@ -131,64 +131,6 @@ impl AgentRecipientPattern {
     }
 }
 
-impl Subsumes for AgentRecipientPattern {
-    fn subsumes(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Any, _) => true,
-            (Self::AccountAgents { account: a }, other) => {
-                other.account_part().is_some_and(|account| a == account)
-            }
-            (
-                Self::ApplicationAgents {
-                    account: aa,
-                    application: ap,
-                },
-                other,
-            ) => other
-                .application_part()
-                .is_some_and(|(ba, bp)| aa == ba && ap == bp),
-            (
-                Self::EnvironmentAgents {
-                    account: aa,
-                    application: ap,
-                    environment: ae,
-                },
-                other,
-            ) => other
-                .environment_part()
-                .is_some_and(|(ba, bp, be)| aa == ba && ap == bp && ae == be),
-            (
-                Self::ComponentAgents {
-                    account: aa,
-                    application: ap,
-                    environment: ae,
-                    component: ac,
-                },
-                other,
-            ) => other
-                .component_part()
-                .is_some_and(|(ba, bp, be, bc)| aa == ba && ap == bp && ae == be && ac == bc),
-            (
-                Self::Agent {
-                    account: aa,
-                    application: ap,
-                    environment: ae,
-                    component: ac,
-                    agent: ag,
-                },
-                Self::Agent {
-                    account: ba,
-                    application: bp,
-                    environment: be,
-                    component: bc,
-                    agent: bg,
-                },
-            ) => aa == ba && ap == bp && ae == be && ac == bc && agent_segment_subsumes(ag, bg),
-            (Self::Agent { .. }, _) => false,
-        }
-    }
-}
-
 impl RecipientPattern for AgentRecipientPattern {
     type Polymorphic = PolymorphicAgentRecipientPattern;
 
@@ -266,5 +208,61 @@ impl RecipientPattern for AgentRecipientPattern {
             return false;
         };
         self.subsumes(&holder)
+    }
+
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::AccountAgents { account: a }, other) => {
+                other.account_part().is_some_and(|account| a == account)
+            }
+            (
+                Self::ApplicationAgents {
+                    account: aa,
+                    application: ap,
+                },
+                other,
+            ) => other
+                .application_part()
+                .is_some_and(|(ba, bp)| aa == ba && ap == bp),
+            (
+                Self::EnvironmentAgents {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                },
+                other,
+            ) => other
+                .environment_part()
+                .is_some_and(|(ba, bp, be)| aa == ba && ap == bp && ae == be),
+            (
+                Self::ComponentAgents {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                    component: ac,
+                },
+                other,
+            ) => other
+                .component_part()
+                .is_some_and(|(ba, bp, be, bc)| aa == ba && ap == bp && ae == be && ac == bc),
+            (
+                Self::Agent {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                    component: ac,
+                    agent: ag,
+                },
+                Self::Agent {
+                    account: ba,
+                    application: bp,
+                    environment: be,
+                    component: bc,
+                    agent: bg,
+                },
+            ) => aa == ba && ap == bp && ae == be && ac == bc && agent_segment_subsumes(ag, bg),
+            (Self::Agent { .. }, _) => false,
+        }
     }
 }

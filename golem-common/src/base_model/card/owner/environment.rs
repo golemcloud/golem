@@ -79,7 +79,29 @@ impl From<&str> for EnvironmentOwnerPattern {
     }
 }
 
-impl Subsumes for EnvironmentOwnerPattern {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PolymorphicEnvironmentOwnerPattern {
+    Concrete(EnvironmentOwnerPattern),
+    Env,
+    Self_,
+}
+
+impl OwnerPattern for EnvironmentOwnerPattern {
+    type Polymorphic = PolymorphicEnvironmentOwnerPattern;
+
+    fn parse(value: &str) -> Result<Self, String> {
+        Self::parse(value)
+    }
+
+    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
+        parse_prefix_owner_slot(value, Self::parse).map(|slot| match slot {
+            PrefixOwnerSlot::Concrete(owner) => PolymorphicEnvironmentOwnerPattern::Concrete(owner),
+            PrefixOwnerSlot::Env => PolymorphicEnvironmentOwnerPattern::Env,
+            PrefixOwnerSlot::Self_ => PolymorphicEnvironmentOwnerPattern::Self_,
+        })
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::AnyEnvironments, _) => true,
@@ -109,29 +131,5 @@ impl Subsumes for EnvironmentOwnerPattern {
             ) => aa == ba && ap == bp && ae == be,
             (Self::Environment { .. }, _) => false,
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicEnvironmentOwnerPattern {
-    Concrete(EnvironmentOwnerPattern),
-    Env,
-    Self_,
-}
-
-impl OwnerPattern for EnvironmentOwnerPattern {
-    type Polymorphic = PolymorphicEnvironmentOwnerPattern;
-
-    fn parse(value: &str) -> Result<Self, String> {
-        Self::parse(value)
-    }
-
-    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
-        parse_prefix_owner_slot(value, Self::parse).map(|slot| match slot {
-            PrefixOwnerSlot::Concrete(owner) => PolymorphicEnvironmentOwnerPattern::Concrete(owner),
-            PrefixOwnerSlot::Env => PolymorphicEnvironmentOwnerPattern::Env,
-            PrefixOwnerSlot::Self_ => PolymorphicEnvironmentOwnerPattern::Self_,
-        })
     }
 }

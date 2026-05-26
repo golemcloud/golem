@@ -5,7 +5,18 @@ use crate::base_model::card::parsing::CardParseError;
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct SystemResourcePattern;
 
-impl Subsumes for SystemResourcePattern {
+impl ResourcePattern for SystemResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource.is_empty() {
+            Ok(SystemResourcePattern)
+        } else {
+            Err(CardParseError::InvalidResource {
+                class: SystemClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
+        }
+    }
+
     fn subsumes(&self, _other: &Self) -> bool {
         true
     }
@@ -18,6 +29,17 @@ pub enum SystemVerb {
     ViewAccountSummariesReport,
     ViewAccountCountsReport,
 }
+impl VerbPattern for SystemVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "create-account" => Some(Self::CreateAccount),
+            "view-default-plan" => Some(Self::ViewDefaultPlan),
+            "view-account-summaries-report" => Some(Self::ViewAccountSummariesReport),
+            "view-account-counts-report" => Some(Self::ViewAccountCountsReport),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -29,20 +51,6 @@ impl PermissionClass for SystemClass {
     type Recipient = AccountRecipientPattern;
     type Resource = SystemResourcePattern;
     const NAME: &'static str = "system";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "create-account" => Some(Self::Verb::CreateAccount),
-            "view-default-plan" => Some(Self::Verb::ViewDefaultPlan),
-            "view-account-summaries-report" => Some(Self::Verb::ViewAccountSummariesReport),
-            "view-account-counts-report" => Some(Self::Verb::ViewAccountCountsReport),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::System(pattern)
@@ -57,19 +65,3 @@ impl PermissionClass for SystemClass {
 
 pub type SystemPermissionPattern = ClassPermissionPattern<SystemClass>;
 pub type PolymorphicSystemPermissionPattern = PolymorphicClassPermissionPattern<SystemClass>;
-
-impl SystemClass {
-    fn parse_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<SystemResourcePattern, CardParseError> {
-        if resource.is_empty() {
-            Ok(SystemResourcePattern)
-        } else {
-            Err(CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            })
-        }
-    }
-}

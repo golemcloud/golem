@@ -31,7 +31,20 @@ impl EnvironmentSecuritySchemeResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentSecuritySchemeResourcePattern {
+impl ResourcePattern for EnvironmentSecuritySchemeResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvironmentSecuritySchemeResourcePattern::Any)
+        } else {
+            EnvironmentSecuritySchemeName::parse(resource)
+                .map(EnvironmentSecuritySchemeResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentSecuritySchemeClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -50,6 +63,18 @@ pub enum EnvironmentSecuritySchemeVerb {
     Delete,
     Restore,
 }
+impl VerbPattern for EnvironmentSecuritySchemeVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
+            "restore" => Some(Self::Restore),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -61,21 +86,6 @@ impl PermissionClass for EnvironmentSecuritySchemeClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentSecuritySchemeResourcePattern;
     const NAME: &'static str = "environment.security-scheme";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "update" => Some(Self::Verb::Update),
-            "delete" => Some(Self::Verb::Delete),
-            "restore" => Some(Self::Verb::Restore),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentSecurityScheme(pattern)
@@ -92,24 +102,6 @@ pub type EnvironmentSecuritySchemePermissionPattern =
     ClassPermissionPattern<EnvironmentSecuritySchemeClass>;
 pub type PolymorphicEnvironmentSecuritySchemePermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentSecuritySchemeClass>;
-
-impl EnvironmentSecuritySchemeClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentSecuritySchemeResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvironmentSecuritySchemeResourcePattern::Any)
-        } else {
-            EnvironmentSecuritySchemeName::parse(resource)
-                .map(EnvironmentSecuritySchemeResourcePattern::Name)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: EnvironmentSecuritySchemeClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_environment_security_scheme_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

@@ -21,7 +21,18 @@ pub enum ComponentResourcePattern {
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct ComponentName(pub String);
 
-impl Subsumes for ComponentResourcePattern {
+impl ResourcePattern for ComponentResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource.is_empty() {
+            Ok(ComponentResourcePattern::Empty)
+        } else {
+            parse_component_resource(resource).map_err(|_| CardParseError::InvalidResource {
+                class: ComponentClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Empty, Self::Empty) => true,
@@ -49,6 +60,17 @@ pub enum ComponentVerb {
     Update,
     Delete,
 }
+impl VerbPattern for ComponentVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -60,20 +82,6 @@ impl PermissionClass for ComponentClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = ComponentResourcePattern;
     const NAME: &'static str = "component";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "update" => Some(Self::Verb::Update),
-            "delete" => Some(Self::Verb::Delete),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Component(pattern)
@@ -88,22 +96,6 @@ impl PermissionClass for ComponentClass {
 
 pub type ComponentPermissionPattern = ClassPermissionPattern<ComponentClass>;
 pub type PolymorphicComponentPermissionPattern = PolymorphicClassPermissionPattern<ComponentClass>;
-
-impl ComponentClass {
-    fn parse_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<ComponentResourcePattern, CardParseError> {
-        if resource.is_empty() {
-            Ok(ComponentResourcePattern::Empty)
-        } else {
-            parse_component_resource(resource).map_err(|_| CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            })
-        }
-    }
-}
 
 fn parse_component_resource(resource: &str) -> Result<ComponentResourcePattern, String> {
     all_consuming(component_resource)(resource)

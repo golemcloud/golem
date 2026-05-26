@@ -40,7 +40,14 @@ impl BlobResourcePattern {
     }
 }
 
-impl Subsumes for BlobResourcePattern {
+impl ResourcePattern for BlobResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        BlobResourcePattern::parse_value(resource).map_err(|_| CardParseError::InvalidResource {
+            class: BlobClass::NAME.to_string(),
+            resource: resource.to_string(),
+        })
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (
@@ -64,6 +71,17 @@ pub enum BlobVerb {
     Delete,
     List,
 }
+impl VerbPattern for BlobVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "read" => Some(Self::Read),
+            "write" => Some(Self::Write),
+            "delete" => Some(Self::Delete),
+            "list" => Some(Self::List),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -75,20 +93,6 @@ impl PermissionClass for BlobClass {
     type Recipient = AgentRecipientPattern;
     type Resource = BlobResourcePattern;
     const NAME: &'static str = "blob";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "read" => Some(Self::Verb::Read),
-            "write" => Some(Self::Verb::Write),
-            "delete" => Some(Self::Verb::Delete),
-            "list" => Some(Self::Verb::List),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Blob(pattern)
@@ -103,12 +107,3 @@ impl PermissionClass for BlobClass {
 
 pub type BlobPermissionPattern = ClassPermissionPattern<BlobClass>;
 pub type PolymorphicBlobPermissionPattern = PolymorphicClassPermissionPattern<BlobClass>;
-
-impl BlobClass {
-    fn parse_resource(_class: &str, resource: &str) -> Result<BlobResourcePattern, CardParseError> {
-        BlobResourcePattern::parse_value(resource).map_err(|_| CardParseError::InvalidResource {
-            class: BlobClass::NAME.to_string(),
-            resource: resource.to_string(),
-        })
-    }
-}

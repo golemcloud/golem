@@ -426,7 +426,7 @@ fn parse_class_permission<C: PermissionClass>(
         owner: owner.to_string(),
     })?;
     let recipient = C::Recipient::parse(recipient).map_err(CardParseError::InvalidRecipientPath)?;
-    let resource = C::parse_resource(resource)?;
+    let resource = C::Resource::parse_resource(resource)?;
     let pattern = if verb == "*" {
         ClassPermissionPattern::<C>::Any {
             owner,
@@ -435,7 +435,7 @@ fn parse_class_permission<C: PermissionClass>(
         }
     } else {
         ClassPermissionPattern::<C>::Verb {
-            verb: C::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
+            verb: C::Verb::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
                 class: C::NAME.to_string(),
                 verb: verb.to_string(),
             })?,
@@ -466,7 +466,7 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
             resource: resource.to_string(),
         });
     }
-    let resource = C::parse_resource(resource)?;
+    let resource = C::Resource::parse_resource(resource)?;
     let pattern = if verb == "*" {
         PolymorphicClassPermissionPattern::<C>::Any {
             owner,
@@ -475,7 +475,7 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
         }
     } else {
         PolymorphicClassPermissionPattern::<C>::Verb {
-            verb: C::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
+            verb: C::Verb::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
                 class: C::NAME.to_string(),
                 verb: verb.to_string(),
             })?,

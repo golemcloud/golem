@@ -21,7 +21,34 @@ impl OplogResourcePattern {
     }
 }
 
-impl Subsumes for OplogResourcePattern {
+impl ResourcePattern for OplogResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            return Ok(OplogResourcePattern::Any);
+        }
+        let mut start = None;
+        let mut end = None;
+        for part in resource.split(':') {
+            if let Some(value) = part.strip_prefix("start=") {
+                start = Some(value.parse().map_err(|_| CardParseError::InvalidResource {
+                    class: OplogClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })?);
+            } else if let Some(value) = part.strip_prefix("end=") {
+                end = Some(value.parse().map_err(|_| CardParseError::InvalidResource {
+                    class: OplogClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })?);
+            } else {
+                return Err(CardParseError::InvalidResource {
+                    class: OplogClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                });
+            }
+        }
+        Ok(OplogResourcePattern::Range { start, end })
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -41,6 +68,14 @@ impl Subsumes for OplogResourcePattern {
 pub enum OplogVerb {
     Read,
 }
+impl VerbPattern for OplogVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "read" => Some(Self::Read),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -52,17 +87,6 @@ impl PermissionClass for OplogClass {
     type Recipient = AgentRecipientPattern;
     type Resource = OplogResourcePattern;
     const NAME: &'static str = "oplog";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "read" => Some(Self::Verb::Read),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Oplog(pattern)
@@ -77,32 +101,3 @@ impl PermissionClass for OplogClass {
 
 pub type OplogPermissionPattern = ClassPermissionPattern<OplogClass>;
 pub type PolymorphicOplogPermissionPattern = PolymorphicClassPermissionPattern<OplogClass>;
-
-impl OplogClass {
-    fn parse_resource(class: &str, resource: &str) -> Result<OplogResourcePattern, CardParseError> {
-        if resource == "*" {
-            return Ok(OplogResourcePattern::Any);
-        }
-        let mut start = None;
-        let mut end = None;
-        for part in resource.split(':') {
-            if let Some(value) = part.strip_prefix("start=") {
-                start = Some(value.parse().map_err(|_| CardParseError::InvalidResource {
-                    class: class.to_string(),
-                    resource: resource.to_string(),
-                })?);
-            } else if let Some(value) = part.strip_prefix("end=") {
-                end = Some(value.parse().map_err(|_| CardParseError::InvalidResource {
-                    class: class.to_string(),
-                    resource: resource.to_string(),
-                })?);
-            } else {
-                return Err(CardParseError::InvalidResource {
-                    class: class.to_string(),
-                    resource: resource.to_string(),
-                });
-            }
-        }
-        Ok(OplogResourcePattern::Range { start, end })
-    }
-}

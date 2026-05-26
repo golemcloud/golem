@@ -47,7 +47,20 @@ impl PlanResourcePattern {
     }
 }
 
-impl Subsumes for PlanResourcePattern {
+impl ResourcePattern for PlanResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(PlanResourcePattern::Any)
+        } else {
+            parse_plan_id(resource)
+                .map(PlanResourcePattern::Plan)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: PlanClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -63,6 +76,16 @@ pub enum PlanVerb {
     Create,
     Update,
 }
+impl VerbPattern for PlanVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "update" => Some(Self::Update),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -74,19 +97,6 @@ impl PermissionClass for PlanClass {
     type Recipient = AccountRecipientPattern;
     type Resource = PlanResourcePattern;
     const NAME: &'static str = "plan";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "update" => Some(Self::Verb::Update),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Plan(pattern)
@@ -101,21 +111,6 @@ impl PermissionClass for PlanClass {
 
 pub type PlanPermissionPattern = ClassPermissionPattern<PlanClass>;
 pub type PolymorphicPlanPermissionPattern = PolymorphicClassPermissionPattern<PlanClass>;
-
-impl PlanClass {
-    fn parse_resource(_class: &str, resource: &str) -> Result<PlanResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(PlanResourcePattern::Any)
-        } else {
-            parse_plan_id(resource)
-                .map(PlanResourcePattern::Plan)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: PlanClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_plan_id(value: &str) -> Result<PlanIdPattern, String> {
     if let Ok(uuid) = Uuid::parse_str(value) {

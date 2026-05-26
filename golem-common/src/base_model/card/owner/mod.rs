@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::{CardBinaryCodec, Subsumes};
+use crate::base_model::card::CardBinaryCodec;
 use nom::IResult;
 use nom::bytes::complete::is_not;
 use nom::character::complete::char;
@@ -38,7 +38,7 @@ pub use environment::*;
 pub use tool::*;
 
 pub trait OwnerPattern:
-    Subsumes + Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
+    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec
 {
     type Polymorphic: Debug
         + Clone
@@ -54,6 +54,8 @@ pub trait OwnerPattern:
     fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String>
     where
         Self: Sized;
+
+    fn subsumes(&self, other: &Self) -> bool;
 }
 
 pub(super) enum PrefixOwnerSlot<T> {

@@ -73,7 +73,25 @@ impl NetworkResourcePattern {
     }
 }
 
-impl Subsumes for NetworkResourcePattern {
+impl ResourcePattern for NetworkResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            return Ok(NetworkResourcePattern::Any);
+        }
+
+        let (host, ports) = if let Some((host, port)) = resource.rsplit_once(':') {
+            if port.chars().all(|c| c.is_ascii_digit() || c == '-') {
+                (host.to_string(), parse_port_pattern(port)?)
+            } else {
+                (resource.to_string(), PortPattern::Any)
+            }
+        } else {
+            (resource.to_string(), PortPattern::Any)
+        };
+
+        Ok(NetworkResourcePattern::HostPort { host, ports })
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -96,6 +114,14 @@ impl Subsumes for NetworkResourcePattern {
 pub enum NetworkVerb {
     Connect,
 }
+impl VerbPattern for NetworkVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "connect" => Some(Self::Connect),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -107,17 +133,6 @@ impl PermissionClass for NetworkClass {
     type Recipient = AgentRecipientPattern;
     type Resource = NetworkResourcePattern;
     const NAME: &'static str = "network";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "connect" => Some(Self::Verb::Connect),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Network(pattern)
@@ -133,46 +148,21 @@ impl PermissionClass for NetworkClass {
 pub type NetworkPermissionPattern = ClassPermissionPattern<NetworkClass>;
 pub type PolymorphicNetworkPermissionPattern = PolymorphicClassPermissionPattern<NetworkClass>;
 
-impl NetworkClass {
-    fn parse_resource(
-        class: &str,
-        resource: &str,
-    ) -> Result<NetworkResourcePattern, CardParseError> {
-        if resource == "*" {
-            return Ok(NetworkResourcePattern::Any);
-        }
-
-        let (host, ports) = if let Some((host, port)) = resource.rsplit_once(':') {
-            if port.chars().all(|c| c.is_ascii_digit() || c == '-') {
-                (host.to_string(), Self::parse_port_pattern(class, port)?)
-            } else {
-                (resource.to_string(), PortPattern::Any)
-            }
-        } else {
-            (resource.to_string(), PortPattern::Any)
-        };
-
-        Ok(NetworkResourcePattern::HostPort { host, ports })
+fn parse_port_pattern(port: &str) -> Result<PortPattern, CardParseError> {
+    if let Some((start, end)) = port.split_once('-') {
+        let start = start.parse().map_err(|_| invalid_network_resource(port))?;
+        let end = end.parse().map_err(|_| invalid_network_resource(port))?;
+        Ok(PortPattern::Range { start, end })
+    } else {
+        Ok(PortPattern::Single(
+            port.parse().map_err(|_| invalid_network_resource(port))?,
+        ))
     }
+}
 
-    fn parse_port_pattern(class: &str, port: &str) -> Result<PortPattern, CardParseError> {
-        if let Some((start, end)) = port.split_once('-') {
-            let start = start.parse().map_err(|_| CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: port.to_string(),
-            })?;
-            let end = end.parse().map_err(|_| CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: port.to_string(),
-            })?;
-            Ok(PortPattern::Range { start, end })
-        } else {
-            Ok(PortPattern::Single(port.parse().map_err(|_| {
-                CardParseError::InvalidResource {
-                    class: class.to_string(),
-                    resource: port.to_string(),
-                }
-            })?))
-        }
+fn invalid_network_resource(resource: &str) -> CardParseError {
+    CardParseError::InvalidResource {
+        class: NetworkClass::NAME.to_string(),
+        resource: resource.to_string(),
     }
 }

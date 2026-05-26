@@ -32,7 +32,20 @@ impl EnvironmentMcpDeploymentResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentMcpDeploymentResourcePattern {
+impl ResourcePattern for EnvironmentMcpDeploymentResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvironmentMcpDeploymentResourcePattern::Any)
+        } else {
+            EnvironmentMcpDeploymentName::parse(resource)
+                .map(EnvironmentMcpDeploymentResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentMcpDeploymentClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -51,6 +64,18 @@ pub enum EnvironmentMcpDeploymentVerb {
     Delete,
     Restore,
 }
+impl VerbPattern for EnvironmentMcpDeploymentVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
+            "restore" => Some(Self::Restore),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -62,21 +87,6 @@ impl PermissionClass for EnvironmentMcpDeploymentClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentMcpDeploymentResourcePattern;
     const NAME: &'static str = "environment.mcp-deployment";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "update" => Some(Self::Verb::Update),
-            "delete" => Some(Self::Verb::Delete),
-            "restore" => Some(Self::Verb::Restore),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentMcpDeployment(pattern)
@@ -93,24 +103,6 @@ pub type EnvironmentMcpDeploymentPermissionPattern =
     ClassPermissionPattern<EnvironmentMcpDeploymentClass>;
 pub type PolymorphicEnvironmentMcpDeploymentPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentMcpDeploymentClass>;
-
-impl EnvironmentMcpDeploymentClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentMcpDeploymentResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvironmentMcpDeploymentResourcePattern::Any)
-        } else {
-            EnvironmentMcpDeploymentName::parse(resource)
-                .map(EnvironmentMcpDeploymentResourcePattern::Name)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: EnvironmentMcpDeploymentClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_environment_mcp_deployment_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

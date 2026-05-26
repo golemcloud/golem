@@ -57,39 +57,6 @@ impl EnvironmentRecipientPattern {
     }
 }
 
-impl Subsumes for EnvironmentRecipientPattern {
-    fn subsumes(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Any, _) => true,
-            (Self::AccountEnvironments { account: a }, other) => {
-                other.account_part().is_some_and(|account| a == account)
-            }
-            (
-                Self::ApplicationEnvironments {
-                    account: aa,
-                    application: ap,
-                },
-                other,
-            ) => other
-                .application_part()
-                .is_some_and(|(ba, bp)| aa == ba && ap == bp),
-            (
-                Self::Environment {
-                    account: aa,
-                    application: ap,
-                    environment: ae,
-                },
-                Self::Environment {
-                    account: ba,
-                    application: bp,
-                    environment: be,
-                },
-            ) => aa == ba && ap == bp && ae == be,
-            (Self::Environment { .. }, _) => false,
-        }
-    }
-}
-
 impl RecipientPattern for EnvironmentRecipientPattern {
     type Polymorphic = PolymorphicEnvironmentRecipientPattern;
 
@@ -153,6 +120,37 @@ impl RecipientPattern for EnvironmentRecipientPattern {
                     && application == &segments[1]
                     && environment == &segments[2]
             }
+        }
+    }
+
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::AccountEnvironments { account: a }, other) => {
+                other.account_part().is_some_and(|account| a == account)
+            }
+            (
+                Self::ApplicationEnvironments {
+                    account: aa,
+                    application: ap,
+                },
+                other,
+            ) => other
+                .application_part()
+                .is_some_and(|(ba, bp)| aa == ba && ap == bp),
+            (
+                Self::Environment {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                },
+                Self::Environment {
+                    account: ba,
+                    application: bp,
+                    environment: be,
+                },
+            ) => aa == ba && ap == bp && ae == be,
+            (Self::Environment { .. }, _) => false,
         }
     }
 }

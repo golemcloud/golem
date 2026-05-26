@@ -29,7 +29,20 @@ impl EnvironmentPluginGrantResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentPluginGrantResourcePattern {
+impl ResourcePattern for EnvironmentPluginGrantResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvironmentPluginGrantResourcePattern::Any)
+        } else {
+            EnvironmentPluginGrantName::parse(resource)
+                .map(EnvironmentPluginGrantResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentPluginGrantClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -45,6 +58,16 @@ pub enum EnvironmentPluginGrantVerb {
     Create,
     Delete,
 }
+impl VerbPattern for EnvironmentPluginGrantVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "delete" => Some(Self::Delete),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -56,19 +79,6 @@ impl PermissionClass for EnvironmentPluginGrantClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentPluginGrantResourcePattern;
     const NAME: &'static str = "environment.plugin-grant";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "delete" => Some(Self::Verb::Delete),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentPluginGrant(pattern)
@@ -85,24 +95,6 @@ pub type EnvironmentPluginGrantPermissionPattern =
     ClassPermissionPattern<EnvironmentPluginGrantClass>;
 pub type PolymorphicEnvironmentPluginGrantPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentPluginGrantClass>;
-
-impl EnvironmentPluginGrantClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentPluginGrantResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvironmentPluginGrantResourcePattern::Any)
-        } else {
-            EnvironmentPluginGrantName::parse(resource)
-                .map(EnvironmentPluginGrantResourcePattern::Name)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: EnvironmentPluginGrantClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_environment_plugin_grant_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

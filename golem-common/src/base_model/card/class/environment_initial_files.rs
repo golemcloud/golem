@@ -59,7 +59,16 @@ impl EnvironmentInitialFilesResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentInitialFilesResourcePattern {
+impl ResourcePattern for EnvironmentInitialFilesResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        EnvironmentInitialFilesPathPattern::parse(resource)
+            .map(EnvironmentInitialFilesResourcePattern::Path)
+            .map_err(|_| CardParseError::InvalidResource {
+                class: EnvironmentInitialFilesClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Path(a), Self::Path(b)) => a.subsumes(b),
@@ -74,6 +83,17 @@ pub enum EnvironmentInitialFilesVerb {
     Delete,
     List,
 }
+impl VerbPattern for EnvironmentInitialFilesVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
+            "list" => Some(Self::List),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -85,20 +105,6 @@ impl PermissionClass for EnvironmentInitialFilesClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentInitialFilesResourcePattern;
     const NAME: &'static str = "environment.initial-files";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "update" => Some(Self::Verb::Update),
-            "delete" => Some(Self::Verb::Delete),
-            "list" => Some(Self::Verb::List),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentInitialFiles(pattern)
@@ -115,20 +121,6 @@ pub type EnvironmentInitialFilesPermissionPattern =
     ClassPermissionPattern<EnvironmentInitialFilesClass>;
 pub type PolymorphicEnvironmentInitialFilesPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentInitialFilesClass>;
-
-impl EnvironmentInitialFilesClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentInitialFilesResourcePattern, CardParseError> {
-        EnvironmentInitialFilesPathPattern::parse(resource)
-            .map(EnvironmentInitialFilesResourcePattern::Path)
-            .map_err(|_| CardParseError::InvalidResource {
-                class: EnvironmentInitialFilesClass::NAME.to_string(),
-                resource: resource.to_string(),
-            })
-    }
-}
 
 fn parse_environment_initial_files_path_segment(
     value: &str,

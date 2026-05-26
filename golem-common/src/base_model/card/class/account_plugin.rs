@@ -29,7 +29,20 @@ impl AccountPluginResourcePattern {
     }
 }
 
-impl Subsumes for AccountPluginResourcePattern {
+impl ResourcePattern for AccountPluginResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(AccountPluginResourcePattern::Any)
+        } else {
+            AccountPluginName::parse(resource)
+                .map(AccountPluginResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: AccountPluginClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -46,6 +59,17 @@ pub enum AccountPluginVerb {
     Delete,
     Restore,
 }
+impl VerbPattern for AccountPluginVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "register" => Some(Self::Register),
+            "delete" => Some(Self::Delete),
+            "restore" => Some(Self::Restore),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -57,20 +81,6 @@ impl PermissionClass for AccountPluginClass {
     type Recipient = AccountRecipientPattern;
     type Resource = AccountPluginResourcePattern;
     const NAME: &'static str = "account.plugin";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "register" => Some(Self::Verb::Register),
-            "delete" => Some(Self::Verb::Delete),
-            "restore" => Some(Self::Verb::Restore),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::AccountPlugin(pattern)
@@ -86,24 +96,6 @@ impl PermissionClass for AccountPluginClass {
 pub type AccountPluginPermissionPattern = ClassPermissionPattern<AccountPluginClass>;
 pub type PolymorphicAccountPluginPermissionPattern =
     PolymorphicClassPermissionPattern<AccountPluginClass>;
-
-impl AccountPluginClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<AccountPluginResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(AccountPluginResourcePattern::Any)
-        } else {
-            AccountPluginName::parse(resource)
-                .map(AccountPluginResourcePattern::Name)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: AccountPluginClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_account_plugin_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

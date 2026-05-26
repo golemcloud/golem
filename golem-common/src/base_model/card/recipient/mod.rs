@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::{CardBinaryCodec, Subsumes};
+use crate::base_model::card::CardBinaryCodec;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -25,15 +25,7 @@ pub use agent::*;
 pub use environment::*;
 
 pub trait RecipientPattern:
-    Subsumes
-    + Debug
-    + Clone
-    + PartialEq
-    + Eq
-    + Serialize
-    + for<'de> Deserialize<'de>
-    + CardBinaryCodec
-    + Sized
+    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + CardBinaryCodec + Sized
 {
     type Polymorphic: Debug
         + Clone
@@ -45,6 +37,7 @@ pub trait RecipientPattern:
 
     fn parse(value: &str) -> Result<Self, String>;
     fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String>;
+    fn subsumes(&self, other: &Self) -> bool;
     fn matches_holder(&self, holder: &str) -> bool;
 }
 

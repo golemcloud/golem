@@ -191,7 +191,48 @@ impl From<&str> for AgentOwnerPattern {
     }
 }
 
-impl Subsumes for AgentOwnerPattern {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PolymorphicAgentOwnerPattern {
+    Concrete(AgentOwnerPattern),
+    EnvAgents,
+    EnvComponentAgents {
+        component: String,
+    },
+    EnvAgent {
+        component: String,
+        agent: AgentOwnerLeafPattern,
+    },
+    Self_,
+}
+
+impl OwnerPattern for AgentOwnerPattern {
+    type Polymorphic = PolymorphicAgentOwnerPattern;
+
+    fn parse(value: &str) -> Result<Self, String> {
+        Self::parse(value)
+    }
+
+    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
+        match split_leftmost_owner_slot(value)? {
+            Some(("?env", rest)) if rest.as_slice() == ["*", "*"] => {
+                Ok(PolymorphicAgentOwnerPattern::EnvAgents)
+            }
+            Some(("?env", rest)) if rest.len() == 2 && rest[1] == "*" => {
+                Ok(PolymorphicAgentOwnerPattern::EnvComponentAgents {
+                    component: parse_concrete_segment(rest[0])?.to_string(),
+                })
+            }
+            Some(("?env", rest)) if rest.len() == 2 => Ok(PolymorphicAgentOwnerPattern::EnvAgent {
+                component: parse_concrete_segment(rest[0])?.to_string(),
+                agent: AgentOwnerLeafPattern::parse(rest[1])?,
+            }),
+            Some(("?self", rest)) if rest.is_empty() => Ok(PolymorphicAgentOwnerPattern::Self_),
+            Some(_) => Err(value.to_string()),
+            None => Self::parse(value).map(PolymorphicAgentOwnerPattern::Concrete),
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::AnyAgents, _) => true,
@@ -245,49 +286,6 @@ impl Subsumes for AgentOwnerPattern {
                 },
             ) => aa == ba && ap == bp && ae == be && ac == bc && ag.subsumes(bg),
             (Self::Agent { .. }, _) => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicAgentOwnerPattern {
-    Concrete(AgentOwnerPattern),
-    EnvAgents,
-    EnvComponentAgents {
-        component: String,
-    },
-    EnvAgent {
-        component: String,
-        agent: AgentOwnerLeafPattern,
-    },
-    Self_,
-}
-
-impl OwnerPattern for AgentOwnerPattern {
-    type Polymorphic = PolymorphicAgentOwnerPattern;
-
-    fn parse(value: &str) -> Result<Self, String> {
-        Self::parse(value)
-    }
-
-    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String> {
-        match split_leftmost_owner_slot(value)? {
-            Some(("?env", rest)) if rest.as_slice() == ["*", "*"] => {
-                Ok(PolymorphicAgentOwnerPattern::EnvAgents)
-            }
-            Some(("?env", rest)) if rest.len() == 2 && rest[1] == "*" => {
-                Ok(PolymorphicAgentOwnerPattern::EnvComponentAgents {
-                    component: parse_concrete_segment(rest[0])?.to_string(),
-                })
-            }
-            Some(("?env", rest)) if rest.len() == 2 => Ok(PolymorphicAgentOwnerPattern::EnvAgent {
-                component: parse_concrete_segment(rest[0])?.to_string(),
-                agent: AgentOwnerLeafPattern::parse(rest[1])?,
-            }),
-            Some(("?self", rest)) if rest.is_empty() => Ok(PolymorphicAgentOwnerPattern::Self_),
-            Some(_) => Err(value.to_string()),
-            None => Self::parse(value).map(PolymorphicAgentOwnerPattern::Concrete),
         }
     }
 }

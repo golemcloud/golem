@@ -29,7 +29,20 @@ impl EnvironmentKvBucketResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentKvBucketResourcePattern {
+impl ResourcePattern for EnvironmentKvBucketResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvironmentKvBucketResourcePattern::Any)
+        } else {
+            EnvironmentKvBucketName::parse(resource)
+                .map(EnvironmentKvBucketResourcePattern::Name)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentKvBucketClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -46,6 +59,17 @@ pub enum EnvironmentKvBucketVerb {
     Delete,
     Clear,
 }
+impl VerbPattern for EnvironmentKvBucketVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "delete" => Some(Self::Delete),
+            "clear" => Some(Self::Clear),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -57,20 +81,6 @@ impl PermissionClass for EnvironmentKvBucketClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentKvBucketResourcePattern;
     const NAME: &'static str = "environment.kv-bucket";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "delete" => Some(Self::Verb::Delete),
-            "clear" => Some(Self::Verb::Clear),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentKvBucket(pattern)
@@ -86,24 +96,6 @@ impl PermissionClass for EnvironmentKvBucketClass {
 pub type EnvironmentKvBucketPermissionPattern = ClassPermissionPattern<EnvironmentKvBucketClass>;
 pub type PolymorphicEnvironmentKvBucketPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentKvBucketClass>;
-
-impl EnvironmentKvBucketClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentKvBucketResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvironmentKvBucketResourcePattern::Any)
-        } else {
-            EnvironmentKvBucketName::parse(resource)
-                .map(EnvironmentKvBucketResourcePattern::Name)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: EnvironmentKvBucketClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}
 
 fn parse_environment_kv_bucket_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();

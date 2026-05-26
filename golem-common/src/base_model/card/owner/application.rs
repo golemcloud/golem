@@ -54,28 +54,6 @@ impl From<&str> for ApplicationOwnerPattern {
     }
 }
 
-impl Subsumes for ApplicationOwnerPattern {
-    fn subsumes(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::AnyApplications, _) => true,
-            (Self::AccountApplications { account: a }, other) => {
-                other.account_part().is_some_and(|b| a == b)
-            }
-            (
-                Self::Application {
-                    account: aa,
-                    application: ap,
-                },
-                Self::Application {
-                    account: ba,
-                    application: bp,
-                },
-            ) => aa == ba && ap == bp,
-            (Self::Application { .. }, _) => false,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicApplicationOwnerPattern {
@@ -97,5 +75,25 @@ impl OwnerPattern for ApplicationOwnerPattern {
             PrefixOwnerSlot::Env => PolymorphicApplicationOwnerPattern::Env,
             PrefixOwnerSlot::Self_ => PolymorphicApplicationOwnerPattern::Self_,
         })
+    }
+
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::AnyApplications, _) => true,
+            (Self::AccountApplications { account: a }, other) => {
+                other.account_part().is_some_and(|b| a == b)
+            }
+            (
+                Self::Application {
+                    account: aa,
+                    application: ap,
+                },
+                Self::Application {
+                    account: ba,
+                    application: bp,
+                },
+            ) => aa == ba && ap == bp,
+            (Self::Application { .. }, _) => false,
+        }
     }
 }

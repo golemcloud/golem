@@ -35,7 +35,20 @@ impl EnvironmentHttpApiDeploymentResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentHttpApiDeploymentResourcePattern {
+impl ResourcePattern for EnvironmentHttpApiDeploymentResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvironmentHttpApiDeploymentResourcePattern::Any)
+        } else {
+            EnvironmentHttpApiDeploymentResourcePattern::parse_value(resource).map_err(|_| {
+                CardParseError::InvalidResource {
+                    class: EnvironmentHttpApiDeploymentClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                }
+            })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -63,6 +76,18 @@ pub enum EnvironmentHttpApiDeploymentVerb {
     Delete,
     Restore,
 }
+impl VerbPattern for EnvironmentHttpApiDeploymentVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
+            "restore" => Some(Self::Restore),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -74,21 +99,6 @@ impl PermissionClass for EnvironmentHttpApiDeploymentClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentHttpApiDeploymentResourcePattern;
     const NAME: &'static str = "environment.http-api-deployment";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "update" => Some(Self::Verb::Update),
-            "delete" => Some(Self::Verb::Delete),
-            "restore" => Some(Self::Verb::Restore),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentHttpApiDeployment(pattern)
@@ -105,21 +115,3 @@ pub type EnvironmentHttpApiDeploymentPermissionPattern =
     ClassPermissionPattern<EnvironmentHttpApiDeploymentClass>;
 pub type PolymorphicEnvironmentHttpApiDeploymentPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentHttpApiDeploymentClass>;
-
-impl EnvironmentHttpApiDeploymentClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentHttpApiDeploymentResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvironmentHttpApiDeploymentResourcePattern::Any)
-        } else {
-            EnvironmentHttpApiDeploymentResourcePattern::parse_value(resource).map_err(|_| {
-                CardParseError::InvalidResource {
-                    class: EnvironmentHttpApiDeploymentClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                }
-            })
-        }
-    }
-}

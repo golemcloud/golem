@@ -38,7 +38,20 @@ impl EnvResourcePattern {
     }
 }
 
-impl Subsumes for EnvResourcePattern {
+impl ResourcePattern for EnvResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvResourcePattern::Any)
+        } else {
+            EnvVarName::parse(resource)
+                .map(EnvResourcePattern::VarName)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -52,6 +65,14 @@ impl Subsumes for EnvResourcePattern {
 pub enum EnvVerb {
     Read,
 }
+impl VerbPattern for EnvVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "read" => Some(Self::Read),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -63,17 +84,6 @@ impl PermissionClass for EnvClass {
     type Recipient = AgentRecipientPattern;
     type Resource = EnvResourcePattern;
     const NAME: &'static str = "env";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "read" => Some(Self::Verb::Read),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Env(pattern)
@@ -88,18 +98,3 @@ impl PermissionClass for EnvClass {
 
 pub type EnvPermissionPattern = ClassPermissionPattern<EnvClass>;
 pub type PolymorphicEnvPermissionPattern = PolymorphicClassPermissionPattern<EnvClass>;
-
-impl EnvClass {
-    fn parse_resource(_class: &str, resource: &str) -> Result<EnvResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvResourcePattern::Any)
-        } else {
-            EnvVarName::parse(resource)
-                .map(EnvResourcePattern::VarName)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: EnvClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}

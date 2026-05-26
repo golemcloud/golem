@@ -56,7 +56,20 @@ impl EnvironmentDomainRegistrationResourcePattern {
     }
 }
 
-impl Subsumes for EnvironmentDomainRegistrationResourcePattern {
+impl ResourcePattern for EnvironmentDomainRegistrationResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(EnvironmentDomainRegistrationResourcePattern::Any)
+        } else {
+            DomainNamePattern::parse(resource)
+                .map(EnvironmentDomainRegistrationResourcePattern::Domain)
+                .map_err(|_| CardParseError::InvalidResource {
+                    class: EnvironmentDomainRegistrationClass::NAME.to_string(),
+                    resource: resource.to_string(),
+                })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -73,6 +86,16 @@ pub enum EnvironmentDomainRegistrationVerb {
     Create,
     Delete,
 }
+impl VerbPattern for EnvironmentDomainRegistrationVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "delete" => Some(Self::Delete),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -84,19 +107,6 @@ impl PermissionClass for EnvironmentDomainRegistrationClass {
     type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentDomainRegistrationResourcePattern;
     const NAME: &'static str = "environment.domain-registration";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "view" => Some(Self::Verb::View),
-            "create" => Some(Self::Verb::Create),
-            "delete" => Some(Self::Verb::Delete),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::EnvironmentDomainRegistration(pattern)
@@ -113,21 +123,3 @@ pub type EnvironmentDomainRegistrationPermissionPattern =
     ClassPermissionPattern<EnvironmentDomainRegistrationClass>;
 pub type PolymorphicEnvironmentDomainRegistrationPermissionPattern =
     PolymorphicClassPermissionPattern<EnvironmentDomainRegistrationClass>;
-
-impl EnvironmentDomainRegistrationClass {
-    fn parse_resource(
-        _class: &str,
-        resource: &str,
-    ) -> Result<EnvironmentDomainRegistrationResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(EnvironmentDomainRegistrationResourcePattern::Any)
-        } else {
-            DomainNamePattern::parse(resource)
-                .map(EnvironmentDomainRegistrationResourcePattern::Domain)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: EnvironmentDomainRegistrationClass::NAME.to_string(),
-                    resource: resource.to_string(),
-                })
-        }
-    }
-}

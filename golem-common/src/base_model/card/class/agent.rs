@@ -55,7 +55,28 @@ impl AgentResourcePattern {
     }
 }
 
-impl Subsumes for AgentResourcePattern {
+impl ResourcePattern for AgentResourcePattern {
+    fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
+        if resource == "*" {
+            Ok(AgentResourcePattern::Any)
+        } else if resource.is_empty() {
+            Ok(AgentResourcePattern::Empty)
+        } else if let Ok(index) = resource.parse::<u64>() {
+            Ok(AgentResourcePattern::OplogIndex(index))
+        } else if let Ok(uuid) = Uuid::parse_str(resource) {
+            Ok(AgentResourcePattern::InvocationId(
+                AgentInvocationIdPattern::Uuid(uuid),
+            ))
+        } else if let Ok(identifier) = AgentMethodName::parse(resource) {
+            Ok(AgentResourcePattern::Method(identifier))
+        } else {
+            Err(CardParseError::InvalidResource {
+                class: AgentClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
+        }
+    }
+
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -83,6 +104,24 @@ pub enum AgentVerb {
     ActivatePlugin,
     DeactivatePlugin,
 }
+impl VerbPattern for AgentVerb {
+    fn parse_verb(verb: &str) -> Option<Self> {
+        match verb {
+            "invoke" => Some(Self::Invoke),
+            "view" => Some(Self::View),
+            "delete" => Some(Self::Delete),
+            "interrupt" => Some(Self::Interrupt),
+            "resume" => Some(Self::Resume),
+            "update-revision" => Some(Self::UpdateRevision),
+            "fork" => Some(Self::Fork),
+            "revert" => Some(Self::Revert),
+            "cancel-invocation" => Some(Self::CancelInvocation),
+            "activate-plugin" => Some(Self::ActivatePlugin),
+            "deactivate-plugin" => Some(Self::DeactivatePlugin),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -94,27 +133,6 @@ impl PermissionClass for AgentClass {
     type Recipient = AgentRecipientPattern;
     type Resource = AgentResourcePattern;
     const NAME: &'static str = "agent";
-
-    fn parse_verb(verb: &str) -> Option<Self::Verb> {
-        match verb {
-            "invoke" => Some(Self::Verb::Invoke),
-            "view" => Some(Self::Verb::View),
-            "delete" => Some(Self::Verb::Delete),
-            "interrupt" => Some(Self::Verb::Interrupt),
-            "resume" => Some(Self::Verb::Resume),
-            "update-revision" => Some(Self::Verb::UpdateRevision),
-            "fork" => Some(Self::Verb::Fork),
-            "revert" => Some(Self::Verb::Revert),
-            "cancel-invocation" => Some(Self::Verb::CancelInvocation),
-            "activate-plugin" => Some(Self::Verb::ActivatePlugin),
-            "deactivate-plugin" => Some(Self::Verb::DeactivatePlugin),
-            _ => None,
-        }
-    }
-
-    fn parse_resource(resource: &str) -> Result<Self::Resource, CardParseError> {
-        Self::parse_resource(Self::NAME, resource)
-    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Agent(pattern)
@@ -129,29 +147,6 @@ impl PermissionClass for AgentClass {
 
 pub type AgentPermissionPattern = ClassPermissionPattern<AgentClass>;
 pub type PolymorphicAgentPermissionPattern = PolymorphicClassPermissionPattern<AgentClass>;
-
-impl AgentClass {
-    fn parse_resource(class: &str, resource: &str) -> Result<AgentResourcePattern, CardParseError> {
-        if resource == "*" {
-            Ok(AgentResourcePattern::Any)
-        } else if resource.is_empty() {
-            Ok(AgentResourcePattern::Empty)
-        } else if let Ok(index) = resource.parse::<u64>() {
-            Ok(AgentResourcePattern::OplogIndex(index))
-        } else if let Ok(uuid) = Uuid::parse_str(resource) {
-            Ok(AgentResourcePattern::InvocationId(
-                AgentInvocationIdPattern::Uuid(uuid),
-            ))
-        } else if let Ok(identifier) = AgentMethodName::parse(resource) {
-            Ok(AgentResourcePattern::Method(identifier))
-        } else {
-            Err(CardParseError::InvalidResource {
-                class: class.to_string(),
-                resource: resource.to_string(),
-            })
-        }
-    }
-}
 
 fn parse_agent_identifier(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
