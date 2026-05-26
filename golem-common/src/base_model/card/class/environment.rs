@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::ApplicationOwnerPattern;
-use crate::model::card::recipient::EnvironmentRecipientPattern;
 use nom::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_while1};
@@ -98,7 +97,6 @@ pub struct EnvironmentClass;
 impl PermissionClass for EnvironmentClass {
     type Verb = EnvironmentVerb;
     type Owner = ApplicationOwnerPattern;
-    type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentResourcePattern;
     const NAME: &'static str = "environment";
 

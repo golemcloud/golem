@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EmptyOwnerPattern;
-use crate::model::card::recipient::AccountRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,7 +53,6 @@ pub struct SystemClass;
 impl PermissionClass for SystemClass {
     type Verb = SystemVerb;
     type Owner = EmptyOwnerPattern;
-    type Recipient = AccountRecipientPattern;
     type Resource = SystemResourcePattern;
     const NAME: &'static str = "system";
 

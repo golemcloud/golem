@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
-use crate::model::card::recipient::EnvironmentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,7 +87,6 @@ pub struct EnvironmentRetryPolicyClass;
 impl PermissionClass for EnvironmentRetryPolicyClass {
     type Verb = EnvironmentRetryPolicyVerb;
     type Owner = EnvironmentOwnerPattern;
-    type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentRetryPolicyResourcePattern;
     const NAME: &'static str = "environment.retry-policy";
 

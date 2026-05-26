@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
-use crate::model::card::recipient::EnvironmentRecipientPattern;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -76,7 +75,6 @@ pub struct EnvironmentShareClass;
 impl PermissionClass for EnvironmentShareClass {
     type Verb = EnvironmentShareVerb;
     type Owner = EnvironmentOwnerPattern;
-    type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentShareResourcePattern;
     const NAME: &'static str = "environment.share";
 

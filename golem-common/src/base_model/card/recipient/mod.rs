@@ -13,56 +13,195 @@
 // limitations under the License.
 
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
 
-mod account;
-mod agent;
-mod environment;
-
-pub use account::*;
-pub use agent::*;
-pub use environment::*;
-
-#[cfg(feature = "full")]
-pub trait RecipientPattern:
-    Debug
-    + Clone
-    + PartialEq
-    + Eq
-    + Serialize
-    + for<'de> Deserialize<'de>
-    + desert_rust::BinarySerializer
-    + desert_rust::BinaryDeserializer
-    + Sized
-{
-    type Polymorphic: Debug
-        + Clone
-        + PartialEq
-        + Eq
-        + Serialize
-        + for<'de> Deserialize<'de>
-        + desert_rust::BinarySerializer
-        + desert_rust::BinaryDeserializer;
-
-    fn parse(value: &str) -> Result<Self, String>;
-    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String>;
-    fn subsumes(&self, other: &Self) -> bool;
-    fn matches_holder(&self, holder: &str) -> bool;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum RecipientPattern {
+    Any,
+    Account {
+        account: String,
+    },
+    Environment {
+        account: String,
+        application: String,
+        environment: String,
+    },
+    Agent {
+        account: String,
+        application: String,
+        environment: String,
+        component: String,
+        agent: String,
+    },
 }
 
-#[cfg(not(feature = "full"))]
-pub trait RecipientPattern:
-    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de> + Sized
-{
-    type Polymorphic: Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de>;
-
-    fn parse(value: &str) -> Result<Self, String>;
-    fn parse_polymorphic(value: &str) -> Result<Self::Polymorphic, String>;
-    fn subsumes(&self, other: &Self) -> bool;
-    fn matches_holder(&self, holder: &str) -> bool;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PolymorphicRecipientPattern {
+    Concrete(RecipientPattern),
+    Account,
+    AccountEnvironments,
+    ApplicationEnvironments,
+    Environment,
+    AccountAgents,
+    ApplicationAgents,
+    EnvironmentAgents,
+    EnvironmentAgent { component: String, agent: String },
+    ComponentAgents,
+    ComponentAgent { agent: String },
+    Self_,
 }
 
-pub(super) fn parse_anchored_segments(value: &str) -> Result<Vec<&str>, String> {
+impl RecipientPattern {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        if value == "*" {
+            return Ok(Self::Any);
+        }
+
+        match parse_anchored_segments(value)?.as_slice() {
+            [account] => Ok(Self::Account {
+                account: concrete_segment(account)?.to_string(),
+            }),
+            [account, application, environment] => Ok(Self::Environment {
+                account: concrete_segment(account)?.to_string(),
+                application: application_segment(application)?.to_string(),
+                environment: application_segment(environment)?.to_string(),
+            }),
+            [account, application, environment, component, agent] => Ok(Self::Agent {
+                account: concrete_segment(account)?.to_string(),
+                application: application_segment(application)?.to_string(),
+                environment: application_segment(environment)?.to_string(),
+                component: application_segment(component)?.to_string(),
+                agent: agent_segment(agent)?.to_string(),
+            }),
+            _ => Err(value.to_string()),
+        }
+    }
+
+    pub fn matches_holder(&self, holder: &str) -> bool {
+        let Ok(holder) = Self::parse_holder(holder) else {
+            return false;
+        };
+        self.subsumes(&holder)
+    }
+
+    pub fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Account { account: a }, other) => {
+                other.account_part().is_some_and(|account| a == account)
+            }
+            (
+                Self::Environment {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                },
+                other,
+            ) => other.environment_part().is_some_and(|(ba, bp, be)| {
+                aa == ba && segment_subsumes(ap, bp) && segment_subsumes(ae, be)
+            }),
+            (
+                Self::Agent {
+                    account: aa,
+                    application: ap,
+                    environment: ae,
+                    component: ac,
+                    agent: ag,
+                },
+                Self::Agent {
+                    account: ba,
+                    application: bp,
+                    environment: be,
+                    component: bc,
+                    agent: bg,
+                },
+            ) => {
+                aa == ba
+                    && segment_subsumes(ap, bp)
+                    && segment_subsumes(ae, be)
+                    && segment_subsumes(ac, bc)
+                    && agent_segment_subsumes(ag, bg)
+            }
+            (Self::Agent { .. }, _) => false,
+        }
+    }
+
+    fn parse_holder(value: &str) -> Result<Self, String> {
+        let segments = parse_holder_segments(value)?;
+        if segments.iter().any(|segment| *segment == "*") {
+            return Err(value.to_string());
+        }
+        Self::parse(value)
+    }
+
+    fn account_part(&self) -> Option<&str> {
+        match self {
+            Self::Any => None,
+            Self::Account { account }
+            | Self::Environment { account, .. }
+            | Self::Agent { account, .. } => Some(account),
+        }
+    }
+
+    fn environment_part(&self) -> Option<(&str, &str, &str)> {
+        match self {
+            Self::Environment {
+                account,
+                application,
+                environment,
+            }
+            | Self::Agent {
+                account,
+                application,
+                environment,
+                ..
+            } => Some((account, application, environment)),
+            Self::Any | Self::Account { .. } => None,
+        }
+    }
+}
+
+impl PolymorphicRecipientPattern {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match split_leftmost_slot(value)? {
+            Some(("?account", rest)) if rest.is_empty() => Ok(Self::Account),
+            Some(("?account", rest)) if rest.as_slice() == ["*", "*"] => {
+                Ok(Self::AccountEnvironments)
+            }
+            Some(("?account", rest)) if rest.as_slice() == ["*", "*", "*", "*"] => {
+                Ok(Self::AccountAgents)
+            }
+            Some(("?app", rest)) if rest.as_slice() == ["*"] => Ok(Self::ApplicationEnvironments),
+            Some(("?app", rest)) if rest.as_slice() == ["*", "*", "*"] => {
+                Ok(Self::ApplicationAgents)
+            }
+            Some(("?env", rest)) if rest.is_empty() => Ok(Self::Environment),
+            Some(("?env", rest)) if rest.as_slice() == ["*", "*"] => Ok(Self::EnvironmentAgents),
+            Some(("?env", rest))
+                if rest.len() == 2
+                    && valid_suffix_segment(rest[0])
+                    && valid_suffix_segment(rest[1]) =>
+            {
+                Ok(Self::EnvironmentAgent {
+                    component: rest[0].to_string(),
+                    agent: rest[1].to_string(),
+                })
+            }
+            Some(("?component", rest)) if rest.as_slice() == ["*"] => Ok(Self::ComponentAgents),
+            Some(("?component", rest)) if rest.len() == 1 && valid_suffix_segment(rest[0]) => {
+                Ok(Self::ComponentAgent {
+                    agent: rest[0].to_string(),
+                })
+            }
+            Some(("?self", rest)) if rest.is_empty() => Ok(Self::Self_),
+            Some(_) => Err(value.to_string()),
+            None => RecipientPattern::parse(value).map(Self::Concrete),
+        }
+    }
+}
+
+fn parse_anchored_segments(value: &str) -> Result<Vec<&str>, String> {
     if value.is_empty() {
         return Err(value.to_string());
     }
@@ -78,7 +217,7 @@ pub(super) fn parse_anchored_segments(value: &str) -> Result<Vec<&str>, String> 
     }
 }
 
-pub(super) fn parse_holder_segments(value: &str) -> Result<Vec<&str>, String> {
+fn parse_holder_segments(value: &str) -> Result<Vec<&str>, String> {
     let segments = parse_anchored_segments(value)?;
     match segments.len() {
         1 | 3 | 5 => Ok(segments),
@@ -86,7 +225,7 @@ pub(super) fn parse_holder_segments(value: &str) -> Result<Vec<&str>, String> {
     }
 }
 
-pub(super) fn has_segment_after_wildcard_segment(segments: &[&str]) -> bool {
+fn has_segment_after_wildcard_segment(segments: &[&str]) -> bool {
     let mut seen_wildcard = false;
     for segment in segments {
         match *segment {
@@ -98,7 +237,7 @@ pub(super) fn has_segment_after_wildcard_segment(segments: &[&str]) -> bool {
     false
 }
 
-pub(super) fn split_leftmost_slot(value: &str) -> Result<Option<(&str, Vec<&str>)>, String> {
+fn split_leftmost_slot(value: &str) -> Result<Option<(&str, Vec<&str>)>, String> {
     let segments = value.split('/').collect::<Vec<_>>();
     if segments.iter().any(|segment| segment.is_empty()) {
         return Err(value.to_string());
@@ -123,8 +262,32 @@ pub(super) fn split_leftmost_slot(value: &str) -> Result<Option<(&str, Vec<&str>
     }
 }
 
-pub(super) fn valid_suffix_segment(segment: &str) -> bool {
+fn valid_suffix_segment(segment: &str) -> bool {
     !segment.is_empty() && segment != "*" && !segment.contains('?')
+}
+
+fn concrete_segment<'a>(segment: &'a str) -> Result<&'a str, String> {
+    if segment.is_empty() || segment.contains('*') || segment.contains('?') {
+        Err(segment.to_string())
+    } else {
+        Ok(segment)
+    }
+}
+
+fn application_segment<'a>(segment: &'a str) -> Result<&'a str, String> {
+    if segment.is_empty() || segment.contains('?') {
+        Err(segment.to_string())
+    } else {
+        Ok(segment)
+    }
+}
+
+fn agent_segment<'a>(segment: &'a str) -> Result<&'a str, String> {
+    if segment.is_empty() || segment.contains('?') {
+        Err(segment.to_string())
+    } else {
+        Ok(segment)
+    }
 }
 
 fn contains_slot_reference(value: &str) -> bool {
@@ -133,7 +296,11 @@ fn contains_slot_reference(value: &str) -> bool {
         .any(|segment| segment.starts_with('?') || segment.contains("/?"))
 }
 
-pub(super) fn agent_segment_subsumes(left: &str, right: &str) -> bool {
+fn segment_subsumes(left: &str, right: &str) -> bool {
+    left == "*" || left == right
+}
+
+fn agent_segment_subsumes(left: &str, right: &str) -> bool {
     if left == right || left == "*" {
         return true;
     }

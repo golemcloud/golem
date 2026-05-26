@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EmptyOwnerPattern;
-use crate::model::card::recipient::AgentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,7 +135,6 @@ pub struct NetworkClass;
 impl PermissionClass for NetworkClass {
     type Verb = NetworkVerb;
     type Owner = EmptyOwnerPattern;
-    type Recipient = AgentRecipientPattern;
     type Resource = NetworkResourcePattern;
     const NAME: &'static str = "network";
 

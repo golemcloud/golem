@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AgentOwnerPattern;
-use crate::model::card::recipient::AgentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,7 +89,6 @@ pub struct OplogClass;
 impl PermissionClass for OplogClass {
     type Verb = OplogVerb;
     type Owner = AgentOwnerPattern;
-    type Recipient = AgentRecipientPattern;
     type Resource = OplogResourcePattern;
     const NAME: &'static str = "oplog";
 

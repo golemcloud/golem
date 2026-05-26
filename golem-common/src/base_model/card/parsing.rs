@@ -14,7 +14,7 @@
 
 use crate::base_model::card::*;
 use crate::model::card::owner::OwnerPattern;
-use crate::model::card::recipient::RecipientPattern;
+use crate::model::card::recipient::{PolymorphicRecipientPattern, RecipientPattern};
 use nom::IResult;
 use nom::bytes::complete::{tag, take_until};
 use nom::character::complete::{char, multispace0};
@@ -427,7 +427,8 @@ fn parse_class_permission<C: PermissionClass>(
         class: C::NAME.to_string(),
         owner: owner.to_string(),
     })?;
-    let recipient = C::Recipient::parse(recipient).map_err(CardParseError::InvalidRecipientPath)?;
+    let recipient =
+        RecipientPattern::parse(recipient).map_err(CardParseError::InvalidRecipientPath)?;
     let resource = C::Resource::parse_resource(resource)?;
     let pattern = if verb == "*" {
         ClassPermissionPattern::<C>::Any {
@@ -460,8 +461,8 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
             class: C::NAME.to_string(),
             owner: owner.to_string(),
         })?;
-    let recipient =
-        C::Recipient::parse_polymorphic(recipient).map_err(CardParseError::InvalidRecipientPath)?;
+    let recipient = PolymorphicRecipientPattern::parse(recipient)
+        .map_err(CardParseError::InvalidRecipientPath)?;
     if contains_slot_reference(resource) {
         return Err(CardParseError::InvalidResource {
             class: C::NAME.to_string(),

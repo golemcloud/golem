@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::ComponentOwnerPattern;
-use crate::model::card::recipient::EnvironmentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,7 +107,6 @@ pub struct EnvironmentInitialFilesClass;
 impl PermissionClass for EnvironmentInitialFilesClass {
     type Verb = EnvironmentInitialFilesVerb;
     type Owner = ComponentOwnerPattern;
-    type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentInitialFilesResourcePattern;
     const NAME: &'static str = "environment.initial-files";
 

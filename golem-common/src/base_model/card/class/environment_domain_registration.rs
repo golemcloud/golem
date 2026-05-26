@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
-use crate::model::card::recipient::EnvironmentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,7 +109,6 @@ pub struct EnvironmentDomainRegistrationClass;
 impl PermissionClass for EnvironmentDomainRegistrationClass {
     type Verb = EnvironmentDomainRegistrationVerb;
     type Owner = EnvironmentOwnerPattern;
-    type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentDomainRegistrationResourcePattern;
     const NAME: &'static str = "environment.domain-registration";
 

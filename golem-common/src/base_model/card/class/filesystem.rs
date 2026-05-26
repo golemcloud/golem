@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AgentOwnerPattern;
-use crate::model::card::recipient::AgentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,7 +107,6 @@ pub struct FilesystemClass;
 impl PermissionClass for FilesystemClass {
     type Verb = FilesystemVerb;
     type Owner = AgentOwnerPattern;
-    type Recipient = AgentRecipientPattern;
     type Resource = FilesystemResourcePattern;
     const NAME: &'static str = "filesystem";
 

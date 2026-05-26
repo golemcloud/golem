@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AccountOwnerPattern;
-use crate::model::card::recipient::AccountRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,7 +56,6 @@ pub struct AccountClass;
 impl PermissionClass for AccountClass {
     type Verb = AccountVerb;
     type Owner = AccountOwnerPattern;
-    type Recipient = AccountRecipientPattern;
     type Resource = AccountResourcePattern;
     const NAME: &'static str = "account";
 

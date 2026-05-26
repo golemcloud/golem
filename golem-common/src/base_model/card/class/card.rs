@@ -4,14 +4,14 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AccountOwnerPattern;
-use crate::model::card::recipient::{AgentRecipientPattern, RecipientPattern};
+use crate::model::card::recipient::RecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum CardResourcePattern {
     Any,
-    InstallTarget(AgentRecipientPattern),
+    InstallTarget(RecipientPattern),
 }
 
 impl CardResourcePattern {
@@ -19,7 +19,7 @@ impl CardResourcePattern {
         Self::Any
     }
 
-    pub fn install_target(target: AgentRecipientPattern) -> Self {
+    pub fn install_target(target: RecipientPattern) -> Self {
         Self::InstallTarget(target)
     }
 }
@@ -35,8 +35,7 @@ impl ResourcePattern for CardResourcePattern {
             })
         } else {
             Ok(CardResourcePattern::InstallTarget(
-                AgentRecipientPattern::parse(resource)
-                    .map_err(CardParseError::InvalidRecipientPath)?,
+                RecipientPattern::parse(resource).map_err(CardParseError::InvalidRecipientPath)?,
             ))
         }
     }
@@ -76,7 +75,6 @@ pub struct CardClass;
 impl PermissionClass for CardClass {
     type Verb = CardVerb;
     type Owner = AccountOwnerPattern;
-    type Recipient = AgentRecipientPattern;
     type Resource = CardResourcePattern;
     const NAME: &'static str = "card";
 

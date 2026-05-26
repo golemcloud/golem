@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EmptyOwnerPattern;
-use crate::model::card::recipient::AccountRecipientPattern;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -100,7 +99,6 @@ pub struct PlanClass;
 impl PermissionClass for PlanClass {
     type Verb = PlanVerb;
     type Owner = EmptyOwnerPattern;
-    type Recipient = AccountRecipientPattern;
     type Resource = PlanResourcePattern;
     const NAME: &'static str = "plan";
 

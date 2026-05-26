@@ -20,11 +20,13 @@ use crate::model::card::owner::{
     PolymorphicApplicationOwnerPattern, PolymorphicEmptyOwnerPattern,
     PolymorphicEnvironmentOwnerPattern, PolymorphicToolOwnerPattern, ToolOwnerPattern,
 };
-use crate::model::card::recipient::{
-    AccountRecipientPattern, AgentRecipientPattern, EnvironmentRecipientPattern,
-    PolymorphicAccountRecipientPattern, PolymorphicAgentRecipientPattern,
-    PolymorphicEnvironmentRecipientPattern,
-};
+use crate::model::card::recipient::{PolymorphicRecipientPattern, RecipientPattern};
+use PolymorphicRecipientPattern as PolymorphicAccountRecipientPattern;
+use PolymorphicRecipientPattern as PolymorphicAgentRecipientPattern;
+use PolymorphicRecipientPattern as PolymorphicEnvironmentRecipientPattern;
+use RecipientPattern as AccountRecipientPattern;
+use RecipientPattern as AgentRecipientPattern;
+use RecipientPattern as EnvironmentRecipientPattern;
 use pretty_assertions::assert_eq;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
@@ -366,11 +368,12 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     environment: "prod".to_string(),
                     component: "cart-svc".to_string(),
                 },
-                recipient: AgentRecipientPattern::ComponentAgents {
+                recipient: AgentRecipientPattern::Agent {
                     account: "acme".to_string(),
                     application: "shop".to_string(),
                     environment: "prod".to_string(),
                     component: "cart-svc".to_string(),
+                    agent: "*".to_string(),
                 },
                 resource: AgentResourcePattern::Any,
             }),
@@ -1038,21 +1041,19 @@ fn rejects_removed_application_credential_and_restore_forms() {
 }
 
 #[test]
-fn rejects_recipients_outside_permission_class_scope() {
+fn rejects_recipient_depths_without_holder_kind() {
     assert_eq!(
-        parse_pattern_grant("system() @ acme/shop/prod/cart/agent : create-account :"),
+        parse_pattern_grant("system() @ acme/shop : create-account :"),
         Err(CardParseError::InvalidRecipientPath(
-            "acme/shop/prod/cart/agent".to_string()
+            "acme/shop".to_string()
         ))
     );
     assert_eq!(
-        parse_pattern_grant("filesystem(acme/shop/prod/cart/agent) @ acme : read : /data/**"),
-        Err(CardParseError::InvalidRecipientPath("acme".to_string()))
-    );
-    assert_eq!(
-        parse_pattern_grant("environment(acme/shop) @ acme/shop/prod/cart/agent : deploy : prod"),
+        parse_pattern_grant(
+            "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart : read : /data/**"
+        ),
         Err(CardParseError::InvalidRecipientPath(
-            "acme/shop/prod/cart/agent".to_string()
+            "acme/shop/prod/cart".to_string()
         ))
     );
 }
@@ -1395,12 +1396,12 @@ fn rejects_polymorphic_owner_slots_with_wrong_scope() {
 #[test]
 fn rejects_undeclared_polymorphic_recipient_slots() {
     assert_eq!(
-        parse_polymorphic_pattern_grant("secret(?env) @ ?account : reveal : billing.*"),
-        Err(CardParseError::InvalidRecipientPath("?account".to_string()))
+        parse_polymorphic_pattern_grant("secret(?env) @ ?user : reveal : billing.*"),
+        Err(CardParseError::InvalidRecipientPath("?user".to_string()))
     );
     assert_eq!(
-        parse_polymorphic_pattern_grant("secret(?env) @ ?env : reveal : billing.*"),
-        Err(CardParseError::InvalidRecipientPath("?env".to_string()))
+        parse_polymorphic_pattern_grant("secret(?env) @ ?app : reveal : billing.*"),
+        Err(CardParseError::InvalidRecipientPath("?app".to_string()))
     );
 }
 

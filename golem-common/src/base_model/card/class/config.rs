@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AgentOwnerPattern;
-use crate::model::card::recipient::AgentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,7 +102,6 @@ pub struct ConfigClass;
 impl PermissionClass for ConfigClass {
     type Verb = ConfigVerb;
     type Owner = AgentOwnerPattern;
-    type Recipient = AgentRecipientPattern;
     type Resource = ConfigResourcePattern;
     const NAME: &'static str = "config";
 

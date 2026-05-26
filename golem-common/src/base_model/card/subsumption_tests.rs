@@ -14,9 +14,10 @@
 
 use super::*;
 use crate::model::card::owner::{AgentOwnerPattern, EmptyOwnerPattern, OwnerPattern};
-use crate::model::card::recipient::{
-    AccountRecipientPattern, AgentRecipientPattern, EnvironmentRecipientPattern, RecipientPattern,
-};
+use crate::model::card::recipient::RecipientPattern;
+use RecipientPattern as AccountRecipientPattern;
+use RecipientPattern as AgentRecipientPattern;
+use RecipientPattern as EnvironmentRecipientPattern;
 use chrono::Utc;
 use pretty_assertions::assert_matches;
 use test_r::core::{DynamicTestRegistration, TestProperties};
@@ -151,7 +152,6 @@ fn invalid_owner_paths_fail_subsumption() {
 fn recipient_patterns_subsume_only_matching_holder_subtrees() {
     let account = AccountRecipientPattern::parse("acme").unwrap();
     let account_environments = EnvironmentRecipientPattern::parse("acme/*/*").unwrap();
-    let application_environments = EnvironmentRecipientPattern::parse("acme/shop/*").unwrap();
     let environment = EnvironmentRecipientPattern::parse("acme/shop/prod").unwrap();
     let account_agents = AgentRecipientPattern::parse("acme/*/*/*/*").unwrap();
     let application_agents = AgentRecipientPattern::parse("acme/shop/*/*/*").unwrap();
@@ -163,14 +163,10 @@ fn recipient_patterns_subsume_only_matching_holder_subtrees() {
     assert!(account.matches_holder("acme/shop/prod"));
     assert!(account_environments.subsumes(&environment));
     assert!(account_environments.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
-    assert!(application_environments.subsumes(&environment));
-    assert!(
-        application_environments.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")")
-    );
+    assert!(environment.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
     assert!(account_agents.subsumes(&agent));
     assert!(application_agents.subsumes(&agent));
     assert!(!account_agents.matches_holder("acme/shop/prod"));
-    assert!(environment.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
     assert!(agent_type.subsumes(&agent));
     assert!(!agent.subsumes(&agent_type));
     assert!(!account.matches_holder("other/shop/prod/cart-svc/ShoppingCart(\"42\")"));
@@ -183,6 +179,11 @@ fn generate_recipient_subsumption_scope_tests(r: &mut DynamicTestRegistration) {
         ("acme/*/*", "acme/shop/prod", true),
         ("acme/*/*", "other/shop/prod", false),
         ("acme/shop/*", "acme/shop/prod", true),
+        (
+            "acme/shop/prod",
+            "acme/shop/prod/cart-svc/ShoppingCart(\"42\")",
+            true,
+        ),
         ("acme/shop/prod", "acme/shop/*", false),
     ];
 

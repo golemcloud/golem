@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
-use crate::model::card::recipient::EnvironmentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,7 +101,6 @@ pub struct EnvironmentHttpApiDeploymentClass;
 impl PermissionClass for EnvironmentHttpApiDeploymentClass {
     type Verb = EnvironmentHttpApiDeploymentVerb;
     type Owner = EnvironmentOwnerPattern;
-    type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentHttpApiDeploymentResourcePattern;
     const NAME: &'static str = "environment.http-api-deployment";
 

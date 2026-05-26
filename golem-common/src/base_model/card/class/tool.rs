@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::ToolOwnerPattern;
-use crate::model::card::recipient::AgentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,7 +127,6 @@ pub struct ToolClass;
 impl PermissionClass for ToolClass {
     type Verb = ToolVerb;
     type Owner = ToolOwnerPattern;
-    type Recipient = AgentRecipientPattern;
     type Resource = ToolResourcePattern;
     const NAME: &'static str = "tool";
 

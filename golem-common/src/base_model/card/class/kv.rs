@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
-use crate::model::card::recipient::AgentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,7 +95,6 @@ pub struct KvClass;
 impl PermissionClass for KvClass {
     type Verb = KvVerb;
     type Owner = EnvironmentOwnerPattern;
-    type Recipient = AgentRecipientPattern;
     type Resource = KvResourcePattern;
     const NAME: &'static str = "kv";
 

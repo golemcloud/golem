@@ -14,9 +14,10 @@
 
 use super::*;
 use crate::model::card::owner::AgentOwnerPattern;
-use crate::model::card::recipient::{
-    AccountRecipientPattern, AgentRecipientPattern, EnvironmentRecipientPattern, RecipientPattern,
-};
+use crate::model::card::recipient::RecipientPattern;
+use RecipientPattern as AccountRecipientPattern;
+use RecipientPattern as AgentRecipientPattern;
+use RecipientPattern as EnvironmentRecipientPattern;
 use chrono::Utc;
 use test_r::test;
 use uuid::Uuid;

@@ -48,7 +48,7 @@ mod system;
 mod tool;
 
 use super::owner::OwnerPattern;
-use super::recipient::RecipientPattern;
+use super::recipient::{PolymorphicRecipientPattern, RecipientPattern};
 use crate::base_model::card::CardParseError;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -146,7 +146,6 @@ pub trait ResourcePattern:
 pub trait PermissionClass {
     type Verb: VerbPattern;
     type Owner: OwnerPattern;
-    type Recipient: RecipientPattern;
     type Resource: ResourcePattern;
 
     const NAME: &'static str;
@@ -163,20 +162,20 @@ pub trait PermissionClass {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "C::Verb: Serialize, C::Owner: Serialize, C::Recipient: Serialize, C::Resource: Serialize",
-    deserialize = "C::Verb: Deserialize<'de>, C::Owner: Deserialize<'de>, C::Recipient: Deserialize<'de>, C::Resource: Deserialize<'de>"
+    serialize = "C::Verb: Serialize, C::Owner: Serialize, C::Resource: Serialize",
+    deserialize = "C::Verb: Deserialize<'de>, C::Owner: Deserialize<'de>, C::Resource: Deserialize<'de>"
 ))]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ClassPermissionPattern<C: PermissionClass> {
     Any {
         owner: C::Owner,
-        recipient: C::Recipient,
+        recipient: RecipientPattern,
         resource: C::Resource,
     },
     Verb {
         verb: C::Verb,
         owner: C::Owner,
-        recipient: C::Recipient,
+        recipient: RecipientPattern,
         resource: C::Resource,
     },
 }
@@ -198,7 +197,7 @@ impl<C: PermissionClass> ClassPermissionPattern<C> {
 }
 
 impl<C: PermissionClass> ClassPermissionPattern<C> {
-    fn parts(&self) -> (Option<C::Verb>, &C::Owner, &C::Recipient, &C::Resource) {
+    fn parts(&self) -> (Option<C::Verb>, &C::Owner, &RecipientPattern, &C::Resource) {
         match self {
             Self::Any {
                 owner,
@@ -217,20 +216,20 @@ impl<C: PermissionClass> ClassPermissionPattern<C> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "C::Verb: Serialize, <C::Owner as OwnerPattern>::Polymorphic: Serialize, <C::Recipient as RecipientPattern>::Polymorphic: Serialize, C::Resource: Serialize",
-    deserialize = "C::Verb: Deserialize<'de>, <C::Owner as OwnerPattern>::Polymorphic: Deserialize<'de>, <C::Recipient as RecipientPattern>::Polymorphic: Deserialize<'de>, C::Resource: Deserialize<'de>"
+    serialize = "C::Verb: Serialize, <C::Owner as OwnerPattern>::Polymorphic: Serialize, C::Resource: Serialize",
+    deserialize = "C::Verb: Deserialize<'de>, <C::Owner as OwnerPattern>::Polymorphic: Deserialize<'de>, C::Resource: Deserialize<'de>"
 ))]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicClassPermissionPattern<C: PermissionClass> {
     Any {
         owner: <C::Owner as OwnerPattern>::Polymorphic,
-        recipient: <C::Recipient as RecipientPattern>::Polymorphic,
+        recipient: PolymorphicRecipientPattern,
         resource: C::Resource,
     },
     Verb {
         verb: C::Verb,
         owner: <C::Owner as OwnerPattern>::Polymorphic,
-        recipient: <C::Recipient as RecipientPattern>::Polymorphic,
+        recipient: PolymorphicRecipientPattern,
         resource: C::Resource,
     },
 }

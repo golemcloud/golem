@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
-use crate::model::card::recipient::EnvironmentRecipientPattern;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +81,6 @@ pub struct EnvironmentPluginGrantClass;
 impl PermissionClass for EnvironmentPluginGrantClass {
     type Verb = EnvironmentPluginGrantVerb;
     type Owner = EnvironmentOwnerPattern;
-    type Recipient = EnvironmentRecipientPattern;
     type Resource = EnvironmentPluginGrantResourcePattern;
     const NAME: &'static str = "environment.plugin-grant";
 

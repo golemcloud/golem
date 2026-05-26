@@ -27,7 +27,7 @@ use crate::model::card::owner::{
     AccountOwnerPattern, AgentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern,
     ToolOwnerPattern,
 };
-use crate::model::card::recipient::AgentRecipientPattern;
+use crate::model::card::recipient::RecipientPattern;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -45,7 +45,7 @@ impl PatternGrant {
 
     pub fn filesystem_read(
         owner: AgentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         path: impl Into<String>,
     ) -> Self {
         Self::filesystem_read_pattern(owner, recipient, FilesystemResourcePattern::exact(path))
@@ -53,7 +53,7 @@ impl PatternGrant {
 
     pub fn filesystem_read_pattern(
         owner: AgentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         resource: FilesystemResourcePattern,
     ) -> Self {
         Self::new(PermissionPattern::Filesystem(
@@ -68,7 +68,7 @@ impl PatternGrant {
 
     pub fn filesystem_write(
         owner: AgentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         path: impl Into<String>,
     ) -> Self {
         Self::new(PermissionPattern::Filesystem(
@@ -82,7 +82,7 @@ impl PatternGrant {
     }
 
     pub fn network_connect(
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         host: impl Into<String>,
         ports: PortPattern,
     ) -> Self {
@@ -96,7 +96,7 @@ impl PatternGrant {
 
     pub fn env_read(
         owner: AgentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         name: impl Into<String>,
     ) -> Self {
         Self::new(PermissionPattern::Env(EnvPermissionPattern::Verb {
@@ -109,7 +109,7 @@ impl PatternGrant {
 
     pub fn oplog_read(
         owner: AgentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         resource: OplogResourcePattern,
     ) -> Self {
         Self::new(PermissionPattern::Oplog(OplogPermissionPattern::Verb {
@@ -122,7 +122,7 @@ impl PatternGrant {
 
     pub fn config_read(
         owner: AgentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         key: impl Into<String>,
     ) -> Self {
         Self::new(PermissionPattern::Config(ConfigPermissionPattern::Verb {
@@ -135,7 +135,7 @@ impl PatternGrant {
 
     pub fn secret_reveal(
         owner: EnvironmentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         key: impl Into<String>,
     ) -> Self {
         Self::new(PermissionPattern::Secret(SecretPermissionPattern::Verb {
@@ -148,7 +148,7 @@ impl PatternGrant {
 
     pub fn agent_invoke(
         owner: AgentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         method: impl Into<String>,
     ) -> Self {
         Self::new(PermissionPattern::Agent(AgentPermissionPattern::Verb {
@@ -161,7 +161,7 @@ impl PatternGrant {
 
     pub fn tool_invoke(
         owner: ToolOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         command: impl Into<String>,
     ) -> Self {
         Self::new(PermissionPattern::Tool(ToolPermissionPattern::Verb {
@@ -174,7 +174,7 @@ impl PatternGrant {
 
     pub fn kv_read(
         owner: EnvironmentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         key: impl Into<String>,
     ) -> Self {
         Self::new(PermissionPattern::Kv(KvPermissionPattern::Verb {
@@ -187,7 +187,7 @@ impl PatternGrant {
 
     pub fn blob_read(
         owner: EnvironmentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         key: impl Into<String>,
     ) -> Self {
         Self::new(PermissionPattern::Blob(BlobPermissionPattern::Verb {
@@ -200,7 +200,7 @@ impl PatternGrant {
 
     pub fn rdbms_query(
         owner: EnvironmentOwnerPattern,
-        recipient: AgentRecipientPattern,
+        recipient: RecipientPattern,
         query_target: impl Into<String>,
     ) -> Self {
         Self::new(PermissionPattern::Rdbms(RdbmsPermissionPattern::Verb {
@@ -213,8 +213,8 @@ impl PatternGrant {
 
     pub fn card_install(
         owner: AccountOwnerPattern,
-        recipient: AgentRecipientPattern,
-        target: AgentRecipientPattern,
+        recipient: RecipientPattern,
+        target: RecipientPattern,
     ) -> Self {
         Self::new(PermissionPattern::Card(CardPermissionPattern::Verb {
             verb: CardVerb::Install,

@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AccountOwnerPattern;
-use crate::model::card::recipient::AccountRecipientPattern;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -72,7 +71,6 @@ pub struct AccountTokenClass;
 impl PermissionClass for AccountTokenClass {
     type Verb = AccountTokenVerb;
     type Owner = AccountOwnerPattern;
-    type Recipient = AccountRecipientPattern;
     type Resource = AccountTokenResourcePattern;
     const NAME: &'static str = "account.token";
 

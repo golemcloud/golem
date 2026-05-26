@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AgentOwnerPattern;
-use crate::model::card::recipient::AgentRecipientPattern;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -128,7 +127,6 @@ pub struct AgentClass;
 impl PermissionClass for AgentClass {
     type Verb = AgentVerb;
     type Owner = AgentOwnerPattern;
-    type Recipient = AgentRecipientPattern;
     type Resource = AgentResourcePattern;
     const NAME: &'static str = "agent";
 

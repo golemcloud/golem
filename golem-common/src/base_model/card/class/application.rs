@@ -4,7 +4,6 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AccountOwnerPattern;
-use crate::model::card::recipient::AccountRecipientPattern;
 use nom::IResult;
 use nom::bytes::complete::take_while1;
 use nom::combinator::{all_consuming, map};
@@ -71,7 +70,6 @@ pub struct ApplicationClass;
 impl PermissionClass for ApplicationClass {
     type Verb = ApplicationVerb;
     type Owner = AccountOwnerPattern;
-    type Recipient = AccountRecipientPattern;
     type Resource = ApplicationResourcePattern;
     const NAME: &'static str = "application";
 
