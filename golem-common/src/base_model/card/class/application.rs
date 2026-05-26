@@ -1,21 +1,26 @@
 use super::*;
 use crate::base_model::card::parsing::CardParseError;
-use uuid::Uuid;
+use nom::IResult;
+use nom::bytes::complete::take_while1;
+use nom::combinator::{all_consuming, map};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ApplicationResourcePattern {
     Empty,
-    AnyCredential,
-    Credential(Uuid),
+    Application(ApplicationName),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct ApplicationName(pub String);
 
 impl Subsumes for ApplicationResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Empty, Self::Empty) => true,
-            (Self::AnyCredential, Self::AnyCredential | Self::Credential(_)) => true,
-            (Self::Credential(a), Self::Credential(b)) => a == b,
+            (Self::Application(a), Self::Application(b)) => a == b,
             _ => false,
         }
     }
@@ -27,11 +32,6 @@ pub enum ApplicationVerb {
     Create,
     Update,
     Delete,
-    Restore,
-    MintCredential,
-    RotateCredential,
-    RevokeCredential,
-    ViewCredentials,
     ListAllEnvironments,
 }
 
@@ -41,7 +41,7 @@ pub struct ApplicationClass;
 
 impl PermissionClass for ApplicationClass {
     type Verb = ApplicationVerb;
-    type Owner = ApplicationOwnerPattern;
+    type Owner = AccountOwnerPattern;
     type Recipient = AccountRecipientPattern;
     type Resource = ApplicationResourcePattern;
     const NAME: &'static str = "application";
@@ -52,11 +52,6 @@ impl PermissionClass for ApplicationClass {
             "create" => Some(Self::Verb::Create),
             "update" => Some(Self::Verb::Update),
             "delete" => Some(Self::Verb::Delete),
-            "restore" => Some(Self::Verb::Restore),
-            "mint-credential" => Some(Self::Verb::MintCredential),
-            "rotate-credential" => Some(Self::Verb::RotateCredential),
-            "revoke-credential" => Some(Self::Verb::RevokeCredential),
-            "view-credentials" => Some(Self::Verb::ViewCredentials),
             "list-all-environments" => Some(Self::Verb::ListAllEnvironments),
             _ => None,
         }
@@ -88,20 +83,28 @@ impl ApplicationClass {
     ) -> Result<ApplicationResourcePattern, CardParseError> {
         if resource.is_empty() {
             Ok(ApplicationResourcePattern::Empty)
-        } else if resource == "cred=*" {
-            Ok(ApplicationResourcePattern::AnyCredential)
-        } else if let Some(credential_id) = resource.strip_prefix("cred=") {
-            Uuid::parse_str(credential_id)
-                .map(ApplicationResourcePattern::Credential)
-                .map_err(|_| CardParseError::InvalidResource {
-                    class: class.to_string(),
-                    resource: resource.to_string(),
-                })
         } else {
-            Err(CardParseError::InvalidResource {
+            parse_application_resource(resource).map_err(|_| CardParseError::InvalidResource {
                 class: class.to_string(),
                 resource: resource.to_string(),
             })
         }
     }
+}
+
+fn parse_application_resource(resource: &str) -> Result<ApplicationResourcePattern, String> {
+    all_consuming(application_resource)(resource)
+        .map(|(_, resource)| resource)
+        .map_err(|_| resource.to_string())
+}
+
+fn application_resource(input: &str) -> IResult<&str, ApplicationResourcePattern> {
+    map(application_name, ApplicationResourcePattern::Application)(input)
+}
+
+fn application_name(input: &str) -> IResult<&str, ApplicationName> {
+    map(
+        take_while1(|c: char| c != ':' && c != '/' && !c.is_whitespace()),
+        |value: &str| ApplicationName(value.to_string()),
+    )(input)
 }

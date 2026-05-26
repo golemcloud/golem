@@ -216,7 +216,7 @@ fn generate_declared_permission_class_parser_tests(r: &mut DynamicTestRegistrati
             "account.plugin(acme) @ acme : view : plugin-a",
             "account.plugin",
         ),
-        ("application(acme/shop) @ acme : view :", "application"),
+        ("application(acme) @ acme : view : shop", "application"),
         (
             "environment(acme/shop) @ acme/shop/prod : view : prod",
             "environment",
@@ -445,13 +445,11 @@ fn parses_admin_class_examples() {
 fn parses_spec_specific_resource_shapes() {
     let credential_id = "550e8400-e29b-41d4-a716-446655440000";
     assert_matches!(
-        parsed_permission(&format!(
-            "application(acme/shop) @ acme : view-credentials : cred={credential_id}"
-        )),
+        parsed_permission("application(acme) @ acme : view : shop"),
         PermissionPattern::Application(ApplicationPermissionPattern::Verb {
-            resource: ApplicationResourcePattern::Credential(id),
+            resource: ApplicationResourcePattern::Application(application),
             ..
-        }) if id.to_string() == credential_id
+        }) if application == ApplicationName("shop".to_string())
     );
 
     assert_matches!(

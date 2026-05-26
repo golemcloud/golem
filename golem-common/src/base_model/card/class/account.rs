@@ -19,7 +19,6 @@ pub enum AccountVerb {
     Delete,
     SetRoles,
     SetPlan,
-    Restore,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,7 +39,6 @@ impl PermissionClass for AccountClass {
             "delete" => Some(Self::Verb::Delete),
             "set-roles" => Some(Self::Verb::SetRoles),
             "set-plan" => Some(Self::Verb::SetPlan),
-            "restore" => Some(Self::Verb::Restore),
             _ => None,
         }
     }
