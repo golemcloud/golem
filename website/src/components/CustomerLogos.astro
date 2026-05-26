@@ -1,0 +1,122 @@
+---
+import { Image } from "astro:assets";
+import type { ImageMetadata } from "astro";
+import { customerLogos } from "../data/homepage";
+
+// Eager-import every logo so Astro emits optimized variants at build time.
+// Look up by filename from the data file.
+const logoModules = import.meta.glob<{ default: ImageMetadata }>(
+  "../assets/logo/*.{png,jpg,jpeg,svg,webp}",
+  { eager: true }
+);
+const logosByFile = Object.fromEntries(
+  Object.entries(logoModules).map(([path, mod]) => [path.split("/").pop()!, mod.default])
+);
+
+const { placeholders, showAtLaunch } = customerLogos;
+---
+
+{
+  showAtLaunch && (
+    <section class="logos-section">
+      <div class="logos-bar">
+        <div class="logos-strip">
+          {placeholders.map((logo) =>
+            logo.kind === "image" && logo.filename ? (
+              <div class={logo.invertOnDarkBg ? "logo-real logo-invert" : "logo-real"}>
+                <Image
+                  src={logosByFile[logo.filename]}
+                  alt={logo.alt ?? ""}
+                  widths={[140, 280]}
+                  sizes="140px"
+                />
+              </div>
+            ) : (
+              <div class="logo-placeholder" aria-label={`${logo.name} (placeholder)`}>
+                <span>{logo.name}</span>
+              </div>
+            )
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+<style>
+  .logos-section {
+    padding: 0;
+  }
+  .logos-bar {
+    width: 100%;
+    background: var(--bg-card);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .logos-bar::-webkit-scrollbar {
+    display: none;
+  }
+  .logos-strip {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: center;
+    align-items: center;
+    gap: 2.25rem;
+    padding: 1.5rem 2rem;
+    width: max-content;
+    min-width: 100%;
+    margin: 0 auto;
+    box-sizing: border-box;
+  }
+  .logo-placeholder {
+    height: 40px;
+    width: 140px;
+    flex: 0 0 140px;
+    border: 1px dashed var(--text-muted);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-family: var(--font-mono);
+    letter-spacing: 0.02em;
+    background: var(--bg);
+    opacity: 0.85;
+    transition:
+      opacity 150ms,
+      color 150ms;
+  }
+  .logo-placeholder:hover {
+    opacity: 1;
+    color: var(--text);
+  }
+  .logo-real {
+    height: 40px;
+    width: 140px;
+    flex: 0 0 140px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.85;
+    transition: opacity 150ms;
+  }
+  .logo-real:hover {
+    opacity: 1;
+  }
+  .logo-real img {
+    max-height: 32px;
+    max-width: 130px;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+  }
+  .logo-invert img {
+    filter: invert(1);
+  }
+</style>

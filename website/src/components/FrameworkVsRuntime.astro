@@ -1,0 +1,224 @@
+---
+import { frameworkVsRuntime } from "../data/homepage";
+
+const { eyebrow, heading, leadHtml, columns, rows, closer } = frameworkVsRuntime;
+
+const icons: Record<string, string> = {
+  cells: `<rect x="3" y="3" width="7" height="7" rx="1.5" />
+    <rect x="14" y="3" width="7" height="7" rx="1.5" />
+    <rect x="3" y="14" width="7" height="7" rx="1.5" />
+    <rect x="14" y="14" width="7" height="7" rx="1.5" />`,
+  stack: `<ellipse cx="12" cy="5.5" rx="8" ry="2.5" />
+    <path d="M4 5.5v13c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-13" />
+    <path d="M4 11.5c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5" />`,
+  cycle: `<path d="M21 12a9 9 0 1 1-3-6.7" stroke-linecap="round" />
+    <path d="M21 4v5h-5" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="m8.5 12 2.5 2.5L16 9" stroke-linecap="round" stroke-linejoin="round" />`,
+  bounded: `<rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="2 2" />
+    <rect x="8" y="8" width="8" height="8" rx="1" />`,
+  brackets: `<path d="M9 5 4 12l5 7" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="m15 5 5 7-5 7" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M13 5 11 19" stroke-linecap="round" />`,
+};
+---
+
+<section class="framework-vs-runtime">
+  <div class="container">
+    <header class="fvr-header">
+      <span class="eyebrow">{eyebrow}</span>
+      <h2 class="section-heading">{heading}</h2>
+      <p class="fvr-lead" set:html={leadHtml} />
+    </header>
+
+    <div class="fvr-table" role="table" aria-label="Framework vs Golem runtime comparison">
+      <div class="fvr-row fvr-row-header" role="row">
+        <div class="fvr-cell fvr-cell-icon" role="columnheader" aria-hidden="true"></div>
+        <div class="fvr-cell fvr-cell-framework fvr-cell-head" role="columnheader">
+          {columns.framework}
+        </div>
+        <div class="fvr-cell fvr-cell-golem fvr-cell-head" role="columnheader">{columns.golem}</div>
+        <div class="fvr-cell fvr-cell-why fvr-cell-head" role="columnheader">{columns.why}</div>
+      </div>
+      {
+        rows.map((row) => (
+          <div class="fvr-row" role="row">
+            <div class="fvr-cell fvr-cell-icon" role="cell" aria-hidden="true">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                set:html={icons[row.icon]}
+              />
+            </div>
+            <div class="fvr-cell fvr-cell-framework" role="cell">
+              <div class="fvr-label">{columns.framework}</div>
+              <div class="fvr-content">{row.framework}</div>
+            </div>
+            <div class="fvr-cell fvr-cell-golem" role="cell">
+              <div class="fvr-label">{columns.golem}</div>
+              <div class="fvr-content">{row.golem}</div>
+            </div>
+            <div class="fvr-cell fvr-cell-why" role="cell">
+              <div class="fvr-label">{columns.why}</div>
+              <div class="fvr-content">{row.why}</div>
+            </div>
+          </div>
+        ))
+      }
+    </div>
+
+    {closer && <p class="fvr-closer">{closer}</p>}
+  </div>
+</section>
+
+<style>
+  .framework-vs-runtime {
+    padding: 5rem 0 5.5rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .fvr-header {
+    margin-bottom: 2.5rem;
+    max-width: 720px;
+  }
+  .section-heading {
+    font-size: clamp(1.6rem, 2.6vw, 2.1rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.18;
+    color: var(--text);
+    margin-bottom: 0.85rem;
+    margin-top: 0.5rem;
+  }
+  .fvr-lead {
+    font-size: 1.02rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+  }
+
+  .fvr-table {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg-card);
+  }
+  .fvr-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    border-bottom: 1px solid var(--border);
+  }
+  .fvr-row:last-child {
+    border-bottom: none;
+  }
+
+  /* Header row hidden on mobile (labels per-cell), shown on desktop */
+  .fvr-row-header {
+    display: none;
+  }
+
+  .fvr-cell {
+    padding: 1.1rem 1.25rem;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    border-bottom: 1px solid var(--border);
+  }
+  .fvr-cell:last-child {
+    border-bottom: none;
+  }
+
+  .fvr-cell-icon {
+    color: var(--accent);
+    padding-bottom: 0.4rem;
+  }
+  .fvr-cell-icon svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+  }
+
+  .fvr-label {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+  }
+
+  .fvr-cell-framework .fvr-content {
+    color: var(--text-secondary);
+  }
+  .fvr-cell-golem .fvr-content {
+    color: var(--text);
+  }
+  .fvr-cell-why .fvr-content {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  /* Desktop layout */
+  @media (min-width: 880px) {
+    .fvr-row-header {
+      display: grid;
+      grid-template-columns: 56px 1.1fr 1.1fr 0.95fr;
+      background: var(--bg-elevated);
+    }
+    .fvr-row-header .fvr-cell {
+      border-bottom: none;
+      padding-top: 0.95rem;
+      padding-bottom: 0.95rem;
+    }
+    .fvr-row:not(.fvr-row-header) {
+      grid-template-columns: 56px 1.1fr 1.1fr 0.95fr;
+    }
+    .fvr-row:not(.fvr-row-header) .fvr-cell {
+      border-bottom: none;
+      border-right: 1px solid var(--border);
+    }
+    .fvr-row:not(.fvr-row-header) .fvr-cell:last-child {
+      border-right: none;
+    }
+    .fvr-row:not(.fvr-row-header) .fvr-cell-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.1rem 0.5rem;
+    }
+    .fvr-row-header .fvr-cell {
+      border-right: 1px solid var(--border);
+    }
+    .fvr-row-header .fvr-cell:last-child {
+      border-right: none;
+    }
+    .fvr-label {
+      display: none;
+    }
+    .fvr-cell-head {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    .fvr-cell-head.fvr-cell-golem {
+      color: var(--text);
+    }
+    .fvr-cell-head.fvr-cell-why {
+      color: var(--accent);
+    }
+  }
+
+  .fvr-closer {
+    margin-top: 2rem;
+    text-align: center;
+    font-size: 1rem;
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 500;
+    letter-spacing: -0.005em;
+  }
+</style>

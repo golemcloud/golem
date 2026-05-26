@@ -1,0 +1,168 @@
+---
+import { Code } from "astro:components";
+import { quickstart } from "../data/homepage";
+
+const { headingLines, lead, installCommand, primaryCtas, secondaryLinks } = quickstart;
+---
+
+<section class="quickstart" id="quickstart">
+  <div class="container quickstart-inner">
+    <header class="qs-header">
+      <h2 class="qs-heading">
+        {
+          headingLines.map((line, i) => (
+            <>
+              {i > 0 && <br />}
+              {line}
+            </>
+          ))
+        }
+      </h2>
+      <p class="qs-lead">{lead}</p>
+    </header>
+
+    <div class="qs-install">
+      <Code code={installCommand} lang="bash" theme="github-dark-default" />
+      <button class="copy-btn" aria-label="Copy install command" data-copy-text={installCommand}
+        >copy</button
+      >
+    </div>
+
+    <div class="qs-links">
+      {
+        primaryCtas.map((cta) => (
+          <a
+            href={cta.href}
+            class:list={["btn", cta.variant === "primary" ? "btn-primary" : "btn-secondary"]}
+          >
+            {cta.label}
+          </a>
+        ))
+      }
+    </div>
+
+    <div class="qs-secondary">
+      {
+        secondaryLinks.map((link) => (
+          <a href={link.href} class="qs-link" set:html={link.labelHtml} />
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>(".copy-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const text = btn.dataset.copyText;
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        const original = btn.textContent;
+        btn.textContent = "copied";
+        setTimeout(() => {
+          btn.textContent = original;
+        }, 1400);
+      } catch {
+        btn.textContent = "failed";
+        setTimeout(() => {
+          btn.textContent = "copy";
+        }, 1400);
+      }
+    });
+  });
+</script>
+
+<style>
+  .quickstart {
+    padding: 6rem 0 7rem;
+    position: relative;
+    border-top: 1px solid var(--border);
+  }
+  .quickstart::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(
+      ellipse 600px 300px at 50% 0%,
+      rgba(245, 176, 62, 0.08),
+      transparent 70%
+    );
+    pointer-events: none;
+    z-index: -1;
+  }
+  .quickstart-inner {
+    max-width: 760px;
+    text-align: center;
+  }
+  .qs-header {
+    margin-bottom: 2.5rem;
+  }
+  .qs-heading {
+    font-size: clamp(1.7rem, 3vw, 2.4rem);
+    font-weight: 600;
+    letter-spacing: -0.022em;
+    line-height: 1.15;
+    margin-bottom: 1rem;
+    color: var(--text);
+  }
+  .qs-lead {
+    font-size: 1.05rem;
+    color: var(--text-secondary);
+    max-width: 580px;
+    margin: 0 auto;
+    line-height: 1.55;
+  }
+  .qs-install {
+    position: relative;
+    text-align: left;
+    margin-bottom: 2rem;
+  }
+  .qs-install :global(pre.astro-code) {
+    font-size: 0.85rem;
+    padding: 1.25rem 1.5rem !important;
+  }
+  .copy-btn {
+    position: absolute;
+    top: 0.85rem;
+    right: 0.85rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    padding: 0.3rem 0.65rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    transition: all 120ms;
+  }
+  .copy-btn:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
+  }
+  .qs-links {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 1.75rem;
+  }
+  .qs-secondary {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    flex-wrap: wrap;
+    font-size: 0.88rem;
+  }
+  .qs-link {
+    color: var(--text-secondary);
+  }
+  .qs-link :global(strong) {
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .qs-link:hover {
+    color: var(--text);
+  }
+</style>

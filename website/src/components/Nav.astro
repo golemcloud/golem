@@ -1,0 +1,140 @@
+---
+import { Image } from "astro:assets";
+import { navItems } from "../data/nav";
+import { site, urls } from "../data/site";
+import { getGitHubStars } from "../lib/github-stars";
+import brandLogo from "../assets/logo/golem-horizontal-white.png";
+
+const stars = await getGitHubStars();
+---
+
+<header class="nav">
+  <div class="container nav-inner">
+    <a href="/" class="brand" aria-label={`${site.brand.name} home`}>
+      <Image src={brandLogo} alt={site.brand.name} class="brand-logo" widths={[120, 240]} sizes="120px" />
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      {navItems.map((item) => <a href={item.href}>{item.label}</a>)}
+    </nav>
+    <div class="nav-cta">
+      <a
+        href={urls.discord}
+        class="icon-btn"
+        aria-label="Discord community"
+        target="_blank"
+        rel="noopener"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path
+            d="M20.317 4.369A19.79 19.79 0 0 0 15.886 3a14.6 14.6 0 0 0-.671 1.376 18.36 18.36 0 0 0-5.43 0A14.6 14.6 0 0 0 9.114 3a19.85 19.85 0 0 0-4.435 1.37C2.066 8.234 1.36 11.99 1.71 15.69a19.9 19.9 0 0 0 6.073 3.07c.488-.668.92-1.378 1.293-2.124a12.85 12.85 0 0 1-2.04-.978c.171-.125.338-.255.5-.39a14.205 14.205 0 0 0 12.93 0c.163.135.33.265.5.39-.652.388-1.337.717-2.04.978.373.746.805 1.456 1.293 2.124a19.9 19.9 0 0 0 6.073-3.07c.412-4.279-.703-7.999-2.974-11.32ZM8.515 13.713c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.953-2.42 2.157-2.42 1.205 0 2.18 1.087 2.158 2.42 0 1.334-.953 2.42-2.158 2.42Zm6.97 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.953-2.42 2.157-2.42 1.205 0 2.18 1.087 2.158 2.42 0 1.334-.953 2.42-2.158 2.42Z"
+          ></path>
+        </svg>
+      </a>
+      <a
+        href={urls.github}
+        class="icon-btn"
+        aria-label="GitHub repository"
+        target="_blank"
+        rel="noopener"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path
+            d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55 0-.27-.01-.99-.02-1.95-3.2.69-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.67 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.17a11.05 11.05 0 0 1 5.78 0c2.2-1.48 3.17-1.17 3.17-1.17.63 1.58.23 2.75.11 3.04.74.8 1.18 1.82 1.18 3.07 0 4.4-2.69 5.38-5.25 5.66.41.36.78 1.06.78 2.14 0 1.55-.01 2.8-.01 3.18 0 .31.21.67.8.55A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"
+          ></path>
+        </svg>
+        {stars && <span class="star-count mono">{stars}</span>}
+      </a>
+      <a href={urls.quickstart} class="btn btn-primary nav-btn">Get started →</a>
+    </div>
+  </div>
+</header>
+
+<style>
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(10, 10, 13, 0.7);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 60px;
+    gap: 2rem;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    color: var(--text);
+  }
+  .brand:hover {
+    color: var(--text);
+  }
+  .brand-logo {
+    height: 28px;
+    width: auto;
+    display: block;
+  }
+  .nav-links {
+    display: flex;
+    gap: 1.7rem;
+    font-size: 0.92rem;
+  }
+  .nav-links a {
+    color: var(--text-secondary);
+  }
+  .nav-links a:hover {
+    color: var(--text);
+  }
+  .nav-cta {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.65rem;
+    color: var(--text-secondary);
+    border-radius: 6px;
+    line-height: 1;
+    transition:
+      color 150ms,
+      background 150ms;
+  }
+  .icon-btn:hover {
+    color: var(--text);
+    background: var(--bg-card);
+  }
+  .icon-btn svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+    flex: 0 0 18px;
+  }
+  .star-count {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  .nav-btn {
+    padding: 0.5rem 0.95rem;
+    font-size: 0.88rem;
+  }
+  .icon-btn:hover .star-count {
+    color: var(--text);
+  }
+  @media (max-width: 720px) {
+    .nav-links {
+      display: none;
+    }
+    .star-count {
+      display: none;
+    }
+  }
+</style>

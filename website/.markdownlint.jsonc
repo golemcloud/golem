@@ -1,0 +1,40 @@
+{
+  // Disable rules that conflict with our blog content or are stylistic-only.
+  "default": true,
+
+  // MD013 line-length — disabled for prose. Blog bodies are not column-wrapped.
+  "MD013": false,
+
+  // MD033 inline HTML — we use <!-- comments --> and rare HTML inside posts.
+  "MD033": false,
+
+  // MD036 emphasis-as-heading — some posts use **Foo.** as inline emphasis legitimately.
+  "MD036": false,
+
+  // MD041 first-line-must-be-H1 — our posts start with YAML frontmatter; H1 comes from the title field.
+  "MD041": false,
+
+  // MD024 duplicate-headings — siblings sometimes share section names across long posts.
+  "MD024": { "siblings_only": true },
+
+  // MD034 bare URLs — links are sometimes raw inline.
+  "MD034": false,
+
+  // MD026 trailing punctuation in headings — we use "Persists state." style.
+  "MD026": false,
+
+  // MD001 heading-increment — some imported posts skip H1→H3; not a formatting concern.
+  "MD001": false,
+
+  // MD040 fenced-code-language — generic code/output blocks (e.g., oplog dumps) intentionally lack a language.
+  "MD040": false,
+
+  // MD014 dollar-signs-without-output — shell sessions show prompts without paired output.
+  "MD014": false,
+
+  // MD059 descriptive-link-text — historical posts use "[here]" / "[click here]" style; not worth bulk-rewriting.
+  "MD059": false,
+
+  // MD060 table-column-style — table pipes don't always have flanking spaces; cosmetic only.
+  "MD060": false
+}

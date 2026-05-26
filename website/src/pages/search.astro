@@ -1,0 +1,118 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<BaseLayout title="Search — Golem" description="Search Golem blog posts and pages.">
+  <Nav />
+  <main class="search-main">
+    <div class="container search-container">
+      <header class="search-header">
+        <span class="eyebrow">Search</span>
+        <h1 class="search-title">Search the blog.</h1>
+        <p class="search-lead">
+          Full-text search across all Golem blog posts. Indexed at build time with Pagefind.
+        </p>
+      </header>
+      <link rel="stylesheet" href="/pagefind/pagefind-ui.css" />
+      <div id="search"></div>
+      <noscript>
+        <p class="fallback">
+          Search requires JavaScript. <a href="/blog">Browse all posts</a> or <a href="/tags"
+            >browse tags</a
+          >.
+        </p>
+      </noscript>
+    </div>
+  </main>
+  <Footer />
+</BaseLayout>
+
+<script>
+  // Pagefind is only generated at build time; the script lives at /pagefind/pagefind-ui.js
+  // and serves the indexed dist/ output. In dev (astro dev) the script 404s — that's expected.
+  if (typeof window !== "undefined") {
+    const ensureLoaded = () => {
+      if ((window as any).PagefindUI) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "/pagefind/pagefind-ui.js";
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error("Pagefind not available — run a production build."));
+        document.head.appendChild(s);
+      });
+    };
+    window.addEventListener("DOMContentLoaded", () => {
+      ensureLoaded()
+        .then(() => {
+          new (window as any).PagefindUI({
+            element: "#search",
+            showSubResults: true,
+            showImages: false,
+            resetStyles: false,
+          });
+        })
+        .catch(() => {
+          const el = document.getElementById("search");
+          if (el)
+            el.innerHTML =
+              '<p class="fallback">Search index not available in dev mode. Run <code>npm run build &amp;&amp; npm run preview</code> to test search.</p>';
+        });
+    });
+  }
+</script>
+
+<style is:global>
+  :root {
+    --pagefind-ui-primary: var(--accent);
+    --pagefind-ui-text: var(--text);
+    --pagefind-ui-background: var(--bg-card);
+    --pagefind-ui-border: var(--border);
+    --pagefind-ui-tag: var(--bg);
+    --pagefind-ui-border-width: 1px;
+    --pagefind-ui-border-radius: 6px;
+    --pagefind-ui-font: var(--font-sans);
+  }
+</style>
+
+<style>
+  .search-main {
+    padding: clamp(3rem, 6vw, 5rem) 0 clamp(4rem, 7vw, 6rem);
+  }
+  .search-container {
+    max-width: 760px;
+  }
+  .search-header {
+    margin-bottom: 2.25rem;
+  }
+  .search-title {
+    font-size: clamp(2rem, 4vw, 2.6rem);
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.022em;
+    margin: 0.5rem 0 0.85rem;
+  }
+  .search-lead {
+    color: var(--text-secondary);
+    line-height: 1.6;
+    max-width: 580px;
+    font-size: 1rem;
+    margin: 0;
+  }
+  .fallback {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+  .fallback :global(a) {
+    color: var(--accent);
+  }
+  .fallback :global(code) {
+    background: var(--bg-card);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+  }
+</style>

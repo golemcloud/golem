@@ -28,6 +28,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, OwnedAgentId, ShardId,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -206,9 +207,16 @@ impl WorkerService for DefaultWorkerService {
                     .component_service
                     .get_metadata(agent_id.component_id, Some(component_revision))
                     .await
+                    .map_or_else(
+                        |e| match e {
+                            WorkerExecutorError::ComponentNotFound { .. } => Ok(None),
+                            other => Err(other),
+                        },
+                        |v| Ok(Some(v)),
+                    )
                     .unwrap_or_else(|err| {
                         panic!("failed to get component metadata for {owned_agent_id}: {err}")
-                    });
+                    })?;
 
                 let config = local_agent_config
                     .into_iter()

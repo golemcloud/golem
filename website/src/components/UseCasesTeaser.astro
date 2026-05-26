@@ -1,0 +1,111 @@
+---
+// Quiet teaser pointing at /use-cases.
+// Four most-recognized agent shapes; "See all →" handles the rest.
+
+const useCases = [
+  "Customer support",
+  "Coding & dev agents",
+  "Internal data copilots",
+  "Voice & chat agents",
+];
+---
+
+<section class="use-cases-teaser">
+  <div class="teaser-bar">
+    <div class="teaser-row">
+      <span class="teaser-eyebrow">Use cases</span>
+      <span class="teaser-divider teaser-divider-header" aria-hidden="true"></span>
+      <span class="teaser-list">
+        {
+          useCases.map((label, i) => (
+            <>
+              {i > 0 && <span class="teaser-divider" aria-hidden="true" />}
+              <a href="/use-cases" class="teaser-link">
+                {label}
+              </a>
+            </>
+          ))
+        }
+        <a href="/use-cases" class="btn btn-primary teaser-cta-btn">See all →</a>
+      </span>
+    </div>
+  </div>
+</section>
+
+<style>
+  .use-cases-teaser {
+    padding: 0;
+  }
+  .teaser-bar {
+    width: 100%;
+    background: var(--bg-card);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .teaser-row {
+    max-width: var(--container);
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0.6rem 1.25rem;
+  }
+  /* Header on the left, list immediately after the header-divider,
+     "See all →" pushed to the right with margin-left:auto. */
+  .teaser-list {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0 1.5rem;
+  }
+  /* Mono uppercase amber to match the global .eyebrow convention,
+     but slightly larger than the items so it still reads as a header. */
+  .teaser-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    flex-shrink: 0;
+    align-self: center;
+  }
+  .teaser-link {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    line-height: 1.3;
+    transition: color 120ms;
+    white-space: nowrap;
+    align-self: center;
+  }
+  .teaser-link:hover {
+    color: var(--text);
+  }
+  /* Vertical partial line between items — same treatment as MetricBar. */
+  .teaser-divider {
+    flex: 0 0 1px;
+    align-self: stretch;
+    background: var(--border);
+    margin: 0.35rem 0;
+  }
+  /* Slightly taller divider between the header and the link list,
+     since the header sits at a larger font size. */
+  .teaser-divider-header {
+    margin: 0.15rem 0;
+  }
+  /* "See all →" rendered as a button — same proportions as the
+     navbar's "Get started →" button. */
+  .teaser-cta-btn {
+    padding: 0.5rem 0.95rem;
+    font-size: 0.88rem;
+    align-self: center;
+    margin-left: 0.5rem;
+  }
+  .teaser-all:hover {
+    color: var(--accent-hover);
+  }
+</style>

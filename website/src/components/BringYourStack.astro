@@ -1,0 +1,97 @@
+---
+import { bringStack, frameworks, frameworksLabel, frameworksNote } from "../data/homepage";
+---
+
+<section class="bring-stack">
+  <div class="container">
+    <div class="bring-grid">
+      <div class="bring-text">
+        <span class="eyebrow">{bringStack.eyebrow}</span>
+        <h2 class="section-heading">{bringStack.heading}</h2>
+        {bringStack.paragraphsHtml.map((p) => <p set:html={p} />)}
+      </div>
+      <aside class="frameworks-strip" aria-label="Compatible frameworks">
+        <div class="frameworks-label muted">{frameworksLabel}</div>
+        <ul>
+          {
+            frameworks.map((name) => (
+              <li class="framework-chip">
+                <span class="chip-dot" aria-hidden="true" />
+                {name}
+              </li>
+            ))
+          }
+        </ul>
+        <p class="frameworks-note faint">{frameworksNote}</p>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<style>
+  .bring-stack {
+    padding: 4.5rem 0 5rem;
+    border-top: 1px solid var(--border);
+  }
+  .bring-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+    align-items: start;
+  }
+  @media (min-width: 900px) {
+    .bring-grid {
+      grid-template-columns: 1.4fr 1fr;
+      gap: 4rem;
+    }
+  }
+  .bring-text p {
+    margin-bottom: 1rem;
+    font-size: 0.98rem;
+    line-height: 1.6;
+  }
+  .bring-text p :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .frameworks-strip {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem 1.4rem;
+  }
+  .frameworks-label {
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+  }
+  .frameworks-strip ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+  .framework-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+  }
+  .chip-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent-dim);
+  }
+  .frameworks-note {
+    margin-top: 1.2rem;
+    font-size: 0.78rem;
+    font-style: italic;
+    border-top: 1px solid var(--border);
+    padding-top: 0.85rem;
+  }
+</style>

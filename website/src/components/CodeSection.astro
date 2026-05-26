@@ -1,0 +1,145 @@
+---
+import { Code } from "astro:components";
+import { codeSection } from "../data/homepage";
+
+const { eyebrow, heading, lead, tabs, snippets, defaultLang } = codeSection;
+---
+
+<section class="code-section">
+  <div class="container code-inner">
+    <header class="code-header-block">
+      <span class="eyebrow">{eyebrow}</span>
+      <h2 class="section-heading">{heading}</h2>
+      <p class="code-lead">{lead}</p>
+    </header>
+
+    <div class="code-block" data-active={defaultLang}>
+      <div class="code-header">
+        <div class="code-tabs" role="tablist">
+          {
+            tabs.map((t) => (
+              <button
+                class:list={["tab", { active: t.id === defaultLang }]}
+                data-lang={t.id}
+                data-filename={t.filename}
+                role="tab"
+                aria-selected={t.id === defaultLang}
+              >
+                {t.label}
+              </button>
+            ))
+          }
+        </div>
+        <span class="code-filename mono" data-filename-display
+          >{tabs.find((t) => t.id === defaultLang)?.filename}</span
+        >
+      </div>
+      {
+        tabs.map((t) => (
+          <div class="code-pane" data-lang={t.id} hidden={t.id !== defaultLang}>
+            <Code code={snippets[t.id]} lang={t.lang as any} theme="github-dark-default" />
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<script>
+  // Tab-switching: clicking a tab swaps the visible pane and updates the filename
+  document.querySelectorAll<HTMLElement>(".code-block").forEach((block) => {
+    const tabs = block.querySelectorAll<HTMLButtonElement>(".tab");
+    const panes = block.querySelectorAll<HTMLElement>(".code-pane");
+    const filenameDisplay = block.querySelector<HTMLElement>("[data-filename-display]");
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const lang = tab.dataset.lang;
+        const filename = tab.dataset.filename;
+        tabs.forEach((t) => {
+          const on = t === tab;
+          t.classList.toggle("active", on);
+          t.setAttribute("aria-selected", String(on));
+        });
+        panes.forEach((p) => {
+          p.hidden = p.dataset.lang !== lang;
+        });
+        if (filenameDisplay && filename) filenameDisplay.textContent = filename;
+        if (lang) block.dataset.active = lang;
+      });
+    });
+  });
+</script>
+
+<style>
+  .code-section {
+    padding: 4rem 0 5rem;
+  }
+  .code-inner {
+    max-width: 900px;
+  }
+  .code-header-block {
+    margin-bottom: 2rem;
+    max-width: 720px;
+  }
+  .section-heading {
+    font-size: clamp(1.6rem, 2.6vw, 2.1rem);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.18;
+    color: var(--text);
+    margin: 0.5rem 0 0.85rem;
+  }
+  .code-lead {
+    font-size: 1.02rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+  }
+  .code-block {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--code-bg);
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  }
+  .code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.45rem 0.7rem 0.45rem 0.9rem;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+  }
+  .code-tabs {
+    display: flex;
+    gap: 0.3rem;
+  }
+  .tab {
+    color: var(--text-muted);
+    padding: 0.35rem 0.85rem;
+    font-size: 0.82rem;
+    font-weight: 500;
+    border-radius: 5px;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    font-family: inherit;
+  }
+  .tab.active {
+    color: var(--text);
+    background: var(--bg-card);
+  }
+  .tab:not(.active):hover {
+    color: var(--text-secondary);
+  }
+  .code-filename {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+  }
+  .code-block :global(pre.astro-code) {
+    border: 0 !important;
+    border-radius: 0 !important;
+    margin: 0;
+    background: var(--code-bg) !important;
+    padding: 1.25rem 1.5rem !important;
+  }
+</style>

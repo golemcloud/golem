@@ -1,0 +1,55 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<BaseLayout title="Page not found — Golem" description="The page you're looking for doesn't exist.">
+  <Nav />
+  <main class="notfound">
+    <div class="container">
+      <span class="eyebrow">404</span>
+      <h1 class="heading">Page not found.</h1>
+      <p class="lede">
+        The page you're looking for has either moved, been removed, or never
+        existed. If you got here from an external link, the URL may be
+        out of date.
+      </p>
+      <div class="actions">
+        <a class="btn btn-primary" href="/">Back to home</a>
+        <a class="btn btn-secondary" href="/blog">Browse the blog</a>
+      </div>
+    </div>
+  </main>
+  <Footer />
+</BaseLayout>
+
+<style>
+  .notfound {
+    padding: clamp(4rem, 9vw, 7.5rem) 0 clamp(3.5rem, 7vw, 5.5rem);
+    min-height: 60vh;
+  }
+  .heading {
+    font-size: clamp(2.4rem, 5vw, 3.5rem);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    margin: 0.5rem 0 1.25rem;
+    background: linear-gradient(to bottom, #ffffff 30%, #b0b0bc 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .lede {
+    font-size: clamp(1rem, 1.4vw, 1.15rem);
+    line-height: 1.6;
+    color: var(--text-secondary);
+    max-width: 620px;
+    margin: 0 0 2rem;
+  }
+  .actions {
+    display: flex;
+    gap: 0.85rem;
+    flex-wrap: wrap;
+  }
+</style>

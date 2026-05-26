@@ -1,0 +1,175 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Nav from "../../components/Nav.astro";
+import Footer from "../../components/Footer.astro";
+
+const allPosts = await getCollection("blog", ({ data }) =>
+  import.meta.env.PROD ? !data.draft : true
+);
+
+// Sort: posts with dates first, newest first; undated posts last in title order.
+const posts = allPosts.sort((a, b) => {
+  const da = a.data.date?.valueOf() ?? -Infinity;
+  const db = b.data.date?.valueOf() ?? -Infinity;
+  if (da !== db) return db - da;
+  return a.data.title.localeCompare(b.data.title);
+});
+
+const fmt = (d?: Date) =>
+  d
+    ? new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" }).format(
+        d
+      )
+    : "";
+---
+
+<BaseLayout
+  title="Blog — Golem"
+  description="Engineering, product, and industry articles from the Golem Cloud team."
+>
+  <Nav />
+  <main class="blog-main">
+    <div class="container blog-container">
+      <header class="blog-header">
+        <span class="eyebrow">Blog</span>
+        <h1 class="blog-title">Engineering, product, and the agent runtime.</h1>
+        <p class="blog-lead">
+          Updates on the Golem runtime, deep dives from the team, and notes from across the
+          agentic-AI landscape.
+        </p>
+        <div class="blog-actions">
+          <a class="blog-link" href="/search">Search</a>
+          <a class="blog-link" href="/tags">Browse tags →</a>
+          <a class="blog-link" href="/rss.xml">RSS feed</a>
+        </div>
+      </header>
+
+      <ul class="post-list">
+        {
+          posts.map((p) => (
+            <li class="post-row">
+              <a href={`/blog/${p.data.slug ?? p.id}`} class="post-link">
+                <div class="post-row-meta mono">
+                  {p.data.date && <span>{fmt(p.data.date)}</span>}
+                  {p.data.author && (
+                    <>
+                      <span class="dot">·</span>
+                      <span>{p.data.author}</span>
+                    </>
+                  )}
+                </div>
+                <div class="post-row-title">{p.data.title}</div>
+                {p.data.tags.length > 0 && (
+                  <div class="post-row-tags">
+                    {p.data.tags.map((t) => (
+                      <span class="row-tag">{t}</span>
+                    ))}
+                  </div>
+                )}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </main>
+  <Footer />
+</BaseLayout>
+
+<style>
+  .blog-main {
+    padding: clamp(3rem, 6vw, 5rem) 0 clamp(4rem, 7vw, 6rem);
+  }
+  .blog-container {
+    max-width: 820px;
+  }
+  .blog-header {
+    margin-bottom: 3rem;
+  }
+  .blog-title {
+    font-size: clamp(2rem, 4vw, 2.6rem);
+    font-weight: 600;
+    letter-spacing: -0.022em;
+    line-height: 1.18;
+    margin: 0.5rem 0 0.85rem;
+    color: var(--text);
+  }
+  .blog-lead {
+    font-size: 1.05rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    margin: 0 0 1rem;
+    max-width: 600px;
+  }
+  .blog-actions {
+    display: flex;
+    gap: 1.25rem;
+    margin-top: 1rem;
+  }
+  .blog-link {
+    color: var(--accent);
+    font-size: 0.9rem;
+    text-decoration: none;
+  }
+  .blog-link:hover {
+    color: var(--accent-hover);
+  }
+  .post-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    border-top: 1px solid var(--border);
+  }
+  .post-row {
+    border-bottom: 1px solid var(--border);
+  }
+  .post-link {
+    display: block;
+    padding: 1.5rem 0;
+    color: var(--text);
+    text-decoration: none;
+    transition: background 150ms;
+  }
+  .post-link:hover {
+    background: linear-gradient(to right, transparent, var(--bg-card), transparent);
+  }
+  .post-row-meta {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.35rem;
+    display: flex;
+    gap: 0.5rem;
+  }
+  .dot {
+    opacity: 0.6;
+  }
+  .post-row-title {
+    font-size: 1.18rem;
+    font-weight: 500;
+    color: var(--text);
+    line-height: 1.35;
+    margin-bottom: 0.45rem;
+  }
+  .post-link:hover .post-row-title {
+    color: var(--accent);
+  }
+  .post-row-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+  }
+  .row-tag {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    background: var(--bg-card);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+  }
+</style>
