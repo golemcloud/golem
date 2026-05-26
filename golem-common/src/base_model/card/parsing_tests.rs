@@ -206,7 +206,10 @@ fn generate_declared_permission_class_parser_tests(r: &mut DynamicTestRegistrati
         ("plan() @ acme : view : plan-a", "plan"),
         ("account(acme) @ acme : view :", "account"),
         ("account.usage(acme) @ acme : view :", "account.usage"),
-        ("account.token(acme) @ acme : create :", "account.token"),
+        (
+            "account.token(acme) @ acme : view : 550e8400-e29b-41d4-a716-446655440000",
+            "account.token",
+        ),
         (
             "account.plugin(acme) @ acme : view : plugin-a",
             "account.plugin",

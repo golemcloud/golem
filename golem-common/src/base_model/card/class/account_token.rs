@@ -8,7 +8,6 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountTokenResourcePattern {
-    Empty,
     Any,
     Token(Uuid),
 }
@@ -16,10 +15,6 @@ pub enum AccountTokenResourcePattern {
 impl AccountTokenResourcePattern {
     pub fn any() -> Self {
         Self::Any
-    }
-
-    pub fn empty() -> Self {
-        Self::Empty
     }
 
     pub fn token(value: Uuid) -> Self {
@@ -31,10 +26,8 @@ impl Subsumes for AccountTokenResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Empty, Self::Empty) => true,
             (Self::Token(a), Self::Token(b)) => a == b,
-            (Self::Empty | Self::Token(_), Self::Any) => false,
-            (Self::Empty, Self::Token(_)) | (Self::Token(_), Self::Empty) => false,
+            (Self::Token(_), Self::Any) => false,
         }
     }
 }
@@ -129,9 +122,7 @@ impl AccountTokenClass {
         class: &str,
         resource: &str,
     ) -> Result<AccountTokenResourcePattern, CardParseError> {
-        if resource.is_empty() {
-            Ok(AccountTokenResourcePattern::Empty)
-        } else if resource == "*" {
+        if resource == "*" {
             Ok(AccountTokenResourcePattern::Any)
         } else {
             Uuid::parse_str(resource)

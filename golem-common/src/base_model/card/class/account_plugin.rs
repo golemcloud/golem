@@ -7,7 +7,6 @@ use crate::base_model::card::parsing::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountPluginResourcePattern {
-    Empty,
     Any,
     Name(String),
 }
@@ -15,10 +14,6 @@ pub enum AccountPluginResourcePattern {
 impl AccountPluginResourcePattern {
     pub fn any() -> Self {
         Self::Any
-    }
-
-    pub fn empty() -> Self {
-        Self::Empty
     }
 
     pub fn exact(value: impl Into<String>) -> Self {
@@ -30,10 +25,8 @@ impl Subsumes for AccountPluginResourcePattern {
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
-            (Self::Empty, Self::Empty) => true,
             (Self::Name(a), Self::Name(b)) => a == b,
-            (Self::Empty | Self::Name(_), Self::Any) => false,
-            (Self::Empty, Self::Name(_)) | (Self::Name(_), Self::Empty) => false,
+            (Self::Name(_), Self::Any) => false,
         }
     }
 }
@@ -130,9 +123,7 @@ impl AccountPluginClass {
         _class: &str,
         resource: &str,
     ) -> Result<AccountPluginResourcePattern, CardParseError> {
-        if resource.is_empty() {
-            Ok(AccountPluginResourcePattern::Empty)
-        } else if resource == "*" {
+        if resource == "*" {
             Ok(AccountPluginResourcePattern::Any)
         } else {
             Ok(AccountPluginResourcePattern::Name(resource.to_string()))
