@@ -80,7 +80,6 @@ use uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi_http::WasiHttpView;
 
 pub struct DebugContext {
     pub durable_ctx: DurableWorkerCtx<Self>,
@@ -628,7 +627,7 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.as_wasi_view()
     }
 
-    fn as_wasi_http_view(&mut self) -> impl WasiHttpView {
+    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
         self.durable_ctx.as_wasi_http_view()
     }
 

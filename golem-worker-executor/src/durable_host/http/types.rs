@@ -41,18 +41,17 @@ use std::fmt;
 use std::str::FromStr;
 use tracing::warn;
 use wasmtime::component::Resource;
-use wasmtime_wasi_http::bindings::http::types::{
+use wasmtime_wasi_http::FieldMap;
+use wasmtime_wasi_http::p2::bindings::http::types::{
     Duration, ErrorCode, FieldKey, FieldValue, Fields, FutureIncomingResponse, FutureTrailers,
-    HeaderError, Headers, Host, HostFields, HostFutureIncomingResponse, HostFutureTrailers,
-    HostIncomingBody, HostIncomingRequest, HostIncomingResponse, HostOutgoingBody,
-    HostOutgoingRequest, HostOutgoingResponse, HostRequestOptions, HostResponseOutparam,
-    IncomingBody, IncomingRequest, IncomingResponse, InputStream, IoError, Method, OutgoingBody,
-    OutgoingRequest, OutgoingResponse, OutputStream, Pollable, RequestOptions, ResponseOutparam,
-    Scheme, StatusCode, Trailers,
+    HeaderError as BindingsHeaderError, Headers, Host, HostFields, HostFutureIncomingResponse,
+    HostFutureTrailers, HostIncomingBody, HostIncomingRequest, HostIncomingResponse,
+    HostOutgoingBody, HostOutgoingRequest, HostOutgoingResponse, HostRequestOptions,
+    HostResponseOutparam, IncomingBody, IncomingRequest, IncomingResponse, InputStream, IoError,
+    Method, OutgoingBody, OutgoingRequest, OutgoingResponse, OutputStream, Pollable,
+    RequestOptions, ResponseOutparam, Scheme, StatusCode, Trailers,
 };
-use wasmtime_wasi_http::get_fields;
-use wasmtime_wasi_http::types::FieldMap;
-use wasmtime_wasi_http::{HttpError, HttpResult};
+use wasmtime_wasi_http::p2::{HeaderError, HeaderResult, HttpError, HttpResult};
 
 impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
     fn new(&mut self) -> wasmtime::Result<Resource<Fields>> {
@@ -63,7 +62,7 @@ impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
     fn from_list(
         &mut self,
         entries: Vec<(FieldKey, FieldValue)>,
-    ) -> wasmtime::Result<Result<Resource<Fields>, HeaderError>> {
+    ) -> HeaderResult<Resource<Fields>> {
         self.observe_function_call("http::types::fields", "from_list");
         HostFields::from_list(&mut self.as_wasi_http_view(), entries)
     }
@@ -87,16 +86,12 @@ impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
         self_: Resource<Fields>,
         name: FieldKey,
         value: Vec<FieldValue>,
-    ) -> wasmtime::Result<Result<(), HeaderError>> {
+    ) -> HeaderResult<()> {
         self.observe_function_call("http::types::fields", "set");
         HostFields::set(&mut self.as_wasi_http_view(), self_, name, value)
     }
 
-    fn delete(
-        &mut self,
-        self_: Resource<Fields>,
-        name: FieldKey,
-    ) -> wasmtime::Result<Result<(), HeaderError>> {
+    fn delete(&mut self, self_: Resource<Fields>, name: FieldKey) -> HeaderResult<()> {
         self.observe_function_call("http::types::fields", "delete");
         HostFields::delete(&mut self.as_wasi_http_view(), self_, name)
     }
@@ -106,7 +101,7 @@ impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
         self_: Resource<Fields>,
         name: FieldKey,
         value: FieldValue,
-    ) -> wasmtime::Result<Result<(), HeaderError>> {
+    ) -> HeaderResult<()> {
         self.observe_function_call("http::types::fields", "append");
         HostFields::append(&mut self.as_wasi_http_view(), self_, name, value)
     }
@@ -522,7 +517,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     Ok(Some(Ok(Ok(Some(trailers))))) => {
                         let mut serialized_trailers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
 
-                        for (key, value) in get_fields(self.table(), trailers)?.as_ref().iter() {
+                        for (key, value) in self.table().get(trailers)?.iter() {
                             serialized_trailers
                                 .entry(key.as_str().to_string())
                                 .or_default()
@@ -585,15 +580,8 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                                 header_map.append(name.clone(), HeaderValue::try_from(value)?);
                             }
                         }
-                        let field_size_limit = {
-                            let mut view = self.as_wasi_http_view();
-                            use wasmtime_wasi_http::types::WasiHttpView;
-                            view.ctx().field_size_limit
-                        };
-                        let fields = FieldMap::new(header_map, field_size_limit);
-                        let hdrs = self
-                            .table()
-                            .push(wasmtime_wasi_http::types::HostFields::Owned { fields })?;
+                        let fields = FieldMap::new_immutable(header_map);
+                        let hdrs = self.table().push(fields)?;
                         Ok(Some(Ok(Ok(Some(hdrs)))))
                     }
                     Ok(Some(Ok(Err(error_code)))) => Ok(Some(Ok(Err(error_code.into())))),
@@ -700,13 +688,10 @@ impl<Ctx: WorkerCtx> HostOutgoingResponse for DurableWorkerCtx<Ctx> {
 /// reconstructs the request from the oplog and dispatches it on a fresh
 /// transport via `try_status_code_retry` (which forces
 /// `connection_pool = None`).
-fn abort_outgoing_body_for_pending_status_retry<T>(
-    view: &mut wasmtime_wasi_http::WasiHttpImpl<T>,
+fn abort_outgoing_body_for_pending_status_retry(
+    view: &mut wasmtime_wasi_http::p2::WasiHttpCtxView<'_>,
     body: Resource<OutgoingBody>,
-) -> HttpResult<()>
-where
-    T: wasmtime_wasi_http::WasiHttpView + Send,
-{
+) -> HttpResult<()> {
     HostOutgoingBody::drop(view, body).map_err(|e| {
         HttpError::trap(wasmtime::Error::msg(format!(
             "failed to abort outgoing body for pending status retry: {e}"
@@ -909,7 +894,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .get(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
                 matches!(
                     future,
-                    wasmtime_wasi_http::types::HostFutureIncomingResponse::Deferred { .. }
+                    wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::Deferred { .. }
                 )
             };
 
@@ -965,9 +950,9 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     let future_res = self
                         .table()
                         .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
-                    *future_res = wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(Ok(
-                        Err(error_code.clone()),
-                    ));
+                    *future_res = wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::ready(
+                        Ok(Err(error_code.clone())),
+                    );
                     response = Ok(Some(Ok(Err(error_code))));
                 }
 
@@ -1003,7 +988,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                             .table()
                             .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
                         *future_res =
-                            wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(Ok(
+                            wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::ready(Ok(
                                 Ok(retried_response),
                             ));
 
@@ -1100,7 +1085,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                                         &Resource::<FutureIncomingResponse>::new_borrow(handle),
                                     )?;
                                 *future_res =
-                                    wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(
+                                    wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::ready(
                                         Ok(Ok(new_resp)),
                                     );
                                 let self2 = Resource::<FutureIncomingResponse>::new_borrow(handle);
@@ -1144,7 +1129,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                                         &Resource::<FutureIncomingResponse>::new_borrow(handle),
                                     )?;
                                 *future_res =
-                                    wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(
+                                    wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::ready(
                                         Ok(Err(error_code.clone())),
                                     );
                                 response = Ok(Some(Ok(Err(error_code))));
@@ -1257,7 +1242,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         state.response_status = Some(serializable_response_headers.status);
                     }
 
-                    let incoming_response: wasmtime_wasi_http::types::HostIncomingResponse =
+                    let incoming_response: wasmtime_wasi_http::p2::types::HostIncomingResponse =
                         serializable_response_headers
                             .try_into()
                             .map_err(wasmtime::Error::from_anyhow)?;
@@ -1308,6 +1293,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn convert_error_code(&mut self, err: HttpError) -> wasmtime::Result<ErrorCode> {
         self.observe_function_call("http::types", "convert_error_code");
         Host::convert_error_code(&mut self.as_wasi_http_view(), err)
+    }
+
+    fn convert_header_error(&mut self, err: HeaderError) -> wasmtime::Result<BindingsHeaderError> {
+        self.observe_function_call("http::types", "convert_header_error");
+        Host::convert_header_error(&mut self.as_wasi_http_view(), err)
     }
 }
 
@@ -1371,8 +1361,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // Wrap with background retry if the original had it
         let exec_state = self.durable_execution_state();
         let final_future = if request_state.retry.has_background_retry {
-            if let wasmtime_wasi_http::types::HostFutureIncomingResponse::Pending(pending_handle) =
-                new_future
+            if let wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::Pending(
+                pending_handle,
+            ) = new_future
             {
                 let environment_state_service = self.state.environment_state_service.clone();
                 let environment_id = self.state.owned_agent_id.environment_id;
@@ -1402,7 +1393,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     request_state.begin_index,
                     self.execution_status.clone(),
                 );
-                wasmtime_wasi_http::types::HostFutureIncomingResponse::pending(retry_handle)
+                wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::pending(retry_handle)
             } else {
                 new_future
             }
@@ -1411,9 +1402,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         // Swap the FutureIncomingResponse in the resource table
-        let future_res: &mut wasmtime_wasi_http::types::HostFutureIncomingResponse =
-            self.table()
-                .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
+        let future_res: &mut wasmtime_wasi_http::p2::types::HostFutureIncomingResponse = self
+            .table()
+            .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
         *future_res = final_future;
 
         // Clear the replayed flag so we don't rebuild again
