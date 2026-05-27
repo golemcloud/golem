@@ -9,7 +9,7 @@ steps:
 
   - id: "add-env-vars"
     prompt: >
-      In the test-app project, the application manifest to add environment variables
+      In the test-app project, edit the application manifest to add environment variables
       `APP_MODE` set to `production` and `LOG_LEVEL` set to `info` under the
       existing component's `env` section. Do not change any source code files.
     expectedSkills:
