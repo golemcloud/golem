@@ -34,7 +34,7 @@ components:
 ## Step 2 — Deploy
 
 ```shell
-golem deploy
+golem deploy --yes
 ```
 
 After deployment, newly created agents from this component automatically send telemetry to the configured collector.

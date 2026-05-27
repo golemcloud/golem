@@ -279,8 +279,8 @@ Presets **cannot** override structural fields like `dir` or `templates`.
 2. **Via CLI flag**: The `-P` / `--preset` flag overrides environment preset selection:
 
    ```shell
-   golem build -P release
-   golem deploy -P debug,verbose
+   golem build --yes -P release
+   golem deploy --yes -P debug,verbose
    ```
 
 3. **Default preset**: One preset per component/agent/template can be marked `default: true` — it is used when no preset is explicitly selected by environment or CLI flag.

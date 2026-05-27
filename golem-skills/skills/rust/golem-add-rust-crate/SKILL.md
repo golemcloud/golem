@@ -28,7 +28,7 @@ description: "Add a new Rust crate dependency to a Rust Golem project. Use when 
 2. **Build to verify**
 
    ```shell
-   golem build
+   golem build --yes
    ```
 
    Do NOT run `cargo build` directly — always use `golem build`.

@@ -172,6 +172,19 @@ Libraries must be **Scala.js-compatible** — use the `%%%` operator in `build.s
 - Do not manually edit files in `golem-temp/` or `.generated/` — they are auto-generated build artifacts
 - The `scalacOptions += "-experimental"` flag is required for macro annotations
 
+## Running Golem CLI commands non-interactively
+
+The `golem` CLI prompts for confirmation when it needs to apply changes such as syncing project skill files, updating dependency configurations, or recreating deployments. In non-interactive contexts (CI, scripts, coding agents) **always pass `--yes` (or `-y`) to mutating commands** so the CLI auto-confirms instead of aborting:
+
+```shell
+golem build --yes
+golem deploy --yes
+golem new --yes --template <LANGUAGE> <APPLICATION_PATH>
+golem agent update --yes <AGENT>
+```
+
+If you see `This action requires confirmation, but the current shell is non-interactive.` (older CLI versions: `The current input device is not an interactive one, defaulting to "false"`) followed by `Failed to build application`, re-run the same command with `--yes`.
+
 ## Documentation
 
 - App manifest reference: https://learn.golem.cloud/app-manifest
