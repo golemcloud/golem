@@ -54,9 +54,8 @@ const gridClass =
                 )}
                 <div class="attribution-text">
                   <div class="story-name">{s.name}</div>
-                  <div class="story-role muted">
-                    {s.role} · {s.company}
-                  </div>
+                  <div class="story-role muted">{s.role}</div>
+                  <div class="story-company muted">{s.company}</div>
                 </div>
                 {s.productLogo && (
                   <Image
@@ -174,13 +173,16 @@ const gridClass =
     font-size: 0.88rem;
     font-weight: 500;
   }
-  .story-role {
+  .story-role,
+  .story-company {
     font-size: 0.78rem;
+    line-height: 1.3;
   }
   .story-featured .story-name {
     font-size: 0.98rem;
   }
-  .story-featured .story-role {
+  .story-featured .story-role,
+  .story-featured .story-company {
     font-size: 0.85rem;
   }
 
