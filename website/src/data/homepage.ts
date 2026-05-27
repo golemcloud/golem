@@ -509,7 +509,7 @@ export const customerStories = {
     {
       quote:
         "Like AWS Lambda, but the function has memory across invocations and durable reminders out of the box. Durability is invisible — exactly how infrastructure should feel.",
-      name: "Seeta Ramayya Vadali",
+      name: "Seeta Vadali",
       role: "Senior Software Consultant",
       company: "Building Seeta AI Assistant",
       avatar: {
