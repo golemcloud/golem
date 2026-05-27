@@ -936,6 +936,7 @@ jobs:
       - golem-wasm-guest
       - worker-tests
       - it
+      - it-cli
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
       CARGO_BUILD_JOBS: 20

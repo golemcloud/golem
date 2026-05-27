@@ -34,7 +34,7 @@ skip_core_tasks = true       # we are not using the predefined cargo-make flows,
 [env]
 JUNIT_OPTS = ""
 WORKER_TEST_THREAD_OPTS = ""
-CLI_TEST_THREADS = "3"
+CLI_TEST_THREADS = "2"
 AWS_EC2_METADATA_DISABLED = "true"
 PROFILE = "dev"
 
