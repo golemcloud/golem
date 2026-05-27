@@ -28,6 +28,7 @@ blake3 = { workspace = true }
 bytes = { workspace = true }
 prometheus = { workspace = true }
 regex = { workspace = true }
+rustls = { workspace = true }
 scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

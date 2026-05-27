@@ -202,6 +202,8 @@ export const customerLogos = {
   placeholders: [
     { kind: "image", filename: "ziverge.png", alt: "Ziverge" },
     { kind: "image", filename: "golem-social.png", alt: "Golem Social" },
+    { kind: "image", filename: "warpmind.png", alt: "WarpMind" },
+    { kind: "image", filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
   ] as CustomerLogo[],
 };
 
@@ -494,6 +496,27 @@ export const customerStories = {
       company: "Building Golem Social",
       avatar: { filename: "peter-kotula.jpg", alt: "Peter Kotula" },
       productLogo: { filename: "golem-social.png", alt: "Golem Social" },
+    },
+    {
+      quote:
+        "I crashed a running agent mid-test — its .schedule() reminder still fired on time. Golem's durability isn't bolted on; it's the runtime.",
+      name: "Rahul Joshi",
+      role: "Full-Stack AI Developer",
+      company: "Building WarpMind",
+      avatar: { filename: "rahul-joshi.jpg", alt: "Rahul Joshi" },
+      productLogo: { filename: "warpmind.png", alt: "WarpMind" },
+    },
+    {
+      quote:
+        "Like AWS Lambda, but the function has memory across invocations and durable reminders out of the box. Durability is invisible — exactly how infrastructure should feel.",
+      name: "Seeta Vadali",
+      role: "Senior Consultant",
+      company: "Building Seeta AI",
+      avatar: {
+        filename: "seeta-ramayya-vadali.jpg",
+        alt: "Seeta Ramayya Vadali",
+      },
+      productLogo: { filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
     },
   ] as Testimonial[],
 };
