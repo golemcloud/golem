@@ -32,20 +32,28 @@ export const sections: AboutSection[] = [
     bodyHtml: `<p>
       Golem began in March 2023, when <strong>John A. De Goes</strong> — mathematician, open-source advocate,
       and creator of <a href="https://zio.dev" target="_blank" rel="noopener">ZIO</a> — joined forces with
-      longtime OSS contributors <strong>Daniel Vigovszky</strong> and <strong>Afsal Thaj</strong>. The
-      first prototype was hacked together in Inverness, Scotland, proving that durable execution of
-      WebAssembly components was possible — extending ZIO Flow's resilient-workflow ideas beyond the
-      JVM.
+      longtime OSS contributor <strong>Daniel Vigovszky</strong> and a small-hand picked team. The first 
+      prototype was hacked together in Inverness, Scotland, proving that transparent durable execution of
+      WASM was possible — extending ZIO Flow's resilient-workflow ideas beyond the JVM.
     </p>
 
     <p>
-      The open-source Golem runtime followed shortly after, with development happening publicly on
-      GitHub. Golem Cloud, Inc. was incorporated in 2024, and the managed Cloud service launched into
-      Developer Preview the same year.
+      The first developer preview release of Golem followed later that year, on August 1, 2023. In 2024, 
+      Golem Cloud Inc. was officially incorporated, and the source code to Golem went public, leading 
+      to the first stable (if still primitive) release of Golem on August 23, 2024.
     </p>
 
     <p>
-      Today, the Golem runtime is open-source under BUSL-1.1. The Cloud service remains in Developer
+      As the Golem team tirelessly worked on improving usability, John recognized that the key strengths of 
+      Golem &mdash; transparent durable execution, entity-orientation, formally-verified and cheap 
+      sandboxing &mdash; all made Golem an incredibly compelling package to developers building agentic
+      applications. So in May 2025, Golem began specializing for AI applications, leaving the broader 
+      durable execution market to well-established and mature solutions like Temporal.
+    </p>
+
+    <p>
+      Today, the Golem runtime is open-source under BUSL-1.1, transitioning to Apache 2. The Cloud service 
+      remains in Developer
       Preview; paid general availability with formal SLAs and data-retention guarantees is planned for
       Q3 2026.
     </p>`,
@@ -67,13 +75,6 @@ export const sections: AboutSection[] = [
         bioHtml: `<p>
           Co-founder. Veteran open-source contributor with deep roots in functional programming, runtime
           design, and WebAssembly tooling.
-        </p>`,
-      },
-      {
-        name: "Afsal Thaj",
-        bioHtml: `<p>
-          Co-founder. Longtime OSS contributor across the ZIO ecosystem, with a focus on production
-          reliability and distributed-system semantics.
         </p>`,
       },
     ],
