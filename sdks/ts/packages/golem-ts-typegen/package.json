@@ -6,6 +6,7 @@
     "access": "public"
   },
   "files": [
+    "bin",
     "dist"
   ],
   "scripts": {
@@ -18,7 +19,7 @@
     "dev": "rollup -c -w"
   },
   "bin": {
-    "golem-typegen": "./dist/golem-typegen.cjs"
+    "golem-typegen": "./bin/golem-typegen.cjs"
   },
   "keywords": [],
   "author": "",
