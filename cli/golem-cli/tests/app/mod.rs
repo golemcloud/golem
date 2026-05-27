@@ -21,14 +21,6 @@ mod build_and_deploy_all;
 mod directory_source_ifs;
 mod plugins;
 
-tag_suite!(app, group1);
-
-tag_suite!(plugins, group1);
-
-tag_suite!(build_and_deploy_all, group2);
-
-tag_suite!(directory_source_ifs, group3);
-
 inherit_test_dep!(Tracing);
 
 use crate::{Tracing, crate_path, workspace_path};
@@ -52,7 +44,7 @@ use std::str::FromStr;
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::{inherit_test_dep, tag_suite};
+use test_r::inherit_test_dep;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
