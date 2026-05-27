@@ -14,8 +14,9 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import { AgentMethod, DataSchema } from 'golem:agent/common@1.5.0';
+import { AgentMethod, DataSchema, ReadOnlyConfig } from 'golem:agent/common@1.5.0';
 import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
+import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
 import { ClassMetadata, MethodParams } from '@golemcloud/golem-ts-types-core';
 import { validateMethodName } from './helpers';
 import { resolveMethodInputSchema } from './methodInput';
@@ -54,6 +55,14 @@ export function getAgentMethodSchema(
       baseError,
     );
 
+    const readOnly: ReadOnlyConfig | undefined =
+      baseMeta.readOnly === undefined
+        ? undefined
+        : {
+            cachePolicy: baseMeta.readOnly,
+            usesPrincipal: methodHasPrincipalParameter(agentClassName, methodName),
+          };
+
     const agentMethod: AgentMethod = {
       name: methodName,
       description: baseMeta.description ?? '',
@@ -61,10 +70,21 @@ export function getAgentMethodSchema(
       inputSchema,
       outputSchema,
       httpEndpoint: baseMeta.httpEndpoint ?? [],
+      readOnly,
     };
 
     return agentMethod;
   });
+}
+
+function methodHasPrincipalParameter(agentClassName: string, methodName: string): boolean {
+  const paramTypes = AgentMethodParamRegistry.getParametersAndType(agentClassName, methodName);
+  for (const typeInfo of paramTypes.values()) {
+    if (typeInfo.tag === 'principal') {
+      return true;
+    }
+  }
+  return false;
 }
 
 function validateMethodNameOrThrow(methodName: string, baseError: string) {

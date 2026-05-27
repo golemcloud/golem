@@ -8037,6 +8037,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/HttpEndpointDetails'
+        readOnly:
+          $ref: '#/components/schemas/ReadOnlyConfig'
     AgentMode:
       type: string
       enum:
@@ -9234,6 +9236,51 @@ components:
       properties:
         mimeType:
           type: string
+    CachePolicy:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/CachePolicy_Empty'
+      - $ref: '#/components/schemas/CachePolicy_Empty'
+      - $ref: '#/components/schemas/CachePolicy_CachePolicyTtl'
+      discriminator:
+        propertyName: type
+        mapping:
+          NoCache: '#/components/schemas/CachePolicy_Empty'
+          UntilWrite: '#/components/schemas/CachePolicy_Empty'
+          Ttl: '#/components/schemas/CachePolicy_CachePolicyTtl'
+    CachePolicyTtl:
+      type: object
+      title: CachePolicyTtl
+      required:
+      - durationNanos
+      properties:
+        durationNanos:
+          type: integer
+          format: uint64
+    CachePolicy_CachePolicyTtl:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Ttl
+            example: Ttl
+      - $ref: '#/components/schemas/CachePolicyTtl'
+    CachePolicy_Empty:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UntilWrite
+            example: UntilWrite
+      - $ref: '#/components/schemas/Empty'
     ComponentCreation:
       type: object
       title: ComponentCreation
@@ -11187,6 +11234,17 @@ components:
           type: string
         variableName:
           type: string
+    ReadOnlyConfig:
+      type: object
+      title: ReadOnlyConfig
+      required:
+      - cachePolicy
+      - usesPrincipal
+      properties:
+        cachePolicy:
+          $ref: '#/components/schemas/CachePolicy'
+        usesPrincipal:
+          type: boolean
     RegisteredAgentTypeImplementer:
       type: object
       title: RegisteredAgentTypeImplementer

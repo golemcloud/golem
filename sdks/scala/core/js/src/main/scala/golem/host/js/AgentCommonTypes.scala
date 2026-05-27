@@ -373,6 +373,7 @@ sealed trait JsAgentMethod extends js.Object {
   def promptHint: js.UndefOr[String]                = js.native
   def inputSchema: JsDataSchema                     = js.native
   def outputSchema: JsDataSchema                    = js.native
+  def readOnly: js.UndefOr[JsReadOnlyConfig]        = js.native
 }
 
 object JsAgentMethod {
@@ -382,7 +383,8 @@ object JsAgentMethod {
     httpEndpoint: js.Array[JsHttpEndpointDetails],
     inputSchema: JsDataSchema,
     outputSchema: JsDataSchema,
-    promptHint: js.UndefOr[String] = js.undefined
+    promptHint: js.UndefOr[String] = js.undefined,
+    readOnly: js.UndefOr[JsReadOnlyConfig] = js.undefined
   ): JsAgentMethod = {
     val obj = js.Dynamic.literal(
       "name"         -> name,
@@ -392,8 +394,47 @@ object JsAgentMethod {
       "outputSchema" -> outputSchema
     )
     promptHint.foreach(p => obj.updateDynamic("promptHint")(p))
+    readOnly.foreach(r => obj.updateDynamic("readOnly")(r))
     obj.asInstanceOf[JsAgentMethod]
   }
+}
+
+// ---------------------------------------------------------------------------
+// CachePolicy, ReadOnlyConfig
+// ---------------------------------------------------------------------------
+
+@js.native
+sealed trait JsCachePolicy extends js.Object {
+  def tag: String = js.native
+}
+
+@js.native
+sealed trait JsCachePolicyTtl extends JsCachePolicy {
+  @JSName("val") def value: js.BigInt = js.native // Duration = u64 nanoseconds
+}
+
+object JsCachePolicy {
+  def noCache: JsCachePolicy =
+    JsShape.tagOnly[JsCachePolicy]("no-cache")
+
+  def untilWrite: JsCachePolicy =
+    JsShape.tagOnly[JsCachePolicy]("until-write")
+
+  def ttl(durationNanos: js.BigInt): JsCachePolicy =
+    JsShape.tagged[JsCachePolicy]("ttl", durationNanos)
+}
+
+@js.native
+sealed trait JsReadOnlyConfig extends js.Object {
+  def cachePolicy: JsCachePolicy = js.native
+  def usesPrincipal: Boolean     = js.native
+}
+
+object JsReadOnlyConfig {
+  def apply(cachePolicy: JsCachePolicy, usesPrincipal: Boolean): JsReadOnlyConfig =
+    js.Dynamic
+      .literal("cachePolicy" -> cachePolicy, "usesPrincipal" -> usesPrincipal)
+      .asInstanceOf[JsReadOnlyConfig]
 }
 
 @js.native

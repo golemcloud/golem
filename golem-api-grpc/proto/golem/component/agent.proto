@@ -41,6 +41,20 @@ message AgentMethod {
   DataSchema input_schema = 4;
   DataSchema output_schema = 5;
   repeated HttpEndpointDetails http_endpoint = 6;
+  optional ReadOnlyConfig read_only = 7;
+}
+
+message ReadOnlyConfig {
+  CachePolicy cache_policy = 1;
+  bool uses_principal = 2;
+}
+
+message CachePolicy {
+  oneof value {
+    golem.common.Empty no_cache = 1;
+    golem.common.Empty until_write = 2;
+    uint64 ttl_nanos = 3;
+  }
 }
 
 message AgentType {
