@@ -1746,6 +1746,7 @@ mod tests {
                         allowed_patterns: vec![],
                     },
                 }],
+                read_only: None,
             }],
             dependencies: vec![],
             mode,

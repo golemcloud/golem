@@ -31,6 +31,7 @@ export const SnapshottingEnabledAgentClassName = new AgentClassName('Snapshottin
 export const SnapshottingPeriodicAgentClassName = new AgentClassName('SnapshottingPeriodicAgent');
 export const SnapshottingEveryNAgentClassName = new AgentClassName('SnapshottingEveryNAgent');
 export const ConstructorUnionOrderAgentClassName = new AgentClassName('ConstructorUnionOrderAgent');
+export const ReadOnlyAgentClassName = new AgentClassName('ReadOnlyAgent');
 
 // Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getTestInterfaceType(): [AnalysedType, Type.Type] {

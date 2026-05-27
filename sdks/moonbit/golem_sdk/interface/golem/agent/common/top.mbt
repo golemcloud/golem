@@ -24,6 +24,19 @@ pub fn AgentMode::from(self : Int) -> AgentMode {
 }
 
 ///|
+pub(all) enum CachePolicy {
+  NoCache
+  UntilWrite
+  Ttl(UInt64)
+} derive(Debug, Eq)
+
+///|
+pub(all) struct ReadOnlyConfig {
+  cache_policy : CachePolicy
+  uses_principal : Bool
+} derive(Debug, Eq)
+
+///|
 pub(all) struct CorsOptions {
   allowed_patterns : Array[String]
 } derive(Debug, Eq)
@@ -122,6 +135,7 @@ pub(all) struct AgentMethod {
   prompt_hint : String?
   input_schema : @types.DataSchema
   output_schema : @types.DataSchema
+  read_only : ReadOnlyConfig?
 } derive(Debug, Eq)
 
 ///|

@@ -4,14 +4,14 @@ date: "2025-05-08"
 author: "Sandra Wolf"
 tags:
   [
-    "hackathon",
+    "Hackathon",
     "Restate",
     "LambdaConf",
     "TypeScript",
     "Java",
     "Kotlin",
-    "distributed systems",
-    "event",
+    "Distributed Systems",
+    "Events",
   ]
 slug: "restate-sponsored-hackathon-at-lambdaconf-may-8th-estes-park-colorado"
 originalUrl: "https://golem.cloud/post/restate-sponsored-hackathon-at-lambdaconf-may-8th-estes-park-colorado"

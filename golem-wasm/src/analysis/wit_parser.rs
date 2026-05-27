@@ -100,7 +100,7 @@ impl WitAnalysisContext {
                     WorldItem::Function(function) => {
                         result.push(AnalysedExport::Function(self.analyse_function(function)?));
                     }
-                    WorldItem::Type(_) => {}
+                    WorldItem::Type { .. } => {}
                 }
             }
 
@@ -171,16 +171,18 @@ impl WitAnalysisContext {
             parameters: function
                 .params
                 .iter()
-                .map(|(name, typ)| {
-                    typ.to_analysed_type(self.wasm.resolve(), self)
+                .map(|param| {
+                    param
+                        .ty
+                        .to_analysed_type(self.wasm.resolve(), self)
                         .map_err(|err| {
                             AnalysisFailure::failed(format!(
                                 "Failed to decode function ({}) parameter ({}) type: {}",
-                                function.name, name, err
+                                function.name, param.name, err
                             ))
                         })
                         .map(|typ| AnalysedFunctionParameter {
-                            name: name.clone(),
+                            name: param.name.clone(),
                             typ,
                         })
                 })
@@ -421,7 +423,7 @@ impl ToAnalysedType for TypeDef {
             )
             .with_optional_name(self.name.clone())
             .with_optional_owner(get_owner_name(resolve, &self.owner))),
-            TypeDefKind::FixedSizeList(ty, _) => Ok(analysed_type::list(
+            TypeDefKind::FixedLengthList(ty, _) => Ok(analysed_type::list(
                 ty.to_analysed_type(resolve, resource_map)?,
             )
             .with_optional_name(self.name.clone())

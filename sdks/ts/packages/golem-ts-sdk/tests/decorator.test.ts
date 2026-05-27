@@ -23,6 +23,7 @@ import {
   SnapshottingPeriodicAgentClassName,
   SnapshottingEveryNAgentClassName,
   ConstructorUnionOrderAgentClassName,
+  ReadOnlyAgentClassName,
 } from './testUtils';
 import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common@1.5.0';
 import * as util from 'node:util';
@@ -920,6 +921,64 @@ describe('Agent decorator should register the agent class and its methods into A
       tag: 'enabled',
       val: { tag: 'every-n-invocation', val: 10 },
     });
+  });
+
+  it('should expose read-only configuration with default cache policy', () => {
+    const agent = AgentTypeRegistry.get(ReadOnlyAgentClassName);
+    if (!agent) throw new Error('ReadOnlyAgent not found');
+    const method = agent.methods.find((m) => m.name === 'defaultCache');
+    expect(method).toBeDefined();
+    expect(method!.readOnly).toEqual({
+      cachePolicy: { tag: 'until-write' },
+      usesPrincipal: false,
+    });
+  });
+
+  it('should expose read-only configuration with no-cache policy', () => {
+    const agent = AgentTypeRegistry.get(ReadOnlyAgentClassName);
+    if (!agent) throw new Error('ReadOnlyAgent not found');
+    const method = agent.methods.find((m) => m.name === 'noCache');
+    expect(method!.readOnly).toEqual({
+      cachePolicy: { tag: 'no-cache' },
+      usesPrincipal: false,
+    });
+  });
+
+  it('should expose read-only configuration with until-write policy', () => {
+    const agent = AgentTypeRegistry.get(ReadOnlyAgentClassName);
+    if (!agent) throw new Error('ReadOnlyAgent not found');
+    const method = agent.methods.find((m) => m.name === 'untilWrite');
+    expect(method!.readOnly).toEqual({
+      cachePolicy: { tag: 'until-write' },
+      usesPrincipal: false,
+    });
+  });
+
+  it('should expose read-only configuration with ttl policy', () => {
+    const agent = AgentTypeRegistry.get(ReadOnlyAgentClassName);
+    if (!agent) throw new Error('ReadOnlyAgent not found');
+    const method = agent.methods.find((m) => m.name === 'ttl');
+    expect(method!.readOnly).toEqual({
+      cachePolicy: { tag: 'ttl', val: 30_000_000_000n },
+      usesPrincipal: false,
+    });
+  });
+
+  it('should derive usesPrincipal=true when the method has a Principal parameter', () => {
+    const agent = AgentTypeRegistry.get(ReadOnlyAgentClassName);
+    if (!agent) throw new Error('ReadOnlyAgent not found');
+    const method = agent.methods.find((m) => m.name === 'withPrincipal');
+    expect(method!.readOnly).toEqual({
+      cachePolicy: { tag: 'until-write' },
+      usesPrincipal: true,
+    });
+  });
+
+  it('should not set read-only for unannotated methods', () => {
+    const agent = AgentTypeRegistry.get(ReadOnlyAgentClassName);
+    if (!agent) throw new Error('ReadOnlyAgent not found');
+    const method = agent.methods.find((m) => m.name === 'notReadOnly');
+    expect(method!.readOnly).toBeUndefined();
   });
 });
 

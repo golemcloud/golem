@@ -1,0 +1,5 @@
+error: read-only methods have no effect on ephemeral agents (no shared state to read). Remove the #[read_only] attribute or make the agent durable.
+ --> tests/ui/fail/ephemeral_read_only.rs:8:8
+  |
+8 |     fn get_value(&self) -> u32;
+  |        ^^^^^^^^^

@@ -2,11 +2,12 @@ use super::{
     AgentConfigDeclaration, AgentConfigSource, AgentConstructor, AgentDependency,
     AgentHttpAuthDetails, AgentInvocationMode, AgentMethod, AgentMode, AgentPrincipal, AgentType,
     AgentTypeName, BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource,
-    BinaryType, ComponentModelElementSchema, ComponentModelElementValue, CorsOptions,
-    CustomHttpMethod, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    LiteralSegment, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable, RegisteredAgentType,
+    BinaryType, CachePolicy, CachePolicyTtl, ComponentModelElementSchema,
+    ComponentModelElementValue, CorsOptions, CustomHttpMethod, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, GolemUserPrincipal, HeaderVariable,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, NamedElementSchema,
+    NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal, PathSegment,
+    PathVariable, Principal, QueryVariable, ReadOnlyConfig, RegisteredAgentType,
     RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, SystemVariable, SystemVariableSegment, TextDescriptor, TextReference,
     TextReferenceValue, TextSource, TextType, UnstructuredBinaryElementValue,
@@ -192,6 +193,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentMethod> for AgentMeth
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
+            read_only: value.read_only.map(TryInto::try_into).transpose()?,
         })
     }
 }
@@ -205,6 +207,71 @@ impl From<AgentMethod> for golem_api_grpc::proto::golem::component::AgentMethod 
             input_schema: Some(value.input_schema.into()),
             output_schema: Some(value.output_schema.into()),
             http_endpoint: value.http_endpoint.into_iter().map(Into::into).collect(),
+            read_only: value.read_only.map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::ReadOnlyConfig> for ReadOnlyConfig {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::ReadOnlyConfig,
+    ) -> Result<Self, Self::Error> {
+        Ok(ReadOnlyConfig {
+            cache_policy: value
+                .cache_policy
+                .ok_or_else(|| "Missing field: cache_policy".to_string())?
+                .try_into()?,
+            uses_principal: value.uses_principal,
+        })
+    }
+}
+
+impl From<ReadOnlyConfig> for golem_api_grpc::proto::golem::component::ReadOnlyConfig {
+    fn from(value: ReadOnlyConfig) -> Self {
+        golem_api_grpc::proto::golem::component::ReadOnlyConfig {
+            cache_policy: Some(value.cache_policy.into()),
+            uses_principal: value.uses_principal,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::CachePolicy> for CachePolicy {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::CachePolicy,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::cache_policy::Value;
+
+        match value
+            .value
+            .ok_or_else(|| "Missing field: value".to_string())?
+        {
+            Value::NoCache(_) => Ok(Self::NoCache(Empty {})),
+            Value::UntilWrite(_) => Ok(Self::UntilWrite(Empty {})),
+            Value::TtlNanos(nanos) => Ok(Self::Ttl(CachePolicyTtl {
+                duration_nanos: nanos,
+            })),
+        }
+    }
+}
+
+impl From<CachePolicy> for golem_api_grpc::proto::golem::component::CachePolicy {
+    fn from(value: CachePolicy) -> Self {
+        use golem_api_grpc::proto::golem::component::cache_policy::Value;
+
+        Self {
+            value: Some(match value {
+                CachePolicy::NoCache(_) => {
+                    Value::NoCache(golem_api_grpc::proto::golem::common::Empty {})
+                }
+                CachePolicy::UntilWrite(_) => {
+                    Value::UntilWrite(golem_api_grpc::proto::golem::common::Empty {})
+                }
+                CachePolicy::Ttl(ttl) => Value::TtlNanos(ttl.duration_nanos),
+            }),
         }
     }
 }
