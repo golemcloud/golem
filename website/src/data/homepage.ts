@@ -203,6 +203,7 @@ export const customerLogos = {
     { kind: "image", filename: "ziverge.png", alt: "Ziverge" },
     { kind: "image", filename: "golem-social.png", alt: "Golem Social" },
     { kind: "image", filename: "warpmind.png", alt: "WarpMind" },
+    { kind: "image", filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
   ] as CustomerLogo[],
 };
 
@@ -504,6 +505,18 @@ export const customerStories = {
       company: "Building WarpMind",
       avatar: { filename: "rahul-joshi.jpg", alt: "Rahul Joshi" },
       productLogo: { filename: "warpmind.png", alt: "WarpMind" },
+    },
+    {
+      quote:
+        "Like AWS Lambda, but the function has memory across invocations and durable reminders out of the box. Durability is invisible — exactly how infrastructure should feel.",
+      name: "Seeta Ramayya Vadali",
+      role: "Senior Software Consultant",
+      company: "Building Seeta AI Assistant",
+      avatar: {
+        filename: "seeta-ramayya-vadali.jpg",
+        alt: "Seeta Ramayya Vadali",
+      },
+      productLogo: { filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
     },
   ] as Testimonial[],
 };
