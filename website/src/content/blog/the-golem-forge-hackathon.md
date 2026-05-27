@@ -130,7 +130,7 @@ Finally, the welcome message and mission progress updates render the internal cl
 ## Daniele Torelli
 
 **Stack:** Rust → WASM (Golem 1.5)
-**Try it:** local or self-hosted (no public bot at time of writing); admin-on-first-write — the first user to message the bot becomes the admin. We self-hosted it ourselves on Golem 1.5.3 against a throwaway BotFather token and it deployed, polled, and answered all four of our test prompts cleanly on the first try.
+**Try it:** no public bot at time of writing, and the source isn't on Daniele's [GitHub](https://github.com/danieletorelli) yet — we hope he'll push it up soon so others can self-host. We tested it ourselves on Golem 1.5.3 against a throwaway BotFather token (admin-on-first-write: the first user to message the bot becomes the admin) and it deployed, polled, and answered all four of our test prompts cleanly on the first try.
 
 ### What he built
 
@@ -323,7 +323,7 @@ The submissions without tests had subtle UX bugs that a test would have caught i
 
 If you'd like to play with what the cohort built, here are the live links that are still up at time of writing:
 
-- **Daniele Torelli** — Rust; no public bot at the moment, but the source builds and runs cleanly locally or self-hosted
+- **Daniele Torelli** — Rust; no public bot at the moment, and the source isn't on his [GitHub](https://github.com/danieletorelli) yet — we hope he'll push it up soon so others can self-host
 - **Seeta Ramayya Vadali** — [@golemclaw_seeta_bot](https://t.me/golemclaw_seeta_bot)
 - **Rahul Joshi** — [@customminiclaw_bot](https://t.me/customminiclaw_bot) · [Mini App](https://webui-six.vercel.app)
 - **Ajay RV** — [@nanashi_lab_claw_bot](https://t.me/nanashi_lab_claw_bot)
