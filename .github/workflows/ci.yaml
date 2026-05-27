@@ -164,7 +164,8 @@ jobs:
           fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
-          use-cache: 'false'
+          cache-shared-key: 'cli-dev-release-ci'
+          cache-save-if: 'true'
       - name: Build CLI test binaries
         env:
           QUIET: true
