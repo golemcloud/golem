@@ -35,6 +35,7 @@ pub mod lucene;
 pub mod mcp_deployment;
 pub mod oplog;
 pub mod parsed_function_name;
+pub mod permission_share;
 pub mod plan;
 pub mod plugin_registration;
 pub mod poem;

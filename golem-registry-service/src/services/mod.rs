@@ -32,6 +32,7 @@ pub mod http_api_deployment;
 pub mod mcp_deployment;
 pub mod oauth2;
 pub mod oauth2_github_client;
+pub mod permission_share;
 pub mod plan;
 pub mod plugin_registration;
 pub mod registry_change_notifier;
