@@ -163,3 +163,7 @@ components:
 - Trace context propagates automatically through HTTP routes and RPC calls
 - Use `context::start_span` from `golem_rust::bindings::golem::api::context` for custom spans
 - Plugin can be activated/deactivated per agent with `golem agent activate-plugin` / `golem agent deactivate-plugin`
+
+## Related Skills
+
+- Load `golem-manage-plugins` for the general plugin installation model (manifest sections, CLI commands, priority, per-environment configuration)

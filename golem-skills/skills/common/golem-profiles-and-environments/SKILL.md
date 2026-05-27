@@ -162,6 +162,8 @@ golem environment sync-deployment-options  # Sync deployment options to the serv
 
 ### Environment-scoped manifest sections
 
+Load `golem-edit-manifest` for the full schema and editing rules of these manifest sections.
+
 Several top-level manifest sections are keyed by environment name:
 
 ```yaml
@@ -214,6 +216,8 @@ resourceDefaults:
 Presets are named configuration overrides defined within components, agents, or component templates. They allow the same codebase to run with different settings per environment.
 
 ### Defining presets
+
+Load `golem-edit-manifest` when adding or modifying preset sections in `golem.yaml` to ensure correct manifest structure.
 
 Presets can be defined at the **component template**, **component**, or **agent** level:
 
