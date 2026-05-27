@@ -19,6 +19,8 @@ pub struct Tracing;
 // Dependencies
 #[test_dep(scope = PerWorker)]
 pub fn tracing() -> Tracing {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     init_tracing_with_default_debug_env_filter(&TracingConfig::test_pretty_without_time(
         "debugging-executor-tests",
     ));
