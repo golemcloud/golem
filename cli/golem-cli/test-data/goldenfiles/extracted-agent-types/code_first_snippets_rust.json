@@ -221,7 +221,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -255,7 +256,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -289,7 +291,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -433,7 +436,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1141,7 +1145,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1187,7 +1192,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1221,7 +1227,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1255,7 +1262,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1289,7 +1297,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1323,7 +1332,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1357,7 +1367,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1391,7 +1402,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1447,7 +1459,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1553,7 +1566,8 @@
           ],
           "type": "Multimodal"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1597,7 +1611,8 @@
           ],
           "type": "Multimodal"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1637,7 +1652,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1909,7 +1925,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -1955,7 +1972,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -2907,7 +2925,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -2945,7 +2964,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -2987,7 +3007,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -3029,7 +3050,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -3227,7 +3249,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -3261,7 +3284,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -5281,7 +5305,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -5547,7 +5572,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -5635,7 +5661,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -5859,7 +5886,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -5915,7 +5943,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -5949,7 +5978,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -5983,7 +6013,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -6017,7 +6048,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -6051,7 +6083,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -6095,7 +6128,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -6125,7 +6159,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -6169,7 +6204,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -6193,7 +6229,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       }
     ],
     "mode": "Durable",
@@ -6425,7 +6462,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -6459,7 +6497,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -6493,7 +6532,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -6637,7 +6677,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7345,7 +7386,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7391,7 +7433,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7425,7 +7468,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7459,7 +7503,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7493,7 +7538,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7527,7 +7573,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7561,7 +7608,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7595,7 +7643,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7651,7 +7700,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7757,7 +7807,8 @@
           ],
           "type": "Multimodal"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7801,7 +7852,8 @@
           ],
           "type": "Multimodal"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -7841,7 +7893,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -8113,7 +8166,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -8159,7 +8213,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -9111,7 +9166,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -9149,7 +9205,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -9191,7 +9248,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -9233,7 +9291,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -9431,7 +9490,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -9465,7 +9525,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -9489,7 +9550,8 @@
           "elements": [],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -9513,7 +9575,8 @@
           "elements": [],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -11533,7 +11596,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -11799,7 +11863,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -11887,7 +11952,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -12111,7 +12177,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -12167,7 +12234,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -12201,7 +12269,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -12235,7 +12304,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -12269,7 +12339,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -12303,7 +12374,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -12347,7 +12419,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -12377,7 +12450,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -12421,7 +12495,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       },
       {
         "description": "",
@@ -12445,7 +12520,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       }
     ],
     "mode": "Durable",
@@ -12492,7 +12568,8 @@
           ],
           "type": "Tuple"
         },
-        "promptHint": null
+        "promptHint": null,
+        "readOnly": null
       }
     ],
     "mode": "Durable",

@@ -720,6 +720,7 @@ mod tests {
             input_schema,
             output_schema: ExtendedDataSchema::Tuple(vec![]),
             http_endpoint: endpoints,
+            read_only: None,
         }
     }
 

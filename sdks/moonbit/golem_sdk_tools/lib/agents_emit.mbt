@@ -382,6 +382,33 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
     Some(s) => make_apply(make_constr_no_args("Some"), [make_string_expr(s)])
     None => make_constr_no_args("None")
   }
+  // `read_only` is derived from the parser; `uses_principal` is *always* derived from
+  // the method signature (presence of a `Principal` parameter) and is never accepted
+  // as user input.
+  let read_only_expr = match info.read_only {
+    Some(ro) => {
+      let cache_policy_expr = match ro.cache_policy {
+        NoCache =>
+          make_qualified_constr("common", "CachePolicy", "NoCache")
+        UntilWrite =>
+          make_qualified_constr("common", "CachePolicy", "UntilWrite")
+        Ttl(nanos) =>
+          make_apply(
+            make_qualified_constr("common", "CachePolicy", "Ttl"),
+            [make_uint64_expr(nanos)],
+          )
+      }
+      let uses_principal = info.params.iter().any(fn(p) {
+        is_principal_type(p.1)
+      })
+      let ro_config = make_record([
+        make_field("cache_policy", cache_policy_expr),
+        make_field("uses_principal", make_bool_expr(uses_principal)),
+      ])
+      make_apply(make_constr_no_args("Some"), [ro_config])
+    }
+    None => make_constr_no_args("None")
+  }
   make_record([
     make_field("name", make_string_expr(info.name)),
     make_field("description", make_string_expr(info.description)),
@@ -389,6 +416,7 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
     make_field("prompt_hint", hint_expr),
     make_field("input_schema", input_schema),
     make_field("output_schema", output_schema),
+    make_field("read_only", read_only_expr),
   ])
 }
 

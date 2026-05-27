@@ -18,7 +18,7 @@ package golem.runtime.macros
 
 import golem.config.ConfigSchema
 import golem.data.GolemSchema
-import golem.runtime.{AgentMetadata, Snapshotting, SnapshottingConfig}
+import golem.runtime.{AgentMetadata, CachePolicy, Snapshotting, SnapshottingConfig}
 import golem.runtime.http.{
   HeaderVariable,
   HttpEndpointDetails,
@@ -81,6 +81,7 @@ object AgentDefinitionMacroImpl {
     val promptType      = typeOf[golem.runtime.annotations.prompt]
     val endpointType    = typeOf[golem.runtime.annotations.endpoint]
     val headerType      = typeOf[golem.runtime.annotations.header]
+    val readOnlyType    = typeOf[golem.runtime.annotations.readOnly]
 
     val traitDescription = annotationString(c)(typeSymbol, descriptionType)
     val traitMode        =
@@ -88,10 +89,28 @@ object AgentDefinitionMacroImpl {
 
     val httpMountOpt = extractHttpMount(c)(typeSymbol, agentTypeName, agentDefinitionFQN)
     val hasMount     = httpMountOpt.isDefined
+    val isEphemeral  = agentDefinitionModeStringValue(c)(typeSymbol, agentDefinitionFQN).contains("ephemeral")
+
+    if (isEphemeral) {
+      tpe.decls.foreach {
+        case method: MethodSymbol if method.isAbstract && method.isMethod && method.name.toString != "new" =>
+          if (
+            method.annotations.exists(ann => ann.tree.tpe != null && ann.tree.tpe =:= readOnlyType)
+          ) {
+            c.abort(
+              c.enclosingPosition,
+              s"Agent '$agentTypeName' is ephemeral but method '${method.name.toString}' is marked with @readOnly. " +
+                s"Read-only methods have no effect on ephemeral agents (no shared state to read). " +
+                s"Remove the @readOnly annotation or change the agent mode to Durable."
+            )
+          }
+        case _ => ()
+      }
+    }
 
     val methods = tpe.decls.collect {
       case method: MethodSymbol if method.isAbstract && method.isMethod && method.name.toString != "new" =>
-        methodMetadata(c)(method, descriptionType, promptType, endpointType, headerType, agentTypeName, hasMount)
+        methodMetadata(c)(method, descriptionType, promptType, endpointType, headerType, readOnlyType, agentTypeName, hasMount)
     }.toList
 
     val idSchema = inferIdSchema(c)(tpe)
@@ -155,6 +174,7 @@ object AgentDefinitionMacroImpl {
     promptType: c.universe.Type,
     endpointType: c.universe.Type,
     headerType: c.universe.Type,
+    readOnlyType: c.universe.Type,
     agentName: String,
     hasMount: Boolean
   ): c.Tree = {
@@ -186,6 +206,8 @@ object AgentDefinitionMacroImpl {
       hasMount
     )
 
+    val readOnlyExpr = extractReadOnlyExpr(c)(method, readOnlyType, principalParamNames.nonEmpty)
+
     q"""
       _root_.golem.runtime.MethodMetadata(
         name = $methodName,
@@ -194,9 +216,56 @@ object AgentDefinitionMacroImpl {
         mode = _root_.scala.None,
         input = $inputSchema,
         output = $outputSchema,
-        httpEndpoints = _root_.scala.List(..$endpointTrees)
+        httpEndpoints = _root_.scala.List(..$endpointTrees),
+        readOnly = $readOnlyExpr
       )
     """
+  }
+
+  private def extractReadOnlyExpr(c: blackbox.Context)(
+    method: c.universe.MethodSymbol,
+    readOnlyType: c.universe.Type,
+    usesPrincipal: Boolean
+  ): c.Tree = {
+    import c.universe._
+
+    val readOnlyAnn = method.annotations.find(ann => ann.tree.tpe != null && ann.tree.tpe =:= readOnlyType)
+
+    readOnlyAnn match {
+      case None => q"_root_.scala.None"
+      case Some(ann) =>
+        val args     = ann.tree.children.tail
+        val cacheStr = extractNamedStringArg(c)(args, "cache", 0).getOrElse("until-write")
+        val policyTree = CachePolicy.parse(cacheStr) match {
+          case Left(err) =>
+            c.abort(c.enclosingPosition, s"@readOnly on method '${method.name.toString}': $err")
+          case Right(CachePolicy.NoCache)    => q"_root_.golem.runtime.CachePolicy.NoCache"
+          case Right(CachePolicy.UntilWrite) => q"_root_.golem.runtime.CachePolicy.UntilWrite"
+          case Right(CachePolicy.Ttl(nanos)) =>
+            q"_root_.golem.runtime.CachePolicy.Ttl($nanos)"
+        }
+        q"_root_.scala.Some(_root_.golem.runtime.ReadOnlyConfig($policyTree, $usesPrincipal))"
+    }
+  }
+
+  private def agentDefinitionModeStringValue(
+    c: blackbox.Context
+  )(symbol: c.universe.Symbol, annFQN: String): Option[String] = {
+    import c.universe._
+    symbol.annotations.collectFirst {
+      case ann if ann.tree.tpe != null && ann.tree.tpe.typeSymbol.fullName == annFQN =>
+        ann.tree.children.tail.drop(1).headOption.flatMap {
+          case Literal(Constant(value: String)) =>
+            val v = value.trim.toLowerCase
+            if (v.isEmpty) None else Some(v)
+          case Literal(Constant(null)) => None
+          case Select(_, TermName("Durable"))    => Some("durable")
+          case Select(_, TermName("Ephemeral"))  => Some("ephemeral")
+          case Ident(TermName("Durable"))        => Some("durable")
+          case Ident(TermName("Ephemeral"))      => Some("ephemeral")
+          case _                                 => None
+        }
+    }.flatten
   }
 
   private def methodInputSchema(c: blackbox.Context)(method: c.universe.MethodSymbol): c.Tree = {

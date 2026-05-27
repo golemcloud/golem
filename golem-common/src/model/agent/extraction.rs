@@ -138,6 +138,11 @@ pub async fn extract_agent_types_with_streams(
     match results.0 {
         Ok(results) => {
             let agent_types: Vec<AgentType> = results.into_iter().map(AgentType::from).collect();
+            for agent_type in &agent_types {
+                agent_type.validate().map_err(|e| {
+                    anyhow!("Invalid agent type returned by discover-agent-types: {e}")
+                })?;
+            }
             trace!("Discovered agent types: {:#?}", agent_types);
             Ok(agent_types)
         }
