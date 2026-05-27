@@ -126,7 +126,6 @@ declare_structs! {
     pub struct AccountUpdate {
         pub current_revision: AccountRevision,
         pub name: Option<String>,
-        pub email: Option<AccountEmail>,
     }
 
     pub struct AccountSetRoles {
