@@ -77,24 +77,27 @@ export const previewBanner = {
   bodyHtml: `<strong>Golem Cloud is currently in Developer Preview</strong> — free to use, AS-IS, with no SLAs or data-retention guarantees. Preview workload data is routinely wiped. The Preview is intended for evaluation, experimentation, and prototyping — not production. Paid tiers with full guarantees and 90-day retention are coming soon. <a href="/legal#preview">See legal →</a>`,
 };
 
-export const agentSecondCallout = {
-  heading: "What's an agent-second?",
-  leadHtml: `An agent-second is one second of a single agent in memory, holding its tier's allotment of RAM. RAM-per-agent defaults to:`,
-  tiers: [
+export const meteringExplainer = {
+  heading: "How Golem Cloud meters usage",
+  leadHtml: `Golem Cloud meters four dimensions, each priced independently. <strong>You pay only for what you use</strong> — no monthly base, no minimums.`,
+  dimensions: [
     {
-      html: `<strong>Free:</strong> 128 MB per agent (fixed — cannot be exceeded)`,
+      html: `<strong>Compute</strong> — measured in <em>Golem Compute Units</em> (GCU). Deterministic per invocation: the same workload produces the same GCU regardless of which machine runs it.`,
     },
     {
-      html: `<strong>Standard:</strong> 512 MB per agent (overage available for agents needing more)`,
+      html: `<strong>Memory</strong> — GB-seconds while your agent's code is <em>actually executing</em>. Idle agents, suspended agents, and time spent waiting on I/O don't accrue memory charges.`,
     },
     {
-      html: `<strong>Custom:</strong> up to 2.1 GB per agent by default; configurable`,
+      html: `<strong>Durable storage</strong> — GB-month for agents that retain state across restarts. When an agent is evicted, its meter stops.`,
+    },
+    {
+      html: `<strong>Ephemeral storage</strong> — GB-month for filesystem scratch space during execution.`,
     },
   ],
-  footerHtml: `An idle agent in memory continues to consume agent-seconds. An agent that's been <em>suspended</em> — oplog-persisted with no in-memory state — does not. Agents requesting more RAM than their tier default incur RAM overage charges per GB-second of excess. Storage costs continue for the persisted oplog regardless of agent state.`,
+  footerHtml: `Per-dimension prices finalized at launch. Multi-currency support (USD, GBP, EUR) planned.`,
 };
 
-export const pricingPreludeHtml = `<strong>Pricing is tentative</strong> — final numbers at launch. Unlike providers that host you on someone else's compute, your code runs on our infrastructure. The free tier is small for that reason.`;
+export const pricingPreludeHtml = `<strong>Pay only for what you use.</strong> No monthly base, no minimums. Final per-dimension prices set at launch.`;
 
 export interface PricingSpec {
   label: string;
@@ -111,11 +114,10 @@ export interface PricingCard {
   name: string;
   priceAmount: string;
   priceUnit?: string;
-  priceTalk?: boolean;
+  priceTagline?: string;
   pill?: string;
   emphasized?: boolean;
   specs: PricingSpec[];
-  overagesHtml?: string;
   availability: string;
   cta: PricingCta;
 }
@@ -126,12 +128,13 @@ export const pricingCards: PricingCard[] = [
     priceAmount: "$0",
     priceUnit: "/month",
     specs: [
+      { label: "Compute", valueHtml: "1,000 GCU/mo" },
       { label: "RAM per agent", valueHtml: "128 MB <em>(fixed)</em>" },
-      { label: "Agent-seconds", valueHtml: "500,000/mo" },
-      { label: "Storage", valueHtml: "1 GB" },
-      { label: "Retention", valueHtml: "7 days" },
+      { label: "Disk per agent", valueHtml: "256 MB <em>(fixed)</em>" },
+      { label: "Concurrent agents", valueHtml: "10" },
+      { label: "Apps / envs", valueHtml: "10 / 10" },
+      { label: "Support", valueHtml: "Community" },
     ],
-    overagesHtml: "—",
     availability: "Developer Preview",
     cta: {
       label: "Get started",
@@ -140,50 +143,35 @@ export const pricingCards: PricingCard[] = [
     },
   },
   {
-    name: "Standard",
-    priceAmount: "$20",
-    priceUnit: "/month",
+    name: "Paid",
+    priceAmount: "$0",
+    priceUnit: "/month base",
+    priceTagline: "Pay only for what you use",
     pill: "Coming Soon",
     emphasized: true,
     specs: [
-      { label: "RAM per agent", valueHtml: "512 MB" },
-      { label: "Agent-seconds", valueHtml: "2,000,000/mo" },
-      { label: "Storage", valueHtml: "25 GB" },
-      { label: "Retention", valueHtml: "30 days <em>(up to 90)</em>" },
+      { label: "Compute", valueHtml: "$/GCU" },
+      { label: "Memory", valueHtml: "$/GB-second" },
+      { label: "Durable storage", valueHtml: "$/GB-month" },
+      { label: "Ephemeral storage", valueHtml: "$/GB-month" },
+      { label: "RAM per agent", valueHtml: "Up to 1 GB <em>(via support)</em>" },
+      { label: "Disk per agent", valueHtml: "Up to 10 GB <em>(configurable)</em>" },
+      { label: "Concurrent agents", valueHtml: "Up to 5,000 <em>(via support)</em>" },
+      { label: "Apps / envs", valueHtml: "1,000 / 1,000" },
+      { label: "Support", valueHtml: "Community + email" },
     ],
-    overagesHtml: `<span class="overage-line"><code>$15</code> per million agent-s</span><span class="overage-line"><code>$30</code> per million GB-s excess RAM</span><span class="overage-line"><code>$1</code> per GB-month storage</span>`,
     availability: "Coming Soon",
     cta: {
       label: "Notify me",
-      href: "mailto:hello@golem.cloud?subject=Notify%20me%20about%20Golem%20Cloud%20Standard",
+      href: "mailto:hello@golem.cloud?subject=Notify%20me%20about%20Golem%20Cloud%20Paid",
       variant: "primary",
     },
   },
-  {
-    name: "Custom",
-    priceAmount: "Talk to us",
-    priceTalk: true,
-    specs: [
-      { label: "RAM per agent", valueHtml: "Up to 2.1 GB <em>(configurable)</em>" },
-      { label: "Agent-seconds", valueHtml: "Tunable" },
-      { label: "Storage", valueHtml: "Tunable" },
-      { label: "Retention", valueHtml: "Unlimited" },
-    ],
-    overagesHtml: "Custom — every axis tunable",
-    availability: "Coming Soon",
-    cta: { label: "Talk to sales", href: "mailto:sales@golem.cloud", variant: "secondary" },
-  },
 ];
 
-// Support row is identical for all three tiers and rendered manually
-// in markup since it doesn't need a value variant.
-export const supportRow: Record<string, string> = {
-  Free: "Community",
-  Standard: "Community + email",
-  Custom: "Dedicated, SLAs",
+export const headroomCallout = {
+  bodyHtml: `<strong>Need more than the Paid defaults?</strong> RAM per agent, concurrency, app/environment counts, and compute caps raise via support for legitimate workloads — same per-dimension prices, no separate tier. Email <a href="mailto:sales@golem.cloud?subject=Golem%20Cloud%20Paid%20—%20headroom%20request">sales@golem.cloud</a>.`,
 };
-
-export const retentionNote = `On the paid Standard tier, oplog history is retained for up to 90 days, configurable per workspace. Retained oplog is compressed and stored to S3 — your storage line covers both active and archival.`;
 
 // =============================================================================
 // Section 4 — On-Prem
@@ -277,16 +265,16 @@ export const comparisonTable = {
       label: "Pricing model",
       cells: [
         { text: "Free" },
-        { text: "Agent-seconds + RAM + storage" },
+        { text: "Usage-metered: GCU + memory + storage" },
         { text: "Annual license" },
       ],
     },
     {
-      label: "Retention",
+      label: "Plan tiers",
       cells: [
-        { text: "Your responsibility" },
-        { text: "90 days configurable" },
-        { text: "Your responsibility" },
+        { text: "—" },
+        { text: "Free + Paid" },
+        { text: "Annual" },
       ],
     },
     {
@@ -332,24 +320,32 @@ export const faq = {
       aHtml: `Evaluate, experiment, prototype. The Preview is not intended for production workloads.`,
     },
     {
-      q: "When will paid tiers launch?",
+      q: "When will the Paid tier launch?",
       aHtml: `Coming soon — sign up for the waitlist and we'll notify you.`,
     },
     {
-      q: "Why is the free tier on paid Cloud going to be small?",
+      q: "How is compute measured?",
+      aHtml: `In <em>Golem Compute Units</em> (GCU). One GCU represents a fixed amount of WebAssembly execution work. Because the unit is deterministic, the same workload produces the same GCU on any machine.`,
+    },
+    {
+      q: "Do idle or suspended agents cost me money?",
+      aHtml: `No. Memory is billed only while your agent's code is actively executing. Durable-storage metering stops when an agent is evicted; ephemeral storage stops at the end of each invocation. No traffic, no bill.`,
+    },
+    {
+      q: "What happens if I hit a limit?",
+      aHtml: `Concurrent-agent and app/environment caps reject the request at allocation time. Compute, memory, and storage are usage-metered without hard caps; raise the per-agent ceilings by contacting support if your workload outgrows the default.`,
+    },
+    {
+      q: "Why is the free tier capped at 1,000 GCU/month?",
       aHtml: `Because compute runs on our infrastructure, unlike providers that host you on someone else's compute. The runtime is free; what you pay for is what we run for you.`,
     },
     {
-      q: "What happens if I exceed my plan?",
-      aHtml: `Overage fees on agent-seconds, RAM, and storage. Serious workloads should move to Custom.`,
-    },
-    {
-      q: "What's the retention policy?",
-      aHtml: `90 days configurable on managed Cloud (Standard tier). Custom is unlimited. We compress and store retained oplog to S3 under your storage line.`,
-    },
-    {
       q: "Why does Golem charge for storage when other runtimes don't?",
-      aHtml: `Golem's durability depends on a persistent oplog of every effect. The oplog <em>is</em> the recovery mechanism — so we charge for the storage that makes byte-identical replay possible. Retention is configurable for that reason.`,
+      aHtml: `Golem's durability depends on a persistent oplog of every effect. The oplog <em>is</em> the recovery mechanism — so we charge for the storage that makes byte-identical replay possible.`,
+    },
+    {
+      q: "Will invoices come in my local currency?",
+      aHtml: `At launch, USD, GBP, and EUR are planned. Other currencies on request.`,
     },
     {
       q: "What's in Golem Cloud On-Prem that's NOT in the open source edition?",

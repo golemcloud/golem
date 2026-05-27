@@ -10,11 +10,10 @@ import {
   paths,
   cloudSection,
   previewBanner,
-  agentSecondCallout,
+  meteringExplainer,
   pricingPreludeHtml,
   pricingCards,
-  supportRow,
-  retentionNote,
+  headroomCallout,
   onPrem,
   comparisonTable,
   ziverge,
@@ -76,14 +75,14 @@ import {
           <p set:html={previewBanner.bodyHtml} />
         </aside>
 
-        <!-- 3B. What's an agent-second? -->
-        <aside class="agent-second-callout">
-          <h3>{agentSecondCallout.heading}</h3>
-          <p set:html={agentSecondCallout.leadHtml} />
+        <!-- 3B. Metering explainer -->
+        <aside class="metering-explainer">
+          <h3>{meteringExplainer.heading}</h3>
+          <p set:html={meteringExplainer.leadHtml} />
           <ul>
-            {agentSecondCallout.tiers.map((tier) => <li set:html={tier.html} />)}
+            {meteringExplainer.dimensions.map((d) => <li set:html={d.html} />)}
           </ul>
-          <p set:html={agentSecondCallout.footerHtml} />
+          <p class="metering-footer" set:html={meteringExplainer.footerHtml} />
         </aside>
 
         <!-- 3C. Pricing cards -->
@@ -97,11 +96,10 @@ import {
                 <header class="pricing-header">
                   <h3>{card.name}</h3>
                   <div class="pricing-price">
-                    <span class:list={["price-amount", card.priceTalk && "price-talk"]}>
-                      {card.priceAmount}
-                    </span>
+                    <span class="price-amount">{card.priceAmount}</span>
                     {card.priceUnit && <span class="price-unit">{card.priceUnit}</span>}
                   </div>
+                  {card.priceTagline && <p class="price-tagline">{card.priceTagline}</p>}
                 </header>
                 <dl class="pricing-specs">
                   {card.specs.map((spec) => (
@@ -110,14 +108,6 @@ import {
                       <dd set:html={spec.valueHtml} />
                     </div>
                   ))}
-                  <div class="overage-row">
-                    <dt>Overages</dt>
-                    <dd set:html={card.overagesHtml} />
-                  </div>
-                  <div>
-                    <dt>Support</dt>
-                    <dd>{supportRow[card.name]}</dd>
-                  </div>
                 </dl>
                 <footer class="pricing-footer">
                   <span class="availability">{card.availability}</span>
@@ -137,7 +127,9 @@ import {
           }
         </div>
 
-        <p class="retention-note">{retentionNote}</p>
+        <aside class="headroom-callout">
+          <p set:html={headroomCallout.bodyHtml} />
+        </aside>
       </div>
     </section>
 
@@ -456,45 +448,47 @@ import {
     font-weight: 500;
   }
 
-  /* Agent-second callout */
-  .agent-second-callout {
+  /* Metering explainer */
+  .metering-explainer {
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: 10px;
     padding: 1.5rem 1.7rem;
     margin: 0 0 2.5rem;
   }
-  .agent-second-callout h3 {
+  .metering-explainer h3 {
     font-size: 1.1rem;
     color: var(--accent);
     margin: 0 0 0.7rem;
     font-weight: 600;
     letter-spacing: -0.01em;
   }
-  .agent-second-callout p {
+  .metering-explainer p {
     font-size: 0.95rem;
     line-height: 1.6;
     color: var(--text-secondary);
     margin: 0 0 0.8rem;
   }
-  .agent-second-callout p:last-child {
-    margin-bottom: 0;
-  }
-  .agent-second-callout ul {
+  .metering-explainer ul {
     margin: 0 0 0.85rem 0;
     padding-left: 1.2rem;
     color: var(--text-secondary);
     font-size: 0.95rem;
     line-height: 1.65;
   }
-  .agent-second-callout li {
-    margin-bottom: 0.2rem;
+  .metering-explainer li {
+    margin-bottom: 0.4rem;
   }
-  .agent-second-callout :global(strong) {
+  .metering-explainer .metering-footer {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0;
+  }
+  .metering-explainer :global(strong) {
     color: var(--text);
     font-weight: 500;
   }
-  .agent-second-callout :global(em) {
+  .metering-explainer :global(em) {
     color: var(--accent);
     font-style: normal;
   }
@@ -515,10 +509,11 @@ import {
     display: grid;
     grid-template-columns: 1fr;
     gap: 1.25rem;
+    max-width: 820px;
   }
-  @media (min-width: 900px) {
+  @media (min-width: 760px) {
     .pricing-grid {
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       align-items: stretch;
     }
   }
@@ -572,8 +567,11 @@ import {
     font-size: 0.92rem;
     color: var(--text-muted);
   }
-  .price-talk {
-    font-size: 1.5rem;
+  .price-tagline {
+    margin: 0.5rem 0 0;
+    font-size: 0.9rem;
+    color: var(--accent);
+    font-weight: 500;
   }
 
   .pricing-specs {
@@ -617,16 +615,6 @@ import {
     font-size: 0.9em;
     font-weight: 600;
   }
-  .overage-row dd {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .overage-line {
-    font-size: 0.86rem;
-    color: var(--text-secondary);
-  }
-
   .pricing-footer {
     margin-top: 1.25rem;
     padding-top: 1rem;
@@ -654,12 +642,27 @@ import {
     font-size: 0.9rem;
   }
 
-  .retention-note {
-    font-size: 0.88rem;
-    color: var(--text-muted);
-    margin-top: 1.5rem;
-    line-height: 1.55;
-    max-width: 720px;
+  .headroom-callout {
+    margin-top: 1.75rem;
+    padding: 1.1rem 1.4rem;
+    background: var(--bg-card);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    max-width: 820px;
+  }
+  .headroom-callout p {
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .headroom-callout :global(strong) {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .headroom-callout :global(a) {
+    color: var(--accent);
+    font-weight: 500;
   }
 
   /* ============================================================
