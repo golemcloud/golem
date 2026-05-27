@@ -26,7 +26,7 @@ use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_f
 use golem_test_framework::config::WorkerExecutorClusterControl;
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
-    WorkerExecutorClusterControlStub,
+    WorkerExecutorClusterControlDispatch, WorkerExecutorClusterControlStub,
 };
 use test_r::{tag_suite, test_dep};
 

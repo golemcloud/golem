@@ -302,6 +302,16 @@ impl WorkerExecutorTestDependencies {
         let component_writer: Arc<FileSystemComponentWriter> =
             Arc::new(FileSystemComponentWriter::new(&component_service_directory).await);
 
+        // `FileSystemComponentWriter::new` `remove_dir_all`s the root and
+        // then only re-creates subdirectories lazily on the first component
+        // write. The `HostedDep::descriptor` impl below eagerly
+        // canonicalises `component_service_directory`, so we materialise
+        // the empty root here to keep `descriptor()` valid even before any
+        // test has written a component.
+        tokio::fs::create_dir_all(&component_service_directory)
+            .await
+            .unwrap();
+
         Self {
             redis,
             redis_monitor,

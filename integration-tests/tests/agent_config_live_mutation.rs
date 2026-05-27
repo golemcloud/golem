@@ -19,7 +19,8 @@ use convert_case::ccase;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
-    WorkerExecutorClusterControl, WorkerExecutorClusterControlStub,
+    WorkerExecutorClusterControl, WorkerExecutorClusterControlDispatch,
+    WorkerExecutorClusterControlStub,
 };
 use std::sync::Arc;
 use test_r::{tag_suite, test, test_dep};

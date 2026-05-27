@@ -35,7 +35,8 @@ mod tests {
     use golem_test_framework::components::rdb::DbInfo;
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
-        WorkerExecutorClusterControl, WorkerExecutorClusterControlStub,
+        WorkerExecutorClusterControl, WorkerExecutorClusterControlDispatch,
+        WorkerExecutorClusterControlStub,
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 

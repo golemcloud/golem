@@ -27,7 +27,10 @@ use chrono::{DateTime, Utc};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 pub use env::{RedisControl, RedisControlStub};
-pub use env::{WorkerExecutorClusterControl, WorkerExecutorClusterControlStub};
+pub use env::{
+    WorkerExecutorClusterControl, WorkerExecutorClusterControlDispatch,
+    WorkerExecutorClusterControlStub,
+};
 use golem_client::api::RegistryServiceClient;
 use golem_client::model::{AccountSetRoles, TokenCreation};
 use golem_common::model::account::{AccountCreation, AccountEmail};
