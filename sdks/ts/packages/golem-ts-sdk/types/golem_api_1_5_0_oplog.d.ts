@@ -486,6 +486,10 @@ declare module 'golem:api/oplog@1.5.0' {
   export type EphemeralCannotSuspend = {
     reason: string;
   };
+  export type ReadOnlyViolation = {
+    method: string;
+    hostFunction: string;
+  };
   /**
    * Describes the error that occurred in the agent
    */
@@ -553,6 +557,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'ephemeral-cannot-suspend'
     val: EphemeralCannotSuspend
+  } |
+  {
+    tag: 'read-only-violation'
+    val: ReadOnlyViolation
   };
   export type RawCreateParameters = {
     timestamp: Datetime;
