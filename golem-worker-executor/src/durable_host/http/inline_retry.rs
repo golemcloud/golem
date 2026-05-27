@@ -54,13 +54,14 @@ use std::time::Duration;
 use tracing::Instrument;
 use wasmtime_wasi::OutputStream;
 use wasmtime_wasi_http::HttpConnectionPool;
-use wasmtime_wasi_http::bindings::http::types as wasi_http_types;
-use wasmtime_wasi_http::body::{
+use wasmtime_wasi_http::p2::bindings::http::types as wasi_http_types;
+use wasmtime_wasi_http::p2::body::{
     HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext,
 };
-use wasmtime_wasi_http::types::{
+use wasmtime_wasi_http::p2::default_send_request_with_pool;
+use wasmtime_wasi_http::p2::types::{
     FutureIncomingResponseHandle, HostFutureIncomingResponse, IncomingResponse,
-    OutgoingRequestConfig, default_send_request_with_pool,
+    OutgoingRequestConfig,
 };
 
 fn resolve_matching_status_retry_policy(
@@ -1128,10 +1129,10 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     stream_rep: u32,
 ) -> Result<bool, anyhow::Error> {
     use wasmtime::component::Resource;
-    use wasmtime_wasi_http::bindings::http::types::FutureIncomingResponse;
-    use wasmtime_wasi_http::bindings::http::types::OutgoingBody;
-    use wasmtime_wasi_http::body::HostOutgoingBody as HostOutgoingBodyType;
-    use wasmtime_wasi_http::types::HostFutureIncomingResponse;
+    use wasmtime_wasi_http::p2::bindings::http::types::FutureIncomingResponse;
+    use wasmtime_wasi_http::p2::bindings::http::types::OutgoingBody;
+    use wasmtime_wasi_http::p2::body::HostOutgoingBody as HostOutgoingBodyType;
+    use wasmtime_wasi_http::p2::types::HostFutureIncomingResponse;
 
     // 1. Find the request handle and state
     let request_handle = match ctx.state.find_request_handle_by_output_stream(stream_rep) {
@@ -1282,7 +1283,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
 ) -> Result<bool, anyhow::Error> {
     use wasmtime::component::Resource;
     use wasmtime_wasi::p2::bindings::io::streams::InputStream as WasiInputStream;
-    use wasmtime_wasi_http::bindings::http::types::IncomingBody as WasiIncomingBody;
+    use wasmtime_wasi_http::p2::bindings::http::types::IncomingBody as WasiIncomingBody;
 
     // 1. Find the request state via the stream handle.
     //    The stream rep IS the request tracking handle for incoming body streams.
@@ -1404,7 +1405,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
                 Some(start) if start == consumed_len => {
                     // Range matches — swap body+stream
                     let (_parts, body) = response.resp.into_parts();
-                    let new_body = HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
+                    let new_body = HostIncomingBody::new(body, between_bytes_timeout);
 
                     // Swap IncomingBody at body_handle, then take stream from it
                     let body_entry: &mut HostIncomingBody =
@@ -1443,7 +1444,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
         _ if original_status == Some(status) && consumed_len == 0 => {
             // Full response with nothing consumed yet — swap body+stream directly
             let (_parts, body) = response.resp.into_parts();
-            let new_body = HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
+            let new_body = HostIncomingBody::new(body, between_bytes_timeout);
 
             let body_entry: &mut HostIncomingBody =
                 ctx.table()
@@ -1471,7 +1472,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
             // the previously consumed data would require the same OOM-prone
             // allocation we are trying to avoid.
             let (_parts, body) = response.resp.into_parts();
-            let new_body = HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
+            let new_body = HostIncomingBody::new(body, between_bytes_timeout);
 
             // Swap IncomingBody at body_handle first
             let body_entry: &mut HostIncomingBody =
@@ -1656,11 +1657,11 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
     // a no-op when the response was not produced through the pool.
     if let Some(rep) = rejected_response_rep {
         let resource = wasmtime::component::Resource::<
-            wasmtime_wasi_http::types::HostIncomingResponse,
+            wasmtime_wasi_http::p2::types::HostIncomingResponse,
         >::new_borrow(rep);
         if let Ok(resp) = ctx
             .table()
-            .get::<wasmtime_wasi_http::types::HostIncomingResponse>(&resource)
+            .get::<wasmtime_wasi_http::p2::types::HostIncomingResponse>(&resource)
         {
             resp.poison_pooled_connection();
         }

@@ -46,7 +46,7 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
 use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
-use wasmtime_wasi_http::body::{FailingStream, HostIncomingBodyStream};
+use wasmtime_wasi_http::p2::body::{FailingStream, HostIncomingBodyStream};
 
 impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     async fn read(

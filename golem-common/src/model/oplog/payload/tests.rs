@@ -32,7 +32,7 @@ use std::ops::Add;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::StreamError;
 use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
-use wasmtime_wasi_http::bindings::http::types::{
+use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
 };
 
