@@ -31,9 +31,7 @@ mod tests {
     use golem_rust::value_and_type::IntoValue;
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, ConfigSchema, MultimodalSchema};
     use golem_rust::{Schema, agent_definition, agent_implementation, agentic::BaseAgent};
-    use golem_rust_macro::{
-        FromValueAndType, IntoValue, description, endpoint, prompt, read_only,
-    };
+    use golem_rust_macro::{FromValueAndType, IntoValue, description, endpoint, prompt, read_only};
     use std::fmt::Debug;
     use test_r::test;
     use wasip2::clocks::wall_clock::Datetime;
@@ -1502,10 +1500,7 @@ mod tests {
         }
         assert!(!ro_ttl.uses_principal);
 
-        let ro_principal = m_principal
-            .read_only
-            .as_ref()
-            .expect("read_only expected");
+        let ro_principal = m_principal.read_only.as_ref().expect("read_only expected");
         assert!(matches!(ro_principal.cache_policy, CachePolicy::UntilWrite));
         assert!(
             ro_principal.uses_principal,
