@@ -78,7 +78,7 @@ fn card(lower_positive: Vec<PermissionPattern>, upper_positive: Vec<PermissionPa
         created_at: Utc::now(),
         expires_at: None,
         system_card: false,
-        polymorphic: false,
+        managed_by: None,
     }
 }
 

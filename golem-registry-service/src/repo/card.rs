@@ -169,16 +169,16 @@ impl CardRepo for DbCardRepo<PostgresPool> {
                     let inserted: CardRecord = tx.fetch_one_as(
                         sqlx::query_as(indoc! { r#"
                             INSERT INTO cards
-                                (card_id, data, created_at, expires_at, system_card, polymorphic)
+                                (card_id, data, created_at, expires_at, system_card, managed_by)
                             VALUES ($1, $2, $3, $4, $5, $6)
-                            RETURNING card_id, data, created_at, expires_at, system_card, polymorphic
+                            RETURNING card_id, data, created_at, expires_at, system_card, managed_by
                         "#})
                         .bind(record.card_id)
                         .bind(record.data)
                         .bind(record.created_at)
                         .bind(record.expires_at)
                         .bind(record.system_card)
-                        .bind(record.polymorphic),
+                        .bind(record.managed_by)
                     )
                     .await?;
 
