@@ -680,7 +680,7 @@ description = "Runs all CLI integration tests in one process"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration -- --nocapture --test-threads=3 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration -- --nocapture --test-threads=4 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-group1]
