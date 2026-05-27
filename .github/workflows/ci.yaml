@@ -257,7 +257,8 @@ jobs:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-  cli-integration-tests-fat:
+  it-cli:
+    name: it-cli
     env:
       CARGO_BUILD_JOBS: 10
       GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
@@ -364,12 +365,12 @@ jobs:
         env:
           QUIET: true
           GOLEM_PRESET: quick
-        run: cargo make --profile ci cli-integration-tests-fat
+        run: cargo make --profile ci cli-integration-tests
         timeout-minutes: 30
       - uses: ./.github/actions/publish-test-report
         if: always()
         with:
-          artifact-name: cli-integration-tests-fat-report
+          artifact-name: it-cli-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   scala-sdk-integration-tests:
