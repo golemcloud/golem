@@ -103,4 +103,4 @@ To find which test components depend on a specific SDK, check their `Cargo.toml`
 3. If TS SDK was changed: rebuilt agent template WASM before components
 4. Followed the component's specific `AGENTS.md` build instructions
 5. Confirmed the expected `.wasm` artifact now exists under `test-components/`
-6. Ran the relevant tests after the rebuild (`cargo make worker-executor-tests`, `cargo make integration-tests`, or `cargo make cli-tests`)
+6. Ran the relevant tests after the rebuild (`cargo make worker-executor-tests`, `cargo make integration-tests`, or `cargo make cli-integration-tests`)
