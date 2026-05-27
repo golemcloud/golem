@@ -31,7 +31,10 @@ use golem_common::model::plugin_registration::{
 };
 use golem_common::model::{AgentStatus, OplogIndex, ScanCursor};
 use golem_common::{agent_id, data_value};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, TestDependencies, WorkerExecutorClusterControl,
+    WorkerExecutorClusterControlStub,
+};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,6 +45,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tracing::Instrument;
 
 inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(WorkerExecutorClusterControlStub);
 
 // ============================================================================
 // Helpers
@@ -757,7 +761,10 @@ async fn oplog_processor_crash_after_confirmed_flush(
 
 #[test]
 #[tracing::instrument]
-async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn oplog_processor_crash_stress(
+    deps: &EnvBasedTestDependencies,
+    cluster_control: &WorkerExecutorClusterControlStub,
+) -> anyhow::Result<()> {
     const CRASH_ROUNDS: usize = 5;
     const INVOCATIONS_PER_ROUND: usize = 2;
 
@@ -833,13 +840,19 @@ async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow
     // automatic flushing. Entries will accumulate in ForwardingOplog's in-memory
     // buffer and never be sent to the plugin worker.
     tracing::info!("Restarting executor(s) with high flush thresholds...");
-    let cluster = deps.worker_executor_cluster();
-    unsafe {
-        std::env::set_var("GOLEM__OPLOG__PLUGIN_MAX_COMMIT_COUNT", "100000");
-        std::env::set_var("GOLEM__OPLOG__PLUGIN_MAX_ELAPSED_TIME", "3600s");
-    }
-    cluster.kill_all().await;
-    cluster.restart_all().await;
+    cluster_control.kill_all().await;
+    cluster_control
+        .restart_all_with_env_vars(vec![
+            (
+                "GOLEM__OPLOG__PLUGIN_MAX_COMMIT_COUNT".to_string(),
+                "100000".to_string(),
+            ),
+            (
+                "GOLEM__OPLOG__PLUGIN_MAX_ELAPSED_TIME".to_string(),
+                "3600s".to_string(),
+            ),
+        ])
+        .await;
 
     // Wait for the worker to recover after executor restart
     user.wait_for_statuses(
@@ -882,12 +895,8 @@ async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow
     // Phase 4: Restart executor(s) with default thresholds so that recovery
     // can replay missed entries and new invocations flush promptly.
     tracing::info!("Restarting executor(s) with default flush thresholds...");
-    unsafe {
-        std::env::remove_var("GOLEM__OPLOG__PLUGIN_MAX_COMMIT_COUNT");
-        std::env::remove_var("GOLEM__OPLOG__PLUGIN_MAX_ELAPSED_TIME");
-    }
-    cluster.kill_all().await;
-    cluster.restart_all().await;
+    cluster_control.kill_all().await;
+    cluster_control.restart_all().await;
 
     // Wait for the worker to recover after executor restart
     user.wait_for_statuses(

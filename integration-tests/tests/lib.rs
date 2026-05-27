@@ -22,8 +22,11 @@ mod quota;
 mod worker;
 
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
+#[allow(unused_imports)]
+use golem_test_framework::config::WorkerExecutorClusterControl;
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+    WorkerExecutorClusterControlDispatch, WorkerExecutorClusterControlStub,
 };
 use test_r::{tag_suite, test_dep};
 
@@ -60,8 +63,8 @@ impl Tracing {
     }
 }
 
-#[test_dep]
-pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
+#[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl))]
+pub async fn create_deps() -> EnvBasedTestDependencies {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 3,
         ..EnvBasedTestDependenciesConfig::new()
@@ -74,7 +77,7 @@ pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
     deps
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 pub fn tracing() -> Tracing {
     Tracing::init()
 }

@@ -59,7 +59,7 @@ impl GetIndexedStorage for InMemoryIndexedStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "in_memory")]
+#[test_dep(scope = Shared, tagged_as = "in_memory")]
 async fn in_memory_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
@@ -99,7 +99,7 @@ impl GetIndexedStorage for RedisIndexedStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "redis")]
+#[test_dep(scope = Shared, tagged_as = "redis")]
 async fn redis_storage(
     deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
@@ -148,7 +148,7 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "sqlite")]
+#[test_dep(scope = Shared, tagged_as = "sqlite")]
 async fn sqlite_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
@@ -185,7 +185,7 @@ impl GetIndexedStorage for MultiSqliteIndexedStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "multi_sqlite")]
+#[test_dep(scope = Shared, tagged_as = "multi_sqlite")]
 async fn multi_sqlite_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
@@ -245,7 +245,7 @@ impl GetIndexedStorage for PostgresIndexedStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "postgres")]
+#[test_dep(scope = Shared, tagged_as = "postgres")]
 async fn postgres_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
@@ -261,7 +261,7 @@ struct IndexedStorageNamespaces {
     meta: IndexedStorageMetaNamespace,
 }
 
-#[test_dep(tagged_as = "ns1")]
+#[test_dep(scope = PerWorker, tagged_as = "ns1")]
 fn ns() -> IndexedStorageNamespaces {
     IndexedStorageNamespaces {
         ns: IndexedStorageNamespace::OpLog {
@@ -284,7 +284,7 @@ fn ns() -> IndexedStorageNamespaces {
     }
 }
 
-#[test_dep(tagged_as = "ns2")]
+#[test_dep(scope = PerWorker, tagged_as = "ns2")]
 fn ns2() -> IndexedStorageNamespaces {
     IndexedStorageNamespaces {
         ns: IndexedStorageNamespace::CompressedOpLog {

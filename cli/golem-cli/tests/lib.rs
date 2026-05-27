@@ -37,7 +37,7 @@ impl Tracing {
     }
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 fn tracing() -> Tracing {
     Tracing::init()
 }
