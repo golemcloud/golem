@@ -64,7 +64,7 @@ use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi_http::WasiHttpView;
+use wasmtime_wasi_http::p2::WasiHttpCtxView;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -156,7 +156,7 @@ pub trait WorkerCtx:
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
-    fn as_wasi_http_view(&mut self) -> impl WasiHttpView;
+    fn as_wasi_http_view(&mut self) -> WasiHttpCtxView<'_>;
 
     /// Get the public part of the worker context
     fn get_public_state(&self) -> &Self::PublicState;

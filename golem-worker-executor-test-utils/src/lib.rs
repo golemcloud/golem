@@ -152,7 +152,6 @@ use uuid::Uuid;
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi_http::WasiHttpView;
 
 #[cfg(test)]
 test_r::enable!();
@@ -218,6 +217,11 @@ impl WorkerExecutorTestDependencies {
     }
 
     pub async fn new() -> Self {
+        // The AWS SDK crates transitively pull in both aws-lc-rs and ring as rustls backends,
+        // so rustls cannot pick one automatically. Install ring as the process default; ignore
+        // the error if another test in the same process already installed a provider.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
         let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
             6379,
             "".to_string(),
@@ -1074,7 +1078,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.as_wasi_view()
     }
 
-    fn as_wasi_http_view(&mut self) -> impl WasiHttpView {
+    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
         self.durable_ctx.as_wasi_http_view()
     }
 
