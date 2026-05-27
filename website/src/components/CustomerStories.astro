@@ -21,6 +21,9 @@ const logosByFile = Object.fromEntries(
 
 const { eyebrow, heading, testimonials, showAtLaunch } = customerStories;
 const isFeatured = testimonials.length === 1;
+// 2 testimonials read better as a 2-up grid than a 3-col with an empty slot.
+const gridClass =
+  testimonials.length === 2 ? "stories-grid stories-grid-2" : "stories-grid";
 ---
 
 {
@@ -31,7 +34,7 @@ const isFeatured = testimonials.length === 1;
           <span class="eyebrow">{eyebrow}</span>
           <h2 class="section-heading">{heading}</h2>
         </header>
-        <div class={isFeatured ? "featured-wrap" : "stories-grid"}>
+        <div class={isFeatured ? "featured-wrap" : gridClass}>
           {testimonials.map((s) => (
             <article class={isFeatured ? "story-card story-featured" : "story-card"}>
               <blockquote>
@@ -87,8 +90,17 @@ const isFeatured = testimonials.length === 1;
     grid-template-columns: 1fr;
     gap: 1.25rem;
   }
+  /* 2 cards: 2-column on desktop, centered with a sensible max-width. */
+  @media (min-width: 760px) {
+    .stories-grid-2 {
+      grid-template-columns: repeat(2, 1fr);
+      max-width: 980px;
+      margin: 0 auto;
+    }
+  }
+  /* 3+ cards: 3-column. */
   @media (min-width: 900px) {
-    .stories-grid {
+    .stories-grid:not(.stories-grid-2) {
       grid-template-columns: repeat(3, 1fr);
     }
   }

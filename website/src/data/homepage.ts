@@ -202,6 +202,7 @@ export const customerLogos = {
   placeholders: [
     { kind: "image", filename: "ziverge.png", alt: "Ziverge" },
     { kind: "image", filename: "golem-social.png", alt: "Golem Social" },
+    { kind: "image", filename: "warpmind.png", alt: "WarpMind" },
   ] as CustomerLogo[],
 };
 
@@ -494,6 +495,15 @@ export const customerStories = {
       company: "Building Golem Social",
       avatar: { filename: "peter-kotula.jpg", alt: "Peter Kotula" },
       productLogo: { filename: "golem-social.png", alt: "Golem Social" },
+    },
+    {
+      quote:
+        "I crashed a running agent mid-test — its .schedule() reminder still fired on time. Golem's durability isn't bolted on; it's the runtime.",
+      name: "Rahul Joshi",
+      role: "Full-Stack AI Developer",
+      company: "Building WarpMind",
+      avatar: { filename: "rahul-joshi.jpg", alt: "Rahul Joshi" },
+      productLogo: { filename: "warpmind.png", alt: "WarpMind" },
     },
   ] as Testimonial[],
 };
