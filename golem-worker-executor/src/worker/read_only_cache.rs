@@ -1,0 +1,321 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Per-worker read-only method result cache.
+//!
+//! - looked up at `Worker::invoke` (covers gRPC and wasm-rpc);
+//! - cache misses do not coalesce: each miss enqueues normally and a detached
+//!   observer fills the cache on completion, so fire-and-forget callers never
+//!   block;
+//! - the key embeds the per-worker epoch and component revision, so mutations
+//!   and updates invalidate lazily on the next lookup;
+//! - the observer fills under the epoch captured at enqueue, never the epoch
+//!   at completion, so a pre-mutation result cannot be stored under a
+//!   post-mutation epoch;
+//! - dropped together with the `Worker`.
+
+use golem_common::model::AgentInvocation;
+use golem_common::model::AgentInvocationOutput;
+use golem_common::model::agent::{AgentMethod, AgentTypeName, Principal, UntypedDataValue};
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::component_metadata::ComponentMetadata;
+use std::fmt::Debug;
+use std::hash::Hash;
+use tokio::time::Instant;
+
+/// Identifies an entry in the per-worker read-only result cache.
+///
+/// `epoch` and `component_revision` are part of the key so mutations and
+/// component updates lazily invalidate cached entries.
+///
+/// `principal_digest` is populated only when the method's
+/// [`AgentMethod::read_only`] has `uses_principal == true`.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ReadOnlyCacheKey {
+    pub method_name: String,
+    pub component_revision: ComponentRevision,
+    pub epoch: u64,
+    pub input_digest: [u8; 32],
+    pub principal_digest: Option<[u8; 32]>,
+}
+
+/// A successfully cached read-only invocation output, plus the optional
+/// wall-clock expiry derived from the method's `CachePolicy::Ttl`.
+#[derive(Debug, Clone)]
+pub struct ReadOnlyCacheEntry {
+    pub output: AgentInvocationOutput,
+    pub expires_at: Option<Instant>,
+}
+
+impl ReadOnlyCacheEntry {
+    pub fn is_expired(&self, now: Instant) -> bool {
+        match self.expires_at {
+            Some(at) => now >= at,
+            None => false,
+        }
+    }
+}
+
+/// How an invocation affects the read-only cache.
+///
+/// - `ReadOnly`: never bumps the epoch.
+/// - `Mutating`: bumps the epoch before the pending entry becomes visible.
+/// - `UnknownAssumeMutating`: classification failed; treat as `Mutating`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvocationEffect {
+    ReadOnly,
+    Mutating,
+    UnknownAssumeMutating,
+}
+
+impl InvocationEffect {
+    pub fn should_bump_epoch(self) -> bool {
+        match self {
+            InvocationEffect::ReadOnly => false,
+            InvocationEffect::Mutating | InvocationEffect::UnknownAssumeMutating => true,
+        }
+    }
+}
+
+/// Looks up the [`AgentMethod`] for `method_name` on `agent_type` in the
+/// already-loaded component metadata. Returns `None` if either is missing;
+/// callers should fall back to the normal invocation path.
+pub fn resolve_read_only_method(
+    metadata: &ComponentMetadata,
+    agent_type: &AgentTypeName,
+    method_name: &str,
+) -> Option<AgentMethod> {
+    let at = metadata.find_agent_type_by_name(agent_type)?;
+    at.methods.into_iter().find(|m| m.name == method_name)
+}
+
+/// Statically classifies an [`AgentInvocation`] for cache invalidation
+/// purposes. Read-only `AgentMethod`s are detected by inspecting the given
+/// component metadata snapshot.
+pub fn classify_invocation(
+    metadata: Option<&ComponentMetadata>,
+    agent_type: Option<&AgentTypeName>,
+    invocation: &AgentInvocation,
+) -> InvocationEffect {
+    match invocation {
+        AgentInvocation::AgentMethod { method_name, .. } => match (metadata, agent_type) {
+            (Some(meta), Some(agent_type)) => {
+                match resolve_read_only_method(meta, agent_type, method_name) {
+                    Some(method) => {
+                        if method.read_only.is_some() {
+                            InvocationEffect::ReadOnly
+                        } else {
+                            InvocationEffect::Mutating
+                        }
+                    }
+                    None => InvocationEffect::UnknownAssumeMutating,
+                }
+            }
+            _ => InvocationEffect::UnknownAssumeMutating,
+        },
+        AgentInvocation::AgentInitialization { .. }
+        | AgentInvocation::ManualUpdate { .. }
+        | AgentInvocation::LoadSnapshot { .. }
+        | AgentInvocation::SaveSnapshot { .. }
+        | AgentInvocation::ProcessOplogEntries { .. } => InvocationEffect::Mutating,
+    }
+}
+
+/// Canonical byte encoding of an [`UntypedDataValue`] for the cache digest.
+/// Uses `desert_rust`'s deterministic `BinaryCodec` serialization, so equal
+/// inputs collide and tuple-order / multimodal-name differences do not.
+pub fn canonicalize_untyped_data_value(input: &UntypedDataValue) -> Vec<u8> {
+    desert_rust::serialize_to_byte_vec(input).expect("UntypedDataValue serialization is infallible")
+}
+
+pub fn principal_bytes(principal: &Principal) -> Vec<u8> {
+    desert_rust::serialize_to_byte_vec(principal).expect("Principal serialization is infallible")
+}
+
+pub fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
+    *blake3::hash(bytes).as_bytes()
+}
+
+/// Builds the cache key for a read-only invocation.
+pub fn build_read_only_cache_key(
+    method_name: &str,
+    input: &UntypedDataValue,
+    principal: Option<&Principal>,
+    component_revision: ComponentRevision,
+    epoch: u64,
+) -> ReadOnlyCacheKey {
+    let input_bytes = canonicalize_untyped_data_value(input);
+    let input_digest = digest_bytes(&input_bytes);
+    let principal_digest = principal.map(|p| digest_bytes(&principal_bytes(p)));
+    ReadOnlyCacheKey {
+        method_name: method_name.to_string(),
+        component_revision,
+        epoch,
+        input_digest,
+        principal_digest,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::AgentId;
+    use golem_common::model::agent::{
+        AgentPrincipal, UntypedElementValue, UntypedNamedElementValue,
+    };
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_wasm::Value;
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn rev(n: u64) -> ComponentRevision {
+        ComponentRevision::new(n).unwrap()
+    }
+
+    fn principal(seed: u128) -> Principal {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::from_u128(seed)),
+            agent_id: format!("agent-{seed}"),
+        };
+        Principal::Agent(AgentPrincipal { agent_id })
+    }
+
+    fn tuple(values: Vec<Value>) -> UntypedDataValue {
+        UntypedDataValue::Tuple(
+            values
+                .into_iter()
+                .map(UntypedElementValue::ComponentModel)
+                .collect(),
+        )
+    }
+
+    fn multimodal(values: Vec<(&str, Value)>) -> UntypedDataValue {
+        UntypedDataValue::Multimodal(
+            values
+                .into_iter()
+                .map(|(name, value)| UntypedNamedElementValue {
+                    name: name.to_string(),
+                    value: UntypedElementValue::ComponentModel(value),
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn equal_inputs_produce_equal_keys() {
+        let a = tuple(vec![Value::U32(1), Value::U32(2)]);
+        let b = tuple(vec![Value::U32(1), Value::U32(2)]);
+        let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
+        let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
+        assert_eq!(ka, kb);
+    }
+
+    #[test]
+    fn different_inputs_produce_different_keys() {
+        let a = tuple(vec![Value::U32(1)]);
+        let b = tuple(vec![Value::U32(2)]);
+        let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
+        let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
+        assert_ne!(ka, kb);
+    }
+
+    #[test]
+    fn swapped_tuple_positions_produce_different_keys() {
+        let a = tuple(vec![Value::U32(1), Value::U32(2)]);
+        let b = tuple(vec![Value::U32(2), Value::U32(1)]);
+        let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
+        let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
+        assert_ne!(ka, kb);
+    }
+
+    #[test]
+    fn multimodal_field_renames_produce_different_keys() {
+        let a = multimodal(vec![("x", Value::U32(1))]);
+        let b = multimodal(vec![("y", Value::U32(1))]);
+        let ka = build_read_only_cache_key("m", &a, None, rev(7), 3);
+        let kb = build_read_only_cache_key("m", &b, None, rev(7), 3);
+        assert_ne!(ka, kb);
+    }
+
+    #[test]
+    fn epoch_in_key_changes_key_when_epoch_bumps() {
+        let a = tuple(vec![Value::U32(1)]);
+        let k1 = build_read_only_cache_key("m", &a, None, rev(1), 1);
+        let k2 = build_read_only_cache_key("m", &a, None, rev(1), 2);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn component_revision_in_key_changes_key_after_update() {
+        let a = tuple(vec![Value::U32(1)]);
+        let k1 = build_read_only_cache_key("m", &a, None, rev(1), 1);
+        let k2 = build_read_only_cache_key("m", &a, None, rev(2), 1);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn principal_off_means_principal_digest_is_none() {
+        let a = tuple(vec![Value::U32(1)]);
+        let key = build_read_only_cache_key("m", &a, None, rev(1), 1);
+        assert!(key.principal_digest.is_none());
+    }
+
+    #[test]
+    fn principal_on_distinguishes_principals() {
+        let a = tuple(vec![Value::U32(1)]);
+        let p1 = principal(1);
+        let p2 = principal(2);
+        let k1 = build_read_only_cache_key("m", &a, Some(&p1), rev(1), 1);
+        let k2 = build_read_only_cache_key("m", &a, Some(&p2), rev(1), 1);
+        assert_ne!(k1, k2);
+        assert!(k1.principal_digest.is_some());
+    }
+
+    #[test]
+    fn method_name_changes_the_key() {
+        let a = tuple(vec![Value::U32(1)]);
+        let k1 = build_read_only_cache_key("foo", &a, None, rev(1), 1);
+        let k2 = build_read_only_cache_key("bar", &a, None, rev(1), 1);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn classify_non_method_variants_are_mutating() {
+        let m = AgentInvocation::ManualUpdate {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
+        assert_eq!(
+            classify_invocation(None, None, &m),
+            InvocationEffect::Mutating
+        );
+    }
+
+    #[test]
+    fn classify_unknown_metadata_is_unknown_assume_mutating() {
+        use golem_common::model::IdempotencyKey;
+        use golem_common::model::invocation_context::InvocationContextStack;
+
+        let m = AgentInvocation::AgentMethod {
+            idempotency_key: IdempotencyKey::new("k".into()),
+            method_name: "m".into(),
+            input: tuple(vec![]),
+            invocation_context: InvocationContextStack::fresh(),
+            principal: Principal::anonymous(),
+        };
+        assert_eq!(
+            classify_invocation(None, None, &m),
+            InvocationEffect::UnknownAssumeMutating
+        );
+    }
+}

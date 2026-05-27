@@ -64,6 +64,8 @@ pub struct GolemConfig {
     pub agent_types_service: AgentTypesServiceConfig,
     pub environment_state_service: EnvironmentStateServiceConfig,
     pub direct_invocation_auth_cache: DirectInvocationAuthCacheConfig,
+    #[serde(default)]
+    pub read_only_cache: ReadOnlyCacheConfig,
     pub agent_webhooks_service: AgentWebhooksServiceConfig,
     pub registry_service: GrpcRegistryServiceConfig,
     pub quota_service: QuotaServiceConfig,
@@ -207,6 +209,13 @@ impl SafeDisplay for GolemConfig {
             self.direct_invocation_auth_cache.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "read only cache:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.read_only_cache.to_safe_string_indented()
+        );
+
         let _ = writeln!(&mut result, "agent webhooks service:");
         let _ = writeln!(
             &mut result,
@@ -266,6 +275,7 @@ impl Default for GolemConfig {
             agent_types_service: AgentTypesServiceConfig::default(),
             environment_state_service: EnvironmentStateServiceConfig::default(),
             direct_invocation_auth_cache: DirectInvocationAuthCacheConfig::default(),
+            read_only_cache: ReadOnlyCacheConfig::default(),
             agent_webhooks_service: AgentWebhooksServiceConfig::default(),
             registry_service: {
                 let default = GrpcRegistryServiceConfig::default();
@@ -1253,6 +1263,43 @@ impl SafeDisplay for DirectInvocationAuthCacheConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "cache_capacity: {}", self.cache_capacity);
         let _ = writeln!(&mut result, "cache_ttl: {:?}", self.cache_ttl);
+        let _ = writeln!(
+            &mut result,
+            "cache_eviction_interval: {:?}",
+            self.cache_eviction_interval
+        );
+        result
+    }
+}
+
+/// Per-worker read-only method result cache configuration.
+///
+/// `max_entry_age` is the background eviction TTL, independent of the
+/// per-method `CachePolicy::Ttl` semantic expiry.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReadOnlyCacheConfig {
+    pub cache_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub max_entry_age: Duration,
+    #[serde(with = "humantime_serde")]
+    pub cache_eviction_interval: Duration,
+}
+
+impl Default for ReadOnlyCacheConfig {
+    fn default() -> Self {
+        Self {
+            cache_capacity: 256,
+            max_entry_age: Duration::from_secs(2 * 60 * 60),
+            cache_eviction_interval: Duration::from_secs(60),
+        }
+    }
+}
+
+impl SafeDisplay for ReadOnlyCacheConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "cache_capacity: {}", self.cache_capacity);
+        let _ = writeln!(&mut result, "max_entry_age: {:?}", self.max_entry_age);
         let _ = writeln!(
             &mut result,
             "cache_eviction_interval: {:?}",
