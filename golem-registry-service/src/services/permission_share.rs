@@ -21,7 +21,7 @@ use crate::repo::model::permission_share::{
 use crate::repo::permission_share::PermissionShareRepo;
 use golem_common::model::account::{Account, AccountId};
 use golem_common::model::card::recipient::RecipientPattern;
-use golem_common::model::card::{CardManagedBy, CardParseError, PermissionPattern};
+use golem_common::model::card::{CardId, CardManagedBy, CardParseError, PermissionPattern};
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareId,
     PermissionShareName, PermissionShareRevision, PermissionShareUpdate,
@@ -290,7 +290,7 @@ impl PermissionShareService {
         let card_id = Uuid::now_v7();
 
         Ok(CardRecord::creation(
-            card_id,
+            CardId(card_id),
             Vec::new(),
             parsed.lower_positive,
             parsed.lower_negative,
@@ -301,7 +301,6 @@ impl PermissionShareService {
             Some(CardManagedBy::PermissionShare {
                 permission_share_id: permission_share_id.0,
             }),
-            false,
         ))
     }
 

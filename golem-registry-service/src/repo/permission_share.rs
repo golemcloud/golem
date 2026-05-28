@@ -22,6 +22,7 @@ use crate::repo::model::permission_share::{
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
+use golem_common::model::card::CardId;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
@@ -227,7 +228,7 @@ impl DbPermissionShareRepo<PostgresPool> {
                     INSERT INTO cards
                         (card_id, data, created_at, expires_at, system_card, managed_by)
                     VALUES ($1, $2, $3, $4, $5, $6)
-                    RETURNING card_id, data, created_at, expires_at, system_card, managed_by, false AS polymorphic
+                    RETURNING card_id, data, created_at, expires_at, system_card, managed_by
                 "#})
                 .bind(card.card_id)
                 .bind(card.data)
@@ -246,7 +247,7 @@ impl DbPermissionShareRepo<PostgresPool> {
             )
             .await
             .to_error_on_foreign_key_violation(
-                PermissionShareRepoError::ParentCardNotFound(*parent_id),
+                PermissionShareRepoError::ParentCardNotFound(CardId(*parent_id)),
             )?;
         }
 
@@ -310,7 +311,6 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
         let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
-                let previous_revision_id = revision.revision_id - 1;
                 let old_card_id = revision.card_id;
                 let replacement_card = Self::insert_card(tx, replacement_card).await?;
                 let mut revision = revision;
@@ -322,8 +322,6 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                         UPDATE permission_shares
                         SET name = $1, current_card_id = $2, updated_at = $3, modified_by = $4, current_revision_id = $5
                         WHERE permission_share_id = $6
-                          AND current_revision_id = $7
-                          AND deleted_at IS NULL
                         RETURNING permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                     "#})
                     .bind(&revision.name)
@@ -331,8 +329,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
-                    .bind(revision.permission_share_id)
-                    .bind(previous_revision_id),
+                    .bind(revision.permission_share_id),
                 )
                 .await
                 .to_error_on_unique_violation(PermissionShareRepoError::ShareViolatesUniqueness)?
@@ -341,7 +338,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                 if let Some(old_card_id) =
                     old_card_id.filter(|card_id| *card_id != replacement_card.card_id)
                 {
-                    DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, old_card_id).await?;
+                    DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, CardId(old_card_id)).await?;
                 }
 
                 Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
@@ -362,7 +359,6 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
         let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
             async move {
-                let previous_revision_id = revision.revision_id - 1;
                 let revision = Self::insert_revision(tx, revision).await?;
 
                 let share: PermissionShareRecord = tx.fetch_optional_as(
@@ -370,21 +366,18 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                         UPDATE permission_shares
                         SET current_card_id = NULL, updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
                         WHERE permission_share_id = $4
-                          AND current_revision_id = $5
-                          AND deleted_at IS NULL
                         RETURNING permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                     "#})
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
-                    .bind(revision.permission_share_id)
-                    .bind(previous_revision_id),
+                    .bind(revision.permission_share_id),
                 )
                 .await?
                 .ok_or(PermissionShareRepoError::ConcurrentModification)?;
 
                 if let Some(old_card_id) = revision.card_id {
-                    DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, old_card_id).await?;
+                    DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, CardId(old_card_id)).await?;
                 }
 
                 Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
