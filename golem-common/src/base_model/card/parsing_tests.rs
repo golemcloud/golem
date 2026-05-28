@@ -32,7 +32,7 @@ use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
 
 fn parsed_permission(input: &str) -> PermissionPattern {
-    parse_pattern_grant(input).expect("grant should parse")
+    parse_permission(input).expect("permission should parse")
 }
 
 fn account_owner(account: &str) -> AccountOwnerPattern {
@@ -941,7 +941,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
 
 #[test]
 fn rejects_unknown_verbs_for_class() {
-    let result = parse_pattern_grant(
+    let result = parse_permission(
         "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : query : /data/**",
     );
 
@@ -956,33 +956,33 @@ fn rejects_unknown_verbs_for_class() {
 
 #[test]
 fn rejects_malformed_grants() {
+    assert!(matches!(
+        parse_permission("filesystem(acme) : read : /data/**"),
+        Err(CardParseError::Malformed(_))
+    ));
     assert_eq!(
-        parse_pattern_grant("filesystem(acme) : read : /data/**"),
-        Err(CardParseError::MissingAtSeparator)
-    );
-    assert_eq!(
-        parse_pattern_grant("filesystem(acme) @ acme : query : /data/**"),
+        parse_permission("filesystem(acme) @ acme : query : /data/**"),
         Err(CardParseError::InvalidOwnerPath {
             class: "filesystem".to_string(),
             owner: "acme".to_string(),
         })
     );
     assert_eq!(
-        parse_pattern_grant("system(acme) @ acme : create-account :"),
+        parse_permission("system(acme) @ acme : create-account :"),
         Err(CardParseError::InvalidOwnerPath {
             class: "system".to_string(),
             owner: "acme".to_string(),
         })
     );
     assert_eq!(
-        parse_pattern_grant("system() @ acme : create-account : not-empty"),
+        parse_permission("system() @ acme : create-account : not-empty"),
         Err(CardParseError::InvalidResource {
             class: "system".to_string(),
             resource: "not-empty".to_string(),
         })
     );
     assert_eq!(
-        parse_pattern_grant(
+        parse_permission(
             "card(acme) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : install : acme/shop"
         ),
         Err(CardParseError::InvalidRecipientPath(
@@ -990,7 +990,7 @@ fn rejects_malformed_grants() {
         ))
     );
     assert_eq!(
-        parse_pattern_grant("unknown(acme) @ acme : view :"),
+        parse_permission("unknown(acme) @ acme : view :"),
         Err(CardParseError::UnknownClass("unknown".to_string()))
     );
 }
@@ -1000,14 +1000,14 @@ fn rejects_removed_application_credential_and_restore_forms() {
     let credential_id = "550e8400-e29b-41d4-a716-446655440000";
 
     assert_eq!(
-        parse_pattern_grant("application(acme/shop) @ acme : view :"),
+        parse_permission("application(acme/shop) @ acme : view :"),
         Err(CardParseError::InvalidOwnerPath {
             class: ApplicationClass::NAME.to_string(),
             owner: "acme/shop".to_string(),
         })
     );
     assert_eq!(
-        parse_pattern_grant(&format!(
+        parse_permission(&format!(
             "application(acme) @ acme : view-credentials : cred={credential_id}"
         )),
         Err(CardParseError::UnknownVerb {
@@ -1016,21 +1016,21 @@ fn rejects_removed_application_credential_and_restore_forms() {
         })
     );
     assert_eq!(
-        parse_pattern_grant("account(acme) @ acme : restore :"),
+        parse_permission("account(acme) @ acme : restore :"),
         Err(CardParseError::UnknownVerb {
             class: AccountClass::NAME.to_string(),
             verb: "restore".to_string(),
         })
     );
     assert_eq!(
-        parse_pattern_grant("application(acme) @ acme : restore : shop"),
+        parse_permission("application(acme) @ acme : restore : shop"),
         Err(CardParseError::UnknownVerb {
             class: ApplicationClass::NAME.to_string(),
             verb: "restore".to_string(),
         })
     );
     assert_eq!(
-        parse_pattern_grant("environment(acme/shop) @ acme/shop/prod : restore : prod"),
+        parse_permission("environment(acme/shop) @ acme/shop/prod : restore : prod"),
         Err(CardParseError::UnknownVerb {
             class: EnvironmentClass::NAME.to_string(),
             verb: "restore".to_string(),
@@ -1041,13 +1041,13 @@ fn rejects_removed_application_credential_and_restore_forms() {
 #[test]
 fn rejects_recipient_depths_without_holder_kind() {
     assert_eq!(
-        parse_pattern_grant("system() @ acme/shop : create-account :"),
+        parse_permission("system() @ acme/shop : create-account :"),
         Err(CardParseError::InvalidRecipientPath(
             "acme/shop".to_string()
         ))
     );
     assert_eq!(
-        parse_pattern_grant(
+        parse_permission(
             "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart : read : /data/**"
         ),
         Err(CardParseError::InvalidRecipientPath(
@@ -1087,7 +1087,7 @@ fn rejects_empty_resource_ids_when_any_resource_is_available() {
 
     for (input, class) in cases {
         assert_eq!(
-            parse_pattern_grant(input),
+            parse_permission(input),
             Err(CardParseError::InvalidResource {
                 class: class.to_string(),
                 resource: String::new(),
@@ -1197,8 +1197,7 @@ fn parses_polymorphic_pattern_grant_examples_from_spec(r: &mut DynamicTestRegist
             format!("parses_polymorphic_pattern_grant_{name}"),
             TestProperties::unit_test(),
             || {
-                let grant = parse_polymorphic_pattern_grant(input).expect(input);
-                assert_eq!(grant.permission, (*expected).clone());
+                assert_eq!(parse_polymorphic_permission(input), Ok((*expected).clone()));
             }
         );
     }
@@ -1454,8 +1453,10 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
             format!("parses_polymorphic_manifest_pattern_grant_{name}"),
             TestProperties::unit_test(),
             || {
-                let grant = parse_polymorphic_manifest_pattern_grant(input).expect(input);
-                assert_eq!(grant.permission, (*expected).clone());
+                assert_eq!(
+                    parse_polymorphic_manifest_permission(input),
+                    Ok((*expected).clone())
+                );
             }
         );
     }
@@ -1464,7 +1465,7 @@ fn parses_polymorphic_manifest_pattern_grant_examples_from_spec(r: &mut DynamicT
 #[test]
 fn empty_resource_classes_reject_polymorphic_resource_slots() {
     assert_eq!(
-        parse_polymorphic_manifest_pattern_grant("account(acme) @ ?account : view : ?resource"),
+        parse_polymorphic_manifest_permission("account(acme) @ ?account : view : ?resource"),
         Err(CardParseError::InvalidResource {
             class: AccountClass::NAME.to_string(),
             resource: "?resource".to_string(),
@@ -1472,9 +1473,7 @@ fn empty_resource_classes_reject_polymorphic_resource_slots() {
     );
 
     assert_eq!(
-        parse_polymorphic_manifest_pattern_grant(
-            "system() @ ?account : create-account : ?resource"
-        ),
+        parse_polymorphic_manifest_permission("system() @ ?account : create-account : ?resource"),
         Err(CardParseError::InvalidResource {
             class: SystemClass::NAME.to_string(),
             resource: "?resource".to_string(),
@@ -1485,7 +1484,7 @@ fn empty_resource_classes_reject_polymorphic_resource_slots() {
 #[test]
 fn rejects_polymorphic_resource_slots_and_templates() {
     assert_eq!(
-        parse_polymorphic_manifest_pattern_grant("env(?self) @ ?self : read : ?env_var"),
+        parse_polymorphic_manifest_permission("env(?self) @ ?self : read : ?env_var"),
         Err(CardParseError::InvalidResource {
             class: EnvClass::NAME.to_string(),
             resource: "?env_var".to_string(),
@@ -1493,7 +1492,7 @@ fn rejects_polymorphic_resource_slots_and_templates() {
     );
 
     assert_eq!(
-        parse_polymorphic_manifest_pattern_grant("card(acme) @ ?self : install : ?self"),
+        parse_polymorphic_manifest_permission("card(acme) @ ?self : install : ?self"),
         Err(CardParseError::InvalidResource {
             class: CardClass::NAME.to_string(),
             resource: "?self".to_string(),
@@ -1501,7 +1500,7 @@ fn rejects_polymorphic_resource_slots_and_templates() {
     );
 
     assert_eq!(
-        parse_polymorphic_manifest_pattern_grant("secret(?env) @ ?self : reveal : secret.?self"),
+        parse_polymorphic_manifest_permission("secret(?env) @ ?self : reveal : secret.?self"),
         Err(CardParseError::InvalidResource {
             class: SecretClass::NAME.to_string(),
             resource: "secret.?self".to_string(),
@@ -1512,7 +1511,7 @@ fn rejects_polymorphic_resource_slots_and_templates() {
 #[test]
 fn rejects_undeclared_polymorphic_owner_slots() {
     assert_eq!(
-        parse_polymorphic_pattern_grant("account(?account) @ ?account : view :"),
+        parse_polymorphic_permission("account(?account) @ ?account : view :"),
         Err(CardParseError::InvalidOwnerPath {
             class: AccountClass::NAME.to_string(),
             owner: "?account".to_string(),
@@ -1520,7 +1519,7 @@ fn rejects_undeclared_polymorphic_owner_slots() {
     );
 
     assert_eq!(
-        parse_polymorphic_pattern_grant("application(?app) @ ?account : view :"),
+        parse_polymorphic_permission("application(?app) @ ?account : view :"),
         Err(CardParseError::InvalidOwnerPath {
             class: ApplicationClass::NAME.to_string(),
             owner: "?app".to_string(),
@@ -1528,7 +1527,7 @@ fn rejects_undeclared_polymorphic_owner_slots() {
     );
 
     assert_eq!(
-        parse_polymorphic_pattern_grant("component(?component) @ ?env : view : cart-svc"),
+        parse_polymorphic_permission("component(?component) @ ?env : view : cart-svc"),
         Err(CardParseError::InvalidOwnerPath {
             class: ComponentClass::NAME.to_string(),
             owner: "?component".to_string(),
@@ -1539,7 +1538,7 @@ fn rejects_undeclared_polymorphic_owner_slots() {
 #[test]
 fn rejects_polymorphic_owner_slots_with_wrong_scope() {
     assert_eq!(
-        parse_polymorphic_pattern_grant("filesystem(?env) @ ?self : read : /data/**"),
+        parse_polymorphic_permission("filesystem(?env) @ ?self : read : /data/**"),
         Err(CardParseError::InvalidOwnerPath {
             class: FilesystemClass::NAME.to_string(),
             owner: "?env".to_string(),
@@ -1550,22 +1549,22 @@ fn rejects_polymorphic_owner_slots_with_wrong_scope() {
 #[test]
 fn rejects_undeclared_polymorphic_recipient_slots() {
     assert_eq!(
-        parse_polymorphic_pattern_grant("secret(?env) @ ?user : reveal : billing.*"),
+        parse_polymorphic_permission("secret(?env) @ ?user : reveal : billing.*"),
         Err(CardParseError::InvalidRecipientPath("?user".to_string()))
     );
     assert_eq!(
-        parse_polymorphic_pattern_grant("secret(?env) @ ?app : reveal : billing.*"),
+        parse_polymorphic_permission("secret(?env) @ ?app : reveal : billing.*"),
         Err(CardParseError::InvalidRecipientPath("?app".to_string()))
     );
     assert_eq!(
-        parse_polymorphic_pattern_grant("secret(?env) @ ?self : reveal : billing.*"),
+        parse_polymorphic_permission("secret(?env) @ ?self : reveal : billing.*"),
         Err(CardParseError::InvalidRecipientPath("?self".to_string()))
     );
 }
 
 #[test]
 fn concrete_parser_rejects_slot_variables() {
-    let result = parse_pattern_grant("secret(?env) @ ?self : reveal : billing.*");
+    let result = parse_permission("secret(?env) @ ?self : reveal : billing.*");
 
     assert_eq!(
         result,

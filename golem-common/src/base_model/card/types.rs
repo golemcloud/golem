@@ -19,21 +19,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Polymorphic grant that can monomorphized and installed, but not used for permission checks
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct PolymorphicPatternGrant {
-    pub permission: PolymorphicPermissionPattern,
-}
-
-/// Polymorphic as allowed in the manifest. Needs to have the recipient monormorphized before it can be sent
-/// to the server
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct PolymorphicManifestPatternGrant {
-    pub permission: PolymorphicManifestPermissionPattern,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Card {
     pub card_id: Uuid,
@@ -52,10 +37,10 @@ pub struct Card {
 pub struct PolymorphicCard {
     pub card_id: Uuid,
     pub parent_ids: Vec<Uuid>,
-    pub lower_positive: Vec<PolymorphicPatternGrant>,
-    pub lower_negative: Vec<PolymorphicPatternGrant>,
-    pub upper_positive: Vec<PolymorphicPatternGrant>,
-    pub upper_negative: Vec<PolymorphicPatternGrant>,
+    pub lower_positive: Vec<PolymorphicPermissionPattern>,
+    pub lower_negative: Vec<PolymorphicPermissionPattern>,
+    pub upper_positive: Vec<PolymorphicPermissionPattern>,
+    pub upper_negative: Vec<PolymorphicPermissionPattern>,
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub system_card: bool,
@@ -65,10 +50,10 @@ pub struct PolymorphicCard {
 pub struct PolymorphicManifestCard {
     pub card_id: Uuid,
     pub parent_ids: Vec<Uuid>,
-    pub lower_positive: Vec<PolymorphicManifestPatternGrant>,
-    pub lower_negative: Vec<PolymorphicManifestPatternGrant>,
-    pub upper_positive: Vec<PolymorphicManifestPatternGrant>,
-    pub upper_negative: Vec<PolymorphicManifestPatternGrant>,
+    pub lower_positive: Vec<PolymorphicManifestPermissionPattern>,
+    pub lower_negative: Vec<PolymorphicManifestPermissionPattern>,
+    pub upper_positive: Vec<PolymorphicManifestPermissionPattern>,
+    pub upper_negative: Vec<PolymorphicManifestPermissionPattern>,
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub system_card: bool,

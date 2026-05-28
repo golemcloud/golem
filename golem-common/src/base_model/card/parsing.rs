@@ -24,12 +24,6 @@ use std::str::FromStr;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum CardParseError {
-    MissingAtSeparator,
-    MissingClassOpenParen,
-    MissingClassCloseParen,
-    MissingRecipient,
-    MissingVerb,
-    MissingResource,
     InvalidRecipientPath(String),
     InvalidOwnerPath { class: String, owner: String },
     Malformed(String),
@@ -42,12 +36,6 @@ pub enum CardParseError {
 impl std::fmt::Display for CardParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingAtSeparator => write!(f, "missing @ separator"),
-            Self::MissingClassOpenParen => write!(f, "missing class owner open parenthesis"),
-            Self::MissingClassCloseParen => write!(f, "missing class owner close parenthesis"),
-            Self::MissingRecipient => write!(f, "missing recipient"),
-            Self::MissingVerb => write!(f, "missing verb"),
-            Self::MissingResource => write!(f, "missing resource"),
             Self::InvalidRecipientPath(path) => write!(f, "invalid recipient path {path}"),
             Self::InvalidOwnerPath { class, owner } => {
                 write!(f, "invalid owner path {owner} for permission class {class}")
@@ -74,191 +62,6 @@ impl std::fmt::Display for CardParseError {
 }
 
 impl std::error::Error for CardParseError {}
-
-impl FromStr for PermissionPattern {
-    type Err = CardParseError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        parse_pattern_grant(value)
-    }
-}
-
-impl FromStr for PolymorphicPatternGrant {
-    type Err = CardParseError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        parse_polymorphic_pattern_grant(value)
-    }
-}
-
-impl FromStr for PolymorphicManifestPatternGrant {
-    type Err = CardParseError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        parse_polymorphic_manifest_pattern_grant(value)
-    }
-}
-
-pub fn parse_pattern_grant(value: &str) -> Result<PermissionPattern, CardParseError> {
-    if !value.contains('@') {
-        return Err(CardParseError::MissingAtSeparator);
-    }
-
-    let parts = pattern_grant_parts(value).map_err(CardParseError::Malformed)?;
-
-    if parts.class.is_empty() {
-        return Err(CardParseError::MissingClassOpenParen);
-    }
-    if parts.owner.is_empty() && !value.contains("()") {
-        return Err(CardParseError::MissingClassCloseParen);
-    }
-    if parts.recipient.is_empty() {
-        return Err(CardParseError::MissingRecipient);
-    }
-    if parts.verb.is_empty() {
-        return Err(CardParseError::MissingVerb);
-    }
-    reject_slot_variables(&parts)?;
-
-    parse_permission(
-        &parts.class,
-        &parts.owner,
-        &parts.recipient,
-        &parts.verb,
-        &parts.resource,
-    )
-}
-
-pub fn parse_polymorphic_pattern_grant(
-    value: &str,
-) -> Result<PolymorphicPatternGrant, CardParseError> {
-    if !value.contains('@') {
-        return Err(CardParseError::MissingAtSeparator);
-    }
-
-    let parts = pattern_grant_parts(value).map_err(CardParseError::Malformed)?;
-
-    if parts.class.is_empty() {
-        return Err(CardParseError::MissingClassOpenParen);
-    }
-    if parts.owner.is_empty() && !value.contains("()") {
-        return Err(CardParseError::MissingClassCloseParen);
-    }
-    if parts.recipient.is_empty() {
-        return Err(CardParseError::MissingRecipient);
-    }
-    if parts.verb.is_empty() {
-        return Err(CardParseError::MissingVerb);
-    }
-
-    Ok(PolymorphicPatternGrant {
-        permission: parse_polymorphic_permission(
-            &parts.class,
-            &parts.owner,
-            &parts.recipient,
-            &parts.verb,
-            &parts.resource,
-        )?,
-    })
-}
-
-pub fn parse_polymorphic_manifest_pattern_grant(
-    value: &str,
-) -> Result<PolymorphicManifestPatternGrant, CardParseError> {
-    if !value.contains('@') {
-        return Err(CardParseError::MissingAtSeparator);
-    }
-
-    let parts = pattern_grant_parts(value).map_err(CardParseError::Malformed)?;
-
-    if parts.class.is_empty() {
-        return Err(CardParseError::MissingClassOpenParen);
-    }
-    if parts.owner.is_empty() && !value.contains("()") {
-        return Err(CardParseError::MissingClassCloseParen);
-    }
-    if parts.recipient.is_empty() {
-        return Err(CardParseError::MissingRecipient);
-    }
-    if parts.verb.is_empty() {
-        return Err(CardParseError::MissingVerb);
-    }
-
-    Ok(PolymorphicManifestPatternGrant {
-        permission: parse_polymorphic_manifest_permission(
-            &parts.class,
-            &parts.owner,
-            &parts.recipient,
-            &parts.verb,
-            &parts.resource,
-        )?,
-    })
-}
-
-#[derive(Debug, Clone)]
-struct PatternGrantParts {
-    class: String,
-    owner: String,
-    recipient: String,
-    verb: String,
-    resource: String,
-}
-
-fn pattern_grant_parts(value: &str) -> Result<PatternGrantParts, String> {
-    let mut parser = (
-        many(none_of("(".chars())),
-        char('('),
-        many(none_of("@".chars())),
-        spaces(),
-        char('@'),
-        spaces(),
-        many(none_of(":".chars())),
-        char(':'),
-        many(none_of(":".chars())),
-        char(':'),
-        many(any()),
-    )
-        .skip(eof());
-
-    let ((class, _, owner, _, _, _, recipient, _, verb, _, resource), _): (
-        (
-            String,
-            char,
-            String,
-            (),
-            char,
-            (),
-            String,
-            char,
-            String,
-            char,
-            String,
-        ),
-        &str,
-    ) = parser.easy_parse(value).map_err(|err| err.to_string())?;
-
-    let owner = owner.trim();
-    let owner = owner.strip_suffix(')').unwrap_or(owner).trim();
-
-    Ok(PatternGrantParts {
-        class: class.trim().to_string(),
-        owner: owner.to_string(),
-        recipient: recipient.trim().to_string(),
-        verb: verb.trim().to_string(),
-        resource: resource.trim().to_string(),
-    })
-}
-
-fn reject_slot_variables(parts: &PatternGrantParts) -> Result<(), CardParseError> {
-    for value in [&parts.owner, &parts.recipient, &parts.resource] {
-        if contains_slot_reference(value) {
-            return Err(CardParseError::SlotVariableInConcreteGrant(
-                value.to_string(),
-            ));
-        }
-    }
-    Ok(())
-}
 
 macro_rules! define_dispatch_permission_class {
     ($($variant:ident: $class:ty,)+) => {
@@ -298,55 +101,137 @@ macro_rules! parse_polymorphic_manifest_permission_case {
     };
 }
 
-fn parse_permission(
-    class: &str,
-    owner: &str,
-    recipient: &str,
-    verb: &str,
-    resource: &str,
-) -> Result<PermissionPattern, CardParseError> {
+pub fn parse_permission(value: &str) -> Result<PermissionPattern, CardParseError> {
+    let parts = permission_parts(value).map_err(CardParseError::Malformed)?;
+    reject_slot_variables(&parts)?;
+
     dispatch_permission_class!(
         parse_permission_case,
-        class,
-        owner,
-        recipient,
-        verb,
-        resource
+        parts.class.as_str(),
+        &parts.owner,
+        &parts.recipient,
+        &parts.verb,
+        &parts.resource
     )
 }
 
-fn parse_polymorphic_permission(
-    class: &str,
-    owner: &str,
-    recipient: &str,
-    verb: &str,
-    resource: &str,
+pub fn parse_polymorphic_permission(
+    value: &str,
 ) -> Result<PolymorphicPermissionPattern, CardParseError> {
+    let parts = permission_parts(value).map_err(CardParseError::Malformed)?;
+
     dispatch_permission_class!(
         parse_polymorphic_permission_case,
-        class,
-        owner,
-        recipient,
-        verb,
-        resource
+        parts.class.as_str(),
+        &parts.owner,
+        &parts.recipient,
+        &parts.verb,
+        &parts.resource
     )
 }
 
-fn parse_polymorphic_manifest_permission(
-    class: &str,
-    owner: &str,
-    recipient: &str,
-    verb: &str,
-    resource: &str,
+pub fn parse_polymorphic_manifest_permission(
+    value: &str,
 ) -> Result<PolymorphicManifestPermissionPattern, CardParseError> {
+    let parts = permission_parts(value).map_err(CardParseError::Malformed)?;
+
     dispatch_permission_class!(
         parse_polymorphic_manifest_permission_case,
-        class,
-        owner,
-        recipient,
-        verb,
-        resource
+        parts.class.as_str(),
+        &parts.owner,
+        &parts.recipient,
+        &parts.verb,
+        &parts.resource
     )
+}
+
+impl FromStr for PermissionPattern {
+    type Err = CardParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        parse_permission(value)
+    }
+}
+
+impl FromStr for PolymorphicPermissionPattern {
+    type Err = CardParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        parse_polymorphic_permission(value)
+    }
+}
+
+impl FromStr for PolymorphicManifestPermissionPattern {
+    type Err = CardParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        parse_polymorphic_manifest_permission(value)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PermissionParts {
+    class: String,
+    owner: String,
+    recipient: String,
+    verb: String,
+    resource: String,
+}
+
+fn permission_parts(value: &str) -> Result<PermissionParts, String> {
+    let mut parser = (
+        many(none_of("(".chars())),
+        char('('),
+        many(none_of("@".chars())),
+        spaces(),
+        char('@'),
+        spaces(),
+        many(none_of(":".chars())),
+        char(':'),
+        many(none_of(":".chars())),
+        char(':'),
+        many(any()),
+    )
+        .skip(eof());
+
+    let ((class, _, owner, _, _, _, recipient, _, verb, _, resource), _): (
+        (
+            String,
+            char,
+            String,
+            (),
+            char,
+            (),
+            String,
+            char,
+            String,
+            char,
+            String,
+        ),
+        &str,
+    ) = parser.easy_parse(value).map_err(|err| err.to_string())?;
+
+    let owner = owner.trim();
+    let owner = owner.strip_suffix(')').unwrap_or(owner).trim();
+
+    Ok(PermissionParts {
+        class: class.trim().to_string(),
+        owner: owner.to_string(),
+        recipient: recipient.trim().to_string(),
+        verb: verb.trim().to_string(),
+        resource: resource.trim().to_string(),
+    })
+}
+
+fn reject_slot_variables(parts: &PermissionParts) -> Result<(), CardParseError> {
+    for value in [&parts.owner, &parts.recipient, &parts.resource] {
+        if contains_slot_reference(value) {
+            return Err(CardParseError::SlotVariableInConcreteGrant(
+                value.to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn parse_class_permission<C: PermissionClass>(
