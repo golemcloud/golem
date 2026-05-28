@@ -204,97 +204,43 @@ pub trait PermissionClass {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "C::Verb: Serialize, C::Owner: Serialize, C::Resource: Serialize",
-    deserialize = "C::Verb: Deserialize<'de>, C::Owner: Deserialize<'de>, C::Resource: Deserialize<'de>"
-))]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum ClassPermissionPattern<C: PermissionClass> {
-    Any {
-        owner: C::Owner,
-        recipient: RecipientPattern,
-        resource: C::Resource,
-    },
-    Verb {
-        verb: C::Verb,
-        owner: C::Owner,
-        recipient: RecipientPattern,
-        resource: C::Resource,
-    },
+pub struct ClassPermissionPattern<C: PermissionClass> {
+    pub verb: Option<C::Verb>,
+    pub owner: C::Owner,
+    pub recipient: RecipientPattern,
+    pub resource: C::Resource,
 }
 
 impl<C: PermissionClass> ClassPermissionPattern<C> {
     pub fn subsumes(&self, other: &Self) -> bool {
-        let (self_verb, self_owner, self_recipient, self_resource) = self.parts();
-        let (other_verb, other_owner, other_recipient, other_resource) = other.parts();
-        self_owner.subsumes(other_owner)
-            && self_recipient.subsumes(other_recipient)
-            && (self_verb.is_none() || self_verb == other_verb)
-            && self_resource.subsumes(other_resource)
+        self.owner.subsumes(&other.owner)
+            && self.recipient.subsumes(&other.recipient)
+            && (self.verb.is_none() || self.verb == other.verb)
+            && self.resource.subsumes(&other.resource)
     }
 
     pub fn matches_holder(&self, holder: &str) -> bool {
-        let (_, _, recipient, _) = self.parts();
-        recipient.matches_holder(holder)
-    }
-}
-
-impl<C: PermissionClass> ClassPermissionPattern<C> {
-    fn parts(&self) -> (Option<C::Verb>, &C::Owner, &RecipientPattern, &C::Resource) {
-        match self {
-            Self::Any {
-                owner,
-                recipient,
-                resource,
-            } => (None, owner, recipient, resource),
-            Self::Verb {
-                verb,
-                owner,
-                recipient,
-                resource,
-            } => (Some(*verb), owner, recipient, resource),
-        }
+        self.recipient.matches_holder(holder)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "C::Verb: Serialize, <C::Owner as OwnerPattern>::Polymorphic: Serialize, C::Resource: Serialize",
-    deserialize = "C::Verb: Deserialize<'de>, <C::Owner as OwnerPattern>::Polymorphic: Deserialize<'de>, C::Resource: Deserialize<'de>"
-))]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicClassPermissionPattern<C: PermissionClass> {
-    Any {
-        owner: <C::Owner as OwnerPattern>::Polymorphic,
-        recipient: RecipientPattern,
-        resource: C::Resource,
-    },
-    Verb {
-        verb: C::Verb,
-        owner: <C::Owner as OwnerPattern>::Polymorphic,
-        recipient: RecipientPattern,
-        resource: C::Resource,
-    },
+pub struct PolymorphicClassPermissionPattern<C: PermissionClass> {
+    pub verb: Option<C::Verb>,
+    pub owner: <C::Owner as OwnerPattern>::Polymorphic,
+    pub recipient: RecipientPattern,
+    pub resource: C::Resource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "C::Verb: Serialize, <C::Owner as OwnerPattern>::Polymorphic: Serialize, C::Resource: Serialize",
-    deserialize = "C::Verb: Deserialize<'de>, <C::Owner as OwnerPattern>::Polymorphic: Deserialize<'de>, C::Resource: Deserialize<'de>"
-))]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum PolymorphicManifestClassPermissionPattern<C: PermissionClass> {
-    Any {
-        owner: <C::Owner as OwnerPattern>::Polymorphic,
-        recipient: PolymorphicRecipientPattern,
-        resource: C::Resource,
-    },
-    Verb {
-        verb: C::Verb,
-        owner: <C::Owner as OwnerPattern>::Polymorphic,
-        recipient: PolymorphicRecipientPattern,
-        resource: C::Resource,
-    },
+pub struct PolymorphicManifestClassPermissionPattern<C: PermissionClass> {
+    pub verb: Option<C::Verb>,
+    pub owner: <C::Owner as OwnerPattern>::Polymorphic,
+    pub recipient: PolymorphicRecipientPattern,
+    pub resource: C::Resource,
 }
 
 fn glob_subsumes(left: &str, right: &str) -> bool {

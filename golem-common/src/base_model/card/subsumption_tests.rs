@@ -25,8 +25,8 @@ use test_r::{add_test, test, test_gen};
 use uuid::Uuid;
 
 fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PermissionPattern {
-    PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass>::Verb {
-        verb: FilesystemVerb::Read,
+    PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {
+        verb: Some(FilesystemVerb::Read),
         owner: AgentOwnerPattern::parse(owner).unwrap(),
         recipient: AgentRecipientPattern::parse(recipient).unwrap(),
         resource,
@@ -46,8 +46,8 @@ fn fs_permission(permission: ClassPermissionPattern<FilesystemClass>) -> Permiss
 }
 
 fn network(recipient: &str, resource: NetworkResourcePattern) -> PermissionPattern {
-    PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
-        verb: NetworkVerb::Connect,
+    PermissionPattern::Network(ClassPermissionPattern::<NetworkClass> {
+        verb: Some(NetworkVerb::Connect),
         owner: EmptyOwnerPattern,
         recipient: AgentRecipientPattern::parse(recipient).unwrap(),
         resource,
@@ -55,8 +55,8 @@ fn network(recipient: &str, resource: NetworkResourcePattern) -> PermissionPatte
 }
 
 fn oplog_read(resource: OplogResourcePattern) -> PermissionPattern {
-    PermissionPattern::Oplog(ClassPermissionPattern::<OplogClass>::Verb {
-        verb: OplogVerb::Read,
+    PermissionPattern::Oplog(ClassPermissionPattern::<OplogClass> {
+        verb: Some(OplogVerb::Read),
         owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource,
@@ -748,19 +748,20 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
 
 #[test]
 fn verb_wildcard_subsumes_class_verbs_only() {
-    let any_filesystem = fs_permission(ClassPermissionPattern::<FilesystemClass>::Any {
+    let any_filesystem = fs_permission(ClassPermissionPattern::<FilesystemClass> {
+        verb: None,
         owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     });
-    let read_file = fs_permission(ClassPermissionPattern::<FilesystemClass>::Verb {
-        verb: FilesystemVerb::Read,
+    let read_file = fs_permission(ClassPermissionPattern::<FilesystemClass> {
+        verb: Some(FilesystemVerb::Read),
         owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     });
-    let write_file = fs_permission(ClassPermissionPattern::<FilesystemClass>::Verb {
-        verb: FilesystemVerb::Write,
+    let write_file = fs_permission(ClassPermissionPattern::<FilesystemClass> {
+        verb: Some(FilesystemVerb::Write),
         owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),

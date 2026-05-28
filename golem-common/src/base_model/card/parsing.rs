@@ -251,22 +251,21 @@ fn parse_class_permission<C: PermissionClass>(
     let recipient =
         RecipientPattern::parse(recipient).map_err(CardParseError::InvalidRecipientPath)?;
     let resource = C::Resource::parse_resource(resource)?;
-    let pattern = if verb == "*" {
-        ClassPermissionPattern::<C>::Any {
-            owner,
-            recipient,
-            resource,
-        }
+    let verb = if verb == "*" {
+        None
     } else {
-        ClassPermissionPattern::<C>::Verb {
-            verb: C::Verb::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
+        Some(
+            C::Verb::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
                 class: C::NAME.to_string(),
                 verb: verb.to_string(),
             })?,
-            owner,
-            recipient,
-            resource,
-        }
+        )
+    };
+    let pattern = ClassPermissionPattern::<C> {
+        verb,
+        owner,
+        recipient,
+        resource,
     };
     Ok(C::into_permission(pattern))
 }
@@ -291,22 +290,21 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
         });
     }
     let resource = C::Resource::parse_resource(resource)?;
-    let pattern = if verb == "*" {
-        PolymorphicClassPermissionPattern::<C>::Any {
-            owner,
-            recipient,
-            resource,
-        }
+    let verb = if verb == "*" {
+        None
     } else {
-        PolymorphicClassPermissionPattern::<C>::Verb {
-            verb: C::Verb::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
+        Some(
+            C::Verb::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
                 class: C::NAME.to_string(),
                 verb: verb.to_string(),
             })?,
-            owner,
-            recipient,
-            resource,
-        }
+        )
+    };
+    let pattern = PolymorphicClassPermissionPattern::<C> {
+        verb,
+        owner,
+        recipient,
+        resource,
     };
     Ok(C::into_polymorphic_permission(pattern))
 }
@@ -331,23 +329,22 @@ fn parse_polymorphic_manifest_class_permission<C: PermissionClass>(
         });
     }
     let resource = C::Resource::parse_resource(resource)?;
-    if verb == "*" {
-        Ok(PolymorphicManifestClassPermissionPattern::<C>::Any {
-            owner,
-            recipient,
-            resource,
-        })
+    let verb = if verb == "*" {
+        None
     } else {
-        Ok(PolymorphicManifestClassPermissionPattern::<C>::Verb {
-            verb: C::Verb::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
+        Some(
+            C::Verb::parse_verb(verb).ok_or_else(|| CardParseError::UnknownVerb {
                 class: C::NAME.to_string(),
                 verb: verb.to_string(),
             })?,
-            owner,
-            recipient,
-            resource,
-        })
-    }
+        )
+    };
+    Ok(PolymorphicManifestClassPermissionPattern::<C> {
+        verb,
+        owner,
+        recipient,
+        resource,
+    })
 }
 
 pub(crate) fn contains_slot_reference(value: &str) -> bool {

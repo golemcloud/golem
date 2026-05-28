@@ -23,8 +23,8 @@ use test_r::test;
 use uuid::Uuid;
 
 fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PermissionPattern {
-    PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass>::Verb {
-        verb: FilesystemVerb::Read,
+    PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {
+        verb: Some(FilesystemVerb::Read),
         owner: AgentOwnerPattern::parse(owner).unwrap(),
         recipient: AgentRecipientPattern::parse(recipient).unwrap(),
         resource,
@@ -36,8 +36,8 @@ fn secret_reveal(
     recipient: &str,
     resource: SecretResourcePattern,
 ) -> PermissionPattern {
-    PermissionPattern::Secret(ClassPermissionPattern::<SecretClass>::Verb {
-        verb: SecretVerb::Reveal,
+    PermissionPattern::Secret(ClassPermissionPattern::<SecretClass> {
+        verb: Some(SecretVerb::Reveal),
         owner: EnvironmentOwnerPattern::parse(owner).unwrap(),
         recipient: AgentRecipientPattern::parse(recipient).unwrap(),
         resource,
