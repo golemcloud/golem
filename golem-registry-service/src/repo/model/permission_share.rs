@@ -16,7 +16,8 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::permission_share::{
-    PermissionShare, PermissionShareData, PermissionShareId, PermissionShareRevision,
+    PermissionShare, PermissionShareData, PermissionShareId, PermissionShareName,
+    PermissionShareRevision,
 };
 use golem_service_base::repo::{Blob, RepoError};
 use sqlx::FromRow;
@@ -93,14 +94,14 @@ pub struct PermissionShareRevisionRecord {
 impl PermissionShareRevisionRecord {
     pub fn creation(
         id: PermissionShareId,
-        name: String,
+        name: PermissionShareName,
         data: PermissionShareData,
         actor: AccountId,
     ) -> Self {
         Self {
             permission_share_id: id.0,
             revision_id: PermissionShareRevision::INITIAL.into(),
-            name,
+            name: name.0,
             card_id: None,
             data: Blob::new(data.into()),
             audit: DeletableRevisionAuditFields::new(actor.0),
@@ -111,7 +112,7 @@ impl PermissionShareRevisionRecord {
         Self {
             permission_share_id: value.id.0,
             revision_id: value.revision.into(),
-            name: value.name,
+            name: value.name.0,
             card_id: value.current_card_id,
             data: Blob::new(value.data.into()),
             audit,
@@ -138,7 +139,7 @@ impl TryFrom<PermissionShareExtRevisionRecord> for PermissionShare {
             revision: value.revision.revision_id.try_into()?,
             owner_account_id: AccountId(value.owner_account_id),
             target_account_id: AccountId(value.target_account_id),
-            name: value.revision.name,
+            name: PermissionShareName(value.revision.name),
             current_card_id: value.current_card_id,
             data: value.revision.data.into_value().into(),
         })

@@ -623,6 +623,9 @@ impl From<PermissionShareError> for ApiError {
             PermissionShareError::PermissionShareNotFound(_) => {
                 Self::not_found(api::error_code::PERMISSION_SHARE_NOT_FOUND, error)
             }
+            PermissionShareError::PermissionShareByNameNotFound(_) => {
+                Self::not_found(api::error_code::PERMISSION_SHARE_NOT_FOUND, error)
+            }
             PermissionShareError::TargetAccountNotFound(_) => {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }

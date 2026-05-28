@@ -13,12 +13,20 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::{declare_revision, declare_structs, newtype_uuid};
+use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use derive_more::Display;
 use uuid::Uuid;
 
 newtype_uuid!(PermissionShareId);
 
 declare_revision!(PermissionShareRevision);
+
+declare_transparent_newtypes! {
+    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(transparent))]
+    pub struct PermissionShareName(pub String);
+}
 
 declare_structs! {
     pub struct PermissionShareData {
@@ -33,20 +41,20 @@ declare_structs! {
         pub revision: PermissionShareRevision,
         pub owner_account_id: AccountId,
         pub target_account_id: AccountId,
-        pub name: String,
+        pub name: PermissionShareName,
         pub current_card_id: Option<Uuid>,
         pub data: PermissionShareData
     }
 
     pub struct PermissionShareCreation {
         pub target_account_id: AccountId,
-        pub name: String,
+        pub name: PermissionShareName,
         pub data: PermissionShareData
     }
 
     pub struct PermissionShareUpdate {
         pub current_revision: PermissionShareRevision,
-        pub name: String,
+        pub name: PermissionShareName,
         pub data: PermissionShareData
     }
 }

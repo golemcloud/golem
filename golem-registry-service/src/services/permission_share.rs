@@ -20,8 +20,8 @@ use crate::repo::model::permission_share::{
 use crate::repo::permission_share::PermissionShareRepo;
 use golem_common::model::account::AccountId;
 use golem_common::model::permission_share::{
-    PermissionShare, PermissionShareCreation, PermissionShareId, PermissionShareRevision,
-    PermissionShareUpdate,
+    PermissionShare, PermissionShareCreation, PermissionShareId, PermissionShareName,
+    PermissionShareRevision, PermissionShareUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, AuthCtx, AuthorizationError};
@@ -33,6 +33,8 @@ pub enum PermissionShareError {
     PermissionShareAlreadyExists,
     #[error("Permission share {0} not found")]
     PermissionShareNotFound(PermissionShareId),
+    #[error("Permission share for name {0} not found")]
+    PermissionShareByNameNotFound(PermissionShareName),
     #[error("Target account {0} not found")]
     TargetAccountNotFound(AccountId),
     #[error("Concurrent update attempt")]
@@ -48,6 +50,7 @@ impl SafeDisplay for PermissionShareError {
         match self {
             Self::PermissionShareAlreadyExists => self.to_string(),
             Self::PermissionShareNotFound(_) => self.to_string(),
+            Self::PermissionShareByNameNotFound(_) => self.to_string(),
             Self::TargetAccountNotFound(_) => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),

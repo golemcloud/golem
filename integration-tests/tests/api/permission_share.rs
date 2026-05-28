@@ -17,7 +17,7 @@ use golem_client::api::{
     RegistryServiceGetPermissionShareError,
 };
 use golem_common::model::permission_share::{
-    PermissionShareCreation, PermissionShareData, PermissionShareUpdate,
+    PermissionShareCreation, PermissionShareData, PermissionShareName, PermissionShareUpdate,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use pretty_assertions::assert_eq;
@@ -46,7 +46,7 @@ async fn create_list_update_and_delete_permission_share(
 
     let creation = PermissionShareCreation {
         target_account_id: target.account_id,
-        name: "team-access".to_string(),
+        name: PermissionShareName("team-access".to_string()),
         data: share_data("environment(owner/app/prod) @ * : deploy : prod"),
     };
 
@@ -67,7 +67,7 @@ async fn create_list_update_and_delete_permission_share(
 
     {
         let fetched = client
-            .get_permission_share_by_name(&owner.account_id.0, &share.name)
+            .get_permission_share_by_name(&owner.account_id.0, &share.name.0)
             .await?;
         assert_eq!(fetched, share);
     }
@@ -89,7 +89,7 @@ async fn create_list_update_and_delete_permission_share(
 
     let update = PermissionShareUpdate {
         current_revision: share.revision,
-        name: "team-access-renamed".to_string(),
+        name: PermissionShareName("team-access-renamed".to_string()),
         data: share_data("environment(owner/app/prod) @ * : rollback : prod@rev=42"),
     };
 
@@ -132,7 +132,7 @@ async fn permission_share_names_are_unique_per_owner(
 
     let creation = PermissionShareCreation {
         target_account_id: target_1.account_id,
-        name: "shared-name".to_string(),
+        name: PermissionShareName("shared-name".to_string()),
         data: share_data("application(owner) @ * : view : shop"),
     };
 
