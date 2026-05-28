@@ -88,6 +88,7 @@ cp wit/deps/io golem-wasm/wit/deps
 cp wit/deps/clocks golem-wasm/wit/deps
 cp wit/deps/golem-1.x golem-wasm/wit/deps
 cp wit/deps/golem-core golem-wasm/wit/deps
+cp wit/deps/golem-core-v2 golem-wasm/wit/deps
 """
 
 [tasks.wit-golem-common]
@@ -100,6 +101,7 @@ cp wit/deps/io golem-common/wit/deps
 cp wit/deps/clocks golem-common/wit/deps
 cp wit/deps/golem-1.x golem-common/wit/deps
 cp wit/deps/golem-core golem-common/wit/deps
+cp wit/deps/golem-core-v2 golem-common/wit/deps
 cp wit/deps/golem-agent golem-common/wit/deps
 """
 
@@ -133,6 +135,7 @@ cp wit/deps/clocks cli/golem-cli/wit/deps
 cp wit/deps/io cli/golem-cli/wit/deps
 cp wit/deps/golem-1.x cli/golem-cli/wit/deps
 cp wit/deps/golem-core cli/golem-cli/wit/deps
+cp wit/deps/golem-core-v2 cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
 cp wit/deps/logging cli/golem-cli/wit/deps
 """
