@@ -17,7 +17,7 @@ use crate::repo::registry_change::{
 };
 use golem_api_grpc::proto::golem::registry::v1::AgentSecretChangedEvent;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AccountTokensInvalidatedEvent, ApplicationDeletedEvent, CursorExpiredEvent,
+    AccountTokensInvalidatedEvent, ApplicationDeletedEvent, CardRevokedEvent, CursorExpiredEvent,
     DeploymentChangedEvent, DomainRegistrationChangedEvent, EnvironmentDeletedEvent,
     EnvironmentPermissionsChangedEvent, RegistryInvalidationEvent, ResourceDefinitionChangedEvent,
     RetryPolicyChangedEvent, SecuritySchemeChangedEvent, registry_invalidation_event::Payload,
@@ -411,6 +411,12 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
                 environment_id: Some(EnvironmentId(*environment_id).into()),
                 app_name: app_name.clone(),
                 env_name: env_name.clone(),
+            }),
+        ),
+        RegistryChangeEvent::CardRevoked { event_id, card_ids } => (
+            *event_id,
+            Payload::CardRevoked(CardRevokedEvent {
+                card_ids: card_ids.iter().copied().map(Into::into).collect(),
             }),
         ),
     };

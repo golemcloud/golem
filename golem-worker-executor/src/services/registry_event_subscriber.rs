@@ -141,6 +141,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     .invalidate_environment(*environment_id)
                     .await;
             }
+            RegistryInvalidationEvent::CardRevoked { .. } => {}
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,
                 account_id,

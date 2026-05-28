@@ -372,6 +372,7 @@ message RegistryInvalidationEvent {
     AgentSecretChangedEvent agent_secret_changed = 10;
     ApplicationDeletedEvent application_deleted = 11;
     EnvironmentDeletedEvent environment_deleted = 12;
+    CardRevokedEvent card_revoked = 13;
   }
 }
 
@@ -446,4 +447,9 @@ message EnvironmentDeletedEvent {
   string app_name = 2;
   // Human-readable environment name; matches the AgentResolutionCache key.
   string env_name = 3;
+}
+
+// Sent when a permission card is revoked or deleted.
+message CardRevokedEvent {
+  repeated golem.common.UUID card_ids = 1;
 }
