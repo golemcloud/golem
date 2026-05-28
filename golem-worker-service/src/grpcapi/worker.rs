@@ -519,6 +519,7 @@ impl WorkerGrpcApi {
             fuel_consumed: output.consumed_fuel,
             component_revision: output.component_revision.map(|r| r.get()),
             status: proto_status,
+            read_only_oplog_index: output.read_only_oplog_index.map(u64::from),
         })
     }
 

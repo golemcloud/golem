@@ -151,6 +151,7 @@ mod protobuf {
                     .into_iter()
                     .map(OplogRegion::from)
                     .collect::<Vec<_>>(),
+                last_oplog_index: OplogIndex::from_u64(value.oplog_idx),
             })
         }
     }
@@ -198,6 +199,7 @@ mod protobuf {
                     .into_iter()
                     .map(|region| region.into())
                     .collect(),
+                oplog_idx: u64::from(value.last_oplog_index),
             }
         }
     }

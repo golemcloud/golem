@@ -3176,6 +3176,10 @@ impl InvocationResult {
                         consumed_fuel: Some(consumed_fuel as u64),
                         invocation_status: None,
                         component_revision: Some(component_revision),
+                        // `oplog_idx` here is the index of the matched
+                        // `AgentInvocationFinished` entry, which is exactly
+                        // what the read-only HTTP cache uses as its ETag.
+                        read_only_oplog_index: Some(oplog_idx),
                     })
                 }
                 OplogEntry::Error {

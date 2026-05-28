@@ -31,6 +31,8 @@ message AgentMetadata {
   repeated OplogRegion skipped_regions = 16;
   repeated OplogRegion deleted_regions = 17;
   golem.common.EnvironmentId environment_id = 18;
+  // Latest known oplog index for this agent.
+  uint64 oplog_idx = 19;
 }
 
 message UpdateRecord {

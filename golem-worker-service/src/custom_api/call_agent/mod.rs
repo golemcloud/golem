@@ -12,9 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod cache_headers;
 mod parameter_parsing;
 mod response_mapping;
 
+use self::cache_headers::{
+    add_vary_header, build_cache_control_value, build_etag_value, headers as cache_header,
+    if_none_match_hits, parse_if_none_match_entries, supports_http_revalidation,
+};
 use self::parameter_parsing::{
     parse_path_segment_value, parse_path_segment_value_to_component_model,
     parse_query_or_header_value,
@@ -22,21 +27,25 @@ use self::parameter_parsing::{
 use self::response_mapping::interpret_agent_response;
 use super::RichRequest;
 use super::error::RequestHandlerError;
+use super::model::{ResponseBody, RichRouteSecurity};
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use anyhow::anyhow;
+use golem_common::model::OplogIndex;
 use golem_common::model::agent::{
     BinaryReference, BinaryReferenceValue, ComponentModelElementValue, DataValue, ElementValue,
-    ElementValues, OidcPrincipal, ParsedAgentId, Principal, TextReference, TextReferenceValue,
-    UntypedDataValue, UntypedElementValue,
+    ElementValues, OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig, TextReference,
+    TextReferenceValue, UntypedDataValue, UntypedElementValue,
 };
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::ValueAndType;
+use http::{Method, StatusCode};
+use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 pub struct CallAgentHandler {
@@ -55,6 +64,24 @@ impl CallAgentHandler {
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         let agent_id = self.build_agent_id(resolved_route, behaviour)?;
+
+        let request_method = request.underlying.method().clone();
+
+        // For read-only methods bound to GET/HEAD routes with a revalidatable
+        // cache policy, try to serve a `304 Not Modified` without invoking the
+        // executor when the client's `If-None-Match` value matches the agent's
+        // current oplog index. `get_metadata` is safe here because the
+        // executor implementation reads cached metadata / persisted oplog
+        // state and does **not** wake or load the worker.
+        if let Some(read_only) = behaviour.read_only.as_ref()
+            && is_cacheable_method(&request_method)
+            && supports_http_revalidation(read_only)
+            && let Some(not_modified) = self
+                .try_handle_if_none_match(request, behaviour, &agent_id, read_only, resolved_route)
+                .await?
+        {
+            return Ok(not_modified);
+        }
 
         let parsed_body = request
             .parse_request_body(&resolved_route.route.body)
@@ -98,17 +125,121 @@ impl CallAgentHandler {
 
         debug!("Received agent response: {agent_response:?}");
 
+        // The executor returns the oplog index that the response's body was
+        // committed at. Using this index as the validator avoids TOCTOU:
+        // because the cached entry stores the same index, a subsequent cache
+        // hit produces the same ETag, and any non-read-only write between two
+        // reads bumps the cache epoch and forces a new invocation whose
+        // recorded index will be strictly greater.
+        let read_only_oplog_index = agent_response.read_only_oplog_index;
+
         let agent_result = match agent_response.result {
             golem_common::model::AgentInvocationResult::AgentMethod { output } => Some(output),
             _ => None,
         };
 
-        let route_result =
+        let mut route_result =
             interpret_agent_response(agent_result, &behaviour.expected_agent_response)?;
+
+        // For read-only methods bound to a GET/HEAD route, add cache headers to
+        // the successful response and (for HEAD) strip the body.
+        if let Some(read_only) = behaviour.read_only.as_ref()
+            && is_cacheable_method(&request_method)
+            && route_result.status.is_success()
+        {
+            add_read_only_cache_headers(
+                &mut route_result.headers,
+                &agent_id,
+                read_only_oplog_index,
+                read_only,
+                behaviour,
+                resolved_route,
+            );
+
+            if request_method == Method::HEAD {
+                route_result.body = ResponseBody::NoBody;
+            }
+        }
 
         debug!("Returning call agent route result: {route_result:?}");
 
         Ok(route_result)
+    }
+
+    /// Pre-invocation `If-None-Match` revalidation. When the request supplies
+    /// an `If-None-Match` header containing the ETag for the agent's current
+    /// oplog index, we short-circuit with `304 Not Modified` and do not touch
+    /// the executor at all.
+    async fn try_handle_if_none_match(
+        &self,
+        request: &RichRequest,
+        behaviour: &CallAgentBehaviour,
+        agent_id: &AgentId,
+        read_only: &ReadOnlyConfig,
+        resolved_route: &ResolvedRouteEntry,
+    ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
+        let Some(raw) = request
+            .headers()
+            .get(&cache_header::IF_NONE_MATCH)
+            .and_then(|h| h.to_str().ok())
+        else {
+            return Ok(None);
+        };
+
+        let entries = parse_if_none_match_entries(raw);
+        if entries.is_empty() {
+            return Ok(None);
+        }
+
+        let Some(current_oplog) = self
+            .fetch_current_oplog_index(resolved_route, agent_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        if !if_none_match_hits(&entries, agent_id, current_oplog) {
+            return Ok(None);
+        }
+
+        let mut headers: HashMap<http::HeaderName, String> = HashMap::new();
+        add_read_only_cache_headers(
+            &mut headers,
+            agent_id,
+            Some(current_oplog),
+            read_only,
+            behaviour,
+            resolved_route,
+        );
+
+        Ok(Some(RouteExecutionResult {
+            status: StatusCode::NOT_MODIFIED,
+            headers,
+            body: ResponseBody::NoBody,
+        }))
+    }
+
+    async fn fetch_current_oplog_index(
+        &self,
+        resolved_route: &ResolvedRouteEntry,
+        agent_id: &AgentId,
+    ) -> Result<Option<OplogIndex>, RequestHandlerError> {
+        match self
+            .worker_service
+            .get_metadata(agent_id, AuthCtx::agent(resolved_route.route.account_id))
+            .await
+        {
+            Ok(metadata) => Ok(Some(metadata.last_oplog_index)),
+            Err(err) => {
+                // Failing to fetch metadata must not block the response. We
+                // simply skip the cache-headers / 304 path and let the regular
+                // invocation flow execute.
+                warn!(
+                    "Skipping HTTP cache headers for agent {agent_id}: failed to fetch metadata: {err}"
+                );
+                Ok(None)
+            }
+        }
     }
 
     fn build_agent_id(
@@ -277,6 +408,68 @@ impl CallAgentHandler {
         }
 
         Ok(values)
+    }
+}
+
+fn is_cacheable_method(method: &Method) -> bool {
+    matches!(*method, Method::GET | Method::HEAD)
+}
+
+/// Insert the cache headers for a read-only `AgentMethod` response into the
+/// given header map: `Cache-Control`, optionally `ETag` (when the cache policy
+/// supports HTTP revalidation), and `Vary` for every header that influences
+/// the response (`Authorization` / session-header for principal-aware
+/// methods, plus any header-bound method parameters).
+fn add_read_only_cache_headers(
+    headers: &mut HashMap<http::HeaderName, String>,
+    agent_id: &AgentId,
+    oplog_index: Option<OplogIndex>,
+    read_only: &ReadOnlyConfig,
+    behaviour: &CallAgentBehaviour,
+    resolved_route: &ResolvedRouteEntry,
+) {
+    headers.insert(
+        cache_header::CACHE_CONTROL,
+        build_cache_control_value(read_only),
+    );
+
+    // `CachePolicy::NoCache` explicitly opts out of HTTP caching: no ETag, and
+    // therefore no 304 path. Otherwise emit an ETag for the supplied oplog
+    // index: on the `200` path this is the executor-reported post-commit (or
+    // cache-entry) index of the read-only invocation; on the `304` path this
+    // is the worker's `last_oplog_index` observed before short-circuiting.
+    // Skip the ETag entirely if no index is available (e.g. metadata fetch
+    // failed, or the executor did not return one).
+    if supports_http_revalidation(read_only)
+        && let Some(idx) = oplog_index
+    {
+        headers.insert(cache_header::ETAG, build_etag_value(agent_id, idx));
+    }
+
+    // Vary on every request header that may influence the response: the
+    // principal-bound header for principal-aware methods, and any header-bound
+    // method parameters bound by the route.
+    if read_only.uses_principal {
+        add_vary_header(
+            headers,
+            principal_vary_header_name(&resolved_route.route.security),
+        );
+    }
+    for param in &behaviour.method_parameters {
+        if let MethodParameter::Header { header_name, .. } = param {
+            add_vary_header(headers, header_name);
+        }
+    }
+}
+
+/// Return the request header used to derive the caller's principal for the
+/// route's security configuration. Defaults to `Authorization` for OIDC /
+/// session-based security; uses the configured header name for
+/// `SessionFromHeader` security.
+fn principal_vary_header_name(security: &RichRouteSecurity) -> &str {
+    match security {
+        RichRouteSecurity::SessionFromHeader(s) => s.header_name.as_str(),
+        RichRouteSecurity::None | RichRouteSecurity::SecurityScheme(_) => "Authorization",
     }
 }
 

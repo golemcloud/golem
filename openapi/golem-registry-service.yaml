@@ -9444,6 +9444,15 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        validationWarnings:
+          type: array
+          description: |-
+            Non-fatal validation warnings produced while compiling the
+            deployment (e.g. read-only methods bound to non-`GET` HTTP verbs).
+            Empty when the deployment is clean.
+          default: []
+          items:
+            $ref: '#/components/schemas/DeployValidationWarning'
     CustomHttpMethod:
       type: object
       title: CustomHttpMethod
@@ -9485,6 +9494,40 @@ components:
             - Multimodal
             example: Multimodal
       - $ref: '#/components/schemas/NamedElementSchemas'
+    DeployValidationWarning:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
+      - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
+      discriminator:
+        propertyName: type
+        mapping:
+          HttpApiReadOnlyMethodBoundToNonGetVerb: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
+          HttpApiReadOnlyTtlBelowOneSecond: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - HttpApiReadOnlyMethodBoundToNonGetVerb
+            example: HttpApiReadOnlyMethodBoundToNonGetVerb
+      - $ref: '#/components/schemas/HttpApiReadOnlyMethodBoundToNonGetVerb'
+    DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - HttpApiReadOnlyTtlBelowOneSecond
+            example: HttpApiReadOnlyTtlBelowOneSecond
+      - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
     DeployedRegisteredAgentType:
       type: object
       title: DeployedRegisteredAgentType
@@ -10237,6 +10280,46 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
+    HttpApiReadOnlyMethodBoundToNonGetVerb:
+      type: object
+      title: HttpApiReadOnlyMethodBoundToNonGetVerb
+      required:
+      - componentId
+      - agentType
+      - methodName
+      - httpMethod
+      - path
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        methodName:
+          type: string
+        httpMethod:
+          $ref: '#/components/schemas/HttpMethod'
+        path:
+          type: string
+    HttpApiReadOnlyTtlBelowOneSecond:
+      type: object
+      title: HttpApiReadOnlyTtlBelowOneSecond
+      required:
+      - componentId
+      - agentType
+      - methodName
+      - ttlNanos
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        methodName:
+          type: string
+        ttlNanos:
+          type: integer
+          format: uint64
     HttpEndpointDetails:
       type: object
       title: HttpEndpointDetails

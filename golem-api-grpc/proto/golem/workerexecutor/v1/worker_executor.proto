@@ -468,6 +468,9 @@ message InvokeAgentSuccess {
   optional uint64 fuel_consumed = 2;
   optional uint64 component_revision = 3;
   optional golem.worker.InvocationStatus status = 4;
+  // For read-only agent methods, the oplog index that the representation
+  // returned in `result` was committed at.
+  optional uint64 read_only_oplog_index = 5;
 }
 
 message ProcessOplogEntriesRequest {

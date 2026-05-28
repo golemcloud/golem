@@ -2545,7 +2545,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         let is_live = self.state.is_live();
 
@@ -2573,6 +2573,19 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::Always)
                     .await;
+
+                // Capture the oplog index right after AgentInvocationFinished
+                // was committed. For read-only methods this is the validator
+                // the worker-service emits as the response's ETag, and is what
+                // gets stored alongside the cached entry so cache hits return
+                // the same value.
+                output.read_only_oplog_index = Some(
+                    self.public_state
+                        .worker()
+                        .oplog()
+                        .current_oplog_index()
+                        .await,
+                );
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
@@ -3050,11 +3063,12 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             }) => {
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
-                                let output = AgentInvocationOutput {
+                                let mut output = AgentInvocationOutput {
                                     result: invocation_result,
                                     consumed_fuel: Some(consumed_fuel),
                                     invocation_status: None,
                                     component_revision: Some(component_revision),
+                                    read_only_oplog_index: None,
                                 };
                                 if let Err(err) = store
                                     .as_context_mut()
@@ -3062,7 +3076,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     .on_agent_invocation_success(
                                         &full_function_name,
                                         consumed_fuel,
-                                        &output,
+                                        &mut output,
                                     )
                                     .await
                                 {

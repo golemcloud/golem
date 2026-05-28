@@ -2418,6 +2418,15 @@ components:
           description: Oplog regions permanently deleted from the workers using the revert functionality.
           items:
             $ref: '#/components/schemas/OplogRegion'
+        lastOplogIndex:
+          type: integer
+          format: uint64
+          description: |-
+            Latest known oplog index for this agent. The worker-service HTTP layer
+            uses this value to derive the `ETag` for read-only `AgentMethod` HTTP
+            routes and to serve `If-None-Match` 304 responses without triggering
+            an executor invocation.
+          default: 0
     AgentMethodInvocationParameters:
       type: object
       title: AgentMethodInvocationParameters

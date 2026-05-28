@@ -19,7 +19,7 @@ use crate::model::SafeIndex;
 use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName, DataSchema, HttpMethod};
+use golem_common::model::agent::{AgentTypeName, DataSchema, HttpMethod, ReadOnlyConfig};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -274,6 +274,11 @@ pub struct CallAgentBehaviour {
     pub expected_agent_response: DataSchema,
     #[desert(default)]
     pub method_description: Option<String>,
+    /// The read-only configuration carried over from the `AgentMethod` this route
+    /// resolves to. Used by the HTTP layer to emit cache-friendly headers and
+    /// handle `If-None-Match` revalidation for `GET`/`HEAD` requests.
+    #[desert(default)]
+    pub read_only: Option<ReadOnlyConfig>,
 }
 
 #[derive(Debug, BinaryCodec)]

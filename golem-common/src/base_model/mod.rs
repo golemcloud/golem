@@ -23,6 +23,7 @@ pub mod component;
 #[allow(unused_assignments)]
 // NOTE: from rust 1.92, a `value assigned to `cache` is never read` warning is emitted, most likely from the derived BinaryCodec. To be fixed in desert
 pub mod component_metadata;
+pub mod deploy_validation_warning;
 pub mod deployment;
 pub mod diff;
 pub mod domain_registration;

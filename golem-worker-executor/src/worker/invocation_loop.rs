@@ -949,16 +949,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         kind: AgentInvocationKind,
     ) -> CommandOutcome {
         let component_revision = self.store.data().component_metadata().revision;
-        let output = AgentInvocationOutput {
+        let mut output = AgentInvocationOutput {
             result: invocation_result,
             consumed_fuel: Some(consumed_fuel),
             invocation_status: None,
             component_revision: Some(component_revision),
+            read_only_oplog_index: None,
         };
         match self
             .store
             .data_mut()
-            .on_agent_invocation_success(&full_function_name, consumed_fuel, &output)
+            .on_agent_invocation_success(&full_function_name, consumed_fuel, &mut output)
             .await
         {
             Ok(()) => {

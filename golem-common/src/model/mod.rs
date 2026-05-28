@@ -914,6 +914,10 @@ pub struct AgentInvocationOutput {
     pub consumed_fuel: Option<u64>,
     pub invocation_status: Option<InvocationStatus>,
     pub component_revision: Option<ComponentRevision>,
+    /// For read-only agent methods, the oplog index that the cached
+    /// representation was committed at. `None` for non-read-only methods or
+    /// for legacy executors that did not report it.
+    pub read_only_oplog_index: Option<OplogIndex>,
 }
 
 fn value_replay_equivalent(a: &Value, b: &Value) -> bool {

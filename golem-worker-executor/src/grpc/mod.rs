@@ -1839,6 +1839,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     consumed_fuel: None,
                     invocation_status: Some(inv_status),
                     component_revision: None,
+                    read_only_oplog_index: None,
                 }),
                 None,
             ));
@@ -2124,6 +2125,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .into_regions()
                 .map(|region| region.into())
                 .collect(),
+            oplog_idx: u64::from(latest_status.oplog_idx),
         })
     }
 }
@@ -2962,28 +2964,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await
         {
             Ok((result, _status)) => {
-                let (result_value, fuel_consumed, component_revision, invocation_status) =
-                    match result {
-                        Some(output) => {
-                            let value = match &output.result {
-                                AgentInvocationResult::AgentMethod { output } => {
-                                    Some(output.clone().into())
-                                }
-                                _ => None,
-                            };
-                            let proto_status = output.invocation_status.map(|s| {
-                                golem_api_grpc::proto::golem::worker::InvocationStatus::from(s)
-                                    as i32
-                            });
-                            (
-                                value,
-                                output.consumed_fuel,
-                                output.component_revision.map(|r| r.get()),
-                                proto_status,
-                            )
-                        }
-                        None => (None, None, None, None),
-                    };
+                let (
+                    result_value,
+                    fuel_consumed,
+                    component_revision,
+                    invocation_status,
+                    read_only_oplog_index,
+                ) = match result {
+                    Some(output) => {
+                        let value = match &output.result {
+                            AgentInvocationResult::AgentMethod { output } => {
+                                Some(output.clone().into())
+                            }
+                            _ => None,
+                        };
+                        let proto_status = output.invocation_status.map(|s| {
+                            golem_api_grpc::proto::golem::worker::InvocationStatus::from(s) as i32
+                        });
+                        (
+                            value,
+                            output.consumed_fuel,
+                            output.component_revision.map(|r| r.get()),
+                            proto_status,
+                            output.read_only_oplog_index.map(u64::from),
+                        )
+                    }
+                    None => (None, None, None, None, None),
+                };
                 record.succeed(Ok(Response::new(InvokeAgentResponse {
                     result: Some(
                         golem::workerexecutor::v1::invoke_agent_response::Result::Success(
@@ -2992,6 +2999,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 fuel_consumed,
                                 component_revision,
                                 status: invocation_status,
+                                read_only_oplog_index,
                             },
                         ),
                     ),

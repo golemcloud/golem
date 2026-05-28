@@ -10259,6 +10259,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/OplogRegion'
+        lastOplogIndex:
+          description: |-
+            Latest known oplog index for this agent. The worker-service HTTP layer
+            uses this value to derive the `ETag` for read-only `AgentMethod` HTTP
+            routes and to serve `If-None-Match` 304 responses without triggering
+            an executor invocation.
+          default: 0
+          type: integer
+          format: uint64
       required:
       - agentId
       - environmentId
@@ -15136,6 +15145,15 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        validationWarnings:
+          description: |-
+            Non-fatal validation warnings produced while compiling the
+            deployment (e.g. read-only methods bound to non-`GET` HTTP verbs).
+            Empty when the deployment is clean.
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/DeployValidationWarning'
       required:
       - environmentId
       - revision
@@ -15183,6 +15201,40 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/NamedElementSchemas'
+    DeployValidationWarning:
+      discriminator:
+        propertyName: type
+        mapping:
+          HttpApiReadOnlyMethodBoundToNonGetVerb: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
+          HttpApiReadOnlyTtlBelowOneSecond: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
+      - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: HttpApiReadOnlyMethodBoundToNonGetVerb
+            type: string
+            enum:
+            - HttpApiReadOnlyMethodBoundToNonGetVerb
+        required:
+        - type
+      - $ref: '#/components/schemas/HttpApiReadOnlyMethodBoundToNonGetVerb'
+    DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: HttpApiReadOnlyTtlBelowOneSecond
+            type: string
+            enum:
+            - HttpApiReadOnlyTtlBelowOneSecond
+        required:
+        - type
+      - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
     DeployedRegisteredAgentType:
       title: DeployedRegisteredAgentType
       description: |-
@@ -15908,6 +15960,46 @@ components:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
       required:
       - currentRevision
+    HttpApiReadOnlyMethodBoundToNonGetVerb:
+      title: HttpApiReadOnlyMethodBoundToNonGetVerb
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        methodName:
+          type: string
+        httpMethod:
+          $ref: '#/components/schemas/HttpMethod'
+        path:
+          type: string
+      required:
+      - componentId
+      - agentType
+      - methodName
+      - httpMethod
+      - path
+    HttpApiReadOnlyTtlBelowOneSecond:
+      title: HttpApiReadOnlyTtlBelowOneSecond
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        methodName:
+          type: string
+        ttlNanos:
+          type: integer
+          format: uint64
+      required:
+      - componentId
+      - agentType
+      - methodName
+      - ttlNanos
     HttpEndpointDetails:
       title: HttpEndpointDetails
       type: object

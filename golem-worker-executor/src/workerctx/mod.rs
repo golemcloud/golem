@@ -319,11 +319,16 @@ pub trait InvocationHooks {
     ) -> RetryDecision;
 
     /// Called when an agent invocation succeeds, with the typed result directly.
+    ///
+    /// The implementation may populate fields on `output` that are only known
+    /// after the success has been persisted to the oplog — for example
+    /// `read_only_oplog_index` on the `AgentInvocationFinished` entry's
+    /// committed index.
     async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Gets the retry point that should be associated with a current error. Errors are grouped

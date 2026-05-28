@@ -127,7 +127,11 @@ declare_structs! {
         /// recorded oplog entries will be skipped on retry.
         pub skipped_regions: Vec<OplogRegion>,
         /// Oplog regions permanently deleted from the workers using the revert functionality.
-        pub deleted_regions: Vec<OplogRegion>
+        pub deleted_regions: Vec<OplogRegion>,
+        /// Latest known oplog index for this agent.
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub last_oplog_index: OplogIndex
     }
 
     #[derive(IntoValue, FromValue)]

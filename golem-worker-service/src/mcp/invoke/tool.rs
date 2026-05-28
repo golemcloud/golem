@@ -491,6 +491,7 @@ mod tests {
             consumed_fuel: None,
             invocation_status: None,
             component_revision: None,
+            read_only_oplog_index: None,
         });
         let tool = AgentMcpTool {
             tool: Tool {
