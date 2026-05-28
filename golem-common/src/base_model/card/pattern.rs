@@ -12,49 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::class::card_permission_classes;
 use super::class::*;
 use serde::{Deserialize, Serialize};
-
-macro_rules! card_permission_classes {
-    ($macro:ident) => {
-        $macro! {
-            Filesystem: FilesystemClass,
-            Network: NetworkClass,
-            Env: EnvClass,
-            Oplog: OplogClass,
-            Config: ConfigClass,
-            Secret: SecretClass,
-            Agent: AgentClass,
-            Tool: ToolClass,
-            Kv: KvClass,
-            Blob: BlobClass,
-            Rdbms: RdbmsClass,
-            Card: CardClass,
-            System: SystemClass,
-            Plan: PlanClass,
-            Account: AccountClass,
-            AccountUsage: AccountUsageClass,
-            AccountToken: AccountTokenClass,
-            AccountPlugin: AccountPluginClass,
-            Application: ApplicationClass,
-            Environment: EnvironmentClass,
-            EnvironmentShare: EnvironmentShareClass,
-            EnvironmentPluginGrant: EnvironmentPluginGrantClass,
-            EnvironmentDomainRegistration: EnvironmentDomainRegistrationClass,
-            EnvironmentSecurityScheme: EnvironmentSecuritySchemeClass,
-            EnvironmentHttpApiDeployment: EnvironmentHttpApiDeploymentClass,
-            EnvironmentMcpDeployment: EnvironmentMcpDeploymentClass,
-            EnvironmentAgentSecret: EnvironmentAgentSecretClass,
-            EnvironmentResourceDefinition: EnvironmentResourceDefinitionClass,
-            EnvironmentRetryPolicy: EnvironmentRetryPolicyClass,
-            Component: ComponentClass,
-            AccountOauth2Identity: AccountOauth2IdentityClass,
-            EnvironmentInitialFiles: EnvironmentInitialFilesClass,
-            EnvironmentKvBucket: EnvironmentKvBucketClass,
-            EnvironmentBlobBucket: EnvironmentBlobBucketClass,
-        }
-    };
-}
 
 macro_rules! define_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {

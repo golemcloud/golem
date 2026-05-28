@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::class::card_permission_classes;
 use crate::base_model::card::*;
 use crate::model::card::owner::OwnerPattern;
 use crate::model::card::recipient::{PolymorphicRecipientPattern, RecipientPattern};
@@ -259,191 +260,24 @@ fn reject_slot_variables(parts: &PatternGrantParts) -> Result<(), CardParseError
     Ok(())
 }
 
-macro_rules! dispatch_permission_class {
-    ($case:ident, $class:expr, $owner:expr, $recipient:expr, $verb:expr, $resource:expr) => {
-        match $class {
-            FilesystemClass::NAME => $case!(
-                FilesystemClass,
-                Filesystem,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            NetworkClass::NAME => {
-                $case!(NetworkClass, Network, $owner, $recipient, $verb, $resource)
-            }
-            EnvClass::NAME => $case!(EnvClass, Env, $owner, $recipient, $verb, $resource),
-            OplogClass::NAME => $case!(OplogClass, Oplog, $owner, $recipient, $verb, $resource),
-            ConfigClass::NAME => $case!(ConfigClass, Config, $owner, $recipient, $verb, $resource),
-            SecretClass::NAME => $case!(SecretClass, Secret, $owner, $recipient, $verb, $resource),
-            AgentClass::NAME => $case!(AgentClass, Agent, $owner, $recipient, $verb, $resource),
-            ToolClass::NAME => $case!(ToolClass, Tool, $owner, $recipient, $verb, $resource),
-            KvClass::NAME => $case!(KvClass, Kv, $owner, $recipient, $verb, $resource),
-            BlobClass::NAME => $case!(BlobClass, Blob, $owner, $recipient, $verb, $resource),
-            RdbmsClass::NAME => $case!(RdbmsClass, Rdbms, $owner, $recipient, $verb, $resource),
-            CardClass::NAME => $case!(CardClass, Card, $owner, $recipient, $verb, $resource),
-            SystemClass::NAME => $case!(SystemClass, System, $owner, $recipient, $verb, $resource),
-            PlanClass::NAME => $case!(PlanClass, Plan, $owner, $recipient, $verb, $resource),
-            AccountClass::NAME => {
-                $case!(AccountClass, Account, $owner, $recipient, $verb, $resource)
-            }
-            AccountUsageClass::NAME => $case!(
-                AccountUsageClass,
-                AccountUsage,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            AccountTokenClass::NAME => $case!(
-                AccountTokenClass,
-                AccountToken,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            AccountPluginClass::NAME => $case!(
-                AccountPluginClass,
-                AccountPlugin,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            ApplicationClass::NAME => $case!(
-                ApplicationClass,
-                Application,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentClass::NAME => $case!(
-                EnvironmentClass,
-                Environment,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentShareClass::NAME => $case!(
-                EnvironmentShareClass,
-                EnvironmentShare,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentPluginGrantClass::NAME => $case!(
-                EnvironmentPluginGrantClass,
-                EnvironmentPluginGrant,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentDomainRegistrationClass::NAME => $case!(
-                EnvironmentDomainRegistrationClass,
-                EnvironmentDomainRegistration,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentSecuritySchemeClass::NAME => $case!(
-                EnvironmentSecuritySchemeClass,
-                EnvironmentSecurityScheme,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentHttpApiDeploymentClass::NAME => $case!(
-                EnvironmentHttpApiDeploymentClass,
-                EnvironmentHttpApiDeployment,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentMcpDeploymentClass::NAME => $case!(
-                EnvironmentMcpDeploymentClass,
-                EnvironmentMcpDeployment,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentAgentSecretClass::NAME => $case!(
-                EnvironmentAgentSecretClass,
-                EnvironmentAgentSecret,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentResourceDefinitionClass::NAME => $case!(
-                EnvironmentResourceDefinitionClass,
-                EnvironmentResourceDefinition,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentRetryPolicyClass::NAME => $case!(
-                EnvironmentRetryPolicyClass,
-                EnvironmentRetryPolicy,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            ComponentClass::NAME => $case!(
-                ComponentClass,
-                Component,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            AccountOauth2IdentityClass::NAME => $case!(
-                AccountOauth2IdentityClass,
-                AccountOauth2Identity,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentInitialFilesClass::NAME => $case!(
-                EnvironmentInitialFilesClass,
-                EnvironmentInitialFiles,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentKvBucketClass::NAME => $case!(
-                EnvironmentKvBucketClass,
-                EnvironmentKvBucket,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            EnvironmentBlobBucketClass::NAME => $case!(
-                EnvironmentBlobBucketClass,
-                EnvironmentBlobBucket,
-                $owner,
-                $recipient,
-                $verb,
-                $resource
-            ),
-            _ => Err(CardParseError::UnknownClass($class.to_string())),
+macro_rules! define_dispatch_permission_class {
+    ($($variant:ident: $class:ty,)+) => {
+        macro_rules! dispatch_permission_class {
+            ($case:ident, $class_name:expr, $owner:expr, $recipient:expr, $verb:expr, $resource:expr) => {
+                match $class_name {
+                    $(
+                        <$class as PermissionClass>::NAME => {
+                            $case!($class, $variant, $owner, $recipient, $verb, $resource)
+                        }
+                    )+
+                    _ => Err(CardParseError::UnknownClass($class_name.to_string())),
+                }
+            };
         }
     };
 }
+
+card_permission_classes!(define_dispatch_permission_class);
 
 macro_rules! parse_permission_case {
     ($class:ty, $variant:ident, $owner:expr, $recipient:expr, $verb:expr, $resource:expr) => {

@@ -88,6 +88,49 @@ pub use secret::*;
 pub use system::*;
 pub use tool::*;
 
+macro_rules! card_permission_classes {
+    ($macro:ident) => {
+        $macro! {
+            Filesystem: FilesystemClass,
+            Network: NetworkClass,
+            Env: EnvClass,
+            Oplog: OplogClass,
+            Config: ConfigClass,
+            Secret: SecretClass,
+            Agent: AgentClass,
+            Tool: ToolClass,
+            Kv: KvClass,
+            Blob: BlobClass,
+            Rdbms: RdbmsClass,
+            Card: CardClass,
+            System: SystemClass,
+            Plan: PlanClass,
+            Account: AccountClass,
+            AccountUsage: AccountUsageClass,
+            AccountToken: AccountTokenClass,
+            AccountPlugin: AccountPluginClass,
+            Application: ApplicationClass,
+            Environment: EnvironmentClass,
+            EnvironmentShare: EnvironmentShareClass,
+            EnvironmentPluginGrant: EnvironmentPluginGrantClass,
+            EnvironmentDomainRegistration: EnvironmentDomainRegistrationClass,
+            EnvironmentSecurityScheme: EnvironmentSecuritySchemeClass,
+            EnvironmentHttpApiDeployment: EnvironmentHttpApiDeploymentClass,
+            EnvironmentMcpDeployment: EnvironmentMcpDeploymentClass,
+            EnvironmentAgentSecret: EnvironmentAgentSecretClass,
+            EnvironmentResourceDefinition: EnvironmentResourceDefinitionClass,
+            EnvironmentRetryPolicy: EnvironmentRetryPolicyClass,
+            Component: ComponentClass,
+            AccountOauth2Identity: AccountOauth2IdentityClass,
+            EnvironmentInitialFiles: EnvironmentInitialFilesClass,
+            EnvironmentKvBucket: EnvironmentKvBucketClass,
+            EnvironmentBlobBucket: EnvironmentBlobBucketClass,
+        }
+    };
+}
+
+pub(crate) use card_permission_classes;
+
 #[cfg(feature = "full")]
 pub trait VerbPattern:
     Debug
