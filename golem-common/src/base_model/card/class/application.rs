@@ -18,9 +18,7 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::AccountOwnerPattern;
-use nom::IResult;
-use nom::bytes::complete::take_while1;
-use nom::combinator::{all_consuming, map};
+use combine::{EasyParser, Parser, eof, many1, satisfy};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,18 +97,26 @@ impl PermissionClass for ApplicationClass {
 }
 
 fn parse_application_resource(resource: &str) -> Result<ApplicationResourcePattern, String> {
-    all_consuming(application_resource)(resource)
-        .map(|(_, resource)| resource)
+    application_resource()
+        .skip(eof())
+        .easy_parse(resource)
+        .map(|(resource, _)| resource)
         .map_err(|_| resource.to_string())
 }
 
-fn application_resource(input: &str) -> IResult<&str, ApplicationResourcePattern> {
-    map(application_name, ApplicationResourcePattern::Application)(input)
+fn application_resource<Input>() -> impl Parser<Input, Output = ApplicationResourcePattern>
+where
+    Input: combine::Stream<Token = char>,
+{
+    application_name().map(ApplicationResourcePattern::Application)
 }
 
-fn application_name(input: &str) -> IResult<&str, ApplicationName> {
-    map(
-        take_while1(|c: char| c != ':' && c != '/' && !c.is_whitespace()),
-        |value: &str| ApplicationName(value.to_string()),
-    )(input)
+fn application_name<Input>() -> impl Parser<Input, Output = ApplicationName>
+where
+    Input: combine::Stream<Token = char>,
+{
+    many1(satisfy(|c: char| {
+        c != ':' && c != '/' && !c.is_whitespace()
+    }))
+    .map(ApplicationName)
 }

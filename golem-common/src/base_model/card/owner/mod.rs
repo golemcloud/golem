@@ -12,11 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use nom::IResult;
-use nom::bytes::complete::is_not;
-use nom::character::complete::char;
-use nom::combinator::{all_consuming, verify};
-use nom::multi::separated_list1;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -124,16 +119,16 @@ pub(super) fn split_leftmost_owner_slot(value: &str) -> Result<Option<(&str, Vec
 }
 
 pub(super) fn parse_segments(value: &str) -> Result<Vec<&str>, String> {
-    all_consuming(owner_path_segments)(value)
-        .map(|(_, segments)| segments)
-        .map_err(|_| value.to_string())
-}
+    if value.is_empty() {
+        return Err(value.to_string());
+    }
 
-fn owner_path_segments(input: &str) -> IResult<&str, Vec<&str>> {
-    separated_list1(
-        char('/'),
-        verify(is_not("/"), |segment: &str| !segment.is_empty()),
-    )(input)
+    let segments: Vec<&str> = value.split('/').collect();
+    if segments.iter().any(|segment| segment.is_empty()) {
+        Err(value.to_string())
+    } else {
+        Ok(segments)
+    }
 }
 
 pub(super) fn parse_concrete_segment(value: &str) -> Result<&str, String> {

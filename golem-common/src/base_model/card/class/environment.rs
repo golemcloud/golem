@@ -18,10 +18,8 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::ApplicationOwnerPattern;
-use nom::IResult;
-use nom::branch::alt;
-use nom::bytes::complete::{tag, take_while1};
-use nom::combinator::{all_consuming, map, map_res};
+use combine::parser::char::string;
+use combine::{EasyParser, Parser, eof, many1, optional, satisfy};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,33 +124,31 @@ impl PermissionClass for EnvironmentClass {
 }
 
 fn parse_environment_resource(resource: &str) -> Result<EnvironmentResourcePattern, String> {
-    all_consuming(environment_resource)(resource)
-        .map(|(_, resource)| resource)
-        .map_err(|_| resource.to_string())
-}
+    let mut parser = (
+        environment_name(),
+        optional(string("@rev=").with(many1(satisfy(|c: char| c.is_ascii_digit())))),
+    )
+        .skip(eof());
 
-fn environment_resource(input: &str) -> IResult<&str, EnvironmentResourcePattern> {
-    let (input, environment) = environment_name(input)?;
-    alt((
-        map(
-            map_res(
-                nom::sequence::preceded(tag("@rev="), take_while1(|c: char| c.is_ascii_digit())),
-                |revision: &str| revision.parse::<u64>(),
-            ),
-            |revision| EnvironmentResourcePattern::Revision {
-                environment: environment.clone(),
-                revision,
-            },
-        ),
-        map(nom::combinator::success(()), |_| {
-            EnvironmentResourcePattern::Environment(environment.clone())
+    let ((environment, revision), _): ((EnvironmentName, Option<String>), &str) = parser
+        .easy_parse(resource)
+        .map_err(|_| resource.to_string())?;
+
+    match revision {
+        Some(revision) => Ok(EnvironmentResourcePattern::Revision {
+            environment,
+            revision: revision.parse::<u64>().map_err(|_| resource.to_string())?,
         }),
-    ))(input)
+        None => Ok(EnvironmentResourcePattern::Environment(environment)),
+    }
 }
 
-fn environment_name(input: &str) -> IResult<&str, EnvironmentName> {
-    map(
-        take_while1(|c: char| c != '@' && c != ':' && c != '/' && !c.is_whitespace()),
-        |value: &str| EnvironmentName(value.to_string()),
-    )(input)
+fn environment_name<Input>() -> impl Parser<Input, Output = EnvironmentName>
+where
+    Input: combine::Stream<Token = char>,
+{
+    many1(satisfy(|c: char| {
+        c != '@' && c != ':' && c != '/' && !c.is_whitespace()
+    }))
+    .map(EnvironmentName)
 }

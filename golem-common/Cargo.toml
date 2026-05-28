@@ -23,7 +23,6 @@ full = [
     "golem-wasm/host",
     "dep:golem-api-grpc",
     "dep:applying",
-    "dep:combine",
     "dep:console-subscriber",
     "dep:desert_rust",
     "dep:figment",
@@ -75,7 +74,7 @@ bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
-combine = { workspace = true, optional = true }
+combine = { workspace = true }
 console-subscriber = { workspace = true, optional = true }
 derive_more = { workspace = true }
 desert_rust = { workspace = true, optional = true }
@@ -92,7 +91,6 @@ itertools = { workspace = true, optional = true }
 lazy_static = { workspace = true, optional = true }
 mac_address = { workspace = true, optional = true }
 nonempty-collections = { workspace = true, optional = true }
-nom = { workspace = true }
 openidconnect = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }

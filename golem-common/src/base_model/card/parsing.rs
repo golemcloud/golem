@@ -15,10 +15,8 @@
 use crate::base_model::card::*;
 use crate::model::card::owner::OwnerPattern;
 use crate::model::card::recipient::{PolymorphicRecipientPattern, RecipientPattern};
-use nom::IResult;
-use nom::bytes::complete::{tag, take_until};
-use nom::character::complete::{char, multispace0};
-use nom::combinator::{all_consuming, rest};
+use combine::parser::char::{char, spaces};
+use combine::{EasyParser, Parser, any, eof, many, none_of};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -105,8 +103,7 @@ pub fn parse_pattern_grant(value: &str) -> Result<PatternGrant, CardParseError> 
         return Err(CardParseError::MissingAtSeparator);
     }
 
-    let (_, parts) = all_consuming(pattern_grant_parts)(value)
-        .map_err(|err| CardParseError::Malformed(err.to_string()))?;
+    let parts = pattern_grant_parts(value).map_err(CardParseError::Malformed)?;
 
     if parts.class.is_empty() {
         return Err(CardParseError::MissingClassOpenParen);
@@ -140,8 +137,7 @@ pub fn parse_polymorphic_pattern_grant(
         return Err(CardParseError::MissingAtSeparator);
     }
 
-    let (_, parts) = all_consuming(pattern_grant_parts)(value)
-        .map_err(|err| CardParseError::Malformed(err.to_string()))?;
+    let parts = pattern_grant_parts(value).map_err(CardParseError::Malformed)?;
 
     if parts.class.is_empty() {
         return Err(CardParseError::MissingClassOpenParen);
@@ -174,8 +170,7 @@ pub fn parse_polymorphic_manifest_pattern_grant(
         return Err(CardParseError::MissingAtSeparator);
     }
 
-    let (_, parts) = all_consuming(pattern_grant_parts)(value)
-        .map_err(|err| CardParseError::Malformed(err.to_string()))?;
+    let parts = pattern_grant_parts(value).map_err(CardParseError::Malformed)?;
 
     if parts.class.is_empty() {
         return Err(CardParseError::MissingClassOpenParen);
@@ -210,32 +205,49 @@ struct PatternGrantParts {
     resource: String,
 }
 
-fn pattern_grant_parts(input: &str) -> IResult<&str, PatternGrantParts> {
-    let (input, class) = take_until("(")(input)?;
-    let (input, _) = char('(')(input)?;
-    let (input, owner) = take_until("@")(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, _) = char('@')(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, recipient) = take_until(":")(input)?;
-    let (input, _) = tag(":")(input)?;
-    let (input, verb) = take_until(":")(input)?;
-    let (input, _) = tag(":")(input)?;
-    let (input, resource) = rest(input)?;
+fn pattern_grant_parts(value: &str) -> Result<PatternGrantParts, String> {
+    let mut parser = (
+        many(none_of("(".chars())),
+        char('('),
+        many(none_of("@".chars())),
+        spaces(),
+        char('@'),
+        spaces(),
+        many(none_of(":".chars())),
+        char(':'),
+        many(none_of(":".chars())),
+        char(':'),
+        many(any()),
+    )
+        .skip(eof());
+
+    let ((class, _, owner, _, _, _, recipient, _, verb, _, resource), _): (
+        (
+            String,
+            char,
+            String,
+            (),
+            char,
+            (),
+            String,
+            char,
+            String,
+            char,
+            String,
+        ),
+        &str,
+    ) = parser.easy_parse(value).map_err(|err| err.to_string())?;
 
     let owner = owner.trim();
     let owner = owner.strip_suffix(')').unwrap_or(owner).trim();
 
-    Ok((
-        input,
-        PatternGrantParts {
-            class: class.trim().to_string(),
-            owner: owner.to_string(),
-            recipient: recipient.trim().to_string(),
-            verb: verb.trim().to_string(),
-            resource: resource.trim().to_string(),
-        },
-    ))
+    Ok(PatternGrantParts {
+        class: class.trim().to_string(),
+        owner: owner.to_string(),
+        recipient: recipient.trim().to_string(),
+        verb: verb.trim().to_string(),
+        resource: resource.trim().to_string(),
+    })
 }
 
 fn reject_slot_variables(parts: &PatternGrantParts) -> Result<(), CardParseError> {

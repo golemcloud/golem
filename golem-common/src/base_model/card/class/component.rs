@@ -18,10 +18,8 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
-use nom::IResult;
-use nom::branch::alt;
-use nom::bytes::complete::{tag, take_while1};
-use nom::combinator::{all_consuming, map, map_res};
+use combine::parser::char::string;
+use combine::{EasyParser, Parser, eof, many1, optional, satisfy};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,33 +112,31 @@ impl PermissionClass for ComponentClass {
 }
 
 fn parse_component_resource(resource: &str) -> Result<ComponentResourcePattern, String> {
-    all_consuming(component_resource)(resource)
-        .map(|(_, resource)| resource)
-        .map_err(|_| resource.to_string())
-}
+    let mut parser = (
+        component_name(),
+        optional(string("@rev=").with(many1(satisfy(|c: char| c.is_ascii_digit())))),
+    )
+        .skip(eof());
 
-fn component_resource(input: &str) -> IResult<&str, ComponentResourcePattern> {
-    let (input, component) = component_name(input)?;
-    alt((
-        map(
-            map_res(
-                nom::sequence::preceded(tag("@rev="), take_while1(|c: char| c.is_ascii_digit())),
-                |revision: &str| revision.parse::<u64>(),
-            ),
-            |revision| ComponentResourcePattern::Revision {
-                component: component.clone(),
-                revision,
-            },
-        ),
-        map(nom::combinator::success(()), |_| {
-            ComponentResourcePattern::Component(component.clone())
+    let ((component, revision), _): ((ComponentName, Option<String>), &str) = parser
+        .easy_parse(resource)
+        .map_err(|_| resource.to_string())?;
+
+    match revision {
+        Some(revision) => Ok(ComponentResourcePattern::Revision {
+            component,
+            revision: revision.parse::<u64>().map_err(|_| resource.to_string())?,
         }),
-    ))(input)
+        None => Ok(ComponentResourcePattern::Component(component)),
+    }
 }
 
-fn component_name(input: &str) -> IResult<&str, ComponentName> {
-    map(
-        take_while1(|c: char| c != '@' && c != ':' && c != '/' && !c.is_whitespace()),
-        |value: &str| ComponentName(value.to_string()),
-    )(input)
+fn component_name<Input>() -> impl Parser<Input, Output = ComponentName>
+where
+    Input: combine::Stream<Token = char>,
+{
+    many1(satisfy(|c: char| {
+        c != '@' && c != ':' && c != '/' && !c.is_whitespace()
+    }))
+    .map(ComponentName)
 }
