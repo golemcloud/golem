@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::BindFields;
+use crate::repo::model::card::CardRecord;
 use crate::repo::model::permission_share::{
     PermissionShareExtRevisionRecord, PermissionShareRecord, PermissionShareRepoError,
     PermissionShareRevisionRecord,
@@ -35,6 +36,7 @@ pub trait PermissionShareRepo: Send + Sync {
         owner_account_id: Uuid,
         target_account_id: Uuid,
         revision: PermissionShareRevisionRecord,
+        card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError>;
 
     async fn update(
@@ -96,9 +98,10 @@ impl<Repo: PermissionShareRepo> PermissionShareRepo for LoggedPermissionShareRep
         owner_account_id: Uuid,
         target_account_id: Uuid,
         revision: PermissionShareRevisionRecord,
+        card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
         self.repo
-            .create(owner_account_id, target_account_id, revision)
+            .create(owner_account_id, target_account_id, revision, card)
             .instrument(Self::span_account_id(owner_account_id))
             .await
     }
@@ -207,6 +210,42 @@ impl DbPermissionShareRepo<PostgresPool> {
         .await
         .to_error_on_unique_violation(PermissionShareRepoError::ConcurrentModification)
     }
+
+    async fn insert_card(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        card: CardRecord,
+    ) -> Result<CardRecord, PermissionShareRepoError> {
+        let inserted: CardRecord = tx
+            .fetch_one_as(
+                sqlx::query_as(indoc! { r#"
+                    INSERT INTO cards
+                        (card_id, data, created_at, expires_at, system_card, managed_by)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING card_id, data, created_at, expires_at, system_card, managed_by, false AS polymorphic
+                "#})
+                .bind(card.card_id)
+                .bind(card.data)
+                .bind(card.created_at)
+                .bind(card.expires_at)
+                .bind(card.system_card)
+                .bind(card.managed_by),
+            )
+            .await?;
+
+        for parent_id in inserted.data.value().parent_ids.as_slice() {
+            tx.execute(
+                sqlx::query("INSERT INTO card_parents (card_id, parent_id) VALUES ($1, $2)")
+                    .bind(inserted.card_id)
+                    .bind(*parent_id),
+            )
+            .await
+            .to_error_on_foreign_key_violation(
+                PermissionShareRepoError::ParentCardNotFound(*parent_id),
+            )?;
+        }
+
+        Ok(inserted)
+    }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -217,9 +256,12 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         owner_account_id: Uuid,
         target_account_id: Uuid,
         revision: PermissionShareRevisionRecord,
+        card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
         let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
             async move {
+                let card = Self::insert_card(tx, card).await?;
+
                 let share: PermissionShareRecord = tx.fetch_one_as(
                     sqlx::query_as(indoc! { r#"
                         INSERT INTO permission_shares
@@ -231,7 +273,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                     .bind(owner_account_id)
                     .bind(target_account_id)
                     .bind(&revision.name)
-                    .bind(revision.card_id)
+                    .bind(Some(card.card_id))
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id),
@@ -239,6 +281,8 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                 .await
                 .to_error_on_unique_violation(PermissionShareRepoError::ShareViolatesUniqueness)?;
 
+                let mut revision = revision;
+                revision.card_id = Some(card.card_id);
                 let revision = Self::insert_revision(tx, revision).await?;
 
                 Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {

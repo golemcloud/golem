@@ -27,6 +27,8 @@ use uuid::Uuid;
 pub enum PermissionShareRepoError {
     #[error("There is already a permission share with this name")]
     ShareViolatesUniqueness,
+    #[error("Parent card {0} does not exist")]
+    ParentCardNotFound(Uuid),
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error(transparent)]

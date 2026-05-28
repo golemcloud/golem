@@ -172,7 +172,7 @@ impl CardRepo for DbCardRepo<PostgresPool> {
                             INSERT INTO cards
                                 (card_id, data, created_at, expires_at, system_card, managed_by)
                             VALUES ($1, $2, $3, $4, $5, $6)
-                            RETURNING card_id, data, created_at, expires_at, system_card, managed_by
+                            RETURNING card_id, data, created_at, expires_at, system_card, managed_by, false AS polymorphic
                         "#})
                             .bind(record.card_id)
                             .bind(record.data)
