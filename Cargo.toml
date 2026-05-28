@@ -330,6 +330,11 @@ codegen-units = 256
 incremental = true
 debug = true
 
+[profile.dev-release-ci]
+inherits = "dev-release"
+incremental = false
+debug = "line-tables-only"
+
 [profile.release]
 panic = "abort"
 
