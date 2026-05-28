@@ -42,10 +42,6 @@ impl AccountPluginResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(AccountPluginName::parse(&value.into()).expect("invalid plugin name"))
-    }
 }
 
 impl ResourcePattern for AccountPluginResourcePattern {

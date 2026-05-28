@@ -42,12 +42,6 @@ impl EnvironmentBlobBucketResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(
-            EnvironmentBlobBucketName::parse(&value.into()).expect("invalid blob bucket name"),
-        )
-    }
 }
 
 impl ResourcePattern for EnvironmentBlobBucketResourcePattern {

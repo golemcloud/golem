@@ -34,17 +34,6 @@ impl AccountOauth2IdentityResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        let value = value.into();
-        let (provider, external_id) = value
-            .split_once('/')
-            .expect("oauth2 identity must be provider/external-id");
-        Self::Identity {
-            provider: provider.to_string(),
-            external_id: external_id.to_string(),
-        }
-    }
 }
 
 impl ResourcePattern for AccountOauth2IdentityResourcePattern {

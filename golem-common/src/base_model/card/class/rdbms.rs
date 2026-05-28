@@ -39,18 +39,6 @@ impl RdbmsResourcePattern {
         }
     }
 
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::parse_value(&value.into()).unwrap_or_else(|value| Self::Table {
-            database: value,
-            schema: String::new(),
-            table: String::new(),
-        })
-    }
-
-    pub fn glob(value: impl Into<String>) -> Self {
-        Self::exact(value)
-    }
-
     fn parse_value(value: &str) -> Result<Self, String> {
         let parts = value.split('.').collect::<Vec<_>>();
         if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {

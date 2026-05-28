@@ -42,10 +42,6 @@ impl EnvironmentKvBucketResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(EnvironmentKvBucketName::parse(&value.into()).expect("invalid KV bucket name"))
-    }
 }
 
 impl ResourcePattern for EnvironmentKvBucketResourcePattern {

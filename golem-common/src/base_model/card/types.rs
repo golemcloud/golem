@@ -16,10 +16,7 @@ use super::class::*;
 use super::{
     PermissionPattern, PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern,
 };
-use crate::model::card::owner::{
-    AccountOwnerPattern, AgentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern,
-    ToolOwnerPattern,
-};
+use crate::model::card::owner::{AccountOwnerPattern, AgentOwnerPattern, EmptyOwnerPattern};
 use crate::model::card::recipient::RecipientPattern;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -37,14 +34,6 @@ impl PatternGrant {
         Self { permission }
     }
 
-    pub fn filesystem_read(
-        owner: AgentOwnerPattern,
-        recipient: RecipientPattern,
-        path: impl Into<String>,
-    ) -> Self {
-        Self::filesystem_read_pattern(owner, recipient, FilesystemResourcePattern::exact(path))
-    }
-
     pub fn filesystem_read_pattern(
         owner: AgentOwnerPattern,
         recipient: RecipientPattern,
@@ -57,21 +46,6 @@ impl PatternGrant {
             owner,
             recipient,
             resource,
-        }))
-    }
-
-    pub fn filesystem_write(
-        owner: AgentOwnerPattern,
-        recipient: RecipientPattern,
-        path: impl Into<String>,
-    ) -> Self {
-        Self::new(PermissionPattern::Filesystem(ClassPermissionPattern::<
-            FilesystemClass,
-        >::Verb {
-            verb: FilesystemVerb::Write,
-            owner,
-            recipient,
-            resource: FilesystemResourcePattern::exact(path),
         }))
     }
 
@@ -90,21 +64,6 @@ impl PatternGrant {
         }))
     }
 
-    pub fn env_read(
-        owner: AgentOwnerPattern,
-        recipient: RecipientPattern,
-        name: impl Into<String>,
-    ) -> Self {
-        Self::new(PermissionPattern::Env(
-            ClassPermissionPattern::<EnvClass>::Verb {
-                verb: EnvVerb::Read,
-                owner,
-                recipient,
-                resource: EnvResourcePattern::exact(name),
-            },
-        ))
-    }
-
     pub fn oplog_read(
         owner: AgentOwnerPattern,
         recipient: RecipientPattern,
@@ -117,111 +76,6 @@ impl PatternGrant {
             owner,
             recipient,
             resource,
-        }))
-    }
-
-    pub fn config_read(
-        owner: AgentOwnerPattern,
-        recipient: RecipientPattern,
-        key: impl Into<String>,
-    ) -> Self {
-        Self::new(PermissionPattern::Config(ClassPermissionPattern::<
-            ConfigClass,
-        >::Verb {
-            verb: ConfigVerb::Read,
-            owner,
-            recipient,
-            resource: ConfigResourcePattern::exact(key),
-        }))
-    }
-
-    pub fn secret_reveal(
-        owner: EnvironmentOwnerPattern,
-        recipient: RecipientPattern,
-        key: impl Into<String>,
-    ) -> Self {
-        Self::new(PermissionPattern::Secret(ClassPermissionPattern::<
-            SecretClass,
-        >::Verb {
-            verb: SecretVerb::Reveal,
-            owner,
-            recipient,
-            resource: SecretResourcePattern::exact(key),
-        }))
-    }
-
-    pub fn agent_invoke(
-        owner: AgentOwnerPattern,
-        recipient: RecipientPattern,
-        method: impl Into<String>,
-    ) -> Self {
-        Self::new(PermissionPattern::Agent(ClassPermissionPattern::<
-            AgentClass,
-        >::Verb {
-            verb: AgentVerb::Invoke,
-            owner,
-            recipient,
-            resource: AgentResourcePattern::method(method),
-        }))
-    }
-
-    pub fn tool_invoke(
-        owner: ToolOwnerPattern,
-        recipient: RecipientPattern,
-        command: impl Into<String>,
-    ) -> Self {
-        Self::new(PermissionPattern::Tool(
-            ClassPermissionPattern::<ToolClass>::Verb {
-                verb: ToolVerb::Invoke,
-                owner,
-                recipient,
-                resource: ToolResourcePattern::command(command),
-            },
-        ))
-    }
-
-    pub fn kv_read(
-        owner: EnvironmentOwnerPattern,
-        recipient: RecipientPattern,
-        key: impl Into<String>,
-    ) -> Self {
-        Self::new(PermissionPattern::Kv(
-            ClassPermissionPattern::<KvClass>::Verb {
-                verb: KvVerb::Read,
-                owner,
-                recipient,
-                resource: KvResourcePattern::exact(key),
-            },
-        ))
-    }
-
-    pub fn blob_read(
-        owner: EnvironmentOwnerPattern,
-        recipient: RecipientPattern,
-        key: impl Into<String>,
-    ) -> Self {
-        Self::new(PermissionPattern::Blob(
-            ClassPermissionPattern::<BlobClass>::Verb {
-                verb: BlobVerb::Read,
-                owner,
-                recipient,
-                resource: BlobResourcePattern::exact(key),
-            },
-        ))
-    }
-
-    pub fn rdbms_query(
-        owner: EnvironmentOwnerPattern,
-        recipient: RecipientPattern,
-        query_target: impl Into<String>,
-    ) -> Self {
-        Self::new(PermissionPattern::Rdbms(ClassPermissionPattern::<
-            RdbmsClass,
-        >::Verb {
-            verb: RdbmsVerb::Query,
-            owner,
-            recipient,
-            resource: RdbmsResourcePattern::exact(query_target),
         }))
     }
 

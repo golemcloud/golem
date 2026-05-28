@@ -63,14 +63,6 @@ impl SecretResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Key(SecretKeyPathPattern::parse(&value.into()).expect("invalid secret key path"))
-    }
-
-    pub fn glob(value: impl Into<String>) -> Self {
-        Self::exact(value)
-    }
 }
 
 impl ResourcePattern for SecretResourcePattern {

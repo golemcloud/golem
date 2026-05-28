@@ -63,14 +63,6 @@ impl ConfigResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Key(ConfigKeyPathPattern::parse(&value.into()).expect("invalid config key path"))
-    }
-
-    pub fn glob(value: impl Into<String>) -> Self {
-        Self::exact(value)
-    }
 }
 
 impl ResourcePattern for ConfigResourcePattern {

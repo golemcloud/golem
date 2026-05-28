@@ -76,17 +76,32 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
     let read_all = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::glob("/data/**"),
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("data".to_string()),
+                FilesystemPathSegmentPattern::GlobStar,
+            ],
+        }),
     );
     let read_secret = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::exact("/data/secret.txt"),
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("data".to_string()),
+                FilesystemPathSegmentPattern::Literal("secret.txt".to_string()),
+            ],
+        }),
     );
     let read_public = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::exact("/data/public.txt"),
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("data".to_string()),
+                FilesystemPathSegmentPattern::Literal("public.txt".to_string()),
+            ],
+        }),
     );
 
     let lower = card(vec![read_all], Vec::new());

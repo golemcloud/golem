@@ -32,6 +32,14 @@ fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> Patt
     )
 }
 
+fn fs_path(segments: Vec<FilesystemPathSegmentPattern>) -> FilesystemResourcePattern {
+    FilesystemResourcePattern::Path(FilesystemPathPattern { segments })
+}
+
+fn fs_lit(value: &str) -> FilesystemPathSegmentPattern {
+    FilesystemPathSegmentPattern::Literal(value.to_string())
+}
+
 fn fs_permission(permission: ClassPermissionPattern<FilesystemClass>) -> PatternGrant {
     PatternGrant::new(PermissionPattern::Filesystem(permission))
 }
@@ -320,12 +328,12 @@ fn glob_resource_subsumes_concrete_resource() {
     let broad = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::glob("/data/**"),
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let narrow = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::exact("/data/item.json"),
+        fs_path(vec![fs_lit("data"), fs_lit("item.json")]),
     );
 
     assert!(broad.subsumes(&narrow).unwrap());
@@ -338,37 +346,40 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
         (
             "any_subsumes_exact",
             FilesystemResourcePattern::any(),
-            FilesystemResourcePattern::exact("/data/file.txt"),
+            fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
             true,
         ),
         (
             "double_star_glob_subsumes_exact_prefix",
-            FilesystemResourcePattern::glob("/data/**"),
-            FilesystemResourcePattern::exact("/data/file.txt"),
+            fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+            fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
             true,
         ),
         (
             "star_glob_subsumes_exact_prefix",
-            FilesystemResourcePattern::glob("/data/*"),
-            FilesystemResourcePattern::exact("/data/file.txt"),
+            fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::Star]),
+            fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
             true,
         ),
         (
             "exact_subsumes_same_exact",
-            FilesystemResourcePattern::exact("/data/file.txt"),
-            FilesystemResourcePattern::exact("/data/file.txt"),
+            fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
+            fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
             true,
         ),
         (
             "exact_does_not_subsume_glob",
-            FilesystemResourcePattern::exact("/data/file.txt"),
-            FilesystemResourcePattern::glob("/data/**"),
+            fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
+            fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
             false,
         ),
         (
             "wrong_glob_prefix_does_not_subsume_exact",
-            FilesystemResourcePattern::glob("/private/**"),
-            FilesystemResourcePattern::exact("/data/file.txt"),
+            fs_path(vec![
+                fs_lit("private"),
+                FilesystemPathSegmentPattern::GlobStar,
+            ]),
+            fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
             false,
         ),
     ];
@@ -699,19 +710,19 @@ fn verb_wildcard_subsumes_class_verbs_only() {
     let any_filesystem = fs_permission(ClassPermissionPattern::<FilesystemClass>::Any {
         owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
-        resource: FilesystemResourcePattern::glob("/data/**"),
+        resource: fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     });
     let read_file = fs_permission(ClassPermissionPattern::<FilesystemClass>::Verb {
         verb: FilesystemVerb::Read,
         owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
-        resource: FilesystemResourcePattern::exact("/data/file.txt"),
+        resource: fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     });
     let write_file = fs_permission(ClassPermissionPattern::<FilesystemClass>::Verb {
         verb: FilesystemVerb::Write,
         owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
-        resource: FilesystemResourcePattern::exact("/data/file.txt"),
+        resource: fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     });
 
     assert!(any_filesystem.subsumes(&read_file).unwrap());
@@ -770,7 +781,7 @@ fn subsumption_requires_same_permission_class() {
     let filesystem = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::glob("/data/**"),
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let network = network(
         "acme/shop/prod/cart/agent",
@@ -790,17 +801,17 @@ fn derivation_must_be_subsumed_by_parent_union() {
     let parent_grant = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::glob("/data/**"),
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_grant = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::exact("/data/file.txt"),
+        fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     );
     let denied_child = fs(
         "other/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::exact("/data/file.txt"),
+        fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     );
 
     let parent = card(vec![parent_grant], Vec::new());
@@ -826,17 +837,17 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
     let parent_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::glob("/data/**"),
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::exact("/data/file.txt"),
+        fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     );
     let too_broad_child_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
-        FilesystemResourcePattern::exact("/other/file.txt"),
+        fs_path(vec![fs_lit("other"), fs_lit("file.txt")]),
     );
     let parent = card(Vec::new(), vec![parent_upper]);
 
@@ -860,22 +871,22 @@ fn negative_grants_override_positive_grants() {
     let allowed = fs(
         "acme/shop/prod/cart/agent",
         "acme/*/*/*/*",
-        FilesystemResourcePattern::glob("/data/**"),
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let denied = fs(
         "acme/shop/prod/cart/agent",
         "acme/*/*/*/*",
-        FilesystemResourcePattern::exact("/data/secret.txt"),
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let public = fs(
         "acme/shop/prod/cart/agent",
         "acme/*/*/*/*",
-        FilesystemResourcePattern::exact("/data/public.txt"),
+        fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
     let secret = fs(
         "acme/shop/prod/cart/agent",
         "acme/*/*/*/*",
-        FilesystemResourcePattern::exact("/data/secret.txt"),
+        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let surface = GrantSurface {
         positive: vec![allowed],

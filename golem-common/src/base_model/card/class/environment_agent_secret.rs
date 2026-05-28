@@ -63,17 +63,6 @@ impl EnvironmentAgentSecretResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Key(
-            EnvironmentAgentSecretKeyPathPattern::parse(&value.into())
-                .expect("invalid agent-secret key path"),
-        )
-    }
-
-    pub fn glob(value: impl Into<String>) -> Self {
-        Self::exact(value)
-    }
 }
 
 impl ResourcePattern for EnvironmentAgentSecretResourcePattern {

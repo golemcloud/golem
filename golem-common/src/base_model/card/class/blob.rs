@@ -34,17 +34,6 @@ impl BlobResourcePattern {
         }
     }
 
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::parse_value(&value.into()).unwrap_or_else(|value| Self::BucketKey {
-            bucket: value,
-            key_pattern: String::new(),
-        })
-    }
-
-    pub fn glob(value: impl Into<String>) -> Self {
-        Self::exact(value)
-    }
-
     fn parse_value(value: &str) -> Result<Self, String> {
         let Some((bucket, key_pattern)) = value.split_once('.') else {
             return Err(value.to_string());

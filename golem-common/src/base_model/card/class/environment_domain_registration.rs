@@ -69,10 +69,6 @@ impl EnvironmentDomainRegistrationResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Domain(DomainNamePattern::parse(&value.into()).expect("invalid domain name"))
-    }
 }
 
 impl ResourcePattern for EnvironmentDomainRegistrationResourcePattern {

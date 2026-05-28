@@ -42,12 +42,6 @@ impl EnvironmentRetryPolicyResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(
-            EnvironmentRetryPolicyName::parse(&value.into()).expect("invalid retry policy name"),
-        )
-    }
 }
 
 impl ResourcePattern for EnvironmentRetryPolicyResourcePattern {

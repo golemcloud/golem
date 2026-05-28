@@ -42,13 +42,6 @@ impl EnvironmentResourceDefinitionResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(
-            EnvironmentResourceDefinitionName::parse(&value.into())
-                .expect("invalid resource definition name"),
-        )
-    }
 }
 
 impl ResourcePattern for EnvironmentResourceDefinitionResourcePattern {

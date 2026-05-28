@@ -63,10 +63,6 @@ impl AgentResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn method(method: impl Into<String>) -> Self {
-        Self::Method(AgentMethodName::parse(&method.into()).expect("invalid method name"))
-    }
 }
 
 impl ResourcePattern for AgentResourcePattern {

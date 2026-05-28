@@ -85,12 +85,6 @@ impl ToolResourcePattern {
     pub fn any() -> Self {
         Self::AnyInvocation
     }
-
-    pub fn command(command: impl Into<String>) -> Self {
-        Self::Invocation(
-            parse_tool_invocation_pattern(&command.into()).expect("invalid tool command"),
-        )
-    }
 }
 
 impl ResourcePattern for ToolResourcePattern {

@@ -59,11 +59,6 @@ impl PlanResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        let value = value.into();
-        Self::Plan(parse_plan_id(&value).expect("invalid plan id"))
-    }
 }
 
 impl ResourcePattern for PlanResourcePattern {

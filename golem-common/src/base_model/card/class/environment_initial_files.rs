@@ -66,16 +66,6 @@ impl EnvironmentInitialFilesResourcePattern {
             segments: vec![EnvironmentInitialFilesPathSegmentPattern::GlobStar],
         })
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Path(
-            EnvironmentInitialFilesPathPattern::parse(&value.into()).expect("invalid IFS path"),
-        )
-    }
-
-    pub fn glob(value: impl Into<String>) -> Self {
-        Self::exact(value)
-    }
 }
 
 impl ResourcePattern for EnvironmentInitialFilesResourcePattern {

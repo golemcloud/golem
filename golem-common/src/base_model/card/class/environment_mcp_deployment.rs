@@ -42,13 +42,6 @@ impl EnvironmentMcpDeploymentResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(
-            EnvironmentMcpDeploymentName::parse(&value.into())
-                .expect("invalid MCP deployment name"),
-        )
-    }
 }
 
 impl ResourcePattern for EnvironmentMcpDeploymentResourcePattern {

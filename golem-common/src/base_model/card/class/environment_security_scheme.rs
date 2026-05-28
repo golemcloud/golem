@@ -42,12 +42,6 @@ impl EnvironmentSecuritySchemeResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(
-            EnvironmentSecuritySchemeName::parse(&value.into()).expect("invalid scheme name"),
-        )
-    }
 }
 
 impl ResourcePattern for EnvironmentSecuritySchemeResourcePattern {

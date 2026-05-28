@@ -51,10 +51,6 @@ impl EnvResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::VarName(EnvVarName::parse(&value.into()).expect("invalid env var name"))
-    }
 }
 
 impl ResourcePattern for EnvResourcePattern {

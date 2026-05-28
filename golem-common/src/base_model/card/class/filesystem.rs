@@ -66,14 +66,6 @@ impl FilesystemResourcePattern {
             segments: vec![FilesystemPathSegmentPattern::GlobStar],
         })
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Path(FilesystemPathPattern::parse(&value.into()).expect("invalid filesystem path"))
-    }
-
-    pub fn glob(value: impl Into<String>) -> Self {
-        Self::exact(value)
-    }
 }
 
 impl ResourcePattern for FilesystemResourcePattern {

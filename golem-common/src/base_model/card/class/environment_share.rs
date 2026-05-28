@@ -32,10 +32,6 @@ impl EnvironmentShareResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Share(Uuid::parse_str(&value.into()).expect("invalid share id"))
-    }
 }
 
 impl ResourcePattern for EnvironmentShareResourcePattern {

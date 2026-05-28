@@ -42,10 +42,6 @@ impl EnvironmentPluginGrantResourcePattern {
     pub fn any() -> Self {
         Self::Any
     }
-
-    pub fn exact(value: impl Into<String>) -> Self {
-        Self::Name(EnvironmentPluginGrantName::parse(&value.into()).expect("invalid plugin name"))
-    }
 }
 
 impl ResourcePattern for EnvironmentPluginGrantResourcePattern {

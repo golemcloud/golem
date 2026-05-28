@@ -32,14 +32,6 @@ impl EnvironmentHttpApiDeploymentResourcePattern {
         Self::Any
     }
 
-    pub fn exact(value: impl Into<String>) -> Self {
-        let value = value.into();
-        Self::parse_value(&value).unwrap_or(Self::DomainPath {
-            domain: value,
-            path_glob: String::new(),
-        })
-    }
-
     fn parse_value(value: &str) -> Result<Self, String> {
         let Some((domain, path_glob)) = value.split_once('.') else {
             return Err(value.to_string());
