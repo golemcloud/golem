@@ -208,6 +208,7 @@ export const customerLogos = {
     { kind: "image", filename: "golem-social.png", alt: "Golem Social" },
     { kind: "image", filename: "warpmind.png", alt: "WarpMind" },
     { kind: "image", filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
+    { kind: "image", filename: "golem-journai.png", alt: "JournAI" },
   ] as CustomerLogo[],
 };
 
@@ -521,6 +522,15 @@ export const customerStories = {
         alt: "Seeta Ramayya Vadali",
       },
       productLogo: { filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
+    },
+    {
+      quote:
+        "For JournAI, I modeled log analysis as durable agents. Golem's guarantees around state, retries, and recovery let me focus on the logic, not the infrastructure.",
+      name: "Daniele Torelli",
+      role: "Senior Software Engineer",
+      company: "Building JournAI",
+      avatar: { filename: "daniele-torelli.png", alt: "Daniele Torelli" },
+      productLogo: { filename: "golem-journai.png", alt: "JournAI" },
     },
   ] as Testimonial[],
 };
