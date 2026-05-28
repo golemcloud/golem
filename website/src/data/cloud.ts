@@ -11,13 +11,13 @@
 export const meta = {
   title: "Golem Cloud — Pricing & Commercial Options",
   description:
-    "Golem Cloud is the operations stack we built around the open-source Golem runtime. We host it for you, or you host it yourself.",
+    "Three ways to run Golem: open source (you run it), Cloud (we run it), or On-Prem (you run it with our tools and support).",
 };
 
 export const hero = {
   eyebrow: "Pricing & Commercial Options",
   heading: "Golem Cloud",
-  ledeHtml: `Golem is open source and free forever (<strong>BUSL-1.1, transitioning to Apache-2.0</strong>). Golem Cloud is the operations stack we built around it — we host it for you, or you host it yourself.`,
+  ledeHtml: `<strong>Open source:</strong> you run it (BUSL-1.1, transitioning to Apache-2.0). <strong>Cloud:</strong> we run it. <strong>On-Prem:</strong> you run it with our tools and support.`,
 };
 
 // =============================================================================
@@ -82,13 +82,13 @@ export const meteringExplainer = {
   leadHtml: `Golem Cloud meters four dimensions, each priced independently. <strong>You pay only for what you use</strong> — no monthly base, no minimums.`,
   dimensions: [
     {
-      html: `<strong>Compute</strong> — measured in <em>Golem Compute Units</em> (GCU). Deterministic per invocation: the same workload produces the same GCU regardless of which machine runs it.`,
+      html: `<strong>Compute</strong> — measured in <em>Golem Compute Units</em> (GCU). Same workload, same price — regardless of which node ran it.`,
     },
     {
-      html: `<strong>Memory</strong> — GB-seconds while your agent's code is <em>actually executing</em>. Idle agents, suspended agents, and time spent waiting on I/O don't accrue memory charges.`,
+      html: `<strong>Memory</strong> — GB-seconds while your agent's code is <em>actually executing</em>. Agents waiting for the next event or paused mid-task don't accrue memory charges.`,
     },
     {
-      html: `<strong>Durable storage</strong> — GB-month for agents that retain state across restarts. When an agent is evicted, its meter stops.`,
+      html: `<strong>Durable storage</strong> — GB-month for agents whose state isn't lost when nodes are replaced. When we shelve an inactive agent, you stop paying for it.`,
     },
     {
       html: `<strong>Ephemeral storage</strong> — GB-month for filesystem scratch space during execution.`,
@@ -190,11 +190,11 @@ export const onPrem = {
       html: `<strong>Prebuilt OpenTelemetry exporters + dashboards</strong> — the observability stack we run in production`,
     },
     {
-      html: `<strong>Operational tooling</strong> — health monitoring, oplog inspection, deployment lifecycle`,
+      html: `<strong>Operational tooling</strong> — health monitoring, audit log inspection, deployment lifecycle`,
     },
-    { html: `<em>Coming soon:</em> agent rebalancing and scheduling optimisations` },
+    { html: `<em>Coming soon:</em> controls for how agents are distributed and when they run` },
   ],
-  frameText: `The OSS edition is the runtime. Golem Cloud is the operations stack we built around it. On-Prem is the same operations stack, packaged for your cloud.`,
+  frameText: `The OSS edition is the runtime. Cloud is the version we run for you. On-Prem is the same software, packaged for your cloud.`,
   audienceHtml: `<strong>Who it's for:</strong> teams large enough to want Golem inside their own cloud — whether that's because of regulation, sovereignty, or because your existing infrastructure runs on GCP or Azure and you want Golem to run there alongside it.`,
   meta: [
     { label: "Deployment", value: "Kubernetes" },
@@ -329,7 +329,7 @@ export const faq = {
     },
     {
       q: "Do idle or suspended agents cost me money?",
-      aHtml: `No. Memory is billed only while your agent's code is actively executing. Durable-storage metering stops when an agent is evicted; ephemeral storage stops at the end of each invocation. No traffic, no bill.`,
+      aHtml: `No. Memory is billed only while your agent's code is actively executing. Durable-storage metering stops when we shelve an inactive agent; ephemeral storage stops at the end of each invocation. No traffic, no bill.`,
     },
     {
       q: "What happens if I hit a limit?",
@@ -341,7 +341,7 @@ export const faq = {
     },
     {
       q: "Why does Golem charge for storage when other runtimes don't?",
-      aHtml: `Golem's durability depends on a persistent oplog of every effect. The oplog <em>is</em> the recovery mechanism — so we charge for the storage that makes byte-identical replay possible.`,
+      aHtml: `Golem's durability depends on a complete history of every action — that's how it recovers when a node fails. We charge for the storage that makes that history possible.`,
     },
     {
       q: "Will invoices come in my local currency?",
