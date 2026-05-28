@@ -494,7 +494,7 @@ export const customerStories = {
   testimonials: [
     {
       quote:
-        "Before Golem I tried Akka with event sourcing, custom orchestration, and Step Functions. What I love about Golem is just writing clean code — durable state and automatic retry for HTTP, RPCs, and DB calls.",
+        "I tried Akka event sourcing and Step Functions first. What I love about Golem is clean code — durable state and automatic retry built in.",
       name: "Peter Kotula",
       role: "Software Engineer",
       company: "Building Golem Social",
