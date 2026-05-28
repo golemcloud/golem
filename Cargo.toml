@@ -162,7 +162,6 @@ minijinja = "2.7.0"
 
 nanoid = "0.4.0"
 native-tls = "=0.2.13"
-nom = "7.1.3"
 nondestructive = "0.0.26"
 nonempty-collections = "0.3.0"
 nonzero_ext = "0.3.0"
