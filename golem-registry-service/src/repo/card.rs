@@ -120,6 +120,48 @@ impl DbCardRepo<PostgresPool> {
     }
 }
 
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+impl DbCardRepo<PostgresPool> {
+    pub async fn delete_tree_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        card_id: Uuid,
+    ) -> RepoResult<Vec<Uuid>> {
+        let rows = tx
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    WITH RECURSIVE to_delete(card_id) AS (
+                        SELECT $1
+                        UNION
+                        SELECT cp.card_id
+                        FROM card_parents cp
+                        JOIN to_delete td ON cp.parent_id = td.card_id
+                    )
+                    DELETE FROM cards
+                    WHERE card_id IN (SELECT card_id FROM to_delete)
+                    RETURNING card_id
+                "#})
+                .bind(card_id),
+            )
+            .await?;
+
+        let mut deleted = Vec::with_capacity(rows.len());
+        for row in rows {
+            let deleted_card_id = row.try_get::<Uuid, _>("card_id").map_err(RepoError::from)?;
+            deleted.push(deleted_card_id);
+        }
+
+        if !deleted.is_empty() {
+            DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                tx,
+                &NewRegistryChangeEvent::cards_revoked(deleted.clone()),
+            )
+            .await?;
+        }
+
+        Ok(deleted)
+    }
+}
+
 impl DbCardRepo<PostgresPool> {
     async fn lock_parent_cards_for_create(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
@@ -200,42 +242,7 @@ impl CardRepo for DbCardRepo<PostgresPool> {
         let deleted = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "hard_delete", |tx| {
-                Box::pin(async move {
-                    let rows = tx
-                        .fetch_all(
-                            sqlx::query(indoc! { r#"
-                                WITH RECURSIVE to_delete(card_id) AS (
-                                    SELECT $1
-                                    UNION
-                                    SELECT cp.card_id
-                                    FROM card_parents cp
-                                    JOIN to_delete td ON cp.parent_id = td.card_id
-                                )
-                                DELETE FROM cards
-                                WHERE card_id IN (SELECT card_id FROM to_delete)
-                                RETURNING card_id
-                            "#})
-                            .bind(card_id),
-                        )
-                        .await?;
-
-                    let mut deleted = Vec::with_capacity(rows.len());
-                    for row in rows {
-                        let deleted_card_id =
-                            row.try_get::<Uuid, _>("card_id").map_err(RepoError::from)?;
-                        deleted.push(deleted_card_id);
-                    }
-
-                    if !deleted.is_empty() {
-                        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
-                            tx,
-                            &NewRegistryChangeEvent::cards_revoked(deleted.clone()),
-                        )
-                        .await?;
-                    }
-
-                    Ok::<_, RepoError>(deleted)
-                })
+                Box::pin(async move { Self::delete_tree_in_tx(tx, card_id).await })
             })
             .await?;
 

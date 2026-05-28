@@ -100,7 +100,8 @@ async fn create_list_update_and_delete_permission_share(
     assert_eq!(updated.revision, share.revision.next()?);
     assert_eq!(updated.name, update.name);
     assert_eq!(updated.data, update.data);
-    assert_eq!(updated.current_card_id, share.current_card_id);
+    assert!(updated.current_card_id.is_some());
+    assert_ne!(updated.current_card_id, share.current_card_id);
 
     client
         .delete_permission_share(&updated.id.0, updated.revision.into())

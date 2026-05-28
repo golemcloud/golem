@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::permission_share::{
@@ -42,6 +43,7 @@ pub trait PermissionShareRepo: Send + Sync {
     async fn update(
         &self,
         revision: PermissionShareRevisionRecord,
+        replacement_card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError>;
 
     async fn delete(
@@ -109,9 +111,13 @@ impl<Repo: PermissionShareRepo> PermissionShareRepo for LoggedPermissionShareRep
     async fn update(
         &self,
         revision: PermissionShareRevisionRecord,
+        replacement_card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
         let span = Self::span_permission_share_id(revision.permission_share_id);
-        self.repo.update(revision).instrument(span).await
+        self.repo
+            .update(revision, replacement_card)
+            .instrument(span)
+            .await
     }
 
     async fn delete(
@@ -300,10 +306,15 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
     async fn update(
         &self,
         revision: PermissionShareRevisionRecord,
+        replacement_card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
         let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let previous_revision_id = revision.revision_id - 1;
+                let old_card_id = revision.card_id;
+                let replacement_card = Self::insert_card(tx, replacement_card).await?;
+                let mut revision = revision;
+                revision.card_id = Some(replacement_card.card_id);
                 let revision = Self::insert_revision(tx, revision).await?;
 
                 let share: PermissionShareRecord = tx.fetch_optional_as(
@@ -316,7 +327,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                         RETURNING permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                     "#})
                     .bind(&revision.name)
-                    .bind(revision.card_id)
+                    .bind(Some(replacement_card.card_id))
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
@@ -326,6 +337,12 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                 .await
                 .to_error_on_unique_violation(PermissionShareRepoError::ShareViolatesUniqueness)?
                 .ok_or(PermissionShareRepoError::ConcurrentModification)?;
+
+                if let Some(old_card_id) =
+                    old_card_id.filter(|card_id| *card_id != replacement_card.card_id)
+                {
+                    DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, old_card_id).await?;
+                }
 
                 Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
                     owner_account_id: share.owner_account_id,
@@ -365,6 +382,10 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                 )
                 .await?
                 .ok_or(PermissionShareRepoError::ConcurrentModification)?;
+
+                if let Some(old_card_id) = revision.card_id {
+                    DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, old_card_id).await?;
+                }
 
                 Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
                     owner_account_id: share.owner_account_id,

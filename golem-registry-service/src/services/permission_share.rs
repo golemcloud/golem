@@ -136,8 +136,12 @@ impl PermissionShareService {
             return Err(PermissionShareError::ConcurrentModification);
         }
 
-        self.parse_and_validate_data(&update.data, share.target_account_id, auth)
-            .await?;
+        let target_account = self.get_account(share.target_account_id).await?;
+        let replacement_card = self.permission_share_card(
+            permission_share_id,
+            &update.data,
+            target_account.email.as_str(),
+        )?;
 
         share.revision = share.revision.next()?;
         share.name = update.name;
@@ -147,7 +151,10 @@ impl PermissionShareService {
 
         match self
             .permission_share_repo
-            .update(PermissionShareRevisionRecord::from_model(share, audit))
+            .update(
+                PermissionShareRevisionRecord::from_model(share, audit),
+                replacement_card,
+            )
             .await
         {
             Ok(record) => Ok(record.try_into()?),
@@ -271,16 +278,6 @@ impl PermissionShareService {
                 }
                 other => other.into(),
             })
-    }
-
-    async fn parse_and_validate_data(
-        &self,
-        data: &PermissionShareData,
-        target_account_id: AccountId,
-        _auth: &AuthCtx,
-    ) -> Result<ParsedPermissionShareData, PermissionShareError> {
-        let target_account = self.get_account(target_account_id).await?;
-        self.parse_and_validate_data_for_target(data, target_account.email.as_str())
     }
 
     fn permission_share_card(
