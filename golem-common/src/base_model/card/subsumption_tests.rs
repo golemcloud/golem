@@ -761,10 +761,26 @@ fn network_resource_subsumption_checks_host_and_ports() {
             ports: PortPattern::single(8080),
         },
     );
+    let wildcard_host = network(
+        "acme/*/*/*/*",
+        NetworkResourcePattern::HostPort {
+            host: "*.internal".to_string(),
+            ports: PortPattern::single(8080),
+        },
+    );
+    let deeper_host = network(
+        "acme/*/*/*/*",
+        NetworkResourcePattern::HostPort {
+            host: "api.us.internal".to_string(),
+            ports: PortPattern::single(8080),
+        },
+    );
 
     assert!(port_range.subsumes(&port_single));
     assert!(!port_single.subsumes(&port_range));
     assert!(!port_range.subsumes(&wrong_host));
+    assert!(wildcard_host.subsumes(&port_single));
+    assert!(!wildcard_host.subsumes(&deeper_host));
 }
 
 #[test]

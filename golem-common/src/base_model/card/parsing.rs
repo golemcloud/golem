@@ -212,11 +212,14 @@ fn permission_parts(value: &str) -> Result<PermissionParts, String> {
     ) = parser.easy_parse(value).map_err(|err| err.to_string())?;
 
     let owner = owner.trim();
-    let owner = owner.strip_suffix(')').unwrap_or(owner).trim();
+    let owner = owner
+        .strip_suffix(')')
+        .ok_or_else(|| "missing class owner close before recipient separator".to_string())?
+        .trim();
 
     Ok(PermissionParts {
         class: class.trim().to_string(),
-        owner: owner.to_string(),
+        owner: owner.trim().to_string(),
         recipient: recipient.trim().to_string(),
         verb: verb.trim().to_string(),
         resource: resource.trim().to_string(),

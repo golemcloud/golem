@@ -242,6 +242,32 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             }),
         ),
         (
+            "network_host_segment_wildcard",
+            "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : *.internal:443",
+            PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
+                verb: NetworkVerb::Connect,
+                owner: EmptyOwnerPattern,
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
+                resource: NetworkResourcePattern::HostPort {
+                    host: "*.internal".to_string(),
+                    ports: PortPattern::Single(443),
+                },
+            }),
+        ),
+        (
+            "network_any_host_single_port",
+            "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : *:443",
+            PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
+                verb: NetworkVerb::Connect,
+                owner: EmptyOwnerPattern,
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
+                resource: NetworkResourcePattern::HostPort {
+                    host: "*".to_string(),
+                    ports: PortPattern::Single(443),
+                },
+            }),
+        ),
+        (
             "env",
             "env(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : HOME",
             PermissionPattern::Env(ClassPermissionPattern::<EnvClass>::Verb {
@@ -960,6 +986,14 @@ fn rejects_malformed_grants() {
         parse_permission("filesystem(acme) : read : /data/**"),
         Err(CardParseError::Malformed(_))
     ));
+    assert!(matches!(
+        parse_permission("system( @ acme : create-account :"),
+        Err(CardParseError::Malformed(_))
+    ));
+    assert!(matches!(
+        parse_permission("application(acme @ acme : view : shop"),
+        Err(CardParseError::Malformed(_))
+    ));
     assert_eq!(
         parse_permission("filesystem(acme) @ acme : query : /data/**"),
         Err(CardParseError::InvalidOwnerPath {
@@ -1054,6 +1088,32 @@ fn rejects_recipient_depths_without_holder_kind() {
             "acme/shop/prod/cart".to_string()
         ))
     );
+}
+
+#[test]
+fn rejects_invalid_network_resource_patterns() {
+    for resource in [
+        ":8080",
+        "api..internal",
+        ".api.internal",
+        "api.internal.",
+        "api.*ternal:8080",
+        "api.internal:*",
+        "api.internal:abc",
+        "api.internal:",
+        "api.internal:9000-8000",
+        "api.internal:8080-9000-1",
+    ] {
+        assert_eq!(
+            parse_permission(&format!(
+                "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : {resource}"
+            )),
+            Err(CardParseError::InvalidResource {
+                class: NetworkClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
+        );
+    }
 }
 
 #[test]

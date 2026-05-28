@@ -14,7 +14,7 @@
 
 use super::{
     ClassPermissionPattern, PermissionClass, PermissionPattern, PolymorphicClassPermissionPattern,
-    PolymorphicPermissionPattern, ResourcePattern, VerbPattern, glob_subsumes,
+    PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EmptyOwnerPattern;
@@ -94,21 +94,19 @@ impl NetworkResourcePattern {
 
 impl ResourcePattern for NetworkResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource == "*" {
-            return Ok(NetworkResourcePattern::Any);
-        }
-
         let (host, ports) = if let Some((host, port)) = resource.rsplit_once(':') {
-            if port.chars().all(|c| c.is_ascii_digit() || c == '-') {
-                (host.to_string(), parse_port_pattern(port)?)
-            } else {
-                (resource.to_string(), PortPattern::Any)
-            }
+            validate_host_pattern(host, resource)?;
+            (host.to_string(), parse_port_pattern(port, resource)?)
         } else {
+            validate_host_pattern(resource, resource)?;
             (resource.to_string(), PortPattern::Any)
         };
 
-        Ok(NetworkResourcePattern::HostPort { host, ports })
+        if host == "*" && ports == PortPattern::Any {
+            Ok(NetworkResourcePattern::Any)
+        } else {
+            Ok(NetworkResourcePattern::HostPort { host, ports })
+        }
     }
 
     fn subsumes(&self, other: &Self) -> bool {
@@ -123,7 +121,7 @@ impl ResourcePattern for NetworkResourcePattern {
                     host: bh,
                     ports: bp,
                 },
-            ) => glob_subsumes(ah, bh) && ap.subsumes(bp),
+            ) => host_pattern_subsumes(ah, bh) && ap.subsumes(bp),
             (Self::HostPort { .. }, Self::Any) => false,
         }
     }
@@ -163,16 +161,62 @@ impl PermissionClass for NetworkClass {
     }
 }
 
-fn parse_port_pattern(port: &str) -> Result<PortPattern, CardParseError> {
+fn validate_host_pattern(host: &str, resource: &str) -> Result<(), CardParseError> {
+    if host == "*" {
+        return Ok(());
+    }
+
+    if host.is_empty() {
+        return Err(invalid_network_resource(resource));
+    }
+
+    for segment in host.split('.') {
+        if segment.is_empty()
+            || (segment != "*"
+                && segment
+                    .chars()
+                    .any(|c| c == '*' || c == ':' || c.is_whitespace()))
+        {
+            return Err(invalid_network_resource(resource));
+        }
+    }
+
+    Ok(())
+}
+
+fn host_pattern_subsumes(left: &str, right: &str) -> bool {
+    if left == "*" {
+        return true;
+    }
+
+    let left_segments: Vec<_> = left.split('.').collect();
+    let right_segments: Vec<_> = right.split('.').collect();
+    left_segments.len() == right_segments.len()
+        && left_segments
+            .iter()
+            .zip(right_segments.iter())
+            .all(|(left, right)| *left == "*" || left == right)
+}
+
+fn parse_port_pattern(port: &str, resource: &str) -> Result<PortPattern, CardParseError> {
     if let Some((start, end)) = port.split_once('-') {
-        let start = start.parse().map_err(|_| invalid_network_resource(port))?;
-        let end = end.parse().map_err(|_| invalid_network_resource(port))?;
+        let start = parse_port_number(start, resource)?;
+        let end = parse_port_number(end, resource)?;
+        if start > end {
+            return Err(invalid_network_resource(resource));
+        }
         Ok(PortPattern::Range { start, end })
     } else {
-        Ok(PortPattern::Single(
-            port.parse().map_err(|_| invalid_network_resource(port))?,
-        ))
+        Ok(PortPattern::Single(parse_port_number(port, resource)?))
     }
+}
+
+fn parse_port_number(port: &str, resource: &str) -> Result<u16, CardParseError> {
+    if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+        return Err(invalid_network_resource(resource));
+    }
+
+    port.parse().map_err(|_| invalid_network_resource(resource))
 }
 
 fn invalid_network_resource(resource: &str) -> CardParseError {
