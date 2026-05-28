@@ -32,9 +32,7 @@ use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
 
 fn parsed_permission(input: &str) -> PermissionPattern {
-    parse_pattern_grant(input)
-        .expect("grant should parse")
-        .permission
+    parse_pattern_grant(input).expect("grant should parse")
 }
 
 fn account_owner(account: &str) -> AccountOwnerPattern {

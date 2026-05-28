@@ -74,7 +74,7 @@ impl std::fmt::Display for CardParseError {
 
 impl std::error::Error for CardParseError {}
 
-impl FromStr for PatternGrant {
+impl FromStr for PermissionPattern {
     type Err = CardParseError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
@@ -98,7 +98,7 @@ impl FromStr for PolymorphicManifestPatternGrant {
     }
 }
 
-pub fn parse_pattern_grant(value: &str) -> Result<PatternGrant, CardParseError> {
+pub fn parse_pattern_grant(value: &str) -> Result<PermissionPattern, CardParseError> {
     if !value.contains('@') {
         return Err(CardParseError::MissingAtSeparator);
     }
@@ -119,15 +119,13 @@ pub fn parse_pattern_grant(value: &str) -> Result<PatternGrant, CardParseError> 
     }
     reject_slot_variables(&parts)?;
 
-    Ok(PatternGrant {
-        permission: parse_permission(
-            &parts.class,
-            &parts.owner,
-            &parts.recipient,
-            &parts.verb,
-            &parts.resource,
-        )?,
-    })
+    parse_permission(
+        &parts.class,
+        &parts.owner,
+        &parts.recipient,
+        &parts.verb,
+        &parts.resource,
+    )
 }
 
 pub fn parse_polymorphic_pattern_grant(

@@ -12,88 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::class::*;
 use super::{
     PermissionPattern, PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern,
 };
-use crate::model::card::owner::{AccountOwnerPattern, AgentOwnerPattern, EmptyOwnerPattern};
-use crate::model::card::recipient::RecipientPattern;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-/// Monomorphic grant that can be held in wallets and used for permission checking.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct PatternGrant {
-    pub permission: PermissionPattern,
-}
-
-impl PatternGrant {
-    pub fn new(permission: PermissionPattern) -> Self {
-        Self { permission }
-    }
-
-    pub fn filesystem_read_pattern(
-        owner: AgentOwnerPattern,
-        recipient: RecipientPattern,
-        resource: FilesystemResourcePattern,
-    ) -> Self {
-        Self::new(PermissionPattern::Filesystem(ClassPermissionPattern::<
-            FilesystemClass,
-        >::Verb {
-            verb: FilesystemVerb::Read,
-            owner,
-            recipient,
-            resource,
-        }))
-    }
-
-    pub fn network_connect(
-        recipient: RecipientPattern,
-        host: impl Into<String>,
-        ports: PortPattern,
-    ) -> Self {
-        Self::new(PermissionPattern::Network(ClassPermissionPattern::<
-            NetworkClass,
-        >::Verb {
-            verb: NetworkVerb::Connect,
-            owner: EmptyOwnerPattern,
-            recipient,
-            resource: NetworkResourcePattern::host_port(host, ports),
-        }))
-    }
-
-    pub fn oplog_read(
-        owner: AgentOwnerPattern,
-        recipient: RecipientPattern,
-        resource: OplogResourcePattern,
-    ) -> Self {
-        Self::new(PermissionPattern::Oplog(ClassPermissionPattern::<
-            OplogClass,
-        >::Verb {
-            verb: OplogVerb::Read,
-            owner,
-            recipient,
-            resource,
-        }))
-    }
-
-    pub fn card_install(
-        owner: AccountOwnerPattern,
-        recipient: RecipientPattern,
-        target: RecipientPattern,
-    ) -> Self {
-        Self::new(PermissionPattern::Card(
-            ClassPermissionPattern::<CardClass>::Verb {
-                verb: CardVerb::Install,
-                owner,
-                recipient,
-                resource: CardResourcePattern::InstallTarget(target),
-            },
-        ))
-    }
-}
 
 /// Polymorphic grant that can monomorphized and installed, but not used for permission checks
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,10 +38,10 @@ pub struct PolymorphicManifestPatternGrant {
 pub struct Card {
     pub card_id: Uuid,
     pub parent_ids: Vec<Uuid>,
-    pub lower_positive: Vec<PatternGrant>,
-    pub lower_negative: Vec<PatternGrant>,
-    pub upper_positive: Vec<PatternGrant>,
-    pub upper_negative: Vec<PatternGrant>,
+    pub lower_positive: Vec<PermissionPattern>,
+    pub lower_negative: Vec<PermissionPattern>,
+    pub upper_positive: Vec<PermissionPattern>,
+    pub upper_negative: Vec<PermissionPattern>,
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub system_card: bool,

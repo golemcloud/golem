@@ -22,15 +22,16 @@ use chrono::Utc;
 use test_r::test;
 use uuid::Uuid;
 
-fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PatternGrant {
-    PatternGrant::filesystem_read_pattern(
-        AgentOwnerPattern::parse(owner).unwrap(),
-        AgentRecipientPattern::parse(recipient).unwrap(),
+fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PermissionPattern {
+    PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass>::Verb {
+        verb: FilesystemVerb::Read,
+        owner: AgentOwnerPattern::parse(owner).unwrap(),
+        recipient: AgentRecipientPattern::parse(recipient).unwrap(),
         resource,
-    )
+    })
 }
 
-fn card(lower_positive: Vec<PatternGrant>, upper_positive: Vec<PatternGrant>) -> Card {
+fn card(lower_positive: Vec<PermissionPattern>, upper_positive: Vec<PermissionPattern>) -> Card {
     Card {
         card_id: Uuid::new_v4(),
         parent_ids: Vec::new(),

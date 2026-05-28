@@ -14,12 +14,10 @@
 
 use chrono::{DateTime, Utc};
 use golem_common::error_forwarding;
-use golem_common::model::card::Card;
+use golem_common::model::card::{Card, PermissionPattern};
 use golem_service_base::repo::{Blob, RepoError, SqlDateTime};
 use sqlx::FromRow;
 use uuid::Uuid;
-
-pub use golem_common::model::card::PatternGrant;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CardRepoError {
@@ -34,10 +32,10 @@ error_forwarding!(CardRepoError, RepoError);
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
 pub struct CardDataRecord {
     pub parent_ids: Vec<Uuid>,
-    pub lower_positive: Vec<PatternGrant>,
-    pub lower_negative: Vec<PatternGrant>,
-    pub upper_positive: Vec<PatternGrant>,
-    pub upper_negative: Vec<PatternGrant>,
+    pub lower_positive: Vec<PermissionPattern>,
+    pub lower_negative: Vec<PermissionPattern>,
+    pub upper_positive: Vec<PermissionPattern>,
+    pub upper_negative: Vec<PermissionPattern>,
 }
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
@@ -75,10 +73,10 @@ impl CardRecord {
     pub fn creation(
         card_id: Uuid,
         parent_ids: Vec<Uuid>,
-        lower_positive: Vec<PatternGrant>,
-        lower_negative: Vec<PatternGrant>,
-        upper_positive: Vec<PatternGrant>,
-        upper_negative: Vec<PatternGrant>,
+        lower_positive: Vec<PermissionPattern>,
+        lower_negative: Vec<PermissionPattern>,
+        upper_positive: Vec<PermissionPattern>,
+        upper_negative: Vec<PermissionPattern>,
         expires_at: Option<DateTime<Utc>>,
         system_card: bool,
         polymorphic: bool,

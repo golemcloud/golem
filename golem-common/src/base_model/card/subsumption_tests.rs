@@ -24,12 +24,13 @@ use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
 use uuid::Uuid;
 
-fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PatternGrant {
-    PatternGrant::filesystem_read_pattern(
-        AgentOwnerPattern::parse(owner).unwrap(),
-        AgentRecipientPattern::parse(recipient).unwrap(),
+fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PermissionPattern {
+    PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass>::Verb {
+        verb: FilesystemVerb::Read,
+        owner: AgentOwnerPattern::parse(owner).unwrap(),
+        recipient: AgentRecipientPattern::parse(recipient).unwrap(),
         resource,
-    )
+    })
 }
 
 fn fs_path(segments: Vec<FilesystemPathSegmentPattern>) -> FilesystemResourcePattern {
@@ -40,26 +41,33 @@ fn fs_lit(value: &str) -> FilesystemPathSegmentPattern {
     FilesystemPathSegmentPattern::Literal(value.to_string())
 }
 
-fn fs_permission(permission: ClassPermissionPattern<FilesystemClass>) -> PatternGrant {
-    PatternGrant::new(PermissionPattern::Filesystem(permission))
+fn fs_permission(permission: ClassPermissionPattern<FilesystemClass>) -> PermissionPattern {
+    PermissionPattern::Filesystem(permission)
 }
 
-fn network(recipient: &str, resource: NetworkResourcePattern) -> PatternGrant {
-    PatternGrant::new(PermissionPattern::Network(ClassPermissionPattern::<
-        NetworkClass,
-    >::Verb {
+fn network(recipient: &str, resource: NetworkResourcePattern) -> PermissionPattern {
+    PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
         verb: NetworkVerb::Connect,
         owner: EmptyOwnerPattern,
         recipient: AgentRecipientPattern::parse(recipient).unwrap(),
         resource,
-    }))
+    })
+}
+
+fn oplog_read(resource: OplogResourcePattern) -> PermissionPattern {
+    PermissionPattern::Oplog(ClassPermissionPattern::<OplogClass>::Verb {
+        verb: OplogVerb::Read,
+        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
+        recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
+        resource,
+    })
 }
 
 fn fixed_uuid() -> Uuid {
     Uuid::from_u128(0x550e8400e29b41d4a716446655440000)
 }
 
-fn card(lower_positive: Vec<PatternGrant>, upper_positive: Vec<PatternGrant>) -> Card {
+fn card(lower_positive: Vec<PermissionPattern>, upper_positive: Vec<PermissionPattern>) -> Card {
     Card {
         card_id: Uuid::new_v4(),
         parent_ids: Vec::new(),
@@ -336,8 +344,8 @@ fn glob_resource_subsumes_concrete_resource() {
         fs_path(vec![fs_lit("data"), fs_lit("item.json")]),
     );
 
-    assert!(broad.subsumes(&narrow).unwrap());
-    assert!(!narrow.subsumes(&broad).unwrap());
+    assert!(broad.subsumes(&narrow));
+    assert!(!narrow.subsumes(&broad));
 }
 
 #[test_gen]
@@ -399,7 +407,7 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
                     (*right).clone(),
                 );
 
-                assert_eq!(left.subsumes(&right).unwrap(), expected);
+                assert_eq!(left.subsumes(&right), expected);
             }
         );
     }
@@ -725,9 +733,9 @@ fn verb_wildcard_subsumes_class_verbs_only() {
         resource: fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     });
 
-    assert!(any_filesystem.subsumes(&read_file).unwrap());
-    assert!(any_filesystem.subsumes(&write_file).unwrap());
-    assert!(!read_file.subsumes(&write_file).unwrap());
+    assert!(any_filesystem.subsumes(&read_file));
+    assert!(any_filesystem.subsumes(&write_file));
+    assert!(!read_file.subsumes(&write_file));
 }
 
 #[test]
@@ -754,26 +762,18 @@ fn network_resource_subsumption_checks_host_and_ports() {
         },
     );
 
-    assert!(port_range.subsumes(&port_single).unwrap());
-    assert!(!port_single.subsumes(&port_range).unwrap());
-    assert!(!port_range.subsumes(&wrong_host).unwrap());
+    assert!(port_range.subsumes(&port_single));
+    assert!(!port_single.subsumes(&port_range));
+    assert!(!port_range.subsumes(&wrong_host));
 }
 
 #[test]
 fn oplog_ranges_subsume_inner_ranges() {
-    let broad = PatternGrant::oplog_read(
-        AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
-        AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
-        OplogResourcePattern::range(Some(100), Some(500)),
-    );
-    let narrow = PatternGrant::oplog_read(
-        AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
-        AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
-        OplogResourcePattern::range(Some(200), Some(300)),
-    );
+    let broad = oplog_read(OplogResourcePattern::range(Some(100), Some(500)));
+    let narrow = oplog_read(OplogResourcePattern::range(Some(200), Some(300)));
 
-    assert!(broad.subsumes(&narrow).unwrap());
-    assert!(!narrow.subsumes(&broad).unwrap());
+    assert!(broad.subsumes(&narrow));
+    assert!(!narrow.subsumes(&broad));
 }
 
 #[test]
@@ -791,8 +791,8 @@ fn subsumption_requires_same_permission_class() {
         },
     );
 
-    assert!(!filesystem.subsumes(&network).unwrap());
-    assert!(!network.subsumes(&filesystem).unwrap());
+    assert!(!filesystem.subsumes(&network));
+    assert!(!network.subsumes(&filesystem));
 }
 
 #[test]
