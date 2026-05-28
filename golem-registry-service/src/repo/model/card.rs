@@ -14,7 +14,7 @@
 
 use chrono::{DateTime, Utc};
 use golem_common::error_forwarding;
-use golem_common::model::card::{Card, PermissionPattern};
+use golem_common::model::card::{Card, CardManagedBy, PermissionPattern};
 use golem_service_base::repo::{Blob, RepoError, SqlDateTime};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -45,6 +45,7 @@ pub struct CardRecord {
     pub created_at: SqlDateTime,
     pub expires_at: Option<SqlDateTime>,
     pub system_card: bool,
+    pub managed_by: Option<Blob<CardManagedBy>>,
     pub polymorphic: bool,
 }
 
@@ -64,7 +65,7 @@ impl TryFrom<CardRecord> for Card {
             created_at: value.created_at.into(),
             expires_at: value.expires_at.map(Into::into),
             system_card: value.system_card,
-            polymorphic: value.polymorphic,
+            managed_by: value.managed_by.map(Blob::into_value),
         })
     }
 }
@@ -79,6 +80,7 @@ impl CardRecord {
         upper_negative: Vec<PermissionPattern>,
         expires_at: Option<DateTime<Utc>>,
         system_card: bool,
+        managed_by: Option<CardManagedBy>,
         polymorphic: bool,
     ) -> Self {
         Self {
@@ -93,6 +95,7 @@ impl CardRecord {
             created_at: SqlDateTime::now(),
             expires_at: expires_at.map(Into::into),
             system_card,
+            managed_by: managed_by.map(Blob::new),
             polymorphic,
         }
     }

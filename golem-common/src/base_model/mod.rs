@@ -39,6 +39,7 @@ pub mod mcp_deployment;
 pub mod oplog;
 pub mod optional_field_update;
 pub mod path;
+pub mod permission_share;
 pub mod plan;
 pub mod plugin_registration;
 pub mod quota;

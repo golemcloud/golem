@@ -15,9 +15,21 @@
 use super::{
     PermissionPattern, PolymorphicManifestPermissionPattern, PolymorphicPermissionPattern,
 };
+use crate::base_model::account::AccountId;
+use crate::base_model::environment::EnvironmentId;
+use crate::model::auth::TokenId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum CardManagedBy {
+    AccountRoot { account_id: AccountId },
+    EnvironmentDefault { environment_id: EnvironmentId },
+    PermissionShare { permission_share_id: Uuid },
+    Token { token_id: TokenId },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Card {
@@ -30,7 +42,7 @@ pub struct Card {
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub system_card: bool,
-    pub polymorphic: bool,
+    pub managed_by: Option<CardManagedBy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -5,7 +5,7 @@ CREATE TABLE cards
     created_at     TIMESTAMP NOT NULL,
     expires_at     TIMESTAMP,
     system_card    BOOLEAN   NOT NULL,
-    polymorphic    BOOLEAN   NOT NULL,
+    managed_by     BYTEA,
 
     CONSTRAINT cards_pk
         PRIMARY KEY (card_id)

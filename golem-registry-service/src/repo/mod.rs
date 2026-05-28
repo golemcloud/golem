@@ -28,6 +28,7 @@ pub mod http_api_deployment;
 pub mod mcp_deployment;
 pub mod oauth2_token;
 pub mod oauth2_webflow_state;
+pub mod permission_share;
 pub mod plan;
 pub mod plugin;
 pub mod registry_change;

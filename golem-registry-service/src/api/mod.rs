@@ -27,6 +27,7 @@ pub mod http_api_deployments;
 pub mod login;
 pub mod mcp_deployments;
 pub mod me;
+pub mod permission_shares;
 pub mod plugin_registrations;
 pub mod reports;
 pub mod resource_definitions;
@@ -48,6 +49,7 @@ use self::http_api_deployments::HttpApiDeploymentsApi;
 use self::login::LoginApi;
 use self::mcp_deployments::McpDeploymentsApi;
 use self::me::MeApi;
+use self::permission_shares::PermissionSharesApi;
 use self::plugin_registrations::PluginRegistrationsApi;
 use self::reports::ReportsApi;
 use self::resource_definitions::ResourceDefinitionsApi;
@@ -73,8 +75,11 @@ pub type Apis = (
     ),
     HttpApiDeploymentsApi,
     (LoginApi, MeApi),
-    McpDeploymentsApi,
-    PluginRegistrationsApi,
+    (
+        McpDeploymentsApi,
+        PermissionSharesApi,
+        PluginRegistrationsApi,
+    ),
     ReportsApi,
     ResourceDefinitionsApi,
     RetryPoliciesApi,
@@ -141,13 +146,19 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.auth_service.clone(),
                 ),
             ),
-            McpDeploymentsApi::new(
-                services.mcp_deployment_service.clone(),
-                services.auth_service.clone(),
-            ),
-            PluginRegistrationsApi::new(
-                services.plugin_registration_service.clone(),
-                services.auth_service.clone(),
+            (
+                McpDeploymentsApi::new(
+                    services.mcp_deployment_service.clone(),
+                    services.auth_service.clone(),
+                ),
+                PermissionSharesApi::new(
+                    services.permission_share_service.clone(),
+                    services.auth_service.clone(),
+                ),
+                PluginRegistrationsApi::new(
+                    services.plugin_registration_service.clone(),
+                    services.auth_service.clone(),
+                ),
             ),
             ReportsApi::new(
                 services.reports_service.clone(),

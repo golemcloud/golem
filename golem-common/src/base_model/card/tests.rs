@@ -64,7 +64,7 @@ fn card_with_bounds(
         created_at: Utc::now(),
         expires_at: None,
         system_card: false,
-        polymorphic: false,
+        managed_by: None,
     }
 }
 

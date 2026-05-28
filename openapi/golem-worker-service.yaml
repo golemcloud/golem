@@ -27,6 +27,7 @@ tags:
   description: The login endpoints are implementing an OAuth2 flow.
 - name: McpDeployment
 - name: Me
+- name: PermissionShares
 - name: Plugin
 - name: RegistryService
 - name: Reports
