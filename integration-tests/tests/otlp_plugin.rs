@@ -36,12 +36,12 @@ use tracing::info;
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 async fn create_jaeger(_tracing: &Tracing) -> DockerJaeger {
     DockerJaeger::new().await
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 async fn create_otel_collector(_tracing: &Tracing) -> DockerOtelCollector {
     DockerOtelCollector::new().await
 }

@@ -42,19 +42,19 @@ use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 use uuid::Uuid;
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn postgres() -> DockerPostgresRdb {
     let unique_network_id = Uuid::new_v4().to_string();
     DockerPostgresRdb::new_with_image(&unique_network_id, false, "pgvector/pgvector", "pg14").await
 }
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn mysql() -> DockerMysqlRdb {
     let unique_network_id = Uuid::new_v4().to_string();
     DockerMysqlRdb::new(&unique_network_id).await
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 fn rdbms_service() -> RdbmsServiceDefault {
     RdbmsServiceDefault::new(RdbmsConfig {
         pool: RdbmsPoolConfig {

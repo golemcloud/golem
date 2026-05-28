@@ -57,12 +57,10 @@ tracing = { workspace = true }
 tracing-core = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tryhard = { workspace = true }
+test-r = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-metadata = { workspace = true }
-
-[dev-dependencies]
-test-r = { workspace = true }
 
 [features]
 default = []

@@ -23,7 +23,7 @@ test_r::enable!();
 #[derive(Debug)]
 pub struct Tracing;
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 pub fn tracing() -> Tracing {
     init_tracing_with_default_debug_env_filter(
         &TracingConfig::test_pretty_without_time("shard-manager-tests").with_env_overrides(),

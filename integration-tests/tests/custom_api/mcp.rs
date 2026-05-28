@@ -208,7 +208,7 @@ impl McpTestContext {
     }
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 async fn test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
     let user = deps.user().await.unwrap().with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
