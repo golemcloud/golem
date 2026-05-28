@@ -25,6 +25,7 @@ import {
   createWebhook,
   Config,
   Secret,
+  readonly,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -697,6 +698,43 @@ class SnapshottingEveryNAgent extends BaseAgent {
     this.input = input;
   }
   async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent()
+export class ReadOnlyAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+
+  @readonly()
+  async defaultCache(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  @readonly({ cache: 'no-cache' })
+  async noCache(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  @readonly({ cache: 'until-write' })
+  async untilWrite(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  @readonly({ cache: { ttl: '30s' } })
+  async ttl(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  @readonly()
+  async withPrincipal(p: Principal, name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+
+  async notReadOnly(name: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
 }

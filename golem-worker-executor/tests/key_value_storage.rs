@@ -58,7 +58,7 @@ impl GetKeyValueStorage for InMemoryKeyValueStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "in_memory")]
+#[test_dep(scope = Shared, tagged_as = "in_memory")]
 async fn in_memory_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
@@ -98,7 +98,7 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "redis")]
+#[test_dep(scope = Shared, tagged_as = "redis")]
 async fn redis_storage(
     deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
@@ -173,14 +173,14 @@ impl GetKeyValueStorage for MultiSqliteKeyValueStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "sqlite")]
+#[test_dep(scope = Shared, tagged_as = "sqlite")]
 async fn sqlite_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
     Arc::new(SqliteKeyValueStorageWrapper::new())
 }
 
-#[test_dep(tagged_as = "multi_sqlite")]
+#[test_dep(scope = Shared, tagged_as = "multi_sqlite")]
 async fn multi_sqlite_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
@@ -235,7 +235,7 @@ impl GetKeyValueStorage for PostgresKeyValueStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "postgres")]
+#[test_dep(scope = Shared, tagged_as = "postgres")]
 async fn postgres_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
@@ -314,7 +314,7 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "namespace_routed")]
+#[test_dep(scope = Shared, tagged_as = "namespace_routed")]
 async fn namespace_routed_storage(
     deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
@@ -335,7 +335,7 @@ struct Namespaces {
     pub ns2: KeyValueStorageNamespace,
 }
 
-#[test_dep(tagged_as = "ns1")]
+#[test_dep(scope = PerWorker, tagged_as = "ns1")]
 fn ns() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::Worker {
@@ -351,7 +351,7 @@ fn ns() -> Namespaces {
     }
 }
 
-#[test_dep(tagged_as = "ns2")]
+#[test_dep(scope = PerWorker, tagged_as = "ns2")]
 fn ns2() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::UserDefined {

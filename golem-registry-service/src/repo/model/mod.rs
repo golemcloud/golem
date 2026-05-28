@@ -17,6 +17,7 @@ pub mod account_usage;
 pub mod agent_secrets;
 pub mod application;
 pub mod audit;
+pub mod card;
 pub mod component;
 pub mod deployment;
 pub mod domain_registration;

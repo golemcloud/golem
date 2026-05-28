@@ -37,15 +37,15 @@ use golem_common::model::invocation_context::{AttributeValue, InvocationContextS
 use golem_common::model::oplog::host_functions::{
     GolemRpcCancellationTokenCancel, GolemRpcFutureInvokeResultCancel,
     GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
-    GolemRpcWasmRpcScheduleInvocation,
+    GolemRpcWasmRpcNew, GolemRpcWasmRpcScheduleInvocation,
 };
 use golem_common::model::oplog::types::{SerializableInvokeResult, SerializableScheduleId};
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
     HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
-    HostResponse, HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
-    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
-    HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
+    HostResponse, HostResponseGolemRpcCreate, HostResponseGolemRpcInvokeAndAwait,
+    HostResponseGolemRpcInvokeGet, HostResponseGolemRpcScheduledInvocation,
+    HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
@@ -64,6 +64,7 @@ use tracing::{Instrument, error};
 use wasmtime::component::{Resource, ResourceTableError};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
+use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -87,8 +88,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-        self.observe_function_call("golem::rpc::wasm-rpc", "new");
-
         let mut env =
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
@@ -133,7 +132,25 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        construct_wasm_rpc_resource(self, remote_agent_id, &env, config).await
+        let span = create_rpc_connection_span(self, &remote_agent_id).await?;
+
+        let durability =
+            Durability::<GolemRpcWasmRpcNew>::new(self, DurableFunctionType::WriteRemote).await?;
+
+        if durability.is_live() {
+            construct_wasm_rpc_resource(self, remote_agent_id, &env, config, &durability, span)
+                .await
+        } else {
+            let response = durability.replay(self).await?;
+            reconstruct_wasm_rpc_resource(
+                self,
+                remote_agent_id,
+                response.target_environment_id,
+                response.target_fingerprint,
+                span,
+            )
+            .await
+        }
     }
 
     async fn invoke_and_await(
@@ -1154,16 +1171,17 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_agent_id: AgentId,
     env: &[(String, String)],
     config: Vec<AgentConfigEntryDto>,
+    durability: &Durability<GolemRpcWasmRpcNew>,
+    span: Arc<InvocationContextSpan>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-    let span = create_rpc_connection_span(ctx, &remote_agent_id).await?;
-
     let stack = ctx.clone_as_inherited_stack(span.span_id());
 
     let target_component = ctx
         .component_service()
         .get_metadata(remote_agent_id.component_id, None)
         .await?;
-    let remote_agent_id = OwnedAgentId::new(target_component.environment_id, &remote_agent_id);
+    let target_environment_id = target_component.environment_id;
+    let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
     let demand = ctx
         .rpc()
         .create_demand(
@@ -1177,9 +1195,43 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         .await?;
     let target_fingerprint = demand.fingerprint();
 
+    durability
+        .persist(
+            ctx,
+            HostRequestGolemRpcCreate {
+                remote_agent_id: remote_agent_id.agent_id(),
+            },
+            HostResponseGolemRpcCreate {
+                target_fingerprint,
+                target_environment_id,
+            },
+        )
+        .await?;
+
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
             demand,
+            remote_agent_id,
+            span_id: span.span_id().clone(),
+            target_fingerprint,
+        }),
+    })?;
+    Ok(entry)
+}
+
+async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    remote_agent_id: AgentId,
+    target_environment_id: EnvironmentId,
+    target_fingerprint: AgentFingerprint,
+    span: Arc<InvocationContextSpan>,
+) -> anyhow::Result<Resource<WasmRpcEntry>> {
+    let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
+    let entry = ctx.table().push(WasmRpcEntry {
+        payload: Box::new(WasmRpcEntryPayload {
+            demand: Box::new(crate::services::rpc::ReplayedDemand::new(
+                target_fingerprint,
+            )),
             remote_agent_id,
             span_id: span.span_id().clone(),
             target_fingerprint,

@@ -38,6 +38,7 @@ export {
 } from './decorators/agent';
 export { prompt } from './decorators/prompt';
 export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
+export { readonly, ReadOnlyOptions, CachePolicyOption } from './decorators/readOnly';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';

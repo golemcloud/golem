@@ -2180,20 +2180,13 @@ pub mod account {
         },
         /// Update some information about the account.
         ///
-        /// At least one of `<ACCOUNT_NAME>` or `<ACCOUNT_EMAIL>` must be
-        /// supplied; passing neither is an error. Any field that is omitted
-        /// is left unchanged on the server (a missing positional argument is
-        /// not interpreted as "clear this field").
+        /// The account email is immutable after account creation.
         #[command(after_help = crate::command_examples::ACCOUNT_UPDATE)]
         Update {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
-            /// New name to set for the account. Omit to leave the current name
-            /// unchanged.
-            account_name: Option<String>,
-            /// New email address to set for the account. Omit to leave the
-            /// current email unchanged.
-            account_email: Option<String>,
+            /// New name to set for the account.
+            account_name: String,
         },
         /// Add a new account
         #[command(after_help = crate::command_examples::ACCOUNT_NEW)]

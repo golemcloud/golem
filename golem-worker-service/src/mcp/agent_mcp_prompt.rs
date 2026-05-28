@@ -351,6 +351,7 @@ mod tests {
                 }],
             }),
             http_endpoint: vec![],
+            read_only: None,
         };
 
         let prompt = AgentMcpPrompt::from_method_hint(
@@ -410,6 +411,7 @@ mod tests {
                 }],
             }),
             http_endpoint: vec![],
+            read_only: None,
         };
 
         let prompt = AgentMcpPrompt::from_method_hint(
@@ -469,6 +471,7 @@ mod tests {
             }),
             output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
             http_endpoint: vec![],
+            read_only: None,
         };
 
         let prompt = AgentMcpPrompt::from_method_hint(
@@ -509,6 +512,7 @@ mod tests {
             input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
             output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
             http_endpoint: vec![],
+            read_only: None,
         };
 
         let prompt = AgentMcpPrompt::from_method_hint(

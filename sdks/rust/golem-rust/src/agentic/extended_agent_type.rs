@@ -16,7 +16,7 @@ use crate::agentic::AutoInjectedParamType;
 use crate::golem_agentic::golem::agent::common::AgentConfigDeclaration;
 use crate::golem_agentic::golem::agent::common::{
     AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, DataSchema,
-    ElementSchema, HttpEndpointDetails, HttpMountDetails, Snapshotting,
+    ElementSchema, HttpEndpointDetails, HttpMountDetails, ReadOnlyConfig, Snapshotting,
 };
 use std::collections::HashSet;
 
@@ -82,6 +82,7 @@ pub struct EnrichedAgentMethod {
     pub prompt_hint: Option<String>,
     pub input_schema: ExtendedDataSchema,
     pub output_schema: ExtendedDataSchema,
+    pub read_only: Option<ReadOnlyConfig>,
 }
 
 impl EnrichedAgentMethod {
@@ -93,6 +94,7 @@ impl EnrichedAgentMethod {
             prompt_hint: self.prompt_hint.clone(),
             input_schema: self.input_schema.to_data_schema(),
             output_schema: self.output_schema.to_data_schema(),
+            read_only: self.read_only.clone(),
         }
     }
 }

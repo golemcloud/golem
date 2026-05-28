@@ -2190,7 +2190,9 @@ paths:
       - Account
       summary: Update account
       description: |-
-        Allows the user to change the account details such as name and email.
+        Allows the user to change mutable account details such as name.
+
+        The account email is immutable after account creation.
 
         Changing the planId is not allowed and the request will be rejected.
         The response is the updated account data.
@@ -14600,8 +14602,6 @@ components:
           format: uint64
         name:
           type: string
-        email:
-          type: string
       required:
       - currentRevision
     AgentConfigDeclaration:
@@ -14696,6 +14696,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/HttpEndpointDetails'
+        readOnly:
+          $ref: '#/components/schemas/ReadOnlyConfig'
       required:
       - name
       - description
@@ -14933,6 +14935,51 @@ components:
           type: string
       required:
       - currentRevision
+    CachePolicy:
+      discriminator:
+        propertyName: type
+        mapping:
+          NoCache: '#/components/schemas/CachePolicy_Empty'
+          UntilWrite: '#/components/schemas/CachePolicy_Empty'
+          Ttl: '#/components/schemas/CachePolicy_CachePolicyTtl'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/CachePolicy_Empty'
+      - $ref: '#/components/schemas/CachePolicy_Empty'
+      - $ref: '#/components/schemas/CachePolicy_CachePolicyTtl'
+    CachePolicyTtl:
+      title: CachePolicyTtl
+      type: object
+      properties:
+        durationNanos:
+          type: integer
+          format: uint64
+      required:
+      - durationNanos
+    CachePolicy_CachePolicyTtl:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Ttl
+            type: string
+            enum:
+            - Ttl
+        required:
+        - type
+      - $ref: '#/components/schemas/CachePolicyTtl'
+    CachePolicy_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UntilWrite
+            type: string
+            enum:
+            - UntilWrite
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
     ComponentCreation:
       title: ComponentCreation
       type: object
@@ -16831,6 +16878,17 @@ components:
       required:
       - queryParamName
       - variableName
+    ReadOnlyConfig:
+      title: ReadOnlyConfig
+      type: object
+      properties:
+        cachePolicy:
+          $ref: '#/components/schemas/CachePolicy'
+        usesPrincipal:
+          type: boolean
+      required:
+      - cachePolicy
+      - usesPrincipal
     RegisteredAgentTypeImplementer:
       title: RegisteredAgentTypeImplementer
       type: object

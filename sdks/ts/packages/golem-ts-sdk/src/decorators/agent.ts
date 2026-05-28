@@ -301,6 +301,19 @@ export function agent(options?: AgentDecoratorOptions) {
       (err) => new Error(`Failed to describe config for agent \`${agentTypeName.value}\`: ${err}`),
     );
 
+    const agentMode: AgentMode = options?.mode ?? 'durable';
+
+    if (agentMode === 'ephemeral') {
+      const readOnlyMethod = methods.find((m) => m.readOnly !== undefined);
+      if (readOnlyMethod) {
+        throw new Error(
+          `Agent '${agentTypeName.value}' is ephemeral but method '${readOnlyMethod.name}' is marked as read-only. ` +
+            `Read-only methods have no effect on ephemeral agents (no shared state to read). ` +
+            `Remove the @readonly() decorator or make the agent durable.`,
+        );
+      }
+    }
+
     const agentType: AgentType = {
       typeName: agentTypeName.value,
       description: agentTypeDescription,
@@ -308,7 +321,7 @@ export function agent(options?: AgentDecoratorOptions) {
       constructor,
       methods,
       dependencies: [],
-      mode: options?.mode ?? 'durable',
+      mode: agentMode,
       httpMount,
       snapshotting: resolveSnapshotting(options?.snapshotting),
       config: agentConfigEntries,

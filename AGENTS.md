@@ -41,7 +41,7 @@ Worker executor tests, integration tests, and CLI integration tests may depend o
 
 For specific tests: `cargo test -p <crate> -- <test_name> --report-time`
 
-For CLI integration test reruns or isolation, use `cargo make cli-integration-tests-group1` through `cargo make cli-integration-tests-group6`.
+For CLI integration test reruns or isolation, use `cargo make cli-integration-tests`. For faster local runs with dev-release binaries, use `cargo make cli-integration-tests-dev-release`. To isolate failures, run targeted `cargo-test-r` filters or lower local concurrency with `CLI_TEST_THREADS=1 cargo make cli-integration-tests`.
 
 **Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
 

@@ -18,8 +18,15 @@ package golem.runtime.macros
 
 import golem.config.{AgentConfigDeclaration, ConfigSchema}
 import golem.data.{ElementSchema, GolemSchema, NamedElementSchema, StructuredSchema}
-import golem.runtime.annotations.{description, prompt}
-import golem.runtime.{AgentMetadata, MethodMetadata, Snapshotting, SnapshottingConfig}
+import golem.runtime.annotations.{description, prompt, readOnly}
+import golem.runtime.{
+  AgentMetadata,
+  CachePolicy,
+  MethodMetadata,
+  ReadOnlyConfig,
+  Snapshotting,
+  SnapshottingConfig
+}
 import golem.runtime.http.{
   HeaderVariable,
   HttpEndpointDetails,
@@ -76,6 +83,20 @@ object AgentDefinitionMacro {
     // --- HTTP mount extraction from @agentDefinition ---
     val httpMountExpr: Expr[Option[HttpMountDetails]] = extractHttpMount(typeSymbol, agentTypeName)
     val hasMount                                      = extractAgentDefinitionStringArg(typeSymbol, "mount", positionalIndex = 2).exists(_.nonEmpty)
+    val isEphemeral                                   = agentDefinitionModeString(typeSymbol).contains("ephemeral")
+
+    // Ephemeral + @readOnly is not allowed.
+    if (isEphemeral) {
+      typeSymbol.methodMembers.foreach { method =>
+        if (method.flags.is(Flags.Deferred) && method.isDefDef && hasReadOnlyAnnotation(method)) {
+          report.errorAndAbort(
+            s"Agent '$agentTypeName' is ephemeral but method '${method.name}' is marked with @readOnly. " +
+              s"Read-only methods have no effect on ephemeral agents (no shared state to read). " +
+              s"Remove the @readOnly annotation or change the agent mode to Durable."
+          )
+        }
+      }
+    }
 
     val methods = typeSymbol.methodMembers.collect {
       case method if method.flags.is(Flags.Deferred) && method.isDefDef =>
@@ -155,6 +176,50 @@ object AgentDefinitionMacro {
   private def validateTypeName(value: String): String =
     value
 
+  /**
+   * Read the `mode` argument of `@agentDefinition` as a plain wire string at
+   * compile time so we can drive compile-time validations (e.g. ephemeral +
+   * read-only).
+   */
+  private def agentDefinitionModeString(using
+    Quotes
+  )(symbol: quotes.reflect.Symbol): Option[String] = {
+    import quotes.reflect.*
+    symbol.annotations.collectFirst {
+      case Apply(Select(New(tpt), _), args)
+          if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.agentDefinition" =>
+        val rawModeArg: Option[Term] =
+          args.collectFirst { case NamedArg("mode", arg: Term) => arg }.orElse {
+            args.lift(1).collect { case t: Term => t }
+          }
+        rawModeArg.flatMap { term =>
+          def loop(t: Term): Option[String] = t match {
+            case Inlined(_, _, inner: Term) => loop(inner)
+            case _                          =>
+              t.symbol.name match {
+                case "$lessinit$greater$default$2" => Some("durable")
+                case "Durable"                     => Some("durable")
+                case "Ephemeral"                   => Some("ephemeral")
+                case _                             => None
+              }
+          }
+          loop(term)
+        }
+    }.flatten
+  }
+
+  private def hasReadOnlyAnnotation(using
+    Quotes
+  )(method: quotes.reflect.Symbol): Boolean = {
+    import quotes.reflect.*
+    method.annotations.exists {
+      case Apply(Select(New(tpt), _), _)
+          if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.readOnly" =>
+        true
+      case _ => false
+    }
+  }
+
   private def agentDefinitionMode(using
     Quotes
   )(symbol: quotes.reflect.Symbol): Option[Expr[String]] = {
@@ -215,6 +280,9 @@ object AgentDefinitionMacro {
 
     validateEndpoints(method, agentName, hasMount, methodParamNames, principalParamNames, headerVars)
 
+    // --- Read-only extraction ---
+    val readOnlyExpr = extractReadOnly(method, principalParamNames.nonEmpty)
+
     '{
       MethodMetadata(
         name = ${
@@ -225,8 +293,51 @@ object AgentDefinitionMacro {
         mode = None,
         input = $inputSchema,
         output = $outputSchema,
-        httpEndpoints = $endpointListExpr
+        httpEndpoints = $endpointListExpr,
+        readOnly = $readOnlyExpr
       )
+    }
+  }
+
+  /**
+   * Extract the optional `@readOnly(cache = ...)` annotation from a method and
+   * build an `Expr[Option[ReadOnlyConfig]]`. `usesPrincipal` is derived from
+   * whether the method has a Principal parameter (it is *not* user-configurable).
+   */
+  private def extractReadOnly(using
+    Quotes
+  )(method: quotes.reflect.Symbol, usesPrincipal: Boolean): Expr[Option[ReadOnlyConfig]] = {
+    import quotes.reflect.*
+
+    val readOnlyAnnotations = method.annotations.collect {
+      case ap @ Apply(Select(New(tpt), _), args)
+          if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.readOnly" =>
+        ap -> args
+    }
+
+    if (readOnlyAnnotations.isEmpty) '{ None }
+    else {
+      val (_, args) = readOnlyAnnotations.head
+
+      // Default cache policy if none specified.
+      val cacheStr: String = args.collectFirst {
+        case NamedArg("cache", Literal(StringConstant(v))) => v
+        case Literal(StringConstant(v))                    => v
+      }.getOrElse("until-write")
+
+      val policyExpr: Expr[CachePolicy] = CachePolicy.parse(cacheStr) match {
+        case Left(err) =>
+          report.errorAndAbort(s"@readOnly on method '${method.name}': $err")
+        case Right(CachePolicy.NoCache) => '{ CachePolicy.NoCache }
+        case Right(CachePolicy.UntilWrite) => '{ CachePolicy.UntilWrite }
+        case Right(CachePolicy.Ttl(nanos)) =>
+          val n = Expr(nanos)
+          '{ CachePolicy.Ttl($n) }
+      }
+
+      val usesPrincipalExpr = Expr(usesPrincipal)
+
+      '{ Some(ReadOnlyConfig($policyExpr, $usesPrincipalExpr)) }
     }
   }
 
