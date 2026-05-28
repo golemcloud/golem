@@ -190,6 +190,46 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             }),
         ),
         (
+            "filesystem_root",
+            "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : /",
+            PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass>::Verb {
+                verb: FilesystemVerb::Read,
+                owner: agent_owner(
+                    "acme",
+                    "shop",
+                    "prod",
+                    "cart",
+                    AgentOwnerLeafPattern::Agent("agent".to_string()),
+                ),
+                recipient: agent_recipient("acme", "shop", "prod", "cart", "agent"),
+                resource: FilesystemResourcePattern::Path(FilesystemPathPattern {
+                    segments: vec![],
+                }),
+            }),
+        ),
+        (
+            "filesystem_segment_wildcards",
+            "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : /data/*/**",
+            PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass>::Verb {
+                verb: FilesystemVerb::Read,
+                owner: agent_owner(
+                    "acme",
+                    "shop",
+                    "prod",
+                    "cart",
+                    AgentOwnerLeafPattern::Agent("agent".to_string()),
+                ),
+                recipient: agent_recipient("acme", "shop", "prod", "cart", "agent"),
+                resource: FilesystemResourcePattern::Path(FilesystemPathPattern {
+                    segments: vec![
+                        FilesystemPathSegmentPattern::Literal("data".to_string()),
+                        FilesystemPathSegmentPattern::Star,
+                        FilesystemPathSegmentPattern::GlobStar,
+                    ],
+                }),
+            }),
+        ),
+        (
             "network",
             "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : api.internal:8080",
             PermissionPattern::Network(ClassPermissionPattern::<NetworkClass>::Verb {
@@ -1110,6 +1150,27 @@ fn rejects_invalid_network_resource_patterns() {
             )),
             Err(CardParseError::InvalidResource {
                 class: NetworkClass::NAME.to_string(),
+                resource: resource.to_string(),
+            })
+        );
+    }
+}
+
+#[test]
+fn rejects_invalid_filesystem_resource_patterns() {
+    for resource in [
+        "data/**",
+        "/data//file",
+        "/data/",
+        "/data/***",
+        "/data/fi*le",
+    ] {
+        assert_eq!(
+            parse_permission(&format!(
+                "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : {resource}"
+            )),
+            Err(CardParseError::InvalidResource {
+                class: FilesystemClass::NAME.to_string(),
                 resource: resource.to_string(),
             })
         );

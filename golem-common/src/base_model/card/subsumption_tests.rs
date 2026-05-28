@@ -364,10 +364,43 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
             true,
         ),
         (
+            "double_star_glob_subsumes_deep_prefix",
+            fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+            fs_path(vec![fs_lit("data"), fs_lit("x"), fs_lit("y"), fs_lit("z")]),
+            true,
+        ),
+        (
+            "double_star_glob_subsumes_zero_segments",
+            fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+            fs_path(vec![fs_lit("data")]),
+            true,
+        ),
+        (
+            "infix_double_star_subsumes_deep_suffix",
+            fs_path(vec![
+                fs_lit("data"),
+                FilesystemPathSegmentPattern::GlobStar,
+                fs_lit("secret.txt"),
+            ]),
+            fs_path(vec![
+                fs_lit("data"),
+                fs_lit("x"),
+                fs_lit("y"),
+                fs_lit("secret.txt"),
+            ]),
+            true,
+        ),
+        (
             "star_glob_subsumes_exact_prefix",
             fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::Star]),
             fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
             true,
+        ),
+        (
+            "star_glob_does_not_subsume_deep_prefix",
+            fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::Star]),
+            fs_path(vec![fs_lit("data"), fs_lit("x"), fs_lit("file.txt")]),
+            false,
         ),
         (
             "exact_subsumes_same_exact",
@@ -831,18 +864,16 @@ fn derivation_must_be_subsumed_by_parent_union() {
     );
 
     let parent = card(vec![parent_grant], Vec::new());
+    let parent_surface =
+        EffectiveSurface::from_cards(std::slice::from_ref(&parent), holder).unwrap();
 
     assert!(
-        EffectiveSurface::validates_derivation(
-            std::slice::from_ref(&parent),
-            holder,
-            std::slice::from_ref(&child_grant),
-            &[]
-        )
-        .is_ok()
+        parent_surface
+            .validates_derivation(std::slice::from_ref(&child_grant), &[])
+            .is_ok()
     );
     assert_matches!(
-        EffectiveSurface::validates_derivation(&[parent], holder, &[denied_child], &[]),
+        parent_surface.validates_derivation(std::slice::from_ref(&denied_child), &[]),
         Err(CardAlgebraError::DerivationNotSubsumed { .. })
     );
 }
@@ -866,18 +897,16 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
         fs_path(vec![fs_lit("other"), fs_lit("file.txt")]),
     );
     let parent = card(Vec::new(), vec![parent_upper]);
+    let parent_surface =
+        EffectiveSurface::from_cards(std::slice::from_ref(&parent), holder).unwrap();
 
     assert!(
-        EffectiveSurface::validates_derivation(
-            std::slice::from_ref(&parent),
-            holder,
-            &[],
-            std::slice::from_ref(&child_upper),
-        )
-        .is_ok()
+        parent_surface
+            .validates_derivation(&[], std::slice::from_ref(&child_upper))
+            .is_ok()
     );
     assert_matches!(
-        EffectiveSurface::validates_derivation(&[parent], holder, &[], &[too_broad_child_upper]),
+        parent_surface.validates_derivation(&[], std::slice::from_ref(&too_broad_child_upper)),
         Err(CardAlgebraError::DerivationNotSubsumed { .. })
     );
 }

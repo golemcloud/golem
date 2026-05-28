@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::model::card::owner::AgentOwnerPattern;
+use crate::model::card::owner::{AgentOwnerPattern, EnvironmentOwnerPattern};
 use crate::model::card::recipient::RecipientPattern;
 use RecipientPattern as AccountRecipientPattern;
 use RecipientPattern as AgentRecipientPattern;
@@ -31,14 +31,36 @@ fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> Perm
     })
 }
 
+fn secret_reveal(
+    owner: &str,
+    recipient: &str,
+    resource: SecretResourcePattern,
+) -> PermissionPattern {
+    PermissionPattern::Secret(ClassPermissionPattern::<SecretClass>::Verb {
+        verb: SecretVerb::Reveal,
+        owner: EnvironmentOwnerPattern::parse(owner).unwrap(),
+        recipient: AgentRecipientPattern::parse(recipient).unwrap(),
+        resource,
+    })
+}
+
 fn card(lower_positive: Vec<PermissionPattern>, upper_positive: Vec<PermissionPattern>) -> Card {
+    card_with_bounds(lower_positive, Vec::new(), upper_positive, Vec::new())
+}
+
+fn card_with_bounds(
+    lower_positive: Vec<PermissionPattern>,
+    lower_negative: Vec<PermissionPattern>,
+    upper_positive: Vec<PermissionPattern>,
+    upper_negative: Vec<PermissionPattern>,
+) -> Card {
     Card {
         card_id: Uuid::new_v4(),
         parent_ids: Vec::new(),
         lower_positive,
-        lower_negative: Vec::new(),
+        lower_negative,
         upper_positive,
-        upper_negative: Vec::new(),
+        upper_negative,
         created_at: Utc::now(),
         expires_at: None,
         system_card: false,
@@ -111,4 +133,120 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
 
     assert!(surface.authorize(&read_public).unwrap());
     assert!(!surface.authorize(&read_secret).unwrap());
+}
+
+#[test]
+fn upper_negative_without_positive_is_unrestricted_except_denials() {
+    let holder = "acme/shop/prod/cart/agent";
+    let read_tmp = fs(
+        holder,
+        holder,
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("tmp".to_string()),
+                FilesystemPathSegmentPattern::Literal("file.txt".to_string()),
+            ],
+        }),
+    );
+    let reveal_secret = secret_reveal("acme/shop/prod", holder, SecretResourcePattern::Any);
+
+    let lower = card(vec![read_tmp.clone(), reveal_secret.clone()], Vec::new());
+    let ceiling = card_with_bounds(
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        vec![reveal_secret.clone()],
+    );
+    let surface = EffectiveSurface::from_cards(&[lower, ceiling.clone()], holder).unwrap();
+    let ceiling_surface =
+        EffectiveSurface::from_cards(std::slice::from_ref(&ceiling), holder).unwrap();
+
+    assert!(surface.authorize(&read_tmp).unwrap());
+    assert!(!surface.authorize(&reveal_secret).unwrap());
+    assert!(
+        ceiling_surface
+            .validates_derivation(&[], std::slice::from_ref(&read_tmp))
+            .is_ok()
+    );
+    assert!(matches!(
+        ceiling_surface.validates_derivation(&[], std::slice::from_ref(&reveal_secret)),
+        Err(CardAlgebraError::DerivationNotSubsumed { .. })
+    ));
+}
+
+#[test]
+fn lower_negative_is_scoped_to_its_card() {
+    let holder = "acme/shop/prod/cart/agent";
+    let read_all = fs(
+        holder,
+        holder,
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("data".to_string()),
+                FilesystemPathSegmentPattern::GlobStar,
+            ],
+        }),
+    );
+    let read_secret = fs(
+        holder,
+        holder,
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("data".to_string()),
+                FilesystemPathSegmentPattern::Literal("secret.txt".to_string()),
+            ],
+        }),
+    );
+
+    let deny_in_one_card = card_with_bounds(
+        vec![read_all],
+        vec![read_secret.clone()],
+        Vec::new(),
+        Vec::new(),
+    );
+    let allow_in_another_card = card(vec![read_secret.clone()], Vec::new());
+    let surface =
+        EffectiveSurface::from_cards(&[deny_in_one_card, allow_in_another_card], holder).unwrap();
+
+    assert!(surface.authorize(&read_secret).unwrap());
+}
+
+#[test]
+fn derivation_upper_bound_uses_parent_ceiling_intersection() {
+    let holder = "acme/shop/prod/cart/agent";
+    let read_all = fs(
+        holder,
+        holder,
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("data".to_string()),
+                FilesystemPathSegmentPattern::GlobStar,
+            ],
+        }),
+    );
+    let read_secret = fs(
+        holder,
+        holder,
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("data".to_string()),
+                FilesystemPathSegmentPattern::Literal("secret.txt".to_string()),
+            ],
+        }),
+    );
+
+    let parent_allow = card(Vec::new(), vec![read_all]);
+    let parent_deny = card_with_bounds(
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        vec![read_secret.clone()],
+    );
+    let parent_surface =
+        EffectiveSurface::from_cards(&[parent_allow, parent_deny], holder).unwrap();
+
+    assert!(matches!(
+        parent_surface.validates_derivation(&[], std::slice::from_ref(&read_secret)),
+        Err(CardAlgebraError::DerivationNotSubsumed { .. })
+    ));
 }

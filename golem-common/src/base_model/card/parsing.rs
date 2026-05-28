@@ -194,6 +194,7 @@ fn permission_parts(value: &str) -> Result<PermissionParts, String> {
     )
         .skip(eof());
 
+    #[allow(clippy::type_complexity)]
     let ((class, _, owner, _, _, _, recipient, _, verb, _, resource), _): (
         (
             String,

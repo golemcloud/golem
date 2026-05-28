@@ -145,25 +145,56 @@ fn filesystem_path_segments_subsume(
     left: &[FilesystemPathSegmentPattern],
     right: &[FilesystemPathSegmentPattern],
 ) -> bool {
-    if left
-        .first()
-        .is_some_and(|segment| matches!(segment, FilesystemPathSegmentPattern::GlobStar))
-    {
-        return true;
+    filesystem_path_segments_subsume_from(left, 0, right, 0)
+}
+
+fn filesystem_path_segments_subsume_from(
+    left: &[FilesystemPathSegmentPattern],
+    left_index: usize,
+    right: &[FilesystemPathSegmentPattern],
+    right_index: usize,
+) -> bool {
+    let Some(left_segment) = left.get(left_index) else {
+        return right_index == right.len();
+    };
+
+    match left_segment {
+        FilesystemPathSegmentPattern::GlobStar => {
+            left_index + 1 == left.len()
+                || filesystem_path_segments_subsume_from(left, left_index + 1, right, right_index)
+                || (right_index < right.len()
+                    && filesystem_path_segments_subsume_from(
+                        left,
+                        left_index,
+                        right,
+                        right_index + 1,
+                    ))
+        }
+        _ => {
+            right
+                .get(right_index)
+                .is_some_and(|right_segment| segment_subsumes(left_segment, right_segment))
+                && filesystem_path_segments_subsume_from(
+                    left,
+                    left_index + 1,
+                    right,
+                    right_index + 1,
+                )
+        }
     }
-    if left.len() != right.len() {
-        return false;
+}
+
+fn segment_subsumes(
+    left: &FilesystemPathSegmentPattern,
+    right: &FilesystemPathSegmentPattern,
+) -> bool {
+    match (left, right) {
+        (FilesystemPathSegmentPattern::Star, FilesystemPathSegmentPattern::Literal(_)) => true,
+        (FilesystemPathSegmentPattern::Star, FilesystemPathSegmentPattern::Star) => true,
+        (
+            FilesystemPathSegmentPattern::Literal(left),
+            FilesystemPathSegmentPattern::Literal(right),
+        ) => left == right,
+        _ => false,
     }
-    left.iter()
-        .zip(right)
-        .all(|(left, right)| match (left, right) {
-            (FilesystemPathSegmentPattern::GlobStar, _) => true,
-            (FilesystemPathSegmentPattern::Star, FilesystemPathSegmentPattern::Literal(_)) => true,
-            (FilesystemPathSegmentPattern::Star, FilesystemPathSegmentPattern::Star) => true,
-            (
-                FilesystemPathSegmentPattern::Literal(left),
-                FilesystemPathSegmentPattern::Literal(right),
-            ) => left == right,
-            _ => false,
-        })
 }
