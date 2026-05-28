@@ -23,6 +23,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 
 pub mod base_model;
+pub mod schema;
 
 #[cfg(not(feature = "full"))]
 pub mod model {

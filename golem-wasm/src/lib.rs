@@ -91,7 +91,11 @@ pub use wasip2 as wasi;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "guest")]
-pub use bindings::golem::core as golem_core_1_5_x;
+pub use bindings::golem::core1_5_0 as golem_core_1_5_x;
+
+#[cfg(not(feature = "host"))]
+#[cfg(feature = "guest")]
+pub use bindings::golem::core2_0_0 as golem_core_2_0_x;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "guest")]
@@ -131,7 +135,10 @@ mod generated {
 pub use generated::wasi;
 
 #[cfg(feature = "host")]
-pub use generated::golem::core as golem_core_1_5_x;
+pub use generated::golem::core1_5_0 as golem_core_1_5_x;
+
+#[cfg(feature = "host")]
+pub use generated::golem::core2_0_0 as golem_core_2_0_x;
 
 #[cfg(feature = "host")]
 pub use golem_core_1_5_x::types::{
