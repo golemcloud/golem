@@ -15013,6 +15013,12 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountRole'
+        tokenRootCardId:
+          type: string
+          format: uuid
+        tokenRootCardEpoch:
+          type: integer
+          format: uint64
       required:
       - id
       - revision
@@ -15020,6 +15026,7 @@ components:
       - email
       - planId
       - roles
+      - tokenRootCardEpoch
     AccountCountsReport:
       title: AccountCountsReport
       type: object
