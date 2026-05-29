@@ -19,6 +19,7 @@ use axum::http::header;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
+use golem_common::model::card::CardId;
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
@@ -276,6 +277,7 @@ pub struct UserAuthCtx {
     pub account_id: AccountId,
     pub account_plan_id: PlanId,
     pub account_roles: BTreeSet<AccountRole>,
+    pub token_root_card_id: Option<CardId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -295,6 +297,7 @@ pub struct AdminImpersonationAuthCtx {
     pub target_account_id: AccountId,
     pub target_account_roles: BTreeSet<AccountRole>,
     pub target_account_plan_id: PlanId,
+    pub token_root_card_id: Option<CardId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -334,6 +337,7 @@ impl AuthCtx {
             target_account_id,
             target_account_roles,
             target_account_plan_id,
+            token_root_card_id: None,
         })
     }
 
@@ -351,6 +355,14 @@ impl AuthCtx {
             Self::System => Self::System,
             // Down't downgrade impersonation auth contexts for better logging
             Self::AdminImpersonation(inner) => Self::AdminImpersonation(inner.clone()),
+        }
+    }
+
+    pub fn token_root_card_id(&self) -> Option<CardId> {
+        match self {
+            Self::User(user) => user.token_root_card_id,
+            Self::AdminImpersonation(ctx) => ctx.token_root_card_id,
+            Self::System | Self::Agent(_) => None,
         }
     }
 
@@ -1053,6 +1065,7 @@ mod protobuf {
                     .collect::<Result<_, _>>()?,
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
                 account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
+                token_root_card_id: None,
             })
         }
     }
@@ -1120,6 +1133,7 @@ mod protobuf {
                     .target_account_plan_id
                     .ok_or("missing target_account_plan_id")?
                     .try_into()?,
+                token_root_card_id: None,
             })
         }
     }

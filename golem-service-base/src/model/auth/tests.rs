@@ -21,6 +21,7 @@ fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) ->
         account_id,
         account_plan_id: plan_id,
         account_roles: roles.iter().cloned().collect(),
+        token_root_card_id: None,
     })
 }
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::auth::AccountRole;
+use crate::base_model::card::CardId;
 use crate::base_model::plan::PlanId;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use derive_more::Display;
@@ -26,6 +27,10 @@ impl AccountId {
 }
 
 declare_revision!(AccountRevision);
+
+// Monotonically increasing epoch for the token-root-card pointer on an account.
+// Used as the OCC guard in `accounts.token_root_card_epoch`.
+declare_revision!(TokenRootCardEpoch);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Display)]
 #[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
@@ -109,7 +114,9 @@ declare_structs! {
         pub name: String,
         pub email: AccountEmail,
         pub plan_id: PlanId,
-        pub roles: Vec<AccountRole>
+        pub roles: Vec<AccountRole>,
+        pub token_root_card_id: Option<CardId>,
+        pub token_root_card_epoch: TokenRootCardEpoch
     }
 
     pub struct AccountSummary {

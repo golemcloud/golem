@@ -21,7 +21,7 @@ use crate::repo::model::permission_share::{
 use crate::repo::permission_share::PermissionShareRepo;
 use golem_common::model::account::{Account, AccountId};
 use golem_common::model::card::recipient::RecipientPattern;
-use golem_common::model::card::{CardId, CardManagedBy, CardParseError, PermissionPattern};
+use golem_common::model::card::{Card, CardId, CardManagedBy, CardParseError, PermissionPattern};
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareId,
     PermissionShareName, PermissionShareRevision, PermissionShareUpdate,
@@ -265,6 +265,23 @@ impl PermissionShareService {
             .await?
             .into_iter()
             .map(|record| record.try_into().map_err(Into::into))
+            .collect()
+    }
+
+    pub async fn active_share_cards_for_target(
+        &self,
+        target_account_id: AccountId,
+    ) -> Result<Vec<Card>, PermissionShareError> {
+        self.permission_share_repo
+            .active_cards_for_target(target_account_id.0)
+            .await?
+            .into_iter()
+            .map(|record| {
+                record
+                    .try_into()
+                    .map_err(PermissionShareRepoError::from)
+                    .map_err(Into::into)
+            })
             .collect()
     }
 
