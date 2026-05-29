@@ -1765,10 +1765,7 @@ mod tests {
 
         fn mark_atomic_region_side_effect(&mut self) {}
 
-        fn check_read_only_allows(
-            &self,
-            host_function: &str,
-        ) -> Result<(), GolemSpecificWasmTrap> {
+        fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
             if let Some(method) = &self.read_only_method {
                 Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
                     method: method.clone(),

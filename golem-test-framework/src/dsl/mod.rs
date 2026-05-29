@@ -1148,9 +1148,9 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         WorkerExecutorError::ReadOnlyViolation {
             method,
             host_function,
-        } => format!(
-            "Read-only agent method '{method}' attempted side effect via '{host_function}'"
-        ),
+        } => {
+            format!("Read-only agent method '{method}' attempted side effect via '{host_function}'")
+        }
     }
 }
 
