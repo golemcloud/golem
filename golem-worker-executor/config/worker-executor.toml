@@ -41,12 +41,6 @@ cache_capacity = 1024
 cache_eviction_interval = "1m"
 cache_ttl = "5m"
 
-# Per-worker read-only method result cache.
-[read_only_cache]
-cache_capacity = 256
-max_entry_age = "2h"
-cache_eviction_interval = "1m"
-
 [engine]
 enable_fs_cache = false
 
@@ -199,6 +193,11 @@ max_connections = 20
 
 [rdbms.query]
 query_batch = 50
+
+[read_only_cache]
+cache_capacity = 256
+cache_eviction_interval = "1m"
+max_entry_age = "2h"
 
 [registry_service]
 connect_timeout = "10s"
@@ -531,6 +530,11 @@ without_time = false
 # [rdbms.query]
 # query_batch = 50
 # 
+# [read_only_cache]
+# cache_capacity = 256
+# cache_eviction_interval = "1m"
+# max_entry_age = "2h"
+# 
 # [registry_service]
 # connect_timeout = "10s"
 # host = "localhost"
@@ -831,6 +835,11 @@ without_time = false
 # 
 # [rdbms.query]
 # query_batch = 50
+# 
+# [read_only_cache]
+# cache_capacity = 256
+# cache_eviction_interval = "1m"
+# max_entry_age = "2h"
 # 
 # [registry_service]
 # connect_timeout = "10s"
