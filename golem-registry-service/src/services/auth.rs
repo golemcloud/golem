@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::account::AccountRepo;
 use crate::repo::card::CardRepo;
+use crate::repo::model::account::AccountRepoError;
 use crate::repo::model::card::{CardRecord, CardRepoError};
 use crate::services::account::{AccountError, AccountService};
 use crate::services::permission_share::{PermissionShareError, PermissionShareService};
 use chrono::Utc;
 use golem_common::model::account::{Account, AccountId, TokenRootCardEpoch};
-use golem_common::model::auth::TokenSecret;
+use golem_common::model::auth::{TokenId, TokenSecret};
 use golem_common::model::card::{CardId, CardManagedBy};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{
@@ -48,9 +50,16 @@ impl SafeDisplay for AuthError {
     }
 }
 
-error_forwarding!(AuthError, AccountError, CardRepoError, PermissionShareError);
+error_forwarding!(
+    AuthError,
+    AccountError,
+    AccountRepoError,
+    CardRepoError,
+    PermissionShareError
+);
 
 pub struct AuthService {
+    account_repo: Arc<dyn AccountRepo>,
     account_service: Arc<AccountService>,
     card_repo: Arc<dyn CardRepo>,
     permission_share_service: Arc<PermissionShareService>,
@@ -58,11 +67,13 @@ pub struct AuthService {
 
 impl AuthService {
     pub fn new(
+        account_repo: Arc<dyn AccountRepo>,
         account_service: Arc<AccountService>,
         card_repo: Arc<dyn CardRepo>,
         permission_share_service: Arc<PermissionShareService>,
     ) -> Self {
         Self {
+            account_repo,
             account_service,
             card_repo,
             permission_share_service,
@@ -71,20 +82,24 @@ impl AuthService {
 
     pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
         let record = self
-            .account_service
-            .get_by_secret_for_auth(&token)
+            .account_repo
+            .get_by_secret(token.secret())
             .await?
             .ok_or(AuthError::CouldNotAuthenticate)?;
 
         // IMPORTANT: make sure the token is still valid
-        if record.token_expires_at <= Utc::now() {
-            warn!("Tried to resolve an expired token {}", record.token_id);
+        if *record.token_expires_at.as_utc() <= Utc::now() {
+            warn!(
+                "Tried to resolve an expired token {}",
+                TokenId(record.token_id)
+            );
             return Err(AuthError::CouldNotAuthenticate);
         };
 
-        let target_account = record.account;
+        let impersonated_by = record.impersonated_by.map(AccountId);
+        let target_account: Account = record.value.try_into()?;
 
-        match record.impersonated_by {
+        match impersonated_by {
             // Normal login flow
             None => {
                 let account_roles = BTreeSet::from_iter(target_account.roles.clone());

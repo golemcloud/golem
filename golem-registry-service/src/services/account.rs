@@ -21,12 +21,11 @@ use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
 use anyhow::anyhow;
-use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountSetRoles;
 use golem_common::model::account::{
     Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
-use golem_common::model::auth::{AccountRole, TokenId, TokenSecret};
+use golem_common::model::auth::AccountRole;
 use golem_common::model::plan::PlanId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, GlobalAction};
@@ -75,13 +74,6 @@ pub struct AccountService {
     plan_service: Arc<PlanService>,
     default_plan_id: PlanId,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
-}
-
-pub struct AccountAuthRecord {
-    pub token_id: TokenId,
-    pub token_expires_at: DateTime<Utc>,
-    pub impersonated_by: Option<AccountId>,
-    pub account: Account,
 }
 
 impl AccountService {
@@ -294,24 +286,6 @@ impl AccountService {
             Err(AccountError::AccountNotFound(_)) => Ok(None),
             Err(other) => Err(other),
         }
-    }
-
-    pub async fn get_by_secret_for_auth(
-        &self,
-        token: &TokenSecret,
-    ) -> Result<Option<AccountAuthRecord>, AccountError> {
-        self.account_repo
-            .get_by_secret(token.secret())
-            .await?
-            .map(|record| {
-                Ok(AccountAuthRecord {
-                    token_id: TokenId(record.token_id),
-                    token_expires_at: record.token_expires_at.into(),
-                    impersonated_by: record.impersonated_by.map(AccountId),
-                    account: record.value.try_into()?,
-                })
-            })
-            .transpose()
     }
 
     async fn create_internal(

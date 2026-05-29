@@ -256,6 +256,7 @@ impl Services {
         ));
 
         let auth_service = Arc::new(AuthService::new(
+            repos.account_repo.clone(),
             account_service.clone(),
             repos.card_repo.clone(),
             permission_share_service.clone(),
