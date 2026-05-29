@@ -11,8 +11,16 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+//! `FromSchema` derive alone should still reject discriminator attributes on
+//! non-union enums (the symmetric check to the `IntoSchema` one).
 
-pub(crate) mod strategies;
+use golem_schema_derive::FromSchema;
 
-#[cfg(feature = "full")]
-mod wit_tests;
+#[derive(FromSchema)]
+enum E {
+    #[schema(prefix = "x")]
+    A(String),
+}
+
+fn main() {}

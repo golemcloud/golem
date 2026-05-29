@@ -12,7 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod strategies;
+use golem_schema_derive::IntoSchema;
 
-#[cfg(feature = "full")]
-mod wit_tests;
+#[derive(IntoSchema)]
+struct Inner {
+    a: u32,
+}
+
+#[derive(IntoSchema)]
+struct Outer {
+    #[schema(flatten)]
+    inner: Inner,
+    c: bool,
+}
+
+fn main() {}

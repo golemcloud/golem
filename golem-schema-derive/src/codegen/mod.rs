@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod strategies;
-
-#[cfg(feature = "full")]
-mod wit_tests;
+pub mod r#enum;
+pub mod helpers;
+pub mod primitives;
+pub mod r#struct;
+pub mod union;

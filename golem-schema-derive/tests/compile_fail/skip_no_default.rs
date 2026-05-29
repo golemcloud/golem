@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod strategies;
+use golem_schema_derive::{FromSchema, IntoSchema};
 
-#[cfg(feature = "full")]
-mod wit_tests;
+struct NoDefault;
+
+#[derive(IntoSchema, FromSchema)]
+struct Bad {
+    #[schema(skip)]
+    inner: NoDefault,
+}
+
+fn main() {}

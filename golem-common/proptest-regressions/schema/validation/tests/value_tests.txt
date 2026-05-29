@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 17aff183b73390de87c795e7c8aadf808be13aa3ec320b61c4a47beff57ec9ec # shrinks to (ty, value) = (List { element: Bool }, List { elements: [Bool(false), S32(0)] })

@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod strategies;
+use golem_schema_derive::IntoSchema;
 
-#[cfg(feature = "full")]
-mod wit_tests;
+#[derive(IntoSchema)]
+struct Bad {
+    #[schema(text(min = 1), binary(min_bytes = 0))]
+    payload: String,
+}
+
+fn main() {}

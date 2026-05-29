@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 846e03e07e81f7eeba8b926cf2b4ef110bab34b3868b33baf94dfbd82c83d032 # shrinks to (ty, value) = (Map { key: String, value: Datetime }, Map { entries: [(String("k0"), Datetime { value: -0001-12-31T23:59:59Z })] })
+cc e3c0751f8229abe47a361f13daa68e9d8657f400fa86afe9f29b04a0c753a78d # shrinks to (ty, value) = (Option { inner: Option { inner: U32 } }, Option { inner: Some(Option { inner: None }) })
+cc 2e88c3ea206bbbd3072fd0374540ddd9abd693a06a8baab3424f86e4a7552797 # shrinks to (ty, value) = (Map { key: String, value: Tuple { elements: [] } }, Map { entries: [] })

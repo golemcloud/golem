@@ -362,7 +362,7 @@ fn composite_schema_type_strategy(
 
 pub fn schema_value_strategy() -> impl Strategy<Value = SchemaValue> {
     let leaf = leaf_schema_value_strategy();
-    leaf.prop_recursive(4, 32, 4, |inner| composite_schema_value_strategy(inner))
+    leaf.prop_recursive(4, 32, 4, composite_schema_value_strategy)
 }
 
 fn leaf_schema_value_strategy() -> BoxedStrategy<SchemaValue> {

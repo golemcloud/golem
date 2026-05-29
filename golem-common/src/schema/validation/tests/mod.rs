@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod strategies;
-
-#[cfg(feature = "full")]
-mod wit_tests;
+mod placement_tests;
+mod subtyping_tests;
+mod value_tests;
+mod well_formedness_tests;
+mod wellformed_strategy;

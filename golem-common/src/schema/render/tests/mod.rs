@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod strategies;
-
-#[cfg(feature = "full")]
-mod wit_tests;
+mod cli_text_tests;
+mod docs_tests;
+mod json_schema_tests;
+mod json_value_tests;
+mod openapi_tests;
+mod paired_strategy;
+mod walker_tests;

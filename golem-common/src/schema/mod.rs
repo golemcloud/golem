@@ -20,16 +20,25 @@
 //! is gated on the `full` feature because it depends on the `wit-bindgen` /
 //! `wasmtime` bindings re-exported from `golem-wasm`.
 
+pub mod canonical;
+pub mod conversion;
+pub mod derive;
 pub mod graph;
 pub mod metadata;
+pub mod render;
 pub mod schema_type;
 pub mod schema_value;
+pub mod validation;
 #[cfg(feature = "full")]
 pub mod wit;
 
-#[cfg(all(test, feature = "full"))]
+#[cfg(test)]
 mod tests;
 
+pub use conversion::{
+    DecodeError, FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, try_into_schema_graph,
+};
+pub use golem_schema_derive::{FromSchema, IntoSchema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 pub use metadata::{MetadataEnvelope, Role, TypeId};
 pub use schema_type::{

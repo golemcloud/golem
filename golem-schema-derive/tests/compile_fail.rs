@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod strategies;
+use test_r::test;
 
-#[cfg(feature = "full")]
-mod wit_tests;
+test_r::enable!();
+
+#[test]
+fn compile_fail_fixtures() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/compile_fail/*.rs");
+}

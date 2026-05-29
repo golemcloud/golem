@@ -41,7 +41,6 @@ full = [
     "dep:poem-openapi",
     "dep:prometheus",
     "dep:prost-types",
-    "dep:regex",
     "dep:scc",
     "dep:serde_yaml",
     "dep:similar",
@@ -63,6 +62,7 @@ full = [
 
 [dependencies]
 golem-api-grpc = { workspace = true, optional = true }
+golem-schema-derive = { workspace = true }
 golem-wasm = { workspace = true, default-features = false }
 golem-wasm-derive = { workspace = true }
 
@@ -102,7 +102,7 @@ prometheus = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }
 rand = { workspace = true }
 range-set-blaze = { workspace = true }
-regex = { workspace = true, optional = true }
+regex = { workspace = true }
 scc = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -148,6 +148,7 @@ futures = { workspace = true }
 golem-wasm = { workspace = true, features = ["proptest"] }
 goldenfile = { workspace = true }
 indoc = { workspace = true }
+jsonschema = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 test-r = { workspace = true }

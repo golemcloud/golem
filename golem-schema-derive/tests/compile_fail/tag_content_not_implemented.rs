@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod strategies;
+use golem_schema_derive::IntoSchema;
 
-#[cfg(feature = "full")]
-mod wit_tests;
+#[derive(IntoSchema)]
+#[schema(tag = "kind", content = "data")]
+enum Adjacent {
+    Foo(u32),
+    Bar(String),
+}
+
+fn main() {}
