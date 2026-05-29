@@ -126,7 +126,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
             )
             .await?;
 
-        worker.invoke(invocation).await?;
+        worker.clone().invoke(invocation).await?;
 
         Worker::start_if_needed(worker).await?;
 

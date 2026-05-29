@@ -378,6 +378,30 @@ impl<
         }
     }
 
+    /// Removes the cached value for `key` only if the stored `Cached` value
+    /// satisfies `predicate`. Pending entries are never removed. The predicate
+    /// runs under the atomic remove, so concurrent inserts cannot be removed
+    /// by accident.
+    pub async fn remove_if_cached<F>(&self, key: &K, predicate: F) -> bool
+    where
+        F: Fn(&V) -> bool,
+    {
+        let removed = self
+            .state
+            .items
+            .remove_if_async(key, |item| match item {
+                Item::Cached { value, .. } => predicate(value),
+                Item::Pending { .. } => false,
+            })
+            .await
+            .is_some();
+        if removed {
+            let count = self.state.count.fetch_sub(1, Ordering::SeqCst);
+            record_cache_size(self.name, count.saturating_sub(1));
+        }
+        removed
+    }
+
     pub async fn contains_key(&self, key: &K) -> bool {
         self.state.items.contains_async(key).await
     }
@@ -657,6 +681,98 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cache.get(&1).await, Some(42));
+    }
+
+    #[test]
+    async fn remove_if_cached_removes_when_predicate_matches() {
+        let cache = test_cache("remove_if_cached_match");
+        cache
+            .get_or_insert_simple(&1, || async { Ok(42u64) })
+            .await
+            .unwrap();
+
+        let removed = cache.remove_if_cached(&1, |v| *v == 42).await;
+        assert!(removed);
+        assert!(!cache.contains_key(&1).await);
+    }
+
+    #[test]
+    async fn remove_if_cached_no_op_when_predicate_does_not_match() {
+        let cache = test_cache("remove_if_cached_no_match");
+        cache
+            .get_or_insert_simple(&1, || async { Ok(42u64) })
+            .await
+            .unwrap();
+
+        let removed = cache.remove_if_cached(&1, |v| *v == 100).await;
+        assert!(!removed);
+        assert!(cache.contains_key(&1).await);
+        assert_eq!(cache.try_get(&1).await, Some(42));
+    }
+
+    #[test]
+    async fn remove_if_cached_predicate_is_evaluated_under_the_remove_lock() {
+        // Regression: an earlier implementation evaluated the predicate during
+        // a separate read pass and then later removed any `Cached` entry under
+        // the same key. If the original value was replaced by a fresh one
+        // between those two steps (for example because the caller dropped its
+        // stale entry, another caller produced a fresh one, and then this
+        // method ran with a stale predicate), the fresh value could be wrongly
+        // removed. The current implementation runs the predicate inside the
+        // atomic remove, so this can no longer happen.
+        let cache: Cache<u64, (), Arc<u64>, String> = Cache::new(
+            None,
+            FullCacheEvictionMode::None,
+            BackgroundEvictionMode::None,
+            "remove_if_cached_atomic",
+        );
+        let v1 = cache
+            .get_or_insert_simple(&1, async || Ok(Arc::new(42u64)))
+            .await
+            .unwrap();
+        cache.remove(&1).await;
+        let v2 = cache
+            .get_or_insert_simple(&1, async || Ok(Arc::new(43u64)))
+            .await
+            .unwrap();
+        assert!(!Arc::ptr_eq(&v1, &v2));
+
+        // Try to remove using a predicate that only matches v1's identity.
+        let removed = cache
+            .remove_if_cached(&1, |current| Arc::ptr_eq(current, &v1))
+            .await;
+        assert!(!removed, "v1-targeted removal must not delete v2");
+        assert_eq!(cache.try_get(&1).await, Some(v2));
+    }
+
+    #[test]
+    async fn remove_if_cached_does_not_remove_pending() {
+        let cache = test_cache("remove_if_cached_pending");
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let proceed = Arc::new(tokio::sync::Notify::new());
+
+        let cache_clone = cache.clone();
+        let e = entered.clone();
+        let p = proceed.clone();
+        let producer = tokio::spawn(async move {
+            cache_clone
+                .get_or_insert_simple(&1, || async move {
+                    e.notify_one();
+                    p.notified().await;
+                    Ok(42u64)
+                })
+                .await
+        });
+
+        entered.notified().await;
+        // Pending entries are never removed by `remove_if_cached`.
+        let removed = cache.remove_if_cached(&1, |_| true).await;
+        assert!(!removed);
+        assert!(cache.contains_key(&1).await);
+
+        proceed.notify_one();
+        let _ = producer.await.unwrap();
+        assert_eq!(cache.try_get(&1).await, Some(42));
     }
 
     #[test]
