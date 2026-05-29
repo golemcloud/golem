@@ -17,7 +17,7 @@ export const hero = {
   // headingLines render as <br>-separated lines inside the same <h1>.
   headingLines: ["Agents that never fail.", "Policies that never bend."],
   // expander is HTML (uses <strong>, <br>, <span class="closer">).
-  expanderHtml: `The durable agent runtime that <strong>persists state</strong>, <strong>finishes every tool exactly once</strong>, and <strong>enforces every policy</strong>.<br class="break-on-md" /> <span class="closer">Reliability and trust by construction.</span>`,
+  expanderHtml: `The durable agent runtime that <strong>automatically persists state</strong>, <strong>executes every tool call exactly once</strong>, and <strong>enforces every policy</strong>.<br class="break-on-md" /> <span class="closer">Reliability and trust by construction.</span>`,
   ctas: {
     primary: { label: "Get started →", href: "https://learn.golem.cloud/quickstart" },
     secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
@@ -228,7 +228,7 @@ export const commitments: Commitment[] = [
   {
     id: "persists-state",
     icon: "journal",
-    title: "Persists state.",
+    title: "Automatically persists state.",
     paragraphsHtml: [
       `State changes and effects are captured automatically, without serialization, state machines, or annotations. Agents suspend for days or weeks at zero compute and zero memory cost, resuming with the same memory, locals, and call stack.`,
     ],
@@ -239,7 +239,7 @@ export const commitments: Commitment[] = [
     icon: "exchange",
     title: "Executes transactionally.",
     paragraphsHtml: [
-      `Agent logic, tools, and inter-agent calls run exactly once — not "at-least-once with idempotency disclaimers." Transient failures retry without exiting your agent; any interruption — restart, redeploy, eviction, hardware fault — recovers with full state.`,
+      `Code keeps running exactly once through any interruption, as if nothing happened. A tool call that crashed mid-execution completes; a workflow paused for days picks up where it stopped. This is transactional code execution.`,
     ],
     closer: "Ship code that runs exactly once.",
   },
