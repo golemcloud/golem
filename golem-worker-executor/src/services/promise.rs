@@ -271,6 +271,7 @@ impl PromiseService for DefaultPromiseService {
             .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
 
         record_promise_created();
+        crate::metrics::promises::inc_promise_pending_count();
 
         // start tracking the promise locally so poll does not need to go to redis
         {
@@ -343,6 +344,11 @@ impl PromiseService for DefaultPromiseService {
         {
             let mut reg = self.registry.lock().await;
             reg.complete(&promise_id, data.clone()).await;
+        }
+
+        // Decrement the pending count on the first successful completion.
+        if written {
+            crate::metrics::promises::dec_promise_pending_count();
         }
 
         // Wake up the worker that owns the promise, ensuring that it resumes its work.
