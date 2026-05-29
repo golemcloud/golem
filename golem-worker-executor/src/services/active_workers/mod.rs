@@ -79,7 +79,7 @@ pub struct WorkerMemoryPermit {
 
 impl WorkerMemoryPermit {
     fn new(permit: OwnedSemaphorePermit) -> Self {
-        crate::metrics::workers::dec_memory_semaphore_available(permit.num_permits());
+        crate::metrics::workers::record_memory_permit_acquired(permit.num_permits());
         Self {
             permit: Some(permit),
         }
@@ -103,7 +103,7 @@ impl WorkerMemoryPermit {
 
 impl Drop for WorkerMemoryPermit {
     fn drop(&mut self) {
-        crate::metrics::workers::inc_memory_semaphore_available(self.num_permits());
+        crate::metrics::workers::record_memory_permit_released(self.num_permits());
     }
 }
 
@@ -126,7 +126,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             acquire_retry_delay: memory_config.acquire_retry_delay,
             priority_allocation_lock: Arc::new(Mutex::new(())),
         };
-        active_workers.initialize_metrics();
+        active_workers.initialize_metrics(worker_memory_size);
         active_workers
     }
 
@@ -471,13 +471,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     /// Initializes worker gauges. Subsequent changes are recorded inline at the mutation sites.
-    fn initialize_metrics(&self) {
-        crate::metrics::workers::initialize_worker_count_by_status();
-        crate::metrics::workers::set_memory_semaphore_available(
-            self.worker_memory.available_permits(),
-        );
+    fn initialize_metrics(&self, worker_memory_size: usize) {
+        crate::metrics::workers::initialize_worker_metrics();
         crate::metrics::workers::set_filesystem_semaphore_available(
             self.worker_filesystem_storage.available_bytes(),
         );
+        crate::metrics::storage::record_worker_memory_pool_total(worker_memory_size as u64);
     }
 }
