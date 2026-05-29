@@ -1145,6 +1145,12 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             format!("File system error: {}", reason)
         }
         WorkerExecutorError::InvocationFailed { .. } => "Invocation failed".to_string(),
+        WorkerExecutorError::ReadOnlyViolation {
+            method,
+            host_function,
+        } => format!(
+            "Read-only agent method '{method}' attempted side effect via '{host_function}'"
+        ),
     }
 }
 
