@@ -1058,6 +1058,7 @@ fn is_worker_error_retriable(
         AgentError::EphemeralSleepTooLong(_) => false,
         AgentError::EphemeralFuelExhausted(_) => false,
         AgentError::EphemeralCannotSuspend(_) => false,
+        AgentError::ReadOnlyViolation(_) => false,
     }
 }
 

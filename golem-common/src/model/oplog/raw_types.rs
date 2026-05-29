@@ -374,6 +374,14 @@ pub struct EphemeralCannotSuspendError {
     pub reason: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+#[wit(name = "read-only-violation", owner = "golem:api@1.5.0/oplog")]
+pub struct ReadOnlyViolationError {
+    pub method: String,
+    pub host_function: String,
+}
+
 /// Describes the error that occurred in the worker
 #[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
 #[wit(name = "worker-error", owner = "golem:api@1.5.0/oplog")]
@@ -406,6 +414,9 @@ pub enum AgentError {
     EphemeralFuelExhausted(EphemeralFuelExhaustedError),
     // Ephemeral agent reached a condition that would suspend a durable agent
     EphemeralCannotSuspend(EphemeralCannotSuspendError),
+    // A read-only agent method attempted to perform a side effect (outgoing HTTP / RPC) that is
+    // disallowed by the read-only strictness mode.
+    ReadOnlyViolation(ReadOnlyViolationError),
 }
 
 impl AgentError {
@@ -429,6 +440,7 @@ impl AgentError {
             Self::EphemeralSleepTooLong(_) => "Ephemeral sleep too long",
             Self::EphemeralFuelExhausted(_) => "Ephemeral fuel exhausted",
             Self::EphemeralCannotSuspend(_) => "Ephemeral agent cannot suspend",
+            Self::ReadOnlyViolation(_) => "Read-only agent method attempted a side effect",
         }
     }
 

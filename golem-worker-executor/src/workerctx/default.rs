@@ -426,6 +426,14 @@ impl InvocationHooks for Context {
     async fn get_current_retry_point(&self) -> OplogIndex {
         self.durable_ctx.get_current_retry_point().await
     }
+
+    fn enter_read_only_mode(&mut self, method_name: String) {
+        self.durable_ctx.enter_read_only_mode(method_name)
+    }
+
+    fn exit_read_only_mode(&mut self) {
+        self.durable_ctx.exit_read_only_mode()
+    }
 }
 
 #[async_trait]

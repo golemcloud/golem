@@ -24,6 +24,7 @@ message AgentError {
     EphemeralSleepTooLong ephemeral_sleep_too_long = 16;
     EphemeralFuelExhausted ephemeral_fuel_exhausted = 17;
     EphemeralCannotSuspend ephemeral_cannot_suspend = 18;
+    ReadOnlyViolation read_only_violation = 19;
   }
 }
 
@@ -83,4 +84,9 @@ message EphemeralFuelExhausted {
 
 message EphemeralCannotSuspend {
   string reason = 1;
+}
+
+message ReadOnlyViolation {
+  string method = 1;
+  string host_function = 2;
 }

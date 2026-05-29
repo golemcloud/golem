@@ -426,8 +426,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // which maps to RetryDecision::TryStop — suspending the worker.
         self.record_monthly_rpc_call()?;
 
+        // The generic read-only side-effect trap (see
+        // `DurabilityHost::begin_durable_function`) refuses this call up front for
+        // read-only agent methods.
         let begin_index = self
-            .begin_function(&DurableFunctionType::WriteRemote)
+            .begin_durable_function(
+                &DurableFunctionType::WriteRemote,
+                "golem::rpc::wasm-rpc::async-invoke-and-await",
+            )
             .await?;
 
         let oplog_index = self.state.oplog.current_oplog_index().await;

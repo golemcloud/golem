@@ -320,7 +320,10 @@ where
     E: From<RdbmsError>,
 {
     let begin_index = ctx
-        .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
+        .begin_durable_function(
+            &DurableFunctionType::WriteRemoteBatched(None),
+            "golem::rdbms::db-connection::query-stream",
+        )
         .await?;
     let durability = Durability::<T::ConnQueryStream>::new(
         ctx,
