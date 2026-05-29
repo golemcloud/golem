@@ -156,7 +156,9 @@ impl AccountsApi {
 
     /// Update account
     ///
-    /// Allows the user to change the account details such as name and email.
+    /// Allows the user to change mutable account details such as name.
+    ///
+    /// The account email is immutable after account creation.
     ///
     /// Changing the planId is not allowed and the request will be rejected.
     /// The response is the updated account data.

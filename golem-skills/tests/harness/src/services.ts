@@ -41,7 +41,7 @@ export interface StartedPrerequisiteServices {
   stopAll(): Promise<void>;
 }
 
-const POSTGRES_IMAGE = "postgres:16";
+const POSTGRES_IMAGE = "postgres:17.7";
 const MYSQL_IMAGE = "mysql:8";
 const IGNITE_IMAGE = "apacheignite/ignite:2.17.0";
 const WIREMOCK_IMAGE = "wiremock/wiremock:3.13.0";

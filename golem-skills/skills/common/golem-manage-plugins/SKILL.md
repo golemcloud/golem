@@ -203,3 +203,7 @@ When multiple plugins are installed, `priority` determines their execution order
 
 - App manifest reference: https://learn.golem.cloud/app-manifest
 - Full docs: https://learn.golem.cloud
+
+## Related Skills
+
+- For enabling the built-in `golem-otlp-exporter` plugin and exporting telemetry from agents, load the language-specific skill: `golem-enable-otlp-rust`, `golem-enable-otlp-ts`, `golem-enable-otlp-scala`, or `golem-enable-otlp-moonbit`

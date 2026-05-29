@@ -29,6 +29,8 @@ use sqlx::{Database, Encode, Type};
 pub enum RepoError {
     #[error("Unique violation repository error: {0}")]
     UniqueViolation(String),
+    #[error("Foreign key violation repository error: {0}")]
+    ForeignKeyViolation(String),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -36,6 +38,10 @@ pub enum RepoError {
 impl RepoError {
     pub fn is_unique_violation(&self) -> bool {
         matches!(self, RepoError::UniqueViolation(_))
+    }
+
+    pub fn is_foreign_key_violation(&self) -> bool {
+        matches!(self, RepoError::ForeignKeyViolation(_))
     }
 
     pub fn is_transient(&self) -> bool {
@@ -48,6 +54,7 @@ impl RepoError {
                 }
             }
             RepoError::UniqueViolation(_) => false,
+            RepoError::ForeignKeyViolation(_) => false,
         }
     }
 }
@@ -60,6 +67,10 @@ impl From<sqlx::Error> for RepoError {
             && db_error.kind() == ErrorKind::UniqueViolation
         {
             RepoError::UniqueViolation(db_error.to_string())
+        } else if let Some(db_error) = error.as_database_error()
+            && db_error.kind() == ErrorKind::ForeignKeyViolation
+        {
+            RepoError::ForeignKeyViolation(db_error.to_string())
         } else {
             RepoError::InternalError(error.into())
         }
@@ -72,6 +83,9 @@ impl SafeDisplay for RepoError {
             RepoError::InternalError(_) => "Internal repository error".to_string(),
             RepoError::UniqueViolation(_) => {
                 "Internal repository error (unique key violation)".to_string()
+            }
+            RepoError::ForeignKeyViolation(_) => {
+                "Internal repository error (foreign key violation)".to_string()
             }
         }
     }
@@ -88,6 +102,11 @@ pub trait ResultExt<T> {
     fn false_on_unique_violation(self) -> RepoResult<bool>;
 
     fn to_error_on_unique_violation<E: From<RepoError>>(self, business_error: E) -> Result<T, E>;
+
+    fn to_error_on_foreign_key_violation<E: From<RepoError>>(
+        self,
+        business_error: E,
+    ) -> Result<T, E>;
 }
 
 impl<T> ResultExt<T> for RepoResult<T> {
@@ -111,6 +130,17 @@ impl<T> ResultExt<T> for RepoResult<T> {
         match self {
             Ok(value) => Ok(value),
             Err(err) if err.is_unique_violation() => Err(business_error),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    fn to_error_on_foreign_key_violation<E: From<RepoError>>(
+        self,
+        business_error: E,
+    ) -> Result<T, E> {
+        match self {
+            Ok(value) => Ok(value),
+            Err(err) if err.is_foreign_key_violation() => Err(business_error),
             Err(err) => Err(err.into()),
         }
     }

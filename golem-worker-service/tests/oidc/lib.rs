@@ -52,17 +52,17 @@ impl Tracing {
     }
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 fn tracing() -> Tracing {
     Tracing::init()
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 async fn sqlite_store_file() -> NamedTempFile {
     NamedTempFile::new().unwrap()
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 async fn sqlite_pool(db_file: &NamedTempFile) -> SqlitePool {
     let db_config = DbSqliteConfig {
         database: db_file.path().to_string_lossy().to_string(),
@@ -83,7 +83,7 @@ async fn sqlite_store(sqlite_pool: &SqlitePool, expiration_secs: i64) -> SqliteS
     .unwrap()
 }
 
-#[test_dep(tagged_as = "sqlite")]
+#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
 async fn sqlite_store_default(
     _tracing: &Tracing,
     sqlite_pool: &SqlitePool,
@@ -91,7 +91,7 @@ async fn sqlite_store_default(
     Arc::new(sqlite_store(sqlite_pool, 60).await)
 }
 
-#[test_dep(tagged_as = "sqlite_fast_expiry")]
+#[test_dep(scope = PerWorker, tagged_as = "sqlite_fast_expiry")]
 async fn sqlite_store_fast_expiry(
     _tracing: &Tracing,
     sqlite_pool: &SqlitePool,
@@ -99,7 +99,7 @@ async fn sqlite_store_fast_expiry(
     Arc::new(sqlite_store(sqlite_pool, 0).await)
 }
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn redis() -> Arc<dyn Redis> {
     Arc::new(SpawnedRedis::new(
         6379,
@@ -109,7 +109,7 @@ async fn redis() -> Arc<dyn Redis> {
     ))
 }
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn redis_pool(redis: &Arc<dyn Redis>) -> RedisPool {
     RedisPool::configured(&RedisConfig {
         host: redis.public_host(),
@@ -125,7 +125,7 @@ async fn redis_store(redis_pool: &RedisPool, expiration_millis: i64) -> RedisSes
     RedisSessionStore::new(redis_pool.clone(), expiration)
 }
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn default_session_store(
     _tracing: &Tracing,
     redis_pool: &RedisPool,
@@ -133,12 +133,12 @@ async fn default_session_store(
     Arc::new(redis_store(redis_pool, 6000).await)
 }
 
-#[test_dep(tagged_as = "redis")]
+#[test_dep(scope = Shared, tagged_as = "redis")]
 async fn redis_store_default(store: &Arc<dyn SessionStore>) -> Arc<dyn SessionStore> {
     store.clone()
 }
 
-#[test_dep(tagged_as = "redis_fast_expiry")]
+#[test_dep(scope = Shared, tagged_as = "redis_fast_expiry")]
 async fn redis_store_fast_expiry(
     _tracing: &Tracing,
     redis_pool: &RedisPool,
@@ -146,7 +146,7 @@ async fn redis_store_fast_expiry(
     Arc::new(redis_store(redis_pool, 100).await)
 }
 
-#[test_dep(tagged_as = "tls")]
+#[test_dep(scope = Shared, tagged_as = "tls")]
 async fn redis_tls() -> Arc<dyn Redis> {
     Arc::new(SpawnedRedisTls::new(
         6380,
@@ -156,7 +156,7 @@ async fn redis_tls() -> Arc<dyn Redis> {
     ))
 }
 
-#[test_dep(tagged_as = "tls")]
+#[test_dep(scope = Shared, tagged_as = "tls")]
 async fn redis_tls_pool(#[tagged_as("tls")] redis_tls: &Arc<dyn Redis>) -> RedisPool {
     // Build a rustls ClientConfig that trusts the self-signed CA used by SpawnedRedisTls.
     let mut cert_store = RootCertStore::empty();
@@ -197,7 +197,7 @@ async fn redis_tls_pool(#[tagged_as("tls")] redis_tls: &Arc<dyn Redis>) -> Redis
     RedisPool::new(pool, redis_config.key_prefix.clone())
 }
 
-#[test_dep(tagged_as = "redis_tls")]
+#[test_dep(scope = Shared, tagged_as = "redis_tls")]
 async fn redis_tls_store(
     _tracing: &Tracing,
     #[tagged_as("tls")] redis_tls_pool: &RedisPool,

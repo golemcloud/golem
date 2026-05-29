@@ -101,7 +101,7 @@ Running `pnpm run build` alone is **not sufficient** — it only updates the JS 
 
 ```shell
 # From repository root
-cargo make cli-tests
+cargo make cli-integration-tests
 ```
 
 ### Testing with golem-cli
@@ -190,5 +190,5 @@ cargo make wit
 3. SDK tests pass
 4. Agent template rebuilt (if TS SDK runtime code changed)
 5. Dependent test components rebuilt (if any)
-6. Platform tests pass (`cargo make worker-executor-tests` for Rust SDK, `cargo make cli-tests` for TS SDK)
+6. Platform tests pass (`cargo make worker-executor-tests` for Rust SDK, `cargo make cli-integration-tests` for TS SDK)
 7. Code formatted and linted

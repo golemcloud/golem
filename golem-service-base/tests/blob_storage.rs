@@ -67,7 +67,7 @@ impl GetBlobStorage for InMemoryTest {
     }
 }
 
-#[test_dep(tagged_as = "in_memory")]
+#[test_dep(scope = PerWorker, tagged_as = "in_memory")]
 fn in_memory() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(InMemoryTest)
 }
@@ -94,7 +94,7 @@ impl GetBlobStorage for FsTest {
     }
 }
 
-#[test_dep(tagged_as = "fs")]
+#[test_dep(scope = PerWorker, tagged_as = "fs")]
 async fn fs() -> Arc<dyn GetBlobStorage + Send + Sync> {
     let dir = tempdir().unwrap();
     let counter = AtomicU32::new(0);
@@ -376,12 +376,12 @@ impl BlobStorage for S3BlobStorageWithContainer {
     }
 }
 
-#[test_dep(tagged_as = "s3")]
+#[test_dep(scope = PerWorker, tagged_as = "s3")]
 async fn s3() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(S3Test { prefixed: None })
 }
 
-#[test_dep(tagged_as = "s3_prefixed")]
+#[test_dep(scope = PerWorker, tagged_as = "s3_prefixed")]
 async fn s3_prefixed() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(S3Test {
         prefixed: Some("random-prefix".to_string()),
@@ -412,12 +412,12 @@ impl GetBlobStorage for SqliteTest {
     }
 }
 
-#[test_dep(tagged_as = "sqlite")]
+#[test_dep(scope = PerWorker, tagged_as = "sqlite")]
 async fn sqlite() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(SqliteTest)
 }
 
-#[test_dep(tagged_as = "cc")]
+#[test_dep(scope = PerWorker, tagged_as = "cc")]
 fn compilation_cache() -> BlobStorageNamespace {
     BlobStorageNamespace::CompilationCache {
         environment_id: EnvironmentId(
@@ -426,7 +426,7 @@ fn compilation_cache() -> BlobStorageNamespace {
     }
 }
 
-#[test_dep(tagged_as = "co")]
+#[test_dep(scope = PerWorker, tagged_as = "co")]
 fn compressed_oplog() -> BlobStorageNamespace {
     BlobStorageNamespace::CompressedOplog {
         environment_id: EnvironmentId(
@@ -438,7 +438,7 @@ fn compressed_oplog() -> BlobStorageNamespace {
     }
 }
 
-#[test_dep(tagged_as = "cs")]
+#[test_dep(scope = PerWorker, tagged_as = "cs")]
 fn custom_storage() -> BlobStorageNamespace {
     BlobStorageNamespace::CustomStorage {
         environment_id: EnvironmentId(

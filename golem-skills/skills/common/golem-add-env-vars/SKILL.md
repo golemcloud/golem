@@ -1,6 +1,6 @@
 ---
 name: golem-add-env-vars
-description: "Defining environment variables for Golem agents. Use when configuring env vars in golem.yaml at the component template, component, agent type, or preset level, passing env vars to individual agent instances via CLI, or using template substitution and merge modes."
+description: "Defining environment variables for Golem agents in `golem.yaml` (`env`, `envDefaults`, `secretDefaults`) or via CLI. Use when adding, setting, or overriding env vars on a component, agent, template, preset, or environment, or when wiring template substitution and merge modes."
 ---
 
 # Defining Environment Variables for Golem Agents
