@@ -78,7 +78,8 @@ impl RegistryInvalidationHandler for ShardManagerRegistryInvalidationHandler {
             | RegistryInvalidationEvent::RetryPolicyChanged { .. }
             | RegistryInvalidationEvent::AgentSecretChanged { .. }
             | RegistryInvalidationEvent::ApplicationDeleted { .. }
-            | RegistryInvalidationEvent::EnvironmentDeleted { .. } => {}
+            | RegistryInvalidationEvent::EnvironmentDeleted { .. }
+            | RegistryInvalidationEvent::CardRevoked { .. } => {}
         }
     }
 }

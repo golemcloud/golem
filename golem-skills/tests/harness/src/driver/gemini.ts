@@ -21,6 +21,11 @@ export class GeminiAgentDriver extends BaseAgentDriver {
   private lastSessionId: string | null = null;
   private activatedSkillNames: Set<string> = new Set();
   private accumulatedUsage: UsageStats = {};
+  // Gemini emits assistant text as many small `delta: true` chunks. We
+  // accumulate them per assistant turn and flush to logs / textParts as a
+  // single block when the turn ends (next non-assistant-message event or
+  // end-of-stream). This avoids one log line per token.
+  private pendingAssistantText = "";
 
   async sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     this.lastSessionId = null;
@@ -45,7 +50,18 @@ export class GeminiAgentDriver extends BaseAgentDriver {
   }
 
   private buildArgs(prompt: string, isFollowup: boolean): string[] {
-    const args = ["--prompt", prompt, "--output-format", "stream-json", "--yolo"];
+    // `--skip-trust` is required: without it, Gemini CLI silently downgrades
+    // `--approval-mode=yolo` to "default" whenever the workspace is not in
+    // the user's trusted-folders config (every CI / harness workspace).
+    // See https://geminicli.com/docs/cli/trusted-folders/#headless-and-automated-environments
+    const args = [
+      "--prompt",
+      prompt,
+      "--output-format",
+      "stream-json",
+      "--approval-mode=yolo",
+      "--skip-trust",
+    ];
     if (isFollowup && this.lastSessionId) {
       args.push("--resume", this.lastSessionId);
     }
@@ -58,6 +74,7 @@ export class GeminiAgentDriver extends BaseAgentDriver {
     opts: DriverTimeoutOptions,
   ): Promise<AgentResult> {
     this.accumulatedUsage = {};
+    this.pendingAssistantText = "";
     const prefix = this.logPrefix;
     const startTime = Date.now();
     const textParts: string[] = [];
@@ -67,7 +84,9 @@ export class GeminiAgentDriver extends BaseAgentDriver {
       const child = spawn("gemini", args, {
         cwd: this.workspace,
         detached: true,
-        env: { ...process.env },
+        // GEMINI_CLI_TRUST_WORKSPACE=true is the env-var equivalent of
+        // `--skip-trust`. We pass both as a safety net across CLI versions.
+        env: { ...process.env, GEMINI_CLI_TRUST_WORKSPACE: "true" },
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -152,6 +171,11 @@ export class GeminiAgentDriver extends BaseAgentDriver {
           if (this.processJsonLine(prefix, stdoutBuf, textParts)) {
             creditInsufficient = true;
           }
+        }
+        // Flush any remaining buffered assistant text (deltas with no
+        // following non-message event).
+        if (this.flushAssistantText(prefix, textParts)) {
+          creditInsufficient = true;
         }
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
 
@@ -243,17 +267,43 @@ export class GeminiAgentDriver extends BaseAgentDriver {
   }
 
   /**
+   * Flush accumulated assistant delta chunks to logs and `textParts` as a
+   * single block. Returns `true` if the flushed content matched the
+   * credit-insufficient pattern.
+   */
+  private flushAssistantText(prefix: string, textParts: string[]): boolean {
+    const text = this.pendingAssistantText;
+    if (!text) return false;
+    this.pendingAssistantText = "";
+    textParts.push(text);
+    for (const l of text.split("\n")) {
+      log.driver(prefix, l);
+    }
+    return CREDIT_INSUFFICIENT_PATTERN.test(text);
+  }
+
+  /**
    * Parse a single JSONL line from gemini's `--output-format stream-json`
    * output and emit structured log output. Returns `true` if a
    * credit-insufficient error was detected and the caller should abort.
    *
-   * Gemini stream-json events:
-   *   init        — session start (session_id, model)
-   *   message     — user/assistant text (role, content, delta)
-   *   tool_use    — tool call request (tool_name, parameters)
-   *   tool_result — tool execution result (tool_id, status, output)
-   *   error       — non-fatal error (severity, message)
-   *   result      — session end (status, stats)
+   * Schema (from gemini-cli/packages/core/src/output/types.ts):
+   *   Every event has `type` and `timestamp`.
+   *
+   *   init         — session start; session_id, model
+   *   message      — user/assistant text;
+   *                  role: "user" | "assistant", content, delta?: boolean
+   *                  Assistant text streams as many `delta: true` chunks;
+   *                  there is no separate "final" assistant event.
+   *   tool_use     — tool_name, tool_id, parameters
+   *   tool_result  — tool_id, status: "success"|"error",
+   *                  output?: string, error?: { type, message }
+   *   error        — non-fatal; severity: "warning"|"error", message
+   *   result       — always last; status: "success"|"error",
+   *                  error?: { type, message },
+   *                  stats?: { total_tokens, input_tokens, output_tokens,
+   *                            cached, input, duration_ms, tool_calls,
+   *                            models: { [name]: ModelStats } }
    */
   private processJsonLine(prefix: string, line: string, textParts: string[]): boolean {
     const trimmed = line.trim();
@@ -268,6 +318,14 @@ export class GeminiAgentDriver extends BaseAgentDriver {
     }
 
     const type = event.type as string | undefined;
+
+    // Any non-assistant-message event ends the current assistant turn; flush
+    // first so logs stay in order.
+    const isAssistantMessage =
+      type === "message" && (event.role as string | undefined) === "assistant";
+    if (!isAssistantMessage) {
+      if (this.flushAssistantText(prefix, textParts)) return true;
+    }
 
     switch (type) {
       case "init": {
@@ -287,12 +345,11 @@ export class GeminiAgentDriver extends BaseAgentDriver {
         const role = event.role as string | undefined;
         const content = event.content as string | undefined;
         if (role === "assistant" && content) {
-          textParts.push(content);
-          for (const l of content.split("\n")) {
-            log.driver(prefix, l);
-          }
-          if (CREDIT_INSUFFICIENT_PATTERN.test(content)) return true;
+          // Accumulate delta chunks; the buffer is flushed on the next
+          // non-assistant-message event or at end-of-stream.
+          this.pendingAssistantText += content;
         }
+        // role === "user" is the echoed prompt; not worth logging.
         break;
       }
 
@@ -311,10 +368,11 @@ export class GeminiAgentDriver extends BaseAgentDriver {
 
       case "tool_result": {
         const status = event.status as string | undefined;
-        const error = event.error as Record<string, unknown> | undefined;
-        if (status === "error" && error) {
-          const errMsg = (error.message as string) || "tool error";
-          log.driverError(prefix, errMsg);
+        if (status === "error") {
+          const error = event.error as Record<string, unknown> | undefined;
+          const errType = (error?.type as string) || "tool_error";
+          const errMsg = (error?.message as string) || "tool error";
+          log.driverError(prefix, `${errType}: ${errMsg}`);
           if (CREDIT_INSUFFICIENT_PATTERN.test(errMsg)) return true;
         }
         break;
@@ -338,17 +396,24 @@ export class GeminiAgentDriver extends BaseAgentDriver {
         if (stats) {
           const inputTokens = (stats.input_tokens as number) ?? 0;
           const outputTokens = (stats.output_tokens as number) ?? 0;
+          const cached = stats.cached as number | undefined;
+          const totalTokens = stats.total_tokens as number | undefined;
           const toolCalls = stats.tool_calls as number | undefined;
+          const durationMs = stats.duration_ms as number | undefined;
           this.accumulatedUsage.inputTokens = inputTokens;
           this.accumulatedUsage.outputTokens = outputTokens;
           let extra = `tokens=${inputTokens}+${outputTokens}`;
+          if (totalTokens != null) extra += ` total=${totalTokens}`;
+          if (cached != null) extra += ` cached=${cached}`;
           if (toolCalls != null) extra += ` tools=${toolCalls}`;
+          if (durationMs != null) extra += ` duration=${durationMs}ms`;
           log.driver(prefix, extra);
         }
         if (status === "error") {
           const error = event.error as Record<string, unknown> | undefined;
+          const errType = (error?.type as string) || "session_error";
           const errMsg = (error?.message as string) || "session error";
-          log.driverError(prefix, errMsg);
+          log.driverError(prefix, `${errType}: ${errMsg}`);
           if (CREDIT_INSUFFICIENT_PATTERN.test(errMsg)) return true;
         }
         break;

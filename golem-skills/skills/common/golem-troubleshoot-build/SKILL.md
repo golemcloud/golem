@@ -7,6 +7,8 @@ description: "Troubleshooting Golem build failures and debugging manifest file (
 
 Both `golem` and `golem-cli` can be used — all commands below work with either binary.
 
+For the normal build workflow and `golem build` usage, load `golem-build`. This skill focuses on what to do when that build fails.
+
 ## Build Pipeline Overview
 
 `golem build` executes a multi-step pipeline. Understanding which step failed is the first step to diagnosing problems:
@@ -162,3 +164,7 @@ golem component manifest-trace -e staging
 ```
 
 This activates the `staging` environment's presets, letting you verify that environment-specific overrides are applied correctly.
+
+## Related Skills
+
+- Load `golem-build` for the normal `golem build` workflow and options

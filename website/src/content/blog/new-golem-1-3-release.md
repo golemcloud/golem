@@ -7,6 +7,8 @@ slug: "new-golem-1-3-release"
 originalUrl: "https://golem.cloud/post/new-golem-1-3-release"
 ---
 
+<iframe allowfullscreen="true" frameborder="0" scrolling="no" src="https://www.youtube.com/embed/91-CH1TZG3o" title="Golem 1.3 Launch Event"></iframe>
+
 We’re a few months out from [announcing our refocus](/blog/golem-prepares-for-major-refocus-on-agentic-applications) on agentic applications. Though at the time, the announcement was purely connected to our shift in marketing, I outlined a roadmap that would take Golem into new territory focused specifically on agentic use cases.
 
 I’m happy to announce that in our new 1.3 release, which is launching on October 15, we have made significant progress toward this goal.
@@ -139,14 +141,10 @@ These features will take Golem all the way into agent-native territory, with cap
 
 ## Learning More
 
-If the Golem 1.3 release sounds interesting, then I invite you to join us for the launch event, on Wednesday, October 15, 2025, at 12 noon Eastern Standard Time (EST).
+The Golem 1.3 launch event ran live on October 15, 2025 — overview, live coding demo, and a walkthrough of key features of the Golem CLI and Console. The full recording is embedded at the top of this post.
 
-We’ll stream the event across LinkedIn, X, and YouTube, and you can find our primary channels below:
+To follow Golem Cloud across other channels:
 
 - [Golem Cloud LinkedIn](https://www.linkedin.com/company/97878182)
 - [Golem Cloud X](https://x.com/GolemCloud)
-- [Youtube account for livestream](https://www.youtube.com/@Ziverge)
-
-Our live event will feature an overview of Golem, a live coding demo, and a walkthrough of key features of the Golem CLI and Console.
-
-Come join us for a sneak peek at the future of agentic applications!
+- [Ziverge on YouTube](https://www.youtube.com/@Ziverge)

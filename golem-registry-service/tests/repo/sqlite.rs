@@ -75,12 +75,12 @@ impl Drop for SqliteDb {
     }
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 async fn db_pool(_tracing: &Tracing) -> SqliteDb {
     SqliteDb::new().await
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 async fn deps(db: &SqliteDb) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(db.pool.clone())),

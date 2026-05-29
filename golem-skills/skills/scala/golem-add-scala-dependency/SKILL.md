@@ -28,7 +28,7 @@ description: "Add a new library dependency to a Scala Golem project. Use when th
 2. **Build to verify**
 
    ```shell
-   golem build
+   golem build --yes
    ```
 
    Do NOT run `sbt compile` directly — always use `golem build`.

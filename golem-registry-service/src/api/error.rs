@@ -26,6 +26,7 @@ use crate::services::environment_share::EnvironmentShareError;
 use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::mcp_deployment::McpDeploymentError;
 use crate::services::oauth2::OAuth2Error;
+use crate::services::permission_share::PermissionShareError;
 use crate::services::plan::PlanError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use crate::services::reports::ReportsError;
@@ -601,6 +602,35 @@ impl From<EnvironmentShareError> for ApiError {
             }
             EnvironmentShareError::Unauthorized(inner) => inner.into(),
             EnvironmentShareError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<PermissionShareError> for ApiError {
+    fn from(value: PermissionShareError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            PermissionShareError::ConcurrentModification => {
+                Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            PermissionShareError::PermissionShareAlreadyExists => {
+                Self::conflict(api::error_code::PERMISSION_SHARE_ALREADY_EXISTS, error)
+            }
+            PermissionShareError::PermissionShareNotFound(_) => {
+                Self::not_found(api::error_code::PERMISSION_SHARE_NOT_FOUND, error)
+            }
+            PermissionShareError::PermissionShareByNameNotFound(_) => {
+                Self::not_found(api::error_code::PERMISSION_SHARE_NOT_FOUND, error)
+            }
+            PermissionShareError::TargetAccountNotFound(_) => {
+                Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+            }
+            PermissionShareError::Unauthorized(inner) => inner.into(),
+            PermissionShareError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),

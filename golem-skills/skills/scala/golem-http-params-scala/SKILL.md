@@ -119,3 +119,8 @@ Each unmapped parameter becomes a top-level field in the expected JSON body obje
 | `Option[T]` | value or `null` |
 | sealed trait / enum | JSON variant |
 | `Tuple` | JSON array |
+
+
+## Related Skills
+
+- Load `golem-add-http-endpoint-scala` for the high-level workflow of defining and mounting HTTP endpoints on an agent

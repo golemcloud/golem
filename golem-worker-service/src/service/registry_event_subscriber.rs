@@ -136,6 +136,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
             }
             RegistryInvalidationEvent::ResourceDefinitionChanged { .. } => {}
             RegistryInvalidationEvent::AgentSecretChanged { .. } => {}
+            RegistryInvalidationEvent::CardRevoked { .. } => {}
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,
                 account_id,

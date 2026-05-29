@@ -81,6 +81,52 @@ impl FileSystemComponentWriter {
         }
     }
 
+    /// Attaches to an existing component store directory without clearing it.
+    ///
+    /// Use this from worker subprocesses (Phase 3.4) when the parent already
+    /// owns the on-disk component store. Unlike [`Self::new`], this
+    /// constructor does **not** call `remove_dir_all` on `root`, so the
+    /// parent's already-written components survive worker startup.
+    ///
+    /// The in-memory caches (`analysis_cache`, `component_cache`,
+    /// `latest_revisions`) start empty in each worker; they are populated
+    /// on-demand by `get_or_insert_simple` and the on-disk scan fallback in
+    /// [`Self::get_latest_revision`].
+    pub fn attach_existing(root: &Path) -> Self {
+        // Fail fast if the parent-prepared directory does not exist or
+        // cannot be canonicalized: without this, a later worker write
+        // would silently create a fresh directory at the descriptor path
+        // instead of attaching to the parent's already-warmed store,
+        // re-introducing per-worker component caches (the exact regression
+        // Phase 3.4 set out to avoid).
+        let root = std::fs::canonicalize(root).unwrap_or_else(|e| {
+            panic!(
+                "FileSystemComponentWriter::attach_existing: {root:?} \
+                 must already exist (worker-side attach to parent-prepared \
+                 component store): {e}"
+            )
+        });
+
+        info!("Attaching to existing component store directory: {root:?}");
+
+        Self {
+            root,
+            analysis_cache: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_analysis",
+            ),
+            component_cache: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_metadata",
+            ),
+            latest_revisions: Mutex::new(HashMap::new()),
+        }
+    }
+
     async fn write_component_to_filesystem(
         &self,
         source_path: &Path,

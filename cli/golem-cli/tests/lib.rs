@@ -16,14 +16,12 @@ use golem_cli::fs;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use test_r::{tag_suite, test_dep};
+use test_r::test_dep;
 
 test_r::enable!();
 
 mod app;
 mod bridge_gen;
-
-tag_suite!(bridge_gen, group1);
 
 #[derive(Debug)]
 pub struct Tracing;
@@ -37,7 +35,7 @@ impl Tracing {
     }
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 fn tracing() -> Tracing {
     Tracing::init()
 }

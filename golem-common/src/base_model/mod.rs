@@ -19,6 +19,7 @@ pub mod api;
 pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod card;
 pub mod component;
 #[allow(unused_assignments)]
 // NOTE: from rust 1.92, a `value assigned to `cache` is never read` warning is emitted, most likely from the derived BinaryCodec. To be fixed in desert
@@ -38,6 +39,7 @@ pub mod mcp_deployment;
 pub mod oplog;
 pub mod optional_field_update;
 pub mod path;
+pub mod permission_share;
 pub mod plan;
 pub mod plugin_registration;
 pub mod quota;
