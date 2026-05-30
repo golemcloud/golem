@@ -16,6 +16,9 @@ use crate::Tracing;
 use anyhow::anyhow;
 use axum::Router;
 use axum::routing::get;
+use golem_common::component_introspection::wit_parser::{
+    SharedAnalysedTypeResolve, TypeName, TypeOwner,
+};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     ComponentModelElementValue, DataValue, ElementValue, ElementValues,
@@ -32,7 +35,6 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{drain_connection, stdout_event_matching, stdout_events};
 use golem_wasm::analysis::analysed_type;
-use golem_wasm::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
 use golem_wasm::{IntoValue, Record};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use golem_worker_executor_test_utils::{

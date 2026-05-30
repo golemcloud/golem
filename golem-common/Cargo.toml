@@ -54,7 +54,9 @@ full = [
     "dep:wasmtime",
     "dep:wasmtime-wasi",
     "dep:wasmtime-wasi-http",
+    "dep:wasm-metadata",
     "dep:wasmparser",
+    "dep:wit-component",
     "dep:wit-parser",
     "dep:wasm-wave",
     "dep:semver"
@@ -127,13 +129,27 @@ uuid = { workspace = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 wasmtime-wasi-http = { workspace = true, optional = true }
+wasm-metadata = { workspace = true, optional = true }
 wasmparser = { workspace = true, optional = true }
+wit-component = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
 wasm-wave = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
 
 [[test]]
 name = "agent_extraction"
+harness = false
+
+[[test]]
+name = "component_introspection_exports"
+harness = false
+
+[[test]]
+name = "component_introspection_mems"
+harness = false
+
+[[test]]
+name = "component_introspection_metadata"
 harness = false
 
 [[bench]]

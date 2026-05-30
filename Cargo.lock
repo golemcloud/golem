@@ -3837,11 +3837,13 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "wasm-metadata 0.248.0",
  "wasm-wave",
  "wasmparser 0.248.0",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
+ "wit-component 0.248.0",
  "wit-parser 0.248.0",
 ]
 
@@ -4213,21 +4215,16 @@ dependencies = [
  "prost 0.14.3",
  "prost-build",
  "protox",
- "semver",
  "serde",
  "serde_json",
  "test-r",
  "url",
  "uuid",
  "wasip2",
- "wasm-metadata 0.248.0",
  "wasm-wave",
- "wasmparser 0.248.0",
  "wasmtime",
  "wasmtime-wasi",
  "wit-bindgen 0.57.1",
- "wit-component 0.248.0",
- "wit-parser 0.248.0",
 ]
 
 [[package]]

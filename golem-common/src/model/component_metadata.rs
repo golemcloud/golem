@@ -19,15 +19,14 @@ use crate::SafeDisplay;
 use crate::base_model::component::InitialAgentFile;
 pub use crate::base_model::component_metadata::*;
 use crate::base_model::worker::TypedAgentConfigEntry;
+use crate::component_introspection::metadata::Producers as IntrospectionProducers;
+use crate::component_introspection::wit_parser::WitAnalysisContext;
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::component::InstalledPlugin;
-use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysisFailure, AnalysisResult};
-use golem_wasm::metadata::Producers as WasmAstProducers;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
-use wasmtime::component::__internal::wasmtime_environ::wasmparser;
 
 impl ComponentMetadata {
     pub fn analyse_component(
@@ -303,11 +302,15 @@ impl From<wasmparser::MemoryType> for LinearMemory {
     }
 }
 
-/// Metadata of Component in terms of golem_wasm_ast types
+/// Raw component metadata as returned by component introspection.
+///
+/// Carries the introspection helper's `Producers` type unchanged; the
+/// public [`ComponentMetadata`] then maps it to the `golem-common` wire-level
+/// shape.
 #[derive(Default)]
 pub struct RawComponentMetadata {
     pub known_exports: KnownExports,
-    pub producers: Vec<WasmAstProducers>,
+    pub producers: Vec<IntrospectionProducers>,
     pub memories: Vec<LinearMemory>,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
@@ -433,8 +436,8 @@ impl RawComponentMetadata {
     }
 }
 
-impl From<golem_wasm::metadata::Producers> for Producers {
-    fn from(value: golem_wasm::metadata::Producers) -> Self {
+impl From<crate::component_introspection::metadata::Producers> for Producers {
+    fn from(value: crate::component_introspection::metadata::Producers) -> Self {
         Self {
             fields: value
                 .fields
@@ -445,7 +448,7 @@ impl From<golem_wasm::metadata::Producers> for Producers {
     }
 }
 
-impl From<Producers> for golem_wasm::metadata::Producers {
+impl From<Producers> for crate::component_introspection::metadata::Producers {
     fn from(value: Producers) -> Self {
         Self {
             fields: value
@@ -457,8 +460,8 @@ impl From<Producers> for golem_wasm::metadata::Producers {
     }
 }
 
-impl From<golem_wasm::metadata::ProducersField> for ProducerField {
-    fn from(value: golem_wasm::metadata::ProducersField) -> Self {
+impl From<crate::component_introspection::metadata::ProducersField> for ProducerField {
+    fn from(value: crate::component_introspection::metadata::ProducersField) -> Self {
         Self {
             name: value.name,
             values: value
@@ -473,17 +476,19 @@ impl From<golem_wasm::metadata::ProducersField> for ProducerField {
     }
 }
 
-impl From<ProducerField> for golem_wasm::metadata::ProducersField {
+impl From<ProducerField> for crate::component_introspection::metadata::ProducersField {
     fn from(value: ProducerField) -> Self {
         Self {
             name: value.name,
             values: value
                 .values
                 .into_iter()
-                .map(|value| golem_wasm::metadata::VersionedName {
-                    name: value.name,
-                    version: value.version,
-                })
+                .map(
+                    |value| crate::component_introspection::metadata::VersionedName {
+                        name: value.name,
+                        version: value.version,
+                    },
+                )
                 .collect(),
         }
     }

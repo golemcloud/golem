@@ -41,12 +41,6 @@ mod extractor;
 #[cfg(any(feature = "host", feature = "client"))]
 pub mod json;
 
-/// The metadata module defines data structures for representing various metadata extracted from WASM binaries.
-///
-/// This module is optional and can be enabled with the `metadata` feature flag. It is enabled by default.
-#[cfg(feature = "host")]
-pub mod metadata;
-
 /// Poem OpenAPI integration for some types
 #[cfg(feature = "host")]
 pub mod poem;

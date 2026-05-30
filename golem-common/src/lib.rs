@@ -33,6 +33,8 @@ pub mod model {
 #[cfg(feature = "full")]
 pub mod cache;
 #[cfg(feature = "full")]
+pub mod component_introspection;
+#[cfg(feature = "full")]
 pub mod config;
 #[cfg(feature = "full")]
 pub mod json_yaml;
