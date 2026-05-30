@@ -226,7 +226,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
     deps
 }
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn postgres_db(_tracing: &Tracing) -> PostgresDb {
     let (config, container) = start_plain_postgres().await;
     wait_for_postgres(&config, Duration::from_secs(30)).await;
@@ -238,12 +238,12 @@ async fn postgres_db(_tracing: &Tracing) -> PostgresDb {
     }
 }
 
-#[test_dep(tagged_as = "postgres")]
+#[test_dep(scope = Shared, tagged_as = "postgres")]
 async fn postgres_deps(db: &PostgresDb) -> Deps {
     make_deps(db.pool.clone()).await
 }
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn postgres_tls_db(_tracing: &Tracing) -> PostgresTlsDb {
     let (config, container) = start_tls_postgres().await;
     let pool = make_pool(&config).await;
@@ -254,7 +254,7 @@ async fn postgres_tls_db(_tracing: &Tracing) -> PostgresTlsDb {
     }
 }
 
-#[test_dep(tagged_as = "postgres_tls")]
+#[test_dep(scope = Shared, tagged_as = "postgres_tls")]
 async fn postgres_tls_deps(db: &PostgresTlsDb) -> Deps {
     make_deps(db.pool.clone()).await
 }

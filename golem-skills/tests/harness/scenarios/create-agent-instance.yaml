@@ -29,4 +29,4 @@ steps:
       cwd: "test-app"
     expect:
       exit_code: 0
-      stdout_contains: "create"
+      stdout_contains: "CREATE"

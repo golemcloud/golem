@@ -37,6 +37,22 @@ pub trait WorkerExecutor: Send + Sync {
 
     async fn restart(&self);
 
+    /// Restarts this worker executor with `extra_env_vars` merged into
+    /// the spawned child process's environment **for this restart only**.
+    ///
+    /// Default implementation panics: only `SpawnedWorkerExecutor` supports
+    /// this. The parent-side `WorkerExecutorClusterControl::restart_all_with_env_vars`
+    /// HostedRpc handler uses this to apply per-test config overrides without
+    /// mutating the parent test runner's process-wide environment (which would
+    /// be unsound in a multi-threaded process).
+    async fn restart_with_extra_env_vars(&self, _extra_env_vars: Vec<(String, String)>) {
+        panic!(
+            "WorkerExecutor::restart_with_extra_env_vars is only supported by \
+             SpawnedWorkerExecutor; the default implementation refuses to silently \
+             discard the requested env overrides."
+        );
+    }
+
     async fn is_running(&self) -> bool;
 }
 

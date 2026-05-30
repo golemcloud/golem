@@ -17,7 +17,7 @@ export const hero = {
   // headingLines render as <br>-separated lines inside the same <h1>.
   headingLines: ["Agents that never fail.", "Policies that never bend."],
   // expander is HTML (uses <strong>, <br>, <span class="closer">).
-  expanderHtml: `The durable agent runtime that <strong>persists state</strong>, <strong>executes tools transactionally</strong>, and <strong>enforces every policy</strong>.<br class="break-on-md" /> <span class="closer">Reliability and trust by construction.</span>`,
+  expanderHtml: `The durable agent runtime that <strong>automatically persists state</strong>, <strong>executes every tool call exactly once</strong>, and <strong>enforces every policy</strong>.<br class="break-on-md" /> <span class="closer">Reliability and trust by construction.</span>`,
   ctas: {
     primary: { label: "Get started →", href: "https://learn.golem.cloud/quickstart" },
     secondary: { label: "View on GitHub", href: "https://github.com/golemcloud/golem" },
@@ -34,7 +34,7 @@ export const hero = {
 export const codeSection = {
   eyebrow: "Code-first",
   heading: "Agents are code, not prompts.",
-  lead: "Typed agents and tools in TypeScript, Rust, Scala, or MoonBit. State persists across failures, tool calls fire exactly once, and your code harnesses the model.",
+  lead: "Typed agents in TypeScript, Rust, Scala, or MoonBit. State survives crashes and redeploys. Tool calls never fire twice. Your code — not the LLM — decides what's allowed.",
   defaultLang: "typescript" as const,
   tabs: [
     { id: "typescript", label: "TypeScript", filename: "orders-agent.ts", lang: "typescript" },
@@ -54,7 +54,7 @@ export default Orders.implement({
   init: () => ({ history: [] as Message[] }),
   methods: {
     async handle({ request, orderId }) {
-      // Durable in-memory state — survives crashes, deploys, host migrations
+      // No DB writes — this push survives crashes, deploys, host migrations
       this.history.push({ role: 'user', content: request })
 
       // LLM sees full conversation; system prompt comes from typed config
@@ -66,9 +66,10 @@ export default Orders.implement({
 
       // Refunds aren't in the LLM's toolset — agent code gates them via HITL
       if (outcome.needsRefund) {
+        // This await can sit for days at zero cost — no queue, no cron, no state table
         const { approved } = await webhooks.awaitApproval(outcome)
         if (approved) {
-          // Transactional — refund executes exactly once, even through crashes or restarts
+          // Crash, retry, restart — still one charge. No silent double-charges.
           const result = await refundOrder({ orderId, amount: outcome.refundAmount })
           this.history.push({ role: 'tool', content: JSON.stringify(result) })
         }
@@ -91,7 +92,7 @@ struct OrdersImpl { config: Config<OrdersConfig>, history: Vec<Message> }
 #[agent_implementation]
 impl Orders for OrdersImpl {
     async fn handle(&mut self, request: String, order_id: String) -> bool {
-        // Durable in-memory state — survives crashes, deploys, host migrations
+        // No DB writes — this push survives crashes, deploys, host migrations
         self.history.push(Message::user(request));
 
         // LLM sees full conversation; system prompt comes from typed config
@@ -103,9 +104,10 @@ impl Orders for OrdersImpl {
 
         // Refunds aren't in the LLM's toolset — agent code gates them via HITL
         if outcome.needs_refund {
+            // This await can sit for days at zero cost — no queue, no cron, no state table
             let approval = create_webhook().await.json::<Approval>();
             if approval.approved {
-                // Transactional — refund executes exactly once, even through crashes or restarts
+                // Crash, retry, restart — still one charge. No silent double-charges.
                 let result = refund_order(order_id, outcome.refund_amount).await;
                 self.history.push(Message::tool(result.to_string()));
             }
@@ -125,7 +127,7 @@ final class OrdersImpl(customerId: String, config: Config[OrdersConfig]) extends
   private var history: Vector[Message] = Vector.empty
 
   override def handle(request: String, orderId: String): Future[Boolean] = Future:
-    // Durable in-memory state — survives crashes, deploys, host migrations
+    // No DB writes — this push survives crashes, deploys, host migrations
     history = history :+ Message("user", request)
 
     // LLM sees full conversation; system prompt comes from typed config
@@ -136,9 +138,10 @@ final class OrdersImpl(customerId: String, config: Config[OrdersConfig]) extends
 
     // Refunds aren't in the LLM's toolset — agent code gates them via HITL
     if outcome.needsRefund then
+      // This await can sit for days at zero cost — no queue, no cron, no state table
       val approval = HostApi.createWebhook().await.json[Approval]()
       if approval.approved then
-        // Transactional — refund executes exactly once, even through crashes or restarts
+        // Crash, retry, restart — still one charge. No silent double-charges.
         val result = refundOrder(orderId, outcome.refundAmount).await
         history = history :+ Message("tool", result.toString)
     true`,
@@ -153,7 +156,7 @@ struct Orders {
 }
 
 pub fn Orders::handle(self : Self, request : String, order_id : String) -> Bool {
-  // Durable in-memory state — survives crashes, deploys, host migrations
+  // No DB writes — this push survives crashes, deploys, host migrations
   self.history.push({ role: "user", content: request })
 
   // LLM sees full conversation; system prompt comes from typed config
@@ -165,9 +168,10 @@ pub fn Orders::handle(self : Self, request : String, order_id : String) -> Bool 
 
   // Refunds aren't in the LLM's toolset — agent code gates them via HITL
   if outcome.needs_refund {
+    // This await can sit for days at zero cost — no queue, no cron, no state table
     let approval : Approval = @webhook.create().wait().json()
     if approval.approved {
-      // Transactional — refund executes exactly once, even through crashes or restarts
+      // Crash, retry, restart — still one charge. No silent double-charges.
       let result = refund_order(order_id, outcome.refund_amount)
       self.history.push({ role: "tool", content: result.to_json().stringify() })
     }
@@ -204,6 +208,7 @@ export const customerLogos = {
     { kind: "image", filename: "golem-social.png", alt: "Golem Social" },
     { kind: "image", filename: "warpmind.png", alt: "WarpMind" },
     { kind: "image", filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
+    { kind: "image", filename: "golem-journai.png", alt: "JournAI" },
   ] as CustomerLogo[],
 };
 
@@ -223,7 +228,7 @@ export const commitments: Commitment[] = [
   {
     id: "persists-state",
     icon: "journal",
-    title: "Persists state.",
+    title: "Automatically persists state.",
     paragraphsHtml: [
       `State changes and effects are captured automatically, without serialization, state machines, or annotations. Agents suspend for days or weeks at zero compute and zero memory cost, resuming with the same memory, locals, and call stack.`,
     ],
@@ -234,7 +239,7 @@ export const commitments: Commitment[] = [
     icon: "exchange",
     title: "Executes transactionally.",
     paragraphsHtml: [
-      `Agent logic, tools, and inter-agent calls run exactly once — not "at-least-once with idempotency disclaimers." Transient failures retry without exiting your agent; any interruption — restart, redeploy, eviction, hardware fault — recovers with full state.`,
+      `Code keeps running exactly once through any interruption, as if nothing happened. A tool call that crashed mid-execution completes; a workflow paused for days picks up where it stopped. This is transactional code execution.`,
     ],
     closer: "Ship code that runs exactly once.",
   },
@@ -243,7 +248,7 @@ export const commitments: Commitment[] = [
     icon: "shield",
     title: "Enforces every policy.",
     paragraphsHtml: [
-      `Every agent and tool runs in its own WASM sandbox — millisecond startup, megabytes of memory — with capabilities that can't be forged or leaked<span class="marker">*</span>. Rate, capacity, and concurrency limits are runtime-enforced; every authorization is journaled.`,
+      `Every agent runs in its own WASM sandbox — its own filesystem, database, and env vars, millisecond startup. Tools, network, and files are explicit grants<span class="marker">*</span>; prompt injection can't escalate, quotas runtime-enforced, every grant journaled.`,
     ],
     closer: "Turn policies into guarantees.",
   },
@@ -338,7 +343,7 @@ export const bringStack = {
 };
 
 export const frameworks: string[] = [
-  "LangChain.js",
+  "OpenAI & Anthropic SDKs",
   "Vercel AI SDK",
   "TanStack AI",
   "Effect AI",
@@ -437,8 +442,8 @@ export const tableStakes = {
     },
     {
       icon: "⊜",
-      label: "Replay-driven evaluation",
-      note: "The oplog is your eval substrate, no separate harness",
+      label: "Complete audit log",
+      note: "Every action recorded and replayable — debug, eval, fine-tune on real data",
     },
     {
       icon: "⤧",
@@ -449,7 +454,7 @@ export const tableStakes = {
     {
       icon: "⛨",
       label: "Tool middleware",
-      note: "Polices and guardrails with irconglad guarantees",
+      note: "Policies and guardrails with ironclad guarantees",
       future: true,
     },
     {
@@ -490,7 +495,7 @@ export const customerStories = {
   testimonials: [
     {
       quote:
-        "Durable agents keep their state across crashes and restarts automatically. I write clean code instead of custom persistence and back-off logic.",
+        "I tried Akka event sourcing and Step Functions first. What I love about Golem is clean code — durable state and automatic retry built in.",
       name: "Peter Kotula",
       role: "Software Engineer",
       company: "Building Golem Social",
@@ -517,6 +522,15 @@ export const customerStories = {
         alt: "Seeta Ramayya Vadali",
       },
       productLogo: { filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
+    },
+    {
+      quote:
+        "For JournAI, I modeled log analysis as durable agents. Golem's guarantees around state, retries, and recovery let me focus on the logic, not the infrastructure.",
+      name: "Daniele Torelli",
+      role: "Senior Software Engineer",
+      company: "Building JournAI",
+      avatar: { filename: "daniele-torelli.png", alt: "Daniele Torelli" },
+      productLogo: { filename: "golem-journai.png", alt: "JournAI" },
     },
   ] as Testimonial[],
 };

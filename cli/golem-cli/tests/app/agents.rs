@@ -14,13 +14,12 @@ use golem_cli::model::GuestLanguage;
 use indoc::indoc;
 use std::io::Write;
 use std::path::Path;
-use test_r::{inherit_test_dep, tag, test};
+use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
 #[test]
-#[tag(group6)]
 async fn test_rust_counter() {
     let mut ctx = TestContext::new();
     let app_name = "counter";
@@ -76,7 +75,6 @@ async fn test_rust_counter() {
 }
 
 #[test]
-#[tag(group6)]
 async fn test_rust_code_first_with_rpc_and_all_types() {
     let mut ctx = TestContext::new();
 
@@ -451,7 +449,6 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 }
 
 #[test]
-#[tag(group4)]
 async fn test_ts_counter() {
     let mut ctx = TestContext::new();
     let app_name = "counter";
@@ -507,7 +504,6 @@ async fn test_ts_counter() {
 }
 
 #[test]
-#[tag(group4)]
 async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
     let mut ctx = TestContext::new();
     let app_name = "long-agent-id-rejected";
@@ -632,7 +628,6 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
 // (post type extraction). This test ensures such issues are caught automatically
 // and act as a regression-test.
 #[test]
-#[tag(group5)]
 async fn test_ts_code_first_with_rpc_and_all_types() {
     let mut ctx = TestContext::new();
 
@@ -906,7 +901,6 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 }
 
 #[test]
-#[tag(group4)]
 async fn test_component_env_var_substitution() {
     let mut ctx = TestContext::new();
     let app_name = "env-var-substitution";
@@ -977,7 +971,6 @@ async fn test_component_env_var_substitution() {
 }
 
 #[test]
-#[tag(group3)]
 async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     let mut ctx = TestContext::new();
     let app_name = "agent-id-casing-and-normalizing";
@@ -1095,7 +1088,6 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
 }
 
 #[test]
-#[tag(group5)]
 async fn test_naming_extremes() {
     let mut ctx = TestContext::new();
     let app_name = "test-naming-extremes";

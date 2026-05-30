@@ -34,7 +34,7 @@ trait TestContext: std::fmt::Debug + Send + Sync {
     fn case_config_path_segment(&self, segment: &str) -> String;
 }
 
-#[test_dep(tagged_as = "ts")]
+#[test_dep(scope = PerWorker, tagged_as = "ts")]
 fn test_context_ts() -> Arc<dyn TestContext> {
     #[derive(Debug)]
     struct TsTestContext;
@@ -57,7 +57,7 @@ fn test_context_ts() -> Arc<dyn TestContext> {
     Arc::new(TsTestContext)
 }
 
-#[test_dep(tagged_as = "rust")]
+#[test_dep(scope = PerWorker, tagged_as = "rust")]
 fn test_context_rust() -> Arc<dyn TestContext> {
     #[derive(Debug)]
     struct TsTestContext;

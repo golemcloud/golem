@@ -229,3 +229,8 @@ async whoAmI(principal: Principal): Promise<{ value: Principal }> {
 @endpoint({ get: '/data/{id}' })
 async getData(id: string, principal: Principal): Promise<Data> { ... }
 ```
+
+
+## Related Skills
+
+- Load `golem-add-http-endpoint-ts` for the high-level workflow of defining and mounting HTTP endpoints on an agent

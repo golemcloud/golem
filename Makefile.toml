@@ -34,6 +34,7 @@ skip_core_tasks = true       # we are not using the predefined cargo-make flows,
 [env]
 JUNIT_OPTS = ""
 WORKER_TEST_THREAD_OPTS = ""
+CLI_TEST_THREADS = "2"
 AWS_EC2_METADATA_DISABLED = "true"
 PROFILE = "dev"
 
@@ -43,6 +44,7 @@ CARGO_INCREMENTAL = "false"
 #CARGO_PROFILE_test_STRIP = "debuginfo"
 JUNIT_OPTS = "--format ctrf --logfile target/ctrf.json"
 WORKER_TEST_THREAD_OPTS = ""
+CLI_TEST_THREADS = "4"
 PROFILE = "dev-ci"
 CI = "true"
 # CARGO_LOG="cargo::core::compiler::fingerprint=trace"
@@ -196,6 +198,47 @@ args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
 private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-bins-all"] }]
+
+[tasks.build-cli-test-bins]
+dependencies = ["wit"]
+description = "Builds the golem and golem-cli binaries used by CLI integration tests"
+script_runner = "@duckscript"
+script = '''
+profile = get_env GOLEM_CLI_TEST_BIN_PROFILE
+profile_empty = is_empty ${profile}
+if ${profile_empty}
+    profile = set debug
+end
+
+debug_profile = eq ${profile} debug
+dev_ci_profile = eq ${profile} dev-ci
+dev_release_profile = eq ${profile} dev-release
+dev_release_ci_profile = eq ${profile} dev-release-ci
+
+if ${debug_profile}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    exec --fail-on-error cargo build -p golem --bin golem
+elseif ${dev_ci_profile}
+    exec --fail-on-error cargo build --profile dev-ci -p golem-cli --bin golem-cli
+    exec --fail-on-error cargo build --profile dev-ci -p golem --bin golem
+elseif ${dev_release_profile}
+    set_env GOLEM_BUILD_SKIP_SHADOW 1
+    exec --fail-on-error cargo build --profile dev-release -p golem-cli --bin golem-cli
+    exec --fail-on-error cargo build --profile dev-release -p golem --bin golem
+elseif ${dev_release_ci_profile}
+    set_env GOLEM_BUILD_SKIP_SHADOW 1
+    exec --fail-on-error cargo build --profile dev-release-ci -p golem-cli --bin golem-cli
+    exec --fail-on-error cargo build --profile dev-release-ci -p golem --bin golem
+else
+    echo "Unsupported GOLEM_CLI_TEST_BIN_PROFILE=${profile}. Expected 'debug', 'dev-ci', 'dev-release', or 'dev-release-ci'."
+    trigger_error unsupported-cli-test-bin-profile
+end
+'''
+
+[tasks.build-cli-test-bins-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-cli-test-bins"] }]
 
 [tasks.build-bins-non-ci]
 private = true
@@ -625,73 +668,21 @@ cargo-test-r run --package integration-tests --test integration :tag:group12 -- 
 '''
 
 [tasks.cli-integration-tests]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
 description = "Runs all CLI integration tests"
-dependencies = [
-    "cli-integration-tests-group1",
-    "cli-integration-tests-group2",
-    "cli-integration-tests-group3",
-    "cli-integration-tests-group4",
-    "cli-integration-tests-group5",
-    "cli-integration-tests-group6",
-]
-
-[tasks.cli-integration-tests-group1]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (1/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
-[tasks.cli-integration-tests-group2]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (2/3)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-group3]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (3)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-group4]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (4)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group4 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-group5]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (5)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group5 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-group6]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (6)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group6 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-'''
+[tasks.cli-integration-tests-dev-release]
+description = "Runs all CLI integration tests with dev-release golem and golem-cli binaries"
+env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
+run_task = "cli-integration-tests"
 
 [tasks.cli-integration-tests-update-golden-files]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1" }
 script_runner = "@duckscript"
 script = '''

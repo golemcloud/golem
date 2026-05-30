@@ -46,7 +46,7 @@ use url::Url;
 
 inherit_test_dep!(Arc<dyn SessionStore>);
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 fn oidc_handler(session_store: &Arc<dyn SessionStore>) -> Arc<OidcHandler> {
     Arc::new(OidcHandler::new(
         session_store.clone(),

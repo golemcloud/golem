@@ -21,9 +21,12 @@ const logosByFile = Object.fromEntries(
 
 const { eyebrow, heading, testimonials, showAtLaunch } = customerStories;
 const isFeatured = testimonials.length === 1;
-// 2 testimonials read better as a 2-up grid than a 3-col with an empty slot.
+// 2 testimonials → 2-up grid (avoids an empty slot in a 3-col).
+// 4 testimonials → reuses the 2-col grid, producing a clean 2x2 layout.
 const gridClass =
-  testimonials.length === 2 ? "stories-grid stories-grid-2" : "stories-grid";
+  testimonials.length === 2 || testimonials.length === 4
+    ? "stories-grid stories-grid-2"
+    : "stories-grid";
 ---
 
 {

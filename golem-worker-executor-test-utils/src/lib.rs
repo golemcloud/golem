@@ -138,7 +138,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -158,7 +158,40 @@ test_r::enable!();
 
 pub use golem_test_framework::dsl::PrecompiledComponent;
 
-/// Defines a `#[test_dep]` function that pre-warms the analysis cache for a
+/// A handle to either an owned `TempDir` (parent process) or a borrowed
+/// on-disk path (worker process).
+///
+/// Phase 3.4 makes [`WorkerExecutorTestDependencies`] a `Hosted` test-dep:
+/// the parent owns the live `TempDir`s and ships only their paths over to
+/// worker subprocesses through the `HostedDep` descriptor. Workers must
+/// **not** delete the parent's directories on drop. This wrapper exposes
+/// the same `path()` API in both cases while constraining `Drop` to the
+/// owner.
+pub enum TestTempDir {
+    /// Parent-owned: dropping this also removes the underlying directory.
+    Owned(TempDir),
+    /// Worker-borrowed: dropping this does NOT remove the underlying
+    /// directory. Lifetime is controlled by whichever process holds the
+    /// matching `Owned` value.
+    Borrowed(PathBuf),
+}
+
+impl TestTempDir {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Owned(td) => td.path(),
+            Self::Borrowed(p) => p.as_path(),
+        }
+    }
+}
+
+impl Debug for TestTempDir {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TestTempDir({:?})", self.path())
+    }
+}
+
+/// Defines a `#[test_dep(scope = Shared)]` function that pre-warms the analysis cache for a
 /// test component during test-r dependency initialization.
 ///
 /// Usage: `test_component!(function_name, "tag_name", "wasm_file_name", "package:name");`
@@ -169,7 +202,7 @@ pub use golem_test_framework::dsl::PrecompiledComponent;
 #[macro_export]
 macro_rules! test_component {
     ($fn_name:ident, $tag:expr, $wasm_name:expr, $package_name:expr) => {
-        #[test_dep(tagged_as = $tag)]
+        #[test_dep(scope = Shared, tagged_as = $tag)]
         pub async fn $fn_name(deps: &WorkerExecutorTestDependencies) -> PrecompiledComponent {
             tracing::info!(
                 "Pre-compiling test component '{}' (package: '{}')",
@@ -200,15 +233,36 @@ pub struct WorkerExecutorTestDependencies {
     pub component_writer: Arc<FileSystemComponentWriter>,
     pub initial_agent_files_service: Arc<InitialAgentFilesService>,
     pub component_directory: PathBuf,
-    pub component_temp_directory: Arc<TempDir>,
+    pub component_temp_directory: Arc<TestTempDir>,
     pub component_service_directory: PathBuf,
-    data_dir: Arc<TempDir>,
+    data_dir: Arc<TestTempDir>,
 }
 
 impl Debug for WorkerExecutorTestDependencies {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "WorkerExecutorTestDependencies")
     }
+}
+
+/// Wire format for the [`HostedDep`] descriptor of
+/// [`WorkerExecutorTestDependencies`].
+///
+/// The parent serialises this once after constructing the live owner;
+/// each spawned worker subprocess deserialises it and reconstructs an
+/// equivalent struct whose handles attach to the parent's resources
+/// (already-running Redis, on-disk caches, etc.) instead of spawning new
+/// ones. See [`WorkerExecutorTestDependencies::from_descriptor`] for the
+/// reconstruction logic.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WorkerExecutorTestDependenciesDescriptor {
+    redis_host: String,
+    redis_port: u16,
+    redis_prefix: String,
+    blob_storage_root: PathBuf,
+    component_directory: PathBuf,
+    component_service_directory: PathBuf,
+    component_temp_directory: PathBuf,
+    data_dir_path: PathBuf,
 }
 
 impl WorkerExecutorTestDependencies {
@@ -252,16 +306,225 @@ impl WorkerExecutorTestDependencies {
         let component_writer: Arc<FileSystemComponentWriter> =
             Arc::new(FileSystemComponentWriter::new(&component_service_directory).await);
 
+        // `FileSystemComponentWriter::new` `remove_dir_all`s the root and
+        // then only re-creates subdirectories lazily on the first component
+        // write. The `HostedDep::descriptor` impl below eagerly
+        // canonicalises `component_service_directory`, so we materialise
+        // the empty root here to keep `descriptor()` valid even before any
+        // test has written a component.
+        tokio::fs::create_dir_all(&component_service_directory)
+            .await
+            .unwrap();
+
         Self {
             redis,
             redis_monitor,
             component_directory,
             component_service_directory,
             component_writer,
-            initial_agent_files_service,
-            component_temp_directory: Arc::new(TempDir::new().unwrap()),
-            data_dir: Arc::new(data_dir),
+            initial_agent_files_service: initial_agent_files_service.clone(),
+            component_temp_directory: Arc::new(TestTempDir::Owned(TempDir::new().unwrap())),
+            data_dir: Arc::new(TestTempDir::Owned(data_dir)),
         }
+    }
+}
+
+impl test_r::core::HostedDep for WorkerExecutorTestDependencies {
+    fn descriptor(&self) -> Vec<u8> {
+        // Canonicalize every on-disk path before shipping it to workers:
+        // worker subprocesses may run with a different cwd than the parent
+        // (e.g. the runner's stamping), so the descriptor must not contain
+        // relative paths like `../test-components` (Phase 3.4 hardening
+        // from the oracle review).
+        fn canonical(path: &Path) -> PathBuf {
+            std::fs::canonicalize(path).unwrap_or_else(|e| {
+                panic!(
+                    "WorkerExecutorTestDependencies::descriptor: \
+                     cannot canonicalize {path:?}: {e}"
+                )
+            })
+        }
+
+        let descriptor = WorkerExecutorTestDependenciesDescriptor {
+            redis_host: self.redis.private_host().to_string(),
+            redis_port: self.redis.private_port(),
+            redis_prefix: self.redis.prefix().to_string(),
+            blob_storage_root: canonical(&self.blob_storage_root()),
+            component_directory: canonical(&self.component_directory),
+            component_service_directory: canonical(&self.component_service_directory),
+            component_temp_directory: canonical(self.component_temp_directory.path()),
+            data_dir_path: canonical(self.data_dir.path()),
+        };
+        serde_json::to_vec(&descriptor)
+            .expect("serializing WorkerExecutorTestDependenciesDescriptor must not fail")
+    }
+
+    fn from_descriptor(bytes: &[u8]) -> Self {
+        let descriptor: WorkerExecutorTestDependenciesDescriptor = serde_json::from_slice(bytes)
+            .expect("deserializing WorkerExecutorTestDependenciesDescriptor must not fail");
+
+        let redis: Arc<dyn Redis> = Arc::new(
+            golem_test_framework::components::redis::provided::ProvidedRedis::new(
+                descriptor.redis_host,
+                descriptor.redis_port,
+                descriptor.redis_prefix,
+            ),
+        );
+        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(
+            golem_test_framework::components::redis_monitor::provided::ProvidedRedisMonitor::new(),
+        );
+
+        // Worker side: attach to the parent's on-disk blob storage without
+        // touching its layout. `FileSystemBlobStorage::attach_existing` is
+        // sync (the parent already created the directory tree).
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::attach_existing(&descriptor.blob_storage_root)
+                .expect("attach to parent-prepared blob storage"),
+        );
+        let initial_agent_files_service =
+            Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
+
+        // Worker side: do NOT call `FileSystemComponentWriter::new` here —
+        // it would `remove_dir_all` the parent's already-warmed component
+        // store. Use `attach_existing` to reuse the parent's on-disk cache.
+        let component_writer: Arc<FileSystemComponentWriter> = Arc::new(
+            FileSystemComponentWriter::attach_existing(&descriptor.component_service_directory),
+        );
+
+        Self {
+            redis,
+            redis_monitor,
+            component_directory: descriptor.component_directory,
+            component_service_directory: descriptor.component_service_directory,
+            component_writer,
+            initial_agent_files_service,
+            component_temp_directory: Arc::new(TestTempDir::Borrowed(
+                descriptor.component_temp_directory,
+            )),
+            data_dir: Arc::new(TestTempDir::Borrowed(descriptor.data_dir_path)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod hosted_descriptor_tests {
+    use super::*;
+    use test_r::core::HostedDep;
+    use test_r::test;
+
+    /// Phase 3.4 regression: when a worker reconstructs
+    /// `WorkerExecutorTestDependencies` via `HostedDep::from_descriptor`
+    /// and the resulting struct is dropped, the parent's TempDirs must
+    /// survive. Dropping a borrowed `TestTempDir` is a no-op by
+    /// construction; this test pins that invariant.
+    #[test]
+    fn worker_side_drop_does_not_delete_parent_temp_dirs() {
+        // Stand in for the parent's data + component-temp directories.
+        let parent_data = TempDir::new().unwrap();
+        let parent_component_temp = TempDir::new().unwrap();
+        let blob_storage_root = parent_data.path().join("blobs");
+        let component_service_directory = parent_data.path().join("components");
+        std::fs::create_dir_all(&blob_storage_root).unwrap();
+        std::fs::create_dir_all(&component_service_directory).unwrap();
+
+        let descriptor = WorkerExecutorTestDependenciesDescriptor {
+            redis_host: "localhost".to_string(),
+            redis_port: 6379,
+            redis_prefix: "".to_string(),
+            blob_storage_root: blob_storage_root.clone(),
+            component_directory: Path::new("../test-components").to_path_buf(),
+            component_service_directory: component_service_directory.clone(),
+            component_temp_directory: parent_component_temp.path().to_path_buf(),
+            data_dir_path: parent_data.path().to_path_buf(),
+        };
+        let bytes = serde_json::to_vec(&descriptor).unwrap();
+
+        // Worker reconstructs and immediately drops.
+        {
+            let worker = WorkerExecutorTestDependencies::from_descriptor(&bytes);
+            // Borrowed temp-dir wrappers must point at the parent paths.
+            assert_eq!(worker.data_dir.path(), parent_data.path());
+            assert_eq!(
+                worker.component_temp_directory.path(),
+                parent_component_temp.path()
+            );
+            assert_eq!(worker.blob_storage_root(), blob_storage_root);
+            drop(worker);
+        }
+
+        // After the worker handle drops, the parent's directories must
+        // still exist — Borrowed must not delete on drop.
+        assert!(parent_data.path().exists(), "parent data_dir was removed");
+        assert!(
+            parent_component_temp.path().exists(),
+            "parent component_temp_directory was removed"
+        );
+        assert!(
+            blob_storage_root.exists(),
+            "parent blob storage root was removed"
+        );
+        assert!(
+            component_service_directory.exists(),
+            "parent component service directory was removed"
+        );
+    }
+
+    /// Phase 3.4 regression: `from_descriptor` must NOT call
+    /// `FileSystemComponentWriter::new()` because that would
+    /// `remove_dir_all` the parent's already-warmed component cache.
+    #[test]
+    fn worker_side_attach_does_not_destroy_component_service_directory() {
+        let parent_data = TempDir::new().unwrap();
+        let blob_storage_root = parent_data.path().join("blobs");
+        let component_service_directory = parent_data.path().join("components");
+        std::fs::create_dir_all(&blob_storage_root).unwrap();
+        std::fs::create_dir_all(&component_service_directory).unwrap();
+
+        // Sentinel file written by the "parent" warm-cache step.
+        let sentinel = component_service_directory.join("warmed.txt");
+        std::fs::write(&sentinel, b"warmed").unwrap();
+
+        let descriptor = WorkerExecutorTestDependenciesDescriptor {
+            redis_host: "localhost".to_string(),
+            redis_port: 6379,
+            redis_prefix: "".to_string(),
+            blob_storage_root,
+            component_directory: Path::new("../test-components").to_path_buf(),
+            component_service_directory: component_service_directory.clone(),
+            component_temp_directory: parent_data.path().join("ctemp"),
+            data_dir_path: parent_data.path().to_path_buf(),
+        };
+        std::fs::create_dir_all(&descriptor.component_temp_directory).unwrap();
+        let bytes = serde_json::to_vec(&descriptor).unwrap();
+
+        let _worker = WorkerExecutorTestDependencies::from_descriptor(&bytes);
+        // Sentinel must survive worker-side attach. If `from_descriptor`
+        // ever switches back to calling `FileSystemComponentWriter::new`,
+        // this assertion will fire because `new` deletes the root.
+        assert!(
+            sentinel.exists(),
+            "worker-side attach destroyed the parent's component cache"
+        );
+    }
+
+    /// Phase 3.4 hardening (oracle review): the worker-side
+    /// `FileSystemComponentWriter::attach_existing` must fail fast if the
+    /// parent-prepared directory does not exist, instead of silently
+    /// creating a fresh per-worker store on first write.
+    #[test]
+    fn attach_existing_fails_fast_when_component_dir_missing() {
+        use crate::component_writer::FileSystemComponentWriter;
+
+        let parent_data = TempDir::new().unwrap();
+        let missing = parent_data.path().join("never-prepared");
+
+        let result = std::panic::catch_unwind(|| {
+            FileSystemComponentWriter::attach_existing(&missing);
+        });
+        assert!(
+            result.is_err(),
+            "attach_existing must panic when {missing:?} does not exist"
+        );
     }
 }
 
@@ -347,15 +610,134 @@ impl TestWorkerExecutor {
     }
 }
 
+/// A single global, monotonically-increasing id allocator shared by
+/// every test-r worker in the suite.
+///
+/// Workers parameterise tests on [`LastUniqueId`] (a type alias for the
+/// auto-generated `UniqueIdsStub`); each call to `next()` round-trips via
+/// the IPC HostedRpc transport to the parent-hosted [`LastUniqueIdOwner`]
+/// and returns a fresh id. There is no per-worker partitioning anymore —
+/// uniqueness is enforced by the single shared `AtomicU64` in the parent.
+#[test_r::hosted_rpc]
+pub trait UniqueIds {
+    fn next(&self) -> u64;
+}
+
+/// Parent-side owner: lives in the top-level test process and serves
+/// [`UniqueIds::next`] calls from every worker subprocess.
+///
+/// Intentionally **does not** derive [`Default`]: the derived zero-value
+/// default would silently re-introduce `0` as the first id and break the
+/// "never returns 0" contract preserved from the previous
+/// `AtomicU16`-based shape. The manual `Default` impl below forwards to
+/// [`LastUniqueIdOwner::new`] so callers using either entry point get a
+/// counter that starts at `1`.
 #[derive(Debug)]
-pub struct LastUniqueId {
-    pub id: AtomicU16,
+pub struct LastUniqueIdOwner {
+    next_id: AtomicU64,
+}
+
+impl LastUniqueIdOwner {
+    pub fn new() -> Self {
+        Self {
+            next_id: AtomicU64::new(1),
+        }
+    }
+}
+
+impl Default for LastUniqueIdOwner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UniqueIds for LastUniqueIdOwner {
+    fn next(&self) -> u64 {
+        // Uniqueness is the only requirement — `Relaxed` is sufficient
+        // because every distinct `fetch_add` necessarily yields a
+        // distinct value, and HostedRpc dispatch is already serialised
+        // per-dep at the runtime level.
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+impl test_r::core::HostedRpcDep for LastUniqueIdOwner {
+    type Stub = UniqueIdsStub;
+
+    fn dispatch(&mut self, method_idx: u32, args: &[u8]) -> Result<Vec<u8>, String> {
+        UniqueIdsDispatch::dispatch_unique_ids(self, method_idx, args)
+    }
+
+    fn build_stub(channel: test_r::core::HostedRpcChannel) -> Self::Stub {
+        UniqueIdsStub::new(channel)
+    }
+}
+
+/// Public name kept stable for downstream tests; internally this is the
+/// macro-generated worker-side stub for the [`UniqueIds`] trait.
+///
+/// This is a type alias (not a wrapper), so:
+/// - `&LastUniqueId` parameters and `inherit_test_dep!(LastUniqueId)`
+///   downstream sites continue to compile unchanged.
+/// - `LastUniqueId::next` resolves through the [`UniqueIds`] trait, so
+///   callers in **other** crates that want to invoke it directly need
+///   `use golem_worker_executor_test_utils::UniqueIds;` in scope.
+/// - `Debug` output and panic messages will refer to the value as a
+///   `UniqueIdsStub`, not as `LastUniqueId`.
+pub type LastUniqueId = UniqueIdsStub;
+
+#[cfg(test)]
+mod last_unique_id_owner_tests {
+    use super::{LastUniqueIdOwner, UniqueIds};
+    use test_r::test;
+
+    /// Pin the "never returns 0" contract preserved from the previous
+    /// `AtomicU16`-based shape: the first id allocated by a fresh
+    /// owner must be `1`, not `0`.
+    #[test]
+    fn new_starts_at_one() {
+        let owner = LastUniqueIdOwner::new();
+        assert_eq!(
+            owner.next(),
+            1,
+            "first id from LastUniqueIdOwner::new() must be 1 to preserve the never-returns-0 contract"
+        );
+    }
+
+    /// Pin that the manual `Default` impl forwards to `new()`. If a
+    /// future refactor lets the derived `Default` slip back in, this
+    /// test fires because the derived default would yield `0` first.
+    #[test]
+    fn default_starts_at_one() {
+        let owner = <LastUniqueIdOwner as Default>::default();
+        assert_eq!(
+            owner.next(),
+            1,
+            "first id from LastUniqueIdOwner::default() must be 1; \
+             a derived Default would re-introduce 0 here"
+        );
+    }
+
+    /// Subsequent calls must produce distinct, monotonically increasing
+    /// ids. This is the core uniqueness contract.
+    #[test]
+    fn next_is_strictly_monotonic_and_unique() {
+        let owner = LastUniqueIdOwner::new();
+        let a = owner.next();
+        let b = owner.next();
+        let c = owner.next();
+        assert!(
+            a < b && b < c,
+            "ids must be strictly increasing: got {a}, {b}, {c}"
+        );
+        assert_ne!(a, 0, "no id may be 0");
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct TestContext {
     base_prefix: String,
-    unique_id: u16,
+    unique_id: u64,
 
     // account id to use during tests
     pub account_id: AccountId,
@@ -374,7 +756,7 @@ pub struct TestContext {
 impl TestContext {
     pub fn new(last_unique_id: &LastUniqueId) -> Self {
         let base_prefix = Uuid::new_v4().to_string();
-        let unique_id = last_unique_id.id.fetch_add(1, Ordering::Relaxed);
+        let unique_id = last_unique_id.next();
 
         let account_id = AccountId::new();
         let account_plan_id = PlanId::new();

@@ -112,10 +112,6 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Resource<WebSocketConnectionEntry>, Error>> {
         self.observe_function_call("golem:websocket/client", "connect");
 
-        // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem:websocket/client::connect")
-            .map_err(wasmtime::Error::from)?;
-
         let durability = Durability::<host_functions::WebsocketClientConnect>::new(
             self,
             DurableFunctionType::WriteRemote,
@@ -211,10 +207,6 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         message: Message,
     ) -> anyhow::Result<Result<(), Error>> {
         self.observe_function_call("golem:websocket/client", "send");
-
-        // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem:websocket/client::send")
-            .map_err(wasmtime::Error::from)?;
 
         let durability = Durability::<host_functions::WebsocketClientSend>::new(
             self,
@@ -521,10 +513,6 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), Error>> {
         self.observe_function_call("golem:websocket/client", "close");
 
-        // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem:websocket/client::close")
-            .map_err(wasmtime::Error::from)?;
-
         let durability = Durability::<host_functions::WebsocketClientClose>::new(
             self,
             DurableFunctionType::WriteRemote,
@@ -674,12 +662,10 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         return Ok(Ok(()));
     }
 
-    // Lazy reconnect of a replay-only entry is itself an outgoing websocket connection.
-    // If the invocation is restricted to read-only side effects, refuse it before we
-    // initiate the connect.
-    ctx.check_read_only_allows("golem:websocket/client::reconnect")
-        .map_err(wasmtime::Error::from)?;
-
+    // The read-only side-effect trap fires earlier: every caller of this helper
+    // (`send` / `receive` / `receive-with-timeout` / `close`) goes through
+    // `Durability::new` with `WriteRemote` first, which routes through
+    // `DurabilityHost::begin_durable_function` — the single central read-only guard.
     let request = match build_request(&info.url, info.headers.as_deref()) {
         Ok(request) => request,
         Err(err) => {

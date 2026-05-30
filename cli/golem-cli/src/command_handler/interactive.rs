@@ -16,7 +16,7 @@ use crate::app::template::AppTemplateName;
 use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::log::{LogColorize, log_warn, log_warn_action, logln};
+use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln};
 use crate::model::GuestLanguage;
 use crate::model::format::Format;
 use crate::model::worker::RawAgentId;
@@ -733,8 +733,11 @@ fn confirm<M: AsRef<str>>(
         Err(error) => {
             if is_interactive_not_available_inquire_error(&error) {
                 logln("\n\n");
-                log_warn(
-                    "The current input device is not an interactive one, defaulting to \"false\"",
+                log_error(
+                    "This action requires confirmation, but the current shell is non-interactive.",
+                );
+                log_error(
+                    "Re-run the same command with the '--yes' (or '-y') flag to auto-confirm.",
                 );
                 Ok(false)
             } else {

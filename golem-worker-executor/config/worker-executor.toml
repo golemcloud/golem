@@ -200,6 +200,11 @@ max_connections = 20
 [rdbms.query]
 query_batch = 50
 
+[read_only_cache]
+cache_capacity = 256
+cache_eviction_interval = "1m"
+max_entry_age = "2h"
+
 [registry_service]
 connect_timeout = "10s"
 host = "localhost"
@@ -531,6 +536,11 @@ without_time = false
 # [rdbms.query]
 # query_batch = 50
 # 
+# [read_only_cache]
+# cache_capacity = 256
+# cache_eviction_interval = "1m"
+# max_entry_age = "2h"
+# 
 # [registry_service]
 # connect_timeout = "10s"
 # host = "localhost"
@@ -831,6 +841,11 @@ without_time = false
 # 
 # [rdbms.query]
 # query_batch = 50
+# 
+# [read_only_cache]
+# cache_capacity = 256
+# cache_eviction_interval = "1m"
+# max_entry_age = "2h"
 # 
 # [registry_service]
 # connect_timeout = "10s"
