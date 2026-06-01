@@ -21,11 +21,14 @@ use crate::services::permission_share::{PermissionShareError, PermissionShareSer
 use chrono::Utc;
 use golem_common::model::account::{Account, AccountId, TokenRootCardEpoch};
 use golem_common::model::auth::{TokenId, TokenSecret};
-use golem_common::model::card::{CardId, CardManagedBy};
+use golem_common::model::card::{
+    Card, CardAlgebraError, CardId, CardManagedBy, EffectiveSurface, PermissionPattern,
+};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{
     AdminImpersonationAuthCtx, AuthCtx, GlobalAction, UserAuthCtx,
 };
+use golem_service_base::repo::RepoError;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tracing::warn;
@@ -55,6 +58,7 @@ error_forwarding!(
     AccountError,
     AccountRepoError,
     CardRepoError,
+    RepoError,
     PermissionShareError
 );
 
@@ -106,6 +110,7 @@ impl AuthService {
                 let token_root_card_id = self
                     .ensure_token_root_card(
                         target_account.id,
+                        target_account.email.as_str().to_string(),
                         target_account.account_root_card_id,
                         target_account.token_root_card_id,
                         target_account.token_root_card_epoch,
@@ -121,7 +126,7 @@ impl AuthService {
             }
             // Impersonation flow
             Some(admin_account_id) => {
-                // ensure the admin account is still alive and still has impersonation rights
+                // Ensure the admin account is still alive and still has impersonation rights
                 let admin_account: Account = self
                     .account_service
                     .get(admin_account_id, &AuthCtx::System)
@@ -153,6 +158,7 @@ impl AuthService {
                 let token_root_card_id = self
                     .ensure_token_root_card(
                         target_account.id,
+                        target_account.email.as_str().to_string(),
                         target_account.account_root_card_id,
                         target_account.token_root_card_id,
                         target_account.token_root_card_epoch,
@@ -173,7 +179,8 @@ impl AuthService {
     async fn ensure_token_root_card(
         &self,
         account_id: AccountId,
-        account_root_card_id: CardId,
+        mut account_holder: String,
+        mut account_root_card_id: CardId,
         snapshot_card_id: Option<CardId>,
         snapshot_epoch: TokenRootCardEpoch,
     ) -> Result<CardId, AuthError> {
@@ -183,35 +190,83 @@ impl AuthService {
 
         let mut expected_epoch = snapshot_epoch;
 
-        for attempt in 0..MAX_REDERIVE_ATTEMPTS {
-            if attempt > 0 {
-                let account = self
-                    .account_service
-                    .get(account_id, &AuthCtx::System)
-                    .await?;
+        for _ in 0..MAX_REDERIVE_ATTEMPTS {
+            let account_root_card: Card = self
+                .card_repo
+                .get(account_root_card_id)
+                .await?
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        "Account root card {} for account {} does not exist",
+                        account_root_card_id,
+                        account_id
+                    );
+                    AuthError::CouldNotAuthenticate
+                })?
+                .try_into()?;
 
-                if let Some(card_id) = account.token_root_card_id {
-                    return Ok(card_id);
-                }
+            let share_cards = self
+                .permission_share_service
+                .active_share_cards_for_target(account_id)
+                .await?;
 
-                expected_epoch = account.token_root_card_epoch;
+            let mut parent_ids = Vec::with_capacity(1 + share_cards.len());
+            parent_ids.push(account_root_card_id);
+            parent_ids.extend(share_cards.iter().map(|card| card.card_id));
+
+            let mut parent_cards = Vec::with_capacity(1 + share_cards.len());
+            parent_cards.push(account_root_card);
+            parent_cards.extend(share_cards);
+
+            let mut lower_positive = Vec::new();
+            let mut lower_negative = Vec::new();
+            let mut upper_positive = Vec::new();
+            let mut upper_negative = Vec::new();
+            for card in &parent_cards {
+                add_card_grants(
+                    &mut lower_positive,
+                    &mut lower_negative,
+                    &mut upper_positive,
+                    &mut upper_negative,
+                    card,
+                );
             }
 
-            let mut parent_ids = vec![account_root_card_id];
-            parent_ids.extend(
-                self.permission_share_service
-                    .active_share_cards_for_target(account_id)
-                    .await?
-                    .into_iter()
-                    .map(|card| card.card_id),
-            );
+            EffectiveSurface::from_cards(&parent_cards, &account_holder)
+                .and_then(|surface| surface.validates_derivation(&lower_positive, &upper_positive))
+                .map_err(|err| invalid_token_root_derivation(account_id, err))?;
 
             if let Some(card_id) = self
-                .insert_token_root_card(account_id, expected_epoch, parent_ids)
+                .insert_token_root_card(
+                    account_id,
+                    expected_epoch,
+                    parent_ids,
+                    lower_positive,
+                    lower_negative,
+                    upper_positive,
+                    upper_negative,
+                )
                 .await?
             {
                 return Ok(card_id);
             }
+
+            // Creating the card failed, refetch account to ensure we are working with up-to-date data on next loop.
+            // This will happen if a new permission share is concurrently created or invalidated
+
+            let account = self
+                .account_service
+                .get(account_id, &AuthCtx::System)
+                .await
+                .map_err(|_| AuthError::CouldNotAuthenticate)?;
+
+            if let Some(card_id) = account.token_root_card_id {
+                return Ok(card_id);
+            }
+
+            account_holder = account.email.as_str().to_string();
+            account_root_card_id = account.account_root_card_id;
+            expected_epoch = account.token_root_card_epoch;
         }
 
         Err(AuthError::InternalError(anyhow::anyhow!(
@@ -226,15 +281,19 @@ impl AuthService {
         account_id: AccountId,
         expected_epoch: TokenRootCardEpoch,
         parent_ids: Vec<CardId>,
+        lower_positive: Vec<PermissionPattern>,
+        lower_negative: Vec<PermissionPattern>,
+        upper_positive: Vec<PermissionPattern>,
+        upper_negative: Vec<PermissionPattern>,
     ) -> Result<Option<CardId>, AuthError> {
         let card_id = CardId(Uuid::now_v7());
         let card = CardRecord::creation(
             card_id,
             parent_ids,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
+            lower_positive,
+            lower_negative,
+            upper_positive,
+            upper_negative,
             None,
             true,
             Some(CardManagedBy::TokenRoot { account_id }),
@@ -245,11 +304,32 @@ impl AuthService {
             .insert_token_root_card(account_id.0, expected_epoch.into(), card)
             .await
         {
-            Ok(record) => Ok(record.map(|record| CardId(record.card_id))),
+            Ok(record) => Ok(Some(CardId(record.card_id))),
             Err(CardRepoError::ConcurrentModification | CardRepoError::ParentNotFound(_)) => {
                 Ok(None)
             }
             Err(err) => Err(err.into()),
         }
     }
+}
+
+fn add_card_grants(
+    lower_positive: &mut Vec<PermissionPattern>,
+    lower_negative: &mut Vec<PermissionPattern>,
+    upper_positive: &mut Vec<PermissionPattern>,
+    upper_negative: &mut Vec<PermissionPattern>,
+    card: &Card,
+) {
+    lower_positive.extend(card.lower_positive.clone());
+    lower_negative.extend(card.lower_negative.clone());
+    upper_positive.extend(card.upper_positive.clone());
+    upper_negative.extend(card.upper_negative.clone());
+}
+
+fn invalid_token_root_derivation(account_id: AccountId, err: CardAlgebraError) -> AuthError {
+    AuthError::InternalError(anyhow::anyhow!(
+        "Failed to validate token root card derivation for account {}: {:?}",
+        account_id,
+        err
+    ))
 }

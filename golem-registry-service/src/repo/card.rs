@@ -32,12 +32,14 @@ use uuid::Uuid;
 pub trait CardRepo: Send + Sync {
     async fn create(&self, card: CardRecord) -> Result<CardRecord, CardRepoError>;
 
+    async fn get(&self, card_id: CardId) -> Result<Option<CardRecord>, CardRepoError>;
+
     async fn insert_token_root_card(
         &self,
         account_id: Uuid,
         expected_epoch: i64,
         card: CardRecord,
-    ) -> Result<Option<CardRecord>, CardRepoError>;
+    ) -> Result<CardRecord, CardRepoError>;
 
     // Delete a card including all descendants. Returns ids of all deleted cards.
     async fn delete(
@@ -72,12 +74,19 @@ impl<Repo: CardRepo> CardRepo for LoggedCardRepo<Repo> {
         self.repo.create(card).instrument(span).await
     }
 
+    async fn get(&self, card_id: CardId) -> Result<Option<CardRecord>, CardRepoError> {
+        self.repo
+            .get(card_id)
+            .instrument(Self::span_card_id(card_id))
+            .await
+    }
+
     async fn insert_token_root_card(
         &self,
         account_id: Uuid,
         expected_epoch: i64,
         card: CardRecord,
-    ) -> Result<Option<CardRecord>, CardRepoError> {
+    ) -> Result<CardRecord, CardRepoError> {
         let span = Self::span_card_id(CardId(card.card_id));
 
         self.repo
@@ -271,14 +280,27 @@ impl CardRepo for DbCardRepo<PostgresPool> {
             .await
     }
 
+    async fn get(&self, card_id: CardId) -> Result<Option<CardRecord>, CardRepoError> {
+        self.with_ro("get")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT card_id, data, created_at, expires_at, system_card, managed_by
+                    FROM cards
+                    WHERE card_id = $1
+                "#})
+                .bind(card_id.0),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     async fn insert_token_root_card(
         &self,
         account_id: Uuid,
         expected_epoch: i64,
         record: CardRecord,
-    ) -> Result<Option<CardRecord>, CardRepoError> {
-        let result = self
-            .db_pool
+    ) -> Result<CardRecord, CardRepoError> {
+        self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "insert_token_root_card", |tx| {
                 Box::pin(async move {
                     let inserted = Self::create_in_tx(tx, record).await?;
@@ -307,13 +329,7 @@ impl CardRepo for DbCardRepo<PostgresPool> {
                     }
                 })
             })
-            .await;
-
-        match result {
-            Ok(card) => Ok(Some(card)),
-            Err(CardRepoError::ConcurrentModification) => Ok(None),
-            Err(err) => Err(err),
-        }
+            .await
     }
 
     async fn delete(
