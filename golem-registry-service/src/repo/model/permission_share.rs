@@ -15,6 +15,7 @@
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
+use golem_common::model::card::CardId;
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareData, PermissionShareId, PermissionShareName,
     PermissionShareRevision,
@@ -27,6 +28,8 @@ use uuid::Uuid;
 pub enum PermissionShareRepoError {
     #[error("There is already a permission share with this name")]
     ShareViolatesUniqueness,
+    #[error("Parent card {0} does not exist")]
+    ParentCardNotFound(CardId),
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error(transparent)]
@@ -113,7 +116,7 @@ impl PermissionShareRevisionRecord {
             permission_share_id: value.id.0,
             revision_id: value.revision.into(),
             name: value.name.0,
-            card_id: value.current_card_id,
+            card_id: value.current_card_id.map(|id| id.0),
             data: Blob::new(value.data.into()),
             audit,
         }
@@ -140,7 +143,7 @@ impl TryFrom<PermissionShareExtRevisionRecord> for PermissionShare {
             owner_account_id: AccountId(value.owner_account_id),
             target_account_id: AccountId(value.target_account_id),
             name: PermissionShareName(value.revision.name),
-            current_card_id: value.current_card_id,
+            current_card_id: value.current_card_id.map(CardId),
             data: value.revision.data.into_value().into(),
         })
     }

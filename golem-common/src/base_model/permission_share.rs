@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
+use crate::base_model::card::CardId;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use derive_more::Display;
-use uuid::Uuid;
 
 newtype_uuid!(PermissionShareId);
 
@@ -42,7 +42,7 @@ declare_structs! {
         pub owner_account_id: AccountId,
         pub target_account_id: AccountId,
         pub name: PermissionShareName,
-        pub current_card_id: Option<Uuid>,
+        pub current_card_id: Option<CardId>,
         pub data: PermissionShareData
     }
 

@@ -17,7 +17,7 @@ mod class;
 mod owner;
 mod parsing;
 mod pattern;
-mod recipient;
+pub mod recipient;
 mod types;
 
 #[cfg(test)]

@@ -97,6 +97,22 @@ macro_rules! define_matches_recipient_match {
 
 card_permission_classes!(define_matches_recipient_match);
 
+macro_rules! define_recipient_match {
+    ($($variant:ident: $class:ty,)+) => {
+        macro_rules! recipient_match {
+            ($self:expr) => {
+                match $self {
+                    $(
+                        Self::$variant(pattern) => &pattern.recipient,
+                    )+
+                }
+            };
+        }
+    };
+}
+
+card_permission_classes!(define_recipient_match);
+
 impl PermissionPattern {
     pub fn class_name(&self) -> &'static str {
         class_name_match!(self)
@@ -108,6 +124,10 @@ impl PermissionPattern {
 
     pub fn matches_recipient(&self, holder: &str) -> bool {
         matches_recipient_match!(self, holder)
+    }
+
+    pub fn recipient(&self) -> &crate::model::card::recipient::RecipientPattern {
+        recipient_match!(self)
     }
 }
 
