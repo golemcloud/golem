@@ -177,9 +177,9 @@ impl SdkOverrides {
                 let tools_path = sdk_path
                     .parent()
                     .map(|p| p.join("golem_sdk_tools"))
-                    .and_then(|p| p.to_str().map(|s| s.to_string()))
+                    .and_then(|p| fs::path_to_unix_str(&p).ok())
                     .unwrap_or_else(|| ".mooncakes/golemcloud/golem_sdk_tools".to_string());
-                format!("moon -C {tools_path} run cmd --")
+                format!("moon -C \"{tools_path}\" run cmd --")
             }
             None => "./.mooncakes/golemcloud/golem_sdk_tools/golem-sdk-tools".to_string(),
         }
