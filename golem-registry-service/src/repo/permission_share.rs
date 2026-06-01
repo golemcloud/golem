@@ -263,7 +263,7 @@ impl DbPermissionShareRepo<PostgresPool> {
             )
             .await
             .to_error_on_foreign_key_violation(
-                PermissionShareRepoError::ParentCardNotFound(CardId(*parent_id)),
+                PermissionShareRepoError::ParentCardNotFound(*parent_id),
             )?;
         }
 
@@ -320,15 +320,14 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                         .fetch_one_as(
                             sqlx::query_as(indoc! { r#"
                                 INSERT INTO permission_shares
-                                    (permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
-                                VALUES ($1, $2, $3, $4, $5, $6, $6, NULL, $7, $8)
-                                RETURNING permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                                    (permission_share_id, owner_account_id, target_account_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                                VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7)
+                                RETURNING permission_share_id, owner_account_id, target_account_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
                             "#})
                             .bind(revision.permission_share_id)
                             .bind(owner_account_id)
                             .bind(target_account_id)
                             .bind(&revision.name)
-                            .bind(Some(card.card_id))
                             .bind(&revision.audit.created_at)
                             .bind(revision.audit.created_by)
                             .bind(revision.revision_id),
@@ -347,7 +346,6 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                     Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
                         owner_account_id: share.owner_account_id,
                         target_account_id: share.target_account_id,
-                        current_card_id: share.current_card_id,
                         revision,
                     })
                 }
@@ -377,12 +375,11 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                         .fetch_optional_as(
                             sqlx::query_as(indoc! { r#"
                                 UPDATE permission_shares
-                                SET name = $1, current_card_id = $2, updated_at = $3, modified_by = $4, current_revision_id = $5
-                                WHERE permission_share_id = $6
-                                RETURNING permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                                SET name = $1, updated_at = $2, modified_by = $3, current_revision_id = $4
+                                WHERE permission_share_id = $5
+                                RETURNING permission_share_id, owner_account_id, target_account_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
                             "#})
                             .bind(&revision.name)
-                            .bind(Some(replacement_card.card_id))
                             .bind(&revision.audit.created_at)
                             .bind(revision.audit.created_by)
                             .bind(revision.revision_id)
@@ -406,7 +403,6 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                     Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
                         owner_account_id: share.owner_account_id,
                         target_account_id: share.target_account_id,
-                        current_card_id: share.current_card_id,
                         revision,
                     })
                 }
@@ -423,17 +419,18 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
         let result = self
             .db_pool
-            .with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
+                .with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
                 async move {
-                    let revision = Self::insert_revision(tx, revision).await?;
+                    let mut revision = Self::insert_revision(tx, revision).await?;
+                    let old_card_id = revision.card_id;
 
                     let share: PermissionShareRecord = tx
                         .fetch_optional_as(
                             sqlx::query_as(indoc! { r#"
                                 UPDATE permission_shares
-                                SET current_card_id = NULL, updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
+                                SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
                                 WHERE permission_share_id = $4
-                                RETURNING permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                                RETURNING permission_share_id, owner_account_id, target_account_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
                             "#})
                             .bind(&revision.audit.created_at)
                             .bind(revision.audit.created_by)
@@ -443,15 +440,15 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                         .await?
                         .ok_or(PermissionShareRepoError::ConcurrentModification)?;
 
-                    if let Some(old_card_id) = revision.card_id {
+                    if let Some(old_card_id) = old_card_id {
                         DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, CardId(old_card_id))
                             .await?;
+                        revision.card_id = None;
                     }
 
                     Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
                         owner_account_id: share.owner_account_id,
                         target_account_id: share.target_account_id,
-                        current_card_id: share.current_card_id,
                         revision,
                     })
                 }
@@ -469,7 +466,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT ps.owner_account_id, ps.target_account_id, ps.current_card_id,
+                    SELECT ps.owner_account_id, ps.target_account_id,
                            psr.permission_share_id, psr.revision_id, psr.name, psr.card_id, psr.data, psr.created_at, psr.created_by, psr.deleted
                     FROM permission_shares ps
                     JOIN permission_share_revisions psr
@@ -492,7 +489,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         self.with_ro("get_by_owner_and_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT ps.owner_account_id, ps.target_account_id, ps.current_card_id,
+                    SELECT ps.owner_account_id, ps.target_account_id,
                            psr.permission_share_id, psr.revision_id, psr.name, psr.card_id, psr.data, psr.created_at, psr.created_by, psr.deleted
                     FROM permission_shares ps
                     JOIN permission_share_revisions psr
@@ -516,7 +513,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         self.with_ro("get_for_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT ps.owner_account_id, ps.target_account_id, ps.current_card_id,
+                    SELECT ps.owner_account_id, ps.target_account_id,
                            psr.permission_share_id, psr.revision_id, psr.name, psr.card_id, psr.data, psr.created_at, psr.created_by, psr.deleted
                     FROM permission_shares ps
                     JOIN permission_share_revisions psr
@@ -539,7 +536,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         self.with_ro("get_for_target")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT ps.owner_account_id, ps.target_account_id, ps.current_card_id,
+                    SELECT ps.owner_account_id, ps.target_account_id,
                            psr.permission_share_id, psr.revision_id, psr.name, psr.card_id, psr.data, psr.created_at, psr.created_by, psr.deleted
                     FROM permission_shares ps
                     JOIN permission_share_revisions psr
@@ -564,10 +561,12 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT c.card_id, c.data, c.created_at, c.expires_at, c.system_card, c.managed_by
                     FROM permission_shares ps
-                    JOIN cards c ON c.card_id = ps.current_card_id
+                    JOIN permission_share_revisions psr
+                        ON psr.permission_share_id = ps.permission_share_id
+                       AND psr.revision_id = ps.current_revision_id
+                    JOIN cards c ON c.card_id = psr.card_id
                     WHERE ps.target_account_id = $1
                       AND ps.deleted_at IS NULL
-                      AND ps.current_card_id IS NOT NULL
                     ORDER BY ps.permission_share_id
                 "#})
                 .bind(target_account_id),

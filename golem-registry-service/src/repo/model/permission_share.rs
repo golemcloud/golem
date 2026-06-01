@@ -30,7 +30,7 @@ pub enum PermissionShareRepoError {
     #[error("There is already a permission share with this name")]
     ShareViolatesUniqueness,
     #[error("Parent card {0} does not exist")]
-    ParentCardNotFound(CardId),
+    ParentCardNotFound(Uuid),
     #[error("Card tree changed during deletion")]
     CardTreeChangedDuringDelete,
     #[error("Concurrent modification")]
@@ -88,7 +88,6 @@ pub struct PermissionShareRecord {
     pub owner_account_id: Uuid,
     pub target_account_id: Uuid,
     pub name: String,
-    pub current_card_id: Option<Uuid>,
 
     #[sqlx(flatten)]
     pub audit: AuditFields,
@@ -141,7 +140,6 @@ impl PermissionShareRevisionRecord {
 pub struct PermissionShareExtRevisionRecord {
     pub owner_account_id: Uuid,
     pub target_account_id: Uuid,
-    pub current_card_id: Option<Uuid>,
 
     #[sqlx(flatten)]
     pub revision: PermissionShareRevisionRecord,
@@ -157,7 +155,7 @@ impl TryFrom<PermissionShareExtRevisionRecord> for PermissionShare {
             owner_account_id: AccountId(value.owner_account_id),
             target_account_id: AccountId(value.target_account_id),
             name: PermissionShareName(value.revision.name),
-            current_card_id: value.current_card_id.map(CardId),
+            current_card_id: value.revision.card_id.map(CardId),
             data: value.revision.data.into_value().into(),
         })
     }
