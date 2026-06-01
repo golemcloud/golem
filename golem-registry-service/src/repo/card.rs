@@ -32,7 +32,7 @@ use uuid::Uuid;
 pub trait CardRepo: Send + Sync {
     async fn create(&self, card: CardRecord) -> Result<CardRecord, CardRepoError>;
 
-    // Delete a card including all descendents. Returns ids of all deleted cards.
+    // Delete a card including all descendants. Returns ids of all deleted cards.
     async fn delete(&self, card_id: CardId) -> RepoResult<RequiresNotificationSignal<Vec<CardId>>>;
 
     async fn existing(&self, card_ids: Vec<CardId>) -> RepoResult<Vec<CardId>>;
