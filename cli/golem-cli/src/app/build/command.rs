@@ -26,7 +26,7 @@ use crate::model::app_raw;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
 };
-use crate::process::{CommandExt, normalized_program_name, which};
+use crate::process::{CommandExt, normalized_program_name, resolve_command_for_execution, which};
 use anyhow::{Context as AnyhowContext, anyhow};
 use camino::Utf8Path;
 use golem_common::model::component::ComponentName;
@@ -397,9 +397,12 @@ pub async fn execute_external_command(
 
                 ensure_common_deps_for_tool(ctx, command_tokens[0].as_str()).await?;
 
-                let mut process = Command::new(which(command_tokens[0].as_str())?);
+                let resolved_command =
+                    resolve_command_for_execution(command_tokens[0].as_str(), Some(&build_dir))?;
+                let mut process = Command::new(resolved_command.program);
 
                 process
+                    .args(resolved_command.prefix_args)
                     .args(command_tokens.iter().skip(1))
                     .current_dir(&build_dir)
                     .envs(&command.env);
