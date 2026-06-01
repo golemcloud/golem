@@ -282,7 +282,7 @@ impl AccountService {
         };
 
         let email = account.email.into_inner();
-        let account_root_card = account_root_card_record(id, &email, &account.roles);
+        let account_root_card = account_root_card_record(id, &account.roles);
 
         let record = AccountRevisionRecord::new(
             id,
