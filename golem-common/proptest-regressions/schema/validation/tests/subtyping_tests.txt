@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 1dcba7d9689df84efde263984a07fefc10dc68d5b5008e5e187c19097c93d44c # shrinks to graph = SchemaGraph { defs: [SchemaTypeDef { id: TypeId("wbd931"), name: None, metadata: MetadataEnvelope { doc: None, aliases: [], examples: [], deprecated: None, role: None }, body: Ref(TypeId("wbd931")) }], root: Variant { cases: [VariantCaseType { name: "a", payload: Some(List { element: Text(TextRestrictions { languages: None, min_length: None, max_length: Some(14620), regex: Some("{\\*") }) }), metadata: MetadataEnvelope { doc: Some("<1jK"), aliases: ["o", "dp4"], examples: ["?\\N:", "\""], deprecated: None, role: None } }] } }
