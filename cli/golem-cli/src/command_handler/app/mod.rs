@@ -2164,6 +2164,10 @@ impl AppCommandHandler {
 
         log_action("Deployed", "all changes");
 
+        for warning in &result.validation_warnings {
+            log_warn(warning.to_string());
+        }
+
         self.ctx.log_handler().log_view(&DeploymentNewView {
             application_name: deploy_diff.environment.application_name.clone(),
             environment_name: deploy_diff.environment.environment_name.clone(),
@@ -2205,6 +2209,10 @@ impl AppCommandHandler {
             .map_service_error()?;
 
         log_action("Rolled back", "all changes");
+
+        for warning in &result.validation_warnings {
+            log_warn(warning.to_string());
+        }
 
         self.ctx.log_handler().log_view(&DeploymentNewView {
             application_name: rollback_diff.environment.application_name.clone(),

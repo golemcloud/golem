@@ -915,6 +915,14 @@ pub struct AgentInvocationOutput {
     pub consumed_fuel: Option<u64>,
     pub invocation_status: Option<InvocationStatus>,
     pub component_revision: Option<ComponentRevision>,
+    /// Oplog index of the agent right after this invocation completed. `None`
+    /// for synthetic outputs (e.g. lookup-only status responses) or for legacy
+    /// executors that did not report it.
+    pub oplog_index: Option<OplogIndex>,
+    /// Per-instance fingerprint of the agent that produced this invocation
+    /// result. `None` for synthetic outputs (e.g. lookup-only status responses)
+    /// or for legacy executors that did not report it.
+    pub agent_fingerprint: Option<AgentFingerprint>,
 }
 
 fn value_replay_equivalent(a: &Value, b: &Value) -> bool {

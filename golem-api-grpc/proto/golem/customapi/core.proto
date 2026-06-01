@@ -195,6 +195,7 @@ message RouteBehaviour {
     repeated MethodParameter method_parameters = 7;
     golem.component.DataSchema expected_agent_response = 8;
     optional string method_description = 9;
+    optional golem.component.ReadOnlyConfig read_only = 10;
   }
 
   message CorsPreflight {

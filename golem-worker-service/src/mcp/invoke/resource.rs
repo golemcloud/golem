@@ -429,6 +429,8 @@ mod tests {
             consumed_fuel: None,
             invocation_status: None,
             component_revision: None,
+            oplog_index: None,
+            agent_fingerprint: None,
         });
         let resource = AgentMcpResource {
             kind: AgentMcpResourceKind::Static(Annotated::new(

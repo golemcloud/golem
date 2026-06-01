@@ -255,12 +255,14 @@ impl DeploymentWriteService {
         }
 
         let mut errors = Vec::new();
+        let mut warnings: Vec<super::DeployValidationWarning> = Vec::new();
 
         if data.replace_incompatible_agent_secrets && compatibility_check_enabled {
             errors.push(DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
-        let compiled_routes = deployment_context.compile_http_api_routes(&mut errors);
+        let compiled_routes =
+            deployment_context.compile_http_api_routes(&mut errors, &mut warnings);
 
         let security_schemes_list = self
             .security_scheme_service
@@ -384,7 +386,8 @@ impl DeploymentWriteService {
             })?
             .signal_new_events_available(&self.registry_change_notifier);
 
-        let deployment: CurrentDeployment = ext_revision.try_into()?;
+        let mut deployment: CurrentDeployment = ext_revision.try_into()?;
+        deployment.validation_warnings = warnings;
 
         Ok(deployment)
     }

@@ -10774,6 +10774,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/OplogRegion'
+        lastOplogIndex:
+          description: |-
+            Latest known oplog index for this agent. Increases monotonically as
+            the agent executes and can be used as a revision marker for the
+            agent's persisted state.
+          default: 0
+          type: integer
+          format: uint64
+        fingerprint:
+          description: |-
+            Per-instance fingerprint for this agent: a random UUID generated at
+            agent creation, globally unique across recreations of the same
+            `AgentId`. Distinguishes a freshly-created agent from a previous,
+            now-deleted instance that shared the same `AgentId`.
+          type: string
+          format: uuid
       required:
       - agentId
       - environmentId
@@ -10792,6 +10808,7 @@ components:
       - activePlugins
       - skippedRegions
       - deletedRegions
+      - fingerprint
     AgentMethodInvocationParameters:
       title: AgentMethodInvocationParameters
       type: object
@@ -15649,6 +15666,15 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        validationWarnings:
+          description: |-
+            Non-fatal validation warnings produced while compiling the
+            deployment (e.g. read-only methods bound to non-`GET` HTTP verbs).
+            Empty when the deployment is clean.
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/DeployValidationWarning'
       required:
       - environmentId
       - revision
@@ -15696,6 +15722,40 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/NamedElementSchemas'
+    DeployValidationWarning:
+      discriminator:
+        propertyName: type
+        mapping:
+          HttpApiReadOnlyMethodBoundToNonGetVerb: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
+          HttpApiReadOnlyTtlBelowOneSecond: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
+      - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: HttpApiReadOnlyMethodBoundToNonGetVerb
+            type: string
+            enum:
+            - HttpApiReadOnlyMethodBoundToNonGetVerb
+        required:
+        - type
+      - $ref: '#/components/schemas/HttpApiReadOnlyMethodBoundToNonGetVerb'
+    DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: HttpApiReadOnlyTtlBelowOneSecond
+            type: string
+            enum:
+            - HttpApiReadOnlyTtlBelowOneSecond
+        required:
+        - type
+      - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
     DeployedRegisteredAgentType:
       title: DeployedRegisteredAgentType
       description: |-
@@ -16421,6 +16481,46 @@ components:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
       required:
       - currentRevision
+    HttpApiReadOnlyMethodBoundToNonGetVerb:
+      title: HttpApiReadOnlyMethodBoundToNonGetVerb
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        methodName:
+          type: string
+        httpMethod:
+          $ref: '#/components/schemas/HttpMethod'
+        path:
+          type: string
+      required:
+      - componentId
+      - agentType
+      - methodName
+      - httpMethod
+      - path
+    HttpApiReadOnlyTtlBelowOneSecond:
+      title: HttpApiReadOnlyTtlBelowOneSecond
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        methodName:
+          type: string
+        ttlNanos:
+          type: integer
+          format: uint64
+      required:
+      - componentId
+      - agentType
+      - methodName
+      - ttlNanos
     HttpEndpointDetails:
       title: HttpEndpointDetails
       type: object

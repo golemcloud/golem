@@ -14,6 +14,7 @@
 
 use crate::model::diff;
 
+pub use crate::base_model::deploy_validation_warning::*;
 pub use crate::base_model::deployment::*;
 
 impl From<CurrentDeployment> for Deployment {

@@ -26,6 +26,7 @@ pub use self::mcp::{DeployedMcpError, DeployedMcpService};
 pub use self::read::{DeploymentError, DeploymentService};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
 pub use self::write::{DeploymentWriteError, DeploymentWriteService};
+pub use golem_common::model::deployment::DeployValidationWarning;
 
 macro_rules! ok_or_continue {
     ($expr:expr, $errors:ident) => {{

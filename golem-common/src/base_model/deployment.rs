@@ -14,6 +14,7 @@
 
 use super::agent_secret::AgentSecretPath;
 use super::component::{ComponentId, ComponentName, ComponentRevision};
+use super::deploy_validation_warning::DeployValidationWarning;
 use super::diff::Hash;
 use super::domain_registration::Domain;
 use super::environment::EnvironmentId;
@@ -78,6 +79,13 @@ declare_structs! {
         pub deployment_hash: Hash,
 
         pub current_revision: CurrentDeploymentRevision,
+
+        /// Non-fatal validation warnings produced while compiling the
+        /// deployment (e.g. read-only methods bound to non-`GET` HTTP verbs).
+        /// Empty when the deployment is clean.
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub validation_warnings: Vec<DeployValidationWarning>,
     }
 
     pub struct DeploymentCreation {

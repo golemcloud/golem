@@ -161,6 +161,11 @@ message InvokeAgentSuccess {
   optional uint64 fuel_consumed = 2;
   optional uint64 component_revision = 3;
   optional golem.worker.InvocationStatus status = 4;
+  // Oplog index of the agent right after this invocation completed.
+  optional uint64 oplog_index = 5;
+  // Per-instance agent fingerprint (UUID) of the agent that produced this
+  // invocation result.
+  optional golem.common.UUID agent_fingerprint = 6;
 }
 
 message CancelInvocationRequest {

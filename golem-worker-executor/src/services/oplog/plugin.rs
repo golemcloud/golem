@@ -357,6 +357,8 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                         .regions()
                         .map(|region| region.clone().into())
                         .collect(),
+                    oplog_idx: u64::from(latest_status.oplog_idx),
+                    fingerprint: Some(worker_metadata.fingerprint.0.into()),
                 }
             };
             let proto_entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry> = entries
