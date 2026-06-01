@@ -24,35 +24,32 @@ use test_r::test;
 #[test]
 fn graph_to_markdown_includes_root_and_defs() {
     let user_id = TypeId::new("User");
-    let user_body = SchemaType::Record {
-        fields: vec![
-            NamedFieldType {
-                name: "id".to_string(),
-                body: SchemaType::U32,
-                metadata: MetadataEnvelope {
-                    doc: Some("Stable identifier".to_string()),
-                    ..Default::default()
-                },
+    let user_body = SchemaType::record(vec![
+        NamedFieldType {
+            name: "id".to_string(),
+            body: SchemaType::u32(),
+            metadata: MetadataEnvelope {
+                doc: Some("Stable identifier".to_string()),
+                ..Default::default()
             },
-            NamedFieldType {
-                name: "name".to_string(),
-                body: SchemaType::Text(TextRestrictions::default()),
-                metadata: Default::default(),
-            },
-        ],
-    };
+        },
+        NamedFieldType {
+            name: "name".to_string(),
+            body: SchemaType::text(TextRestrictions::default()),
+            metadata: Default::default(),
+        },
+    ]);
     let graph = SchemaGraph {
         defs: vec![SchemaTypeDef {
             id: user_id.clone(),
             name: Some("User".to_string()),
-            metadata: MetadataEnvelope {
+            body: user_body.with_metadata(MetadataEnvelope {
                 doc: Some("A user record.".to_string()),
                 examples: vec![r#"{ "id": 1, "name": { "text": "Ada" } }"#.to_string()],
                 ..Default::default()
-            },
-            body: user_body,
+            }),
         }],
-        root: SchemaType::Ref(user_id),
+        root: SchemaType::ref_to(user_id),
     };
     let md = graph_to_markdown(&graph, "Root");
     assert!(md.contains("## Root"));
@@ -73,16 +70,13 @@ fn root_ref_inlines_referenced_body_fields() {
         defs: vec![SchemaTypeDef {
             id: user_id.clone(),
             name: Some("Profile".to_string()),
-            metadata: Default::default(),
-            body: SchemaType::Record {
-                fields: vec![NamedFieldType {
-                    name: "handle".to_string(),
-                    body: SchemaType::String,
-                    metadata: Default::default(),
-                }],
-            },
+            body: SchemaType::record(vec![NamedFieldType {
+                name: "handle".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            }]),
         }],
-        root: SchemaType::Ref(user_id),
+        root: SchemaType::ref_to(user_id),
     };
     let md = graph_to_markdown(&graph, "InboundProfile");
     assert!(md.contains("## InboundProfile"));
@@ -96,11 +90,11 @@ fn root_ref_inlines_referenced_body_fields() {
 
 #[test]
 fn union_renders_branches_subsection() {
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "ssh".to_string(),
-                body: SchemaType::String,
+                body: SchemaType::string(),
                 discriminator: DiscriminatorRule::Prefix {
                     prefix: "ssh://".to_string(),
                 },
@@ -112,13 +106,11 @@ fn union_renders_branches_subsection() {
             },
             UnionBranch {
                 tag: "by_kind".to_string(),
-                body: SchemaType::Record {
-                    fields: vec![NamedFieldType {
-                        name: "kind".to_string(),
-                        body: SchemaType::String,
-                        metadata: Default::default(),
-                    }],
-                },
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "kind".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
                 discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name: "kind".to_string(),
                     literal: Some("custom".to_string()),

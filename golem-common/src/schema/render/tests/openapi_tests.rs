@@ -27,18 +27,15 @@ fn refs_are_rewritten_to_components_schemas() {
     let user_def = SchemaTypeDef {
         id: user_id.clone(),
         name: Some("User".to_string()),
-        metadata: Default::default(),
-        body: SchemaType::Record {
-            fields: vec![NamedFieldType {
-                name: "id".to_string(),
-                body: SchemaType::U32,
-                metadata: Default::default(),
-            }],
-        },
+        body: SchemaType::record(vec![NamedFieldType {
+            name: "id".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        }]),
     };
     let graph = SchemaGraph {
         defs: vec![user_def],
-        root: SchemaType::Ref(user_id.clone()),
+        root: SchemaType::ref_to(user_id.clone()),
     };
     let bundle = to_openapi_components(&graph, &graph.root);
     assert!(bundle["components"]["schemas"]["myapp.user"].is_object());
@@ -50,24 +47,22 @@ fn refs_are_rewritten_to_components_schemas() {
 
 #[test]
 fn root_schema_has_no_dollar_schema_keyword() {
-    let graph = SchemaGraph::anonymous(SchemaType::Bool);
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
     let bundle = to_openapi_components(&graph, &graph.root);
     assert!(bundle["root"].get("$schema").is_none());
 }
 
 #[test]
 fn union_branch_defs_are_emitted_as_components() {
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "a".to_string(),
-                body: SchemaType::Record {
-                    fields: vec![NamedFieldType {
-                        name: "kind".to_string(),
-                        body: SchemaType::String,
-                        metadata: Default::default(),
-                    }],
-                },
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "kind".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
                 discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name: "kind".to_string(),
                     literal: Some("a".to_string()),
@@ -76,13 +71,11 @@ fn union_branch_defs_are_emitted_as_components() {
             },
             UnionBranch {
                 tag: "b".to_string(),
-                body: SchemaType::Record {
-                    fields: vec![NamedFieldType {
-                        name: "kind".to_string(),
-                        body: SchemaType::String,
-                        metadata: Default::default(),
-                    }],
-                },
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "kind".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
                 discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name: "kind".to_string(),
                     literal: Some("b".to_string()),
@@ -114,20 +107,16 @@ fn nested_refs_inside_schemas_are_rewritten() {
     let user_def = SchemaTypeDef {
         id: user_id.clone(),
         name: None,
-        metadata: Default::default(),
-        body: SchemaType::U32,
+        body: SchemaType::u32(),
     };
     let group_def = SchemaTypeDef {
         id: group_id.clone(),
         name: None,
-        metadata: Default::default(),
-        body: SchemaType::List {
-            element: Box::new(SchemaType::Ref(user_id.clone())),
-        },
+        body: SchemaType::list(SchemaType::ref_to(user_id.clone())),
     };
     let graph = SchemaGraph {
         defs: vec![user_def, group_def.clone()],
-        root: SchemaType::Ref(group_id),
+        root: SchemaType::ref_to(group_id),
     };
     let bundle = to_openapi_components(&graph, &graph.root);
     let group_schema = &bundle["components"]["schemas"]["g"];

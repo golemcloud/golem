@@ -97,14 +97,14 @@ pub fn expand_enum_into_schema(
             fn register_in(builder: &mut #private::SchemaBuilder) -> #private::SchemaType {
                 let id = <Self as #private::IntoSchema>::type_id();
                 if builder.is_registered(&id) {
-                    return #private::SchemaType::Ref(id);
+                    return #private::SchemaType::ref_to(id);
                 }
                 builder.reserve(id.clone());
-                let body: #private::SchemaType = #private::SchemaType::Variant {
-                    cases: ::std::vec![ #( #case_tokens ),* ],
-                };
+                let body: #private::SchemaType = #private::SchemaType::variant(
+                    ::std::vec![ #( #case_tokens ),* ],
+                );
                 builder.commit(id.clone(), #display, #metadata, body);
-                #private::SchemaType::Ref(id)
+                #private::SchemaType::ref_to(id)
             }
 
             fn to_value(&self) -> #private::SchemaValue {
@@ -270,9 +270,9 @@ fn variant_case_token(info: &VariantInfo) -> TokenStream {
                 })
                 .collect();
             quote! {
-                ::core::option::Option::Some(#private::SchemaType::Tuple {
-                    elements: ::std::vec![ #( #elements ),* ],
-                })
+                ::core::option::Option::Some(#private::SchemaType::tuple(
+                    ::std::vec![ #( #elements ),* ],
+                ))
             }
         }
         PayloadShape::Record { fields } => {
@@ -293,9 +293,9 @@ fn variant_case_token(info: &VariantInfo) -> TokenStream {
                 })
                 .collect();
             quote! {
-                ::core::option::Option::Some(#private::SchemaType::Record {
-                    fields: ::std::vec![ #( #field_tokens ),* ],
-                })
+                ::core::option::Option::Some(#private::SchemaType::record(
+                    ::std::vec![ #( #field_tokens ),* ],
+                ))
             }
         }
     };

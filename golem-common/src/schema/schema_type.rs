@@ -17,6 +17,11 @@ use serde::{Deserialize, Serialize};
 
 /// One schema type in the recursive in-memory representation.
 ///
+/// Every variant carries a [`MetadataEnvelope`] so docs / aliases / examples /
+/// deprecation / role can attach to any node, not only to registered defs or
+/// named positions. Use [`SchemaType::metadata`] / [`SchemaType::metadata_mut`]
+/// for ergonomic access regardless of variant.
+///
 /// Recursive positions hold owned, boxed children (rather than indices) so
 /// consumers can walk and pattern-match the schema directly without chasing
 /// indices into a flat node list. The WIT-shaped flat form is reconstructed
@@ -37,78 +42,487 @@ use serde::{Deserialize, Serialize};
 pub enum SchemaType {
     /// Reference to a named definition in the enclosing
     /// [`super::SchemaGraph`].
-    Ref(TypeId),
+    Ref {
+        id: TypeId,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
 
     // Primitives
-    Bool,
-    S8,
-    S16,
-    S32,
-    S64,
-    U8,
-    U16,
-    U32,
-    U64,
-    F32,
-    F64,
-    Char,
-    String,
+    Bool {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    S8 {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    S16 {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    S32 {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    S64 {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    U8 {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    U16 {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    U32 {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    U64 {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    F32 {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    F64 {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    Char {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    String {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
 
     // Structural composites
     Record {
         fields: Vec<NamedFieldType>,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
     Variant {
         cases: Vec<VariantCaseType>,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
     Enum {
         cases: Vec<String>,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
     Flags {
         flags: Vec<String>,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
     Tuple {
         elements: Vec<SchemaType>,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
     List {
         element: Box<SchemaType>,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
     FixedList {
         element: Box<SchemaType>,
         length: u32,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
     Map {
         key: Box<SchemaType>,
         value: Box<SchemaType>,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
     Option {
         inner: Box<SchemaType>,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
-    Result(ResultSpec),
+    Result {
+        spec: ResultSpec,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
 
     // Rich semantic types
-    Text(TextRestrictions),
-    Binary(BinaryRestrictions),
-    Path(PathSpec),
-    Url(UrlRestrictions),
-    Datetime,
-    Duration,
-    Quantity(QuantitySpec),
+    Text {
+        restrictions: TextRestrictions,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    Binary {
+        restrictions: BinaryRestrictions,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    Path {
+        spec: PathSpec,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    Url {
+        restrictions: UrlRestrictions,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    Datetime {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    Duration {
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    Quantity {
+        spec: QuantitySpec,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
 
     // Discriminated union (closed, inferred-tag)
-    Union(UnionSpec),
+    Union {
+        spec: UnionSpec,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
 
     // Capability nodes
-    Secret(SecretSpec),
-    QuotaToken(QuotaTokenSpec),
+    Secret {
+        spec: SecretSpec,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
+    QuotaToken {
+        spec: QuotaTokenSpec,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
+    },
 
     // WASI P3 stubs (parseable only; no semantics yet).
     Future {
         inner: Option<Box<SchemaType>>,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
     Stream {
         inner: Option<Box<SchemaType>>,
+        #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
+        metadata: MetadataEnvelope,
     },
+}
+
+impl SchemaType {
+    /// Per-node metadata envelope (docs / aliases / examples / deprecation /
+    /// role). Always returns a reference; empty envelopes are the default.
+    pub fn metadata(&self) -> &MetadataEnvelope {
+        match self {
+            SchemaType::Ref { metadata, .. }
+            | SchemaType::Bool { metadata }
+            | SchemaType::S8 { metadata }
+            | SchemaType::S16 { metadata }
+            | SchemaType::S32 { metadata }
+            | SchemaType::S64 { metadata }
+            | SchemaType::U8 { metadata }
+            | SchemaType::U16 { metadata }
+            | SchemaType::U32 { metadata }
+            | SchemaType::U64 { metadata }
+            | SchemaType::F32 { metadata }
+            | SchemaType::F64 { metadata }
+            | SchemaType::Char { metadata }
+            | SchemaType::String { metadata }
+            | SchemaType::Record { metadata, .. }
+            | SchemaType::Variant { metadata, .. }
+            | SchemaType::Enum { metadata, .. }
+            | SchemaType::Flags { metadata, .. }
+            | SchemaType::Tuple { metadata, .. }
+            | SchemaType::List { metadata, .. }
+            | SchemaType::FixedList { metadata, .. }
+            | SchemaType::Map { metadata, .. }
+            | SchemaType::Option { metadata, .. }
+            | SchemaType::Result { metadata, .. }
+            | SchemaType::Text { metadata, .. }
+            | SchemaType::Binary { metadata, .. }
+            | SchemaType::Path { metadata, .. }
+            | SchemaType::Url { metadata, .. }
+            | SchemaType::Datetime { metadata }
+            | SchemaType::Duration { metadata }
+            | SchemaType::Quantity { metadata, .. }
+            | SchemaType::Union { metadata, .. }
+            | SchemaType::Secret { metadata, .. }
+            | SchemaType::QuotaToken { metadata, .. }
+            | SchemaType::Future { metadata, .. }
+            | SchemaType::Stream { metadata, .. } => metadata,
+        }
+    }
+
+    /// Mutable access to the per-node metadata envelope.
+    pub fn metadata_mut(&mut self) -> &mut MetadataEnvelope {
+        match self {
+            SchemaType::Ref { metadata, .. }
+            | SchemaType::Bool { metadata }
+            | SchemaType::S8 { metadata }
+            | SchemaType::S16 { metadata }
+            | SchemaType::S32 { metadata }
+            | SchemaType::S64 { metadata }
+            | SchemaType::U8 { metadata }
+            | SchemaType::U16 { metadata }
+            | SchemaType::U32 { metadata }
+            | SchemaType::U64 { metadata }
+            | SchemaType::F32 { metadata }
+            | SchemaType::F64 { metadata }
+            | SchemaType::Char { metadata }
+            | SchemaType::String { metadata }
+            | SchemaType::Record { metadata, .. }
+            | SchemaType::Variant { metadata, .. }
+            | SchemaType::Enum { metadata, .. }
+            | SchemaType::Flags { metadata, .. }
+            | SchemaType::Tuple { metadata, .. }
+            | SchemaType::List { metadata, .. }
+            | SchemaType::FixedList { metadata, .. }
+            | SchemaType::Map { metadata, .. }
+            | SchemaType::Option { metadata, .. }
+            | SchemaType::Result { metadata, .. }
+            | SchemaType::Text { metadata, .. }
+            | SchemaType::Binary { metadata, .. }
+            | SchemaType::Path { metadata, .. }
+            | SchemaType::Url { metadata, .. }
+            | SchemaType::Datetime { metadata }
+            | SchemaType::Duration { metadata }
+            | SchemaType::Quantity { metadata, .. }
+            | SchemaType::Union { metadata, .. }
+            | SchemaType::Secret { metadata, .. }
+            | SchemaType::QuotaToken { metadata, .. }
+            | SchemaType::Future { metadata, .. }
+            | SchemaType::Stream { metadata, .. } => metadata,
+        }
+    }
+
+    /// Replace this node's metadata envelope, returning `self` for chaining.
+    pub fn with_metadata(mut self, metadata: MetadataEnvelope) -> Self {
+        *self.metadata_mut() = metadata;
+        self
+    }
+
+    // --- Ergonomic constructors ------------------------------------------
+    //
+    // These default the metadata envelope to empty; callers that need
+    // metadata can chain `.with_metadata(env)`.
+
+    pub fn ref_to(id: TypeId) -> Self {
+        Self::Ref {
+            id,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn bool() -> Self {
+        Self::Bool {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn s8() -> Self {
+        Self::S8 {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn s16() -> Self {
+        Self::S16 {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn s32() -> Self {
+        Self::S32 {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn s64() -> Self {
+        Self::S64 {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn u8() -> Self {
+        Self::U8 {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn u16() -> Self {
+        Self::U16 {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn u32() -> Self {
+        Self::U32 {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn u64() -> Self {
+        Self::U64 {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn f32() -> Self {
+        Self::F32 {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn f64() -> Self {
+        Self::F64 {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn char() -> Self {
+        Self::Char {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn string() -> Self {
+        Self::String {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn datetime() -> Self {
+        Self::Datetime {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn duration() -> Self {
+        Self::Duration {
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn record(fields: Vec<NamedFieldType>) -> Self {
+        Self::Record {
+            fields,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn variant(cases: Vec<VariantCaseType>) -> Self {
+        Self::Variant {
+            cases,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn r#enum(cases: Vec<String>) -> Self {
+        Self::Enum {
+            cases,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn flags(flags: Vec<String>) -> Self {
+        Self::Flags {
+            flags,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn tuple(elements: Vec<SchemaType>) -> Self {
+        Self::Tuple {
+            elements,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn list(element: SchemaType) -> Self {
+        Self::List {
+            element: Box::new(element),
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn fixed_list(element: SchemaType, length: u32) -> Self {
+        Self::FixedList {
+            element: Box::new(element),
+            length,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn map(key: SchemaType, value: SchemaType) -> Self {
+        Self::Map {
+            key: Box::new(key),
+            value: Box::new(value),
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn option(inner: SchemaType) -> Self {
+        Self::Option {
+            inner: Box::new(inner),
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn result(spec: ResultSpec) -> Self {
+        Self::Result {
+            spec,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn text(restrictions: TextRestrictions) -> Self {
+        Self::Text {
+            restrictions,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn binary(restrictions: BinaryRestrictions) -> Self {
+        Self::Binary {
+            restrictions,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn path(spec: PathSpec) -> Self {
+        Self::Path {
+            spec,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn url(restrictions: UrlRestrictions) -> Self {
+        Self::Url {
+            restrictions,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn quantity(spec: QuantitySpec) -> Self {
+        Self::Quantity {
+            spec,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn union(spec: UnionSpec) -> Self {
+        Self::Union {
+            spec,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn secret(spec: SecretSpec) -> Self {
+        Self::Secret {
+            spec,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn quota_token(spec: QuotaTokenSpec) -> Self {
+        Self::QuotaToken {
+            spec,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn future(inner: Option<SchemaType>) -> Self {
+        Self::Future {
+            inner: inner.map(Box::new),
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+    pub fn stream(inner: Option<SchemaType>) -> Self {
+        Self::Stream {
+            inner: inner.map(Box::new),
+            metadata: MetadataEnvelope::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,8 +695,6 @@ pub struct SecretSpec {
     /// Optional categorisation (e.g., `"api-key"`, `"oauth-token"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
-    #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
-    pub metadata: MetadataEnvelope,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,6 +703,4 @@ pub struct QuotaTokenSpec {
     /// `None` = any resource permitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_name: Option<String>,
-    #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
-    pub metadata: MetadataEnvelope,
 }

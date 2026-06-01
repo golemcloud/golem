@@ -203,17 +203,11 @@ fn discriminator_rule() -> impl Strategy<Value = DiscriminatorRule> {
 }
 
 fn secret_spec() -> impl Strategy<Value = SecretSpec> {
-    (option::of(ident_strategy()), metadata_strategy())
-        .prop_map(|(category, metadata)| SecretSpec { category, metadata })
+    option::of(ident_strategy()).prop_map(|category| SecretSpec { category })
 }
 
 fn quota_token_spec() -> impl Strategy<Value = QuotaTokenSpec> {
-    (option::of(ident_strategy()), metadata_strategy()).prop_map(|(resource_name, metadata)| {
-        QuotaTokenSpec {
-            resource_name,
-            metadata,
-        }
-    })
+    option::of(ident_strategy()).prop_map(|resource_name| QuotaTokenSpec { resource_name })
 }
 
 /// Generator for one [`SchemaType`] case at a chosen depth budget.
@@ -230,41 +224,41 @@ fn schema_type_strategy(depth: u32, def_ids: Vec<TypeId>) -> impl Strategy<Value
 
 fn leaf_schema_type_strategy(def_ids: Vec<TypeId>) -> BoxedStrategy<SchemaType> {
     let mut leaves: Vec<BoxedStrategy<SchemaType>> = vec![
-        Just(SchemaType::Bool).boxed(),
-        Just(SchemaType::S8).boxed(),
-        Just(SchemaType::S16).boxed(),
-        Just(SchemaType::S32).boxed(),
-        Just(SchemaType::S64).boxed(),
-        Just(SchemaType::U8).boxed(),
-        Just(SchemaType::U16).boxed(),
-        Just(SchemaType::U32).boxed(),
-        Just(SchemaType::U64).boxed(),
-        Just(SchemaType::F32).boxed(),
-        Just(SchemaType::F64).boxed(),
-        Just(SchemaType::Char).boxed(),
-        Just(SchemaType::String).boxed(),
-        Just(SchemaType::Datetime).boxed(),
-        Just(SchemaType::Duration).boxed(),
-        text_restrictions().prop_map(SchemaType::Text).boxed(),
-        binary_restrictions().prop_map(SchemaType::Binary).boxed(),
-        path_spec().prop_map(SchemaType::Path).boxed(),
-        url_restrictions().prop_map(SchemaType::Url).boxed(),
-        quantity_spec().prop_map(SchemaType::Quantity).boxed(),
-        secret_spec().prop_map(SchemaType::Secret).boxed(),
-        quota_token_spec().prop_map(SchemaType::QuotaToken).boxed(),
+        Just(SchemaType::bool()).boxed(),
+        Just(SchemaType::s8()).boxed(),
+        Just(SchemaType::s16()).boxed(),
+        Just(SchemaType::s32()).boxed(),
+        Just(SchemaType::s64()).boxed(),
+        Just(SchemaType::u8()).boxed(),
+        Just(SchemaType::u16()).boxed(),
+        Just(SchemaType::u32()).boxed(),
+        Just(SchemaType::u64()).boxed(),
+        Just(SchemaType::f32()).boxed(),
+        Just(SchemaType::f64()).boxed(),
+        Just(SchemaType::char()).boxed(),
+        Just(SchemaType::string()).boxed(),
+        Just(SchemaType::datetime()).boxed(),
+        Just(SchemaType::duration()).boxed(),
+        text_restrictions().prop_map(SchemaType::text).boxed(),
+        binary_restrictions().prop_map(SchemaType::binary).boxed(),
+        path_spec().prop_map(SchemaType::path).boxed(),
+        url_restrictions().prop_map(SchemaType::url).boxed(),
+        quantity_spec().prop_map(SchemaType::quantity).boxed(),
+        secret_spec().prop_map(SchemaType::secret).boxed(),
+        quota_token_spec().prop_map(SchemaType::quota_token).boxed(),
         vec(ident_strategy(), 0..4)
-            .prop_map(|cases| SchemaType::Enum { cases })
+            .prop_map(SchemaType::r#enum)
             .boxed(),
         vec(ident_strategy(), 0..4)
-            .prop_map(|flags| SchemaType::Flags { flags })
+            .prop_map(SchemaType::flags)
             .boxed(),
-        Just(SchemaType::Future { inner: None }).boxed(),
-        Just(SchemaType::Stream { inner: None }).boxed(),
+        Just(SchemaType::future(None)).boxed(),
+        Just(SchemaType::stream(None)).boxed(),
     ];
     if !def_ids.is_empty() {
         leaves.push(
             proptest::sample::select(def_ids)
-                .prop_map(SchemaType::Ref)
+                .prop_map(SchemaType::ref_to)
                 .boxed(),
         );
     }
@@ -287,7 +281,7 @@ fn composite_schema_type_strategy(
             ),
             0..4
         )
-        .prop_map(|fields| SchemaType::Record { fields }),
+        .prop_map(SchemaType::record),
         // variant
         vec(
             (
@@ -302,30 +296,21 @@ fn composite_schema_type_strategy(
                 }),
             1..4
         )
-        .prop_map(|cases| SchemaType::Variant { cases }),
+        .prop_map(SchemaType::variant),
         // tuple
-        vec(inner.clone(), 0..4).prop_map(|elements| SchemaType::Tuple { elements }),
+        vec(inner.clone(), 0..4).prop_map(SchemaType::tuple),
         // list
-        inner.clone().prop_map(|t| SchemaType::List {
-            element: Box::new(t),
-        }),
+        inner.clone().prop_map(SchemaType::list),
         // fixed list
-        (inner.clone(), any::<u32>()).prop_map(|(t, length)| SchemaType::FixedList {
-            element: Box::new(t),
-            length,
-        }),
+        (inner.clone(), any::<u32>())
+            .prop_map(|(t, length)| SchemaType::fixed_list(t, length)),
         // map
-        (inner.clone(), inner.clone()).prop_map(|(k, v)| SchemaType::Map {
-            key: Box::new(k),
-            value: Box::new(v),
-        }),
+        (inner.clone(), inner.clone()).prop_map(|(k, v)| SchemaType::map(k, v)),
         // option
-        inner
-            .clone()
-            .prop_map(|t| SchemaType::Option { inner: Box::new(t) }),
+        inner.clone().prop_map(SchemaType::option),
         // result
         (option::of(inner.clone()), option::of(inner.clone())).prop_map(|(ok, err)| {
-            SchemaType::Result(ResultSpec {
+            SchemaType::result(ResultSpec {
                 ok: ok.map(Box::new),
                 err: err.map(Box::new),
             })
@@ -346,14 +331,10 @@ fn composite_schema_type_strategy(
                 }),
             1..4
         )
-        .prop_map(|branches| SchemaType::Union(UnionSpec { branches })),
+        .prop_map(|branches| SchemaType::union(UnionSpec { branches })),
         // future / stream with inner
-        inner.clone().prop_map(|t| SchemaType::Future {
-            inner: Some(Box::new(t)),
-        }),
-        inner.prop_map(|t| SchemaType::Stream {
-            inner: Some(Box::new(t)),
-        }),
+        inner.clone().prop_map(|t| SchemaType::future(Some(t))),
+        inner.prop_map(|t| SchemaType::stream(Some(t))),
     ]
     .boxed()
 }
@@ -502,8 +483,7 @@ pub fn schema_graph_strategy() -> impl Strategy<Value = SchemaGraph> {
                     .map(|(((id, name), metadata), body)| SchemaTypeDef {
                         id,
                         name,
-                        metadata,
-                        body,
+                        body: body.with_metadata(metadata),
                     })
                     .collect();
                 SchemaGraph { defs, root }

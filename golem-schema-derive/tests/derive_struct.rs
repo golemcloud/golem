@@ -37,18 +37,18 @@ fn struct_into_schema_emits_named_record() {
     assert!(def.name.is_some());
 
     match &def.body {
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             assert_eq!(
                 fields.as_slice(),
                 &[
                     NamedFieldType {
                         name: "a".to_string(),
-                        body: SchemaType::U32,
+                        body: SchemaType::u32(),
                         metadata: Default::default(),
                     },
                     NamedFieldType {
                         name: "b".to_string(),
-                        body: SchemaType::String,
+                        body: SchemaType::string(),
                         metadata: Default::default(),
                     },
                 ]
@@ -58,7 +58,7 @@ fn struct_into_schema_emits_named_record() {
     }
 
     match &graph.root {
-        SchemaType::Ref(id) => assert_eq!(id, &Foo::type_id()),
+        SchemaType::Ref { id, .. } => assert_eq!(id, &Foo::type_id()),
         other => panic!("expected ref root, got {other:?}"),
     }
 }
@@ -74,8 +74,11 @@ fn tuple_struct_into_schema_emits_tuple_body() {
 
     assert_eq!(graph.defs.len(), 1);
     match &graph.defs[0].body {
-        SchemaType::Tuple { elements } => {
-            assert_eq!(elements.as_slice(), &[SchemaType::U32, SchemaType::String]);
+        SchemaType::Tuple { elements, .. } => {
+            assert_eq!(
+                elements.as_slice(),
+                &[SchemaType::u32(), SchemaType::string()]
+            );
         }
         other => panic!("expected tuple body, got {other:?}"),
     }
@@ -90,9 +93,9 @@ fn unit_struct_into_schema_emits_empty_record() {
     let root = Marker::register_in(&mut builder);
     let graph = builder.into_graph(root);
 
-    assert!(matches!(graph.root, SchemaType::Ref(_)));
+    assert!(matches!(graph.root, SchemaType::Ref { .. }));
     assert_eq!(graph.defs.len(), 1);
-    assert!(matches!(&graph.defs[0].body, SchemaType::Record { fields } if fields.is_empty()));
+    assert!(matches!(&graph.defs[0].body, SchemaType::Record { fields, .. } if fields.is_empty()));
 }
 
 #[test]

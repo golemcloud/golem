@@ -35,7 +35,7 @@ fn enum_into_schema_emits_variant() {
 
     assert_eq!(graph.defs.len(), 1);
     match &graph.defs[0].body {
-        SchemaType::Variant { cases } => {
+        SchemaType::Variant { cases, .. } => {
             let expected = vec![
                 VariantCaseType {
                     name: "active".to_string(),
@@ -44,18 +44,16 @@ fn enum_into_schema_emits_variant() {
                 },
                 VariantCaseType {
                     name: "pending".to_string(),
-                    payload: Some(SchemaType::U32),
+                    payload: Some(SchemaType::u32()),
                     metadata: Default::default(),
                 },
                 VariantCaseType {
                     name: "failed".to_string(),
-                    payload: Some(SchemaType::Record {
-                        fields: vec![NamedFieldType {
-                            name: "reason".to_string(),
-                            body: SchemaType::String,
-                            metadata: Default::default(),
-                        }],
-                    }),
+                    payload: Some(SchemaType::record(vec![NamedFieldType {
+                        name: "reason".to_string(),
+                        body: SchemaType::string(),
+                        metadata: Default::default(),
+                    }])),
                     metadata: Default::default(),
                 },
             ];
@@ -78,11 +76,14 @@ fn enum_multi_tuple_variant_payload_is_tuple() {
     let graph = builder.into_graph(root);
 
     match &graph.defs[0].body {
-        SchemaType::Variant { cases } => {
+        SchemaType::Variant { cases, .. } => {
             let payload = cases[0].payload.as_ref().expect("first case has a payload");
             match payload {
-                SchemaType::Tuple { elements } => {
-                    assert_eq!(elements.as_slice(), &[SchemaType::U32, SchemaType::String]);
+                SchemaType::Tuple { elements, .. } => {
+                    assert_eq!(
+                        elements.as_slice(),
+                        &[SchemaType::u32(), SchemaType::string()]
+                    );
                 }
                 other => panic!("expected tuple payload, got {other:?}"),
             }

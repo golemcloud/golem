@@ -47,21 +47,22 @@ fn type_attributes_populate_metadata_and_typeid() {
         .find(|d| d.id == User::type_id())
         .expect("user def is present");
 
-    assert_eq!(def.metadata.doc.as_deref(), Some("A user record"));
-    assert_eq!(def.metadata.aliases, vec!["person".to_string()]);
+    let def_metadata = def.body.metadata();
+    assert_eq!(def_metadata.doc.as_deref(), Some("A user record"));
+    assert_eq!(def_metadata.aliases, vec!["person".to_string()]);
     assert_eq!(
-        def.metadata.examples,
+        def_metadata.examples,
         vec!["{\"name\": \"alice\"}".to_string()]
     );
-    assert_eq!(def.metadata.deprecated.as_deref(), Some("use V2"));
+    assert_eq!(def_metadata.deprecated.as_deref(), Some("use V2"));
     assert_eq!(def.name.as_deref(), Some("myapp.user"));
 
     match &def.body {
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             assert_eq!(fields[0].name, "name");
             assert_eq!(fields[0].metadata.doc.as_deref(), Some("Display name"));
             match &fields[0].body {
-                SchemaType::Text(restrictions) => {
+                SchemaType::Text { restrictions, .. } => {
                     assert_eq!(
                         restrictions,
                         &TextRestrictions {
@@ -108,7 +109,7 @@ fn field_rename_attribute_overrides_default_name() {
     let graph = try_into_schema_graph::<WithRename>().expect("graph should be well-formed");
     let def = &graph.defs[0];
     match &def.body {
-        SchemaType::Record { fields } => assert_eq!(fields[0].name, "real-name"),
+        SchemaType::Record { fields, .. } => assert_eq!(fields[0].name, "real-name"),
         other => panic!("expected record, got {other:?}"),
     }
 }
@@ -126,7 +127,7 @@ fn source_and_kind_attributes_are_accepted_and_ignored_today() {
     // `FieldSource` type.
     let graph = try_into_schema_graph::<Source>().expect("graph should be well-formed");
     match &graph.defs[0].body {
-        SchemaType::Record { fields } => assert_eq!(fields[0].name, "principal"),
+        SchemaType::Record { fields, .. } => assert_eq!(fields[0].name, "principal"),
         other => panic!("expected record, got {other:?}"),
     }
 }
@@ -142,7 +143,7 @@ fn role_attribute_populates_metadata_role() {
     let graph = try_into_schema_graph::<Multimodal>().expect("graph should be well-formed");
     let def = &graph.defs[0];
     assert_eq!(
-        def.metadata.role.as_ref().map(|r| format!("{r:?}")),
+        def.body.metadata().role.as_ref().map(|r| format!("{r:?}")),
         Some("Multimodal".to_string())
     );
 }
@@ -162,7 +163,7 @@ struct SnakeNames {
 fn rename_all_snake_case() {
     let graph = try_into_schema_graph::<SnakeNames>().expect("graph should be well-formed");
     match &graph.defs[0].body {
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             assert_eq!(fields[0].name, "foo_bar");
             assert_eq!(fields[1].name, "baz_qux");
         }
@@ -191,7 +192,7 @@ struct WithSkipped {
 fn skip_attribute_omits_field_from_schema_and_value() {
     let graph = try_into_schema_graph::<WithSkipped>().expect("graph should be well-formed");
     match &graph.defs[0].body {
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             // Skipped and defaulted fields don't appear in the schema.
             assert_eq!(fields.len(), 1);
             assert_eq!(fields[0].name, "keep");

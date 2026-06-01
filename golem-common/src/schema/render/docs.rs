@@ -44,19 +44,20 @@ pub fn graph_to_markdown(graph: &SchemaGraph, root_name: &str) -> String {
     let _ = writeln!(out);
 
     // Inline the body of a root `Ref(id)` so the root section shows the
-    // structure instead of just the pointer.
+    // structure instead of just the pointer. Metadata now lives on the
+    // body's own envelope (def has no separate metadata slot).
     let (root_body, root_metadata): (&SchemaType, MetadataEnvelope) = match &graph.root {
-        SchemaType::Ref(id) => match graph.lookup(id) {
-            Some(def) => (&def.body, def.metadata.clone()),
-            None => (&graph.root, MetadataEnvelope::default()),
+        SchemaType::Ref { id, .. } => match graph.lookup(id) {
+            Some(def) => (&def.body, def.body.metadata().clone()),
+            None => (&graph.root, graph.root.metadata().clone()),
         },
-        other => (other, MetadataEnvelope::default()),
+        other => (other, other.metadata().clone()),
     };
     section(&mut out, root_name, &root_metadata, graph, root_body);
 
     for def in &graph.defs {
         let title = def.name.clone().unwrap_or_else(|| def.id.0.clone());
-        section(&mut out, &title, &def.metadata, graph, &def.body);
+        section(&mut out, &title, def.body.metadata(), graph, &def.body);
     }
 
     out
@@ -81,7 +82,7 @@ fn section(
     let _ = writeln!(out);
 
     match body {
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             let _ = writeln!(out, "### Fields");
             let _ = writeln!(out);
             for field in fields {
@@ -91,14 +92,23 @@ fn section(
                     field.name,
                     type_to_cli_text(graph, &field.body)
                 );
-                if let Some(doc) = &field.metadata.doc {
+                // Prefer the field-level metadata doc; fall back to the
+                // inline body's metadata so inline-typed fields can still
+                // attach documentation.
+                let field_doc = field
+                    .metadata
+                    .doc
+                    .as_ref()
+                    .or(field.body.metadata().doc.as_ref());
+                if let Some(doc) = field_doc {
                     let _ = writeln!(out, "  - {doc}");
                 }
                 write_inline_examples(out, &field.metadata);
+                write_inline_examples(out, field.body.metadata());
             }
             let _ = writeln!(out);
         }
-        SchemaType::Variant { cases } => {
+        SchemaType::Variant { cases, .. } => {
             let _ = writeln!(out, "### Cases");
             let _ = writeln!(out);
             for case in cases {
@@ -106,7 +116,7 @@ fn section(
             }
             let _ = writeln!(out);
         }
-        SchemaType::Enum { cases } => {
+        SchemaType::Enum { cases, .. } => {
             let _ = writeln!(out, "### Cases");
             let _ = writeln!(out);
             for case in cases {
@@ -114,7 +124,7 @@ fn section(
             }
             let _ = writeln!(out);
         }
-        SchemaType::Flags { flags } => {
+        SchemaType::Flags { flags, .. } => {
             let _ = writeln!(out, "### Flags");
             let _ = writeln!(out);
             for flag in flags {
@@ -122,7 +132,7 @@ fn section(
             }
             let _ = writeln!(out);
         }
-        SchemaType::Union(spec) => {
+        SchemaType::Union { spec, .. } => {
             write_union_branches(out, graph, spec);
         }
         _ => {}

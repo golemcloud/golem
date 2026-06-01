@@ -64,7 +64,7 @@ proptest! {
         which in 0u8..3u8,
         rest in 0u32..100u32,
     ) {
-        let ty = SchemaType::Union(UnionSpec {
+        let ty = SchemaType::union(UnionSpec {
             branches: vec![
                 make_field_equals_branch("alpha", "a", "kind"),
                 make_field_equals_branch("beta", "b", "kind"),
@@ -95,20 +95,18 @@ proptest! {
 fn make_field_equals_branch(tag: &str, literal: &str, field_name: &str) -> UnionBranch {
     UnionBranch {
         tag: tag.to_string(),
-        body: SchemaType::Record {
-            fields: vec![
-                NamedFieldType {
-                    name: field_name.to_string(),
-                    body: SchemaType::String,
-                    metadata: Default::default(),
-                },
-                NamedFieldType {
-                    name: "value".to_string(),
-                    body: SchemaType::U32,
-                    metadata: Default::default(),
-                },
-            ],
-        },
+        body: SchemaType::record(vec![
+            NamedFieldType {
+                name: field_name.to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "value".to_string(),
+                body: SchemaType::u32(),
+                metadata: Default::default(),
+            },
+        ]),
         discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
             field_name: field_name.to_string(),
             literal: Some(literal.to_string()),
@@ -119,20 +117,18 @@ fn make_field_equals_branch(tag: &str, literal: &str, field_name: &str) -> Union
 
 #[test]
 fn record_renders_as_json_object() {
-    let ty = SchemaType::Record {
-        fields: vec![
-            NamedFieldType {
-                name: "id".to_string(),
-                body: SchemaType::U32,
-                metadata: Default::default(),
-            },
-            NamedFieldType {
-                name: "name".to_string(),
-                body: SchemaType::Text(TextRestrictions::default()),
-                metadata: Default::default(),
-            },
-        ],
-    };
+    let ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "id".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "name".to_string(),
+            body: SchemaType::text(TextRestrictions::default()),
+            metadata: Default::default(),
+        },
+    ]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let value = SchemaValue::Record {
         fields: vec![
@@ -151,13 +147,11 @@ fn record_renders_as_json_object() {
 
 #[test]
 fn variant_unit_case_renders_as_bare_string() {
-    let ty = SchemaType::Variant {
-        cases: vec![crate::schema::schema_type::VariantCaseType {
-            name: "ready".to_string(),
-            payload: None,
-            metadata: Default::default(),
-        }],
-    };
+    let ty = SchemaType::variant(vec![crate::schema::schema_type::VariantCaseType {
+        name: "ready".to_string(),
+        payload: None,
+        metadata: Default::default(),
+    }]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let value = SchemaValue::Variant(crate::schema::schema_value::VariantValuePayload {
         case: 0,
@@ -171,9 +165,9 @@ fn variant_unit_case_renders_as_bare_string() {
 
 #[test]
 fn shape_mismatch_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::S32);
-    let err =
-        to_json_value(&graph, &SchemaType::S32, &SchemaValue::Bool(true)).expect_err("should fail");
+    let graph = SchemaGraph::anonymous(SchemaType::s32());
+    let err = to_json_value(&graph, &SchemaType::s32(), &SchemaValue::Bool(true))
+        .expect_err("should fail");
     assert!(matches!(err, RenderError::ValueMismatch { .. }));
 }
 
@@ -181,13 +175,11 @@ fn shape_mismatch_is_reported() {
 
 #[test]
 fn record_decoder_rejects_extra_fields() {
-    let ty = SchemaType::Record {
-        fields: vec![NamedFieldType {
-            name: "id".to_string(),
-            body: SchemaType::U32,
-            metadata: Default::default(),
-        }],
-    };
+    let ty = SchemaType::record(vec![NamedFieldType {
+        name: "id".to_string(),
+        body: SchemaType::u32(),
+        metadata: Default::default(),
+    }]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let json = json!({ "id": 1, "extra": "nope" });
     let err = from_json_value(&graph, &ty, &json).expect_err("should fail");
@@ -196,9 +188,7 @@ fn record_decoder_rejects_extra_fields() {
 
 #[test]
 fn flags_decoder_rejects_duplicates() {
-    let ty = SchemaType::Flags {
-        flags: vec!["a".to_string(), "b".to_string()],
-    };
+    let ty = SchemaType::flags(vec!["a".to_string(), "b".to_string()]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let json = json!(["a", "a"]);
     let err = from_json_value(&graph, &ty, &json).expect_err("should fail");
@@ -207,9 +197,7 @@ fn flags_decoder_rejects_duplicates() {
 
 #[test]
 fn tuple_arity_mismatch_is_rejected() {
-    let ty = SchemaType::Tuple {
-        elements: vec![SchemaType::U32, SchemaType::String],
-    };
+    let ty = SchemaType::tuple(vec![SchemaType::u32(), SchemaType::string()]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let too_few = json!([1]);
     let too_many = json!([1, "x", true]);
@@ -219,10 +207,10 @@ fn tuple_arity_mismatch_is_rejected() {
 
 #[test]
 fn union_no_match_is_reported() {
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "t".to_string(),
-            body: SchemaType::String,
+            body: SchemaType::string(),
             discriminator: DiscriminatorRule::Prefix {
                 prefix: "x:".to_string(),
             },
@@ -240,14 +228,12 @@ fn union_ambiguous_match_is_reported() {
     // Two branches with the same `FieldEquals` rule overlap: validation
     // should normally catch this, but the runtime safety net activates here
     // because we build the graph directly.
-    let body_ty = SchemaType::Record {
-        fields: vec![NamedFieldType {
-            name: "k".to_string(),
-            body: SchemaType::String,
-            metadata: Default::default(),
-        }],
-    };
-    let ty = SchemaType::Union(UnionSpec {
+    let body_ty = SchemaType::record(vec![NamedFieldType {
+        name: "k".to_string(),
+        body: SchemaType::string(),
+        metadata: Default::default(),
+    }]);
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "a".to_string(),
@@ -280,10 +266,10 @@ fn union_encode_validates_branch_body() {
     // The encoded body of the chosen branch must satisfy the branch's
     // discriminator rule; constructing a value where it doesn't is an
     // encode error.
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "p".to_string(),
-            body: SchemaType::String,
+            body: SchemaType::string(),
             discriminator: DiscriminatorRule::Prefix {
                 prefix: "expected:".to_string(),
             },
@@ -301,11 +287,11 @@ fn union_encode_validates_branch_body() {
 
 #[test]
 fn union_decode_picks_prefix_branch() {
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "ssh".to_string(),
-                body: SchemaType::String,
+                body: SchemaType::string(),
                 discriminator: DiscriminatorRule::Prefix {
                     prefix: "ssh://".to_string(),
                 },
@@ -313,7 +299,7 @@ fn union_decode_picks_prefix_branch() {
             },
             UnionBranch {
                 tag: "https".to_string(),
-                body: SchemaType::String,
+                body: SchemaType::string(),
                 discriminator: DiscriminatorRule::Prefix {
                     prefix: "https://".to_string(),
                 },
@@ -333,11 +319,11 @@ fn union_decode_picks_prefix_branch() {
 
 #[test]
 fn union_decode_picks_suffix_branch() {
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "tar".to_string(),
-                body: SchemaType::String,
+                body: SchemaType::string(),
                 discriminator: DiscriminatorRule::Suffix {
                     suffix: ".tar.gz".to_string(),
                 },
@@ -345,7 +331,7 @@ fn union_decode_picks_suffix_branch() {
             },
             UnionBranch {
                 tag: "zip".to_string(),
-                body: SchemaType::String,
+                body: SchemaType::string(),
                 discriminator: DiscriminatorRule::Suffix {
                     suffix: ".zip".to_string(),
                 },
@@ -365,10 +351,10 @@ fn union_decode_picks_suffix_branch() {
 
 #[test]
 fn union_decode_picks_contains_branch() {
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "marker".to_string(),
-            body: SchemaType::String,
+            body: SchemaType::string(),
             discriminator: DiscriminatorRule::Contains {
                 substring: "@@".to_string(),
             },
@@ -387,10 +373,10 @@ fn union_decode_picks_contains_branch() {
 
 #[test]
 fn union_decode_picks_regex_branch() {
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "num".to_string(),
-            body: SchemaType::String,
+            body: SchemaType::string(),
             discriminator: DiscriminatorRule::Regex {
                 regex: "^[0-9]+$".to_string(),
             },
@@ -409,14 +395,12 @@ fn union_decode_picks_regex_branch() {
 
 #[test]
 fn union_decode_picks_field_equals_with_literal() {
-    let body = SchemaType::Record {
-        fields: vec![NamedFieldType {
-            name: "kind".to_string(),
-            body: SchemaType::String,
-            metadata: Default::default(),
-        }],
-    };
-    let ty = SchemaType::Union(UnionSpec {
+    let body = SchemaType::record(vec![NamedFieldType {
+        name: "kind".to_string(),
+        body: SchemaType::string(),
+        metadata: Default::default(),
+    }]);
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "left".to_string(),
@@ -452,17 +436,15 @@ fn union_decode_picks_field_equals_with_literal() {
 fn union_decode_picks_field_equals_without_literal() {
     // Two branches discriminated by presence of distinct fields (no
     // literals).
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "left".to_string(),
-                body: SchemaType::Record {
-                    fields: vec![NamedFieldType {
-                        name: "left_only".to_string(),
-                        body: SchemaType::String,
-                        metadata: Default::default(),
-                    }],
-                },
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "left_only".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
                 discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name: "left_only".to_string(),
                     literal: None,
@@ -471,13 +453,11 @@ fn union_decode_picks_field_equals_without_literal() {
             },
             UnionBranch {
                 tag: "right".to_string(),
-                body: SchemaType::Record {
-                    fields: vec![NamedFieldType {
-                        name: "right_only".to_string(),
-                        body: SchemaType::String,
-                        metadata: Default::default(),
-                    }],
-                },
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "right_only".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
                 discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name: "right_only".to_string(),
                     literal: None,
@@ -498,17 +478,15 @@ fn union_decode_picks_field_equals_without_literal() {
 
 #[test]
 fn union_decode_picks_field_absent_branch() {
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "with_kind".to_string(),
-                body: SchemaType::Record {
-                    fields: vec![NamedFieldType {
-                        name: "kind".to_string(),
-                        body: SchemaType::String,
-                        metadata: Default::default(),
-                    }],
-                },
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "kind".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
                 discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name: "kind".to_string(),
                     literal: None,
@@ -517,7 +495,7 @@ fn union_decode_picks_field_absent_branch() {
             },
             UnionBranch {
                 tag: "without_kind".to_string(),
-                body: SchemaType::Record { fields: vec![] },
+                body: SchemaType::record(vec![]),
                 discriminator: DiscriminatorRule::FieldAbsent {
                     field_name: "kind".to_string(),
                 },

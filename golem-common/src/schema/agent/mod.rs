@@ -31,8 +31,11 @@
 //! pair so receivers do not need an external schema registry to interpret
 //! the value tree.
 
-use crate::base_model::agent::AgentTypeName;
-use crate::schema::graph::TypedSchemaValue;
+use crate::base_model::agent::{
+    AgentConfigDeclaration, AgentMode, AgentTypeName, HttpEndpointDetails, HttpMountDetails,
+    Snapshotting,
+};
+use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::MetadataEnvelope;
 use crate::schema::schema_type::SchemaType;
 use serde::{Deserialize, Serialize};
@@ -181,6 +184,125 @@ impl ParsedAgentId {
             parameters,
             phantom_id,
         }
+    }
+}
+
+/// Constructor signature for an agent type, schema-layer form.
+///
+/// Mirrors the legacy `AgentConstructor`, with `input_schema` replaced by the
+/// new [`InputSchema`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentConstructorSchema {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_hint: Option<String>,
+    pub input_schema: InputSchema,
+}
+
+/// Method signature on an agent type, schema-layer form.
+///
+/// Mirrors the legacy `AgentMethod`, with `input_schema` / `output_schema`
+/// replaced by [`InputSchema`] / [`OutputSchema`]. Non-schema fields
+/// (`http_endpoint`) are carried verbatim from the legacy representation
+/// during the transition; they are not part of the schema layer's core
+/// concern.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentMethodSchema {
+    pub name: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_hint: Option<String>,
+    pub input_schema: InputSchema,
+    pub output_schema: OutputSchema,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub http_endpoint: Vec<HttpEndpointDetails>,
+}
+
+/// Dependent agent type, schema-layer form.
+///
+/// Owns its own [`SchemaGraph`] — a dependent agent is independently
+/// published, so it brings a self-contained graph rather than sharing a
+/// namespace with the parent agent. Constructor and method input/output
+/// bodies may use [`SchemaType::Ref`] resolving against `schema.defs`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentDependencySchema {
+    pub type_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Named-type registry shared by this dependency's constructor and
+    /// methods. Refs in those bodies resolve against this graph, not the
+    /// parent [`AgentTypeSchema::schema`]. Use [`SchemaGraph::empty`] when
+    /// there are no shared definitions to declare.
+    ///
+    /// The graph's `root` field is a placeholder (empty record) — only
+    /// `defs` is consumed by agent-layer helpers.
+    #[serde(default = "SchemaGraph::empty")]
+    pub schema: SchemaGraph,
+    pub constructor: AgentConstructorSchema,
+    pub methods: Vec<AgentMethodSchema>,
+}
+
+/// Full agent type declaration, schema-layer form.
+///
+/// Owns a per-agent [`SchemaGraph`] that is shared by this agent's
+/// constructor and methods. Shared types across methods become
+/// first-class named definitions referenced by [`SchemaType::Ref`]
+/// rather than duplicated inline subtrees.
+///
+/// Dependencies (`AgentDependencySchema`) each carry their own
+/// [`SchemaGraph`] — there is no cross-agent registry: two unrelated
+/// agents that coincidentally define a same-named type do not share
+/// definitions, and a dependency cannot reference defs from its parent
+/// agent's graph.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentTypeSchema {
+    pub type_name: AgentTypeName,
+    pub description: String,
+    #[serde(default)]
+    pub source_language: String,
+    /// Named-type registry shared by this agent's constructor and methods.
+    /// Each [`AgentDependencySchema`] in [`dependencies`](Self::dependencies)
+    /// carries its own independent registry; this field does not cover them.
+    /// Use [`SchemaGraph::empty`] when there are no shared definitions to
+    /// declare.
+    ///
+    /// The graph's `root` field is a placeholder (empty record) — only
+    /// `defs` is consumed by agent-layer helpers. The real roots are the
+    /// constructor and method input/output bodies.
+    #[serde(default = "SchemaGraph::empty")]
+    pub schema: SchemaGraph,
+    pub constructor: AgentConstructorSchema,
+    pub methods: Vec<AgentMethodSchema>,
+    pub dependencies: Vec<AgentDependencySchema>,
+    pub mode: AgentMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_mount: Option<HttpMountDetails>,
+    pub snapshotting: Snapshotting,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<AgentConfigDeclaration>,
+}
+
+impl AgentDependencySchema {
+    pub fn normalized(mut self) -> Self {
+        self.methods.sort_by(|a, b| a.name.cmp(&b.name));
+        self
+    }
+}
+
+impl AgentTypeSchema {
+    pub fn normalized(mut self) -> Self {
+        self.methods.sort_by(|a, b| a.name.cmp(&b.name));
+        self.dependencies
+            .sort_by(|a, b| a.type_name.cmp(&b.type_name));
+        self.dependencies = self
+            .dependencies
+            .into_iter()
+            .map(AgentDependencySchema::normalized)
+            .collect();
+        self.config.sort_by(|a, b| a.path.cmp(&b.path));
+        self
     }
 }
 

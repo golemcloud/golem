@@ -67,30 +67,56 @@ fn assignable(
 
     match (sub_resolved, sup_resolved) {
         // Primitives must match exactly.
-        (SchemaType::Bool, SchemaType::Bool)
-        | (SchemaType::S8, SchemaType::S8)
-        | (SchemaType::S16, SchemaType::S16)
-        | (SchemaType::S32, SchemaType::S32)
-        | (SchemaType::S64, SchemaType::S64)
-        | (SchemaType::U8, SchemaType::U8)
-        | (SchemaType::U16, SchemaType::U16)
-        | (SchemaType::U32, SchemaType::U32)
-        | (SchemaType::U64, SchemaType::U64)
-        | (SchemaType::F32, SchemaType::F32)
-        | (SchemaType::F64, SchemaType::F64)
-        | (SchemaType::Char, SchemaType::Char)
-        | (SchemaType::String, SchemaType::String)
-        | (SchemaType::Datetime, SchemaType::Datetime)
-        | (SchemaType::Duration, SchemaType::Duration) => true,
+        (SchemaType::Bool { .. }, SchemaType::Bool { .. })
+        | (SchemaType::S8 { .. }, SchemaType::S8 { .. })
+        | (SchemaType::S16 { .. }, SchemaType::S16 { .. })
+        | (SchemaType::S32 { .. }, SchemaType::S32 { .. })
+        | (SchemaType::S64 { .. }, SchemaType::S64 { .. })
+        | (SchemaType::U8 { .. }, SchemaType::U8 { .. })
+        | (SchemaType::U16 { .. }, SchemaType::U16 { .. })
+        | (SchemaType::U32 { .. }, SchemaType::U32 { .. })
+        | (SchemaType::U64 { .. }, SchemaType::U64 { .. })
+        | (SchemaType::F32 { .. }, SchemaType::F32 { .. })
+        | (SchemaType::F64 { .. }, SchemaType::F64 { .. })
+        | (SchemaType::Char { .. }, SchemaType::Char { .. })
+        | (SchemaType::String { .. }, SchemaType::String { .. })
+        | (SchemaType::Datetime { .. }, SchemaType::Datetime { .. })
+        | (SchemaType::Duration { .. }, SchemaType::Duration { .. }) => true,
 
-        (SchemaType::Text(a), SchemaType::Text(b)) => text_narrows(a, b),
-        (SchemaType::Binary(a), SchemaType::Binary(b)) => binary_narrows(a, b),
-        (SchemaType::Url(a), SchemaType::Url(b)) => url_narrows(a, b),
-        (SchemaType::Path(a), SchemaType::Path(b)) => path_narrows(a, b),
-        (SchemaType::Quantity(a), SchemaType::Quantity(b)) => quantity_narrows(a, b),
+        (
+            SchemaType::Text {
+                restrictions: a, ..
+            },
+            SchemaType::Text {
+                restrictions: b, ..
+            },
+        ) => text_narrows(a, b),
+        (
+            SchemaType::Binary {
+                restrictions: a, ..
+            },
+            SchemaType::Binary {
+                restrictions: b, ..
+            },
+        ) => binary_narrows(a, b),
+        (
+            SchemaType::Url {
+                restrictions: a, ..
+            },
+            SchemaType::Url {
+                restrictions: b, ..
+            },
+        ) => url_narrows(a, b),
+        (SchemaType::Path { spec: a, .. }, SchemaType::Path { spec: b, .. }) => path_narrows(a, b),
+        (SchemaType::Quantity { spec: a, .. }, SchemaType::Quantity { spec: b, .. }) => {
+            quantity_narrows(a, b)
+        }
 
         // Records: exact structural match (no width / reorder subtyping).
-        (SchemaType::Record { fields: a }, SchemaType::Record { fields: b }) => {
+        (
+            SchemaType::Record { fields: a, .. },
+            SchemaType::Record { fields: b, .. },
+        ) => {
             if a.len() != b.len() {
                 return false;
             }
@@ -100,7 +126,10 @@ fn assignable(
         }
 
         // Variants: exact case-name match, invariant on payload.
-        (SchemaType::Variant { cases: a }, SchemaType::Variant { cases: b }) => {
+        (
+            SchemaType::Variant { cases: a, .. },
+            SchemaType::Variant { cases: b, .. },
+        ) => {
             a.len() == b.len()
                 && a.iter().zip(b.iter()).all(|(ac, bc)| {
                     ac.name == bc.name
@@ -116,40 +145,52 @@ fn assignable(
         }
 
         // Enums: exact-match by case names.
-        (SchemaType::Enum { cases: a }, SchemaType::Enum { cases: b }) => a == b,
+        (SchemaType::Enum { cases: a, .. }, SchemaType::Enum { cases: b, .. }) => a == b,
 
         // Flags: exact-match.
-        (SchemaType::Flags { flags: a }, SchemaType::Flags { flags: b }) => a == b,
+        (SchemaType::Flags { flags: a, .. }, SchemaType::Flags { flags: b, .. }) => a == b,
 
         // Tuples: same length, depth-subtyping per element.
-        (SchemaType::Tuple { elements: a }, SchemaType::Tuple { elements: b }) => {
+        (
+            SchemaType::Tuple { elements: a, .. },
+            SchemaType::Tuple { elements: b, .. },
+        ) => {
             a.len() == b.len()
                 && a.iter()
                     .zip(b.iter())
                     .all(|(ae, be)| assignable(graph, ae, be, visited))
         }
 
-        (SchemaType::List { element: a }, SchemaType::List { element: b }) => {
-            assignable(graph, a, b, visited)
-        }
+        (
+            SchemaType::List { element: a, .. },
+            SchemaType::List { element: b, .. },
+        ) => assignable(graph, a, b, visited),
         (
             SchemaType::FixedList {
                 element: a,
                 length: na,
+                ..
             },
             SchemaType::FixedList {
                 element: b,
                 length: nb,
+                ..
             },
         ) => na == nb && assignable(graph, a, b, visited),
-        (SchemaType::Map { key: ak, value: av }, SchemaType::Map { key: bk, value: bv }) => {
-            assignable(graph, ak, bk, visited) && assignable(graph, av, bv, visited)
-        }
+        (
+            SchemaType::Map {
+                key: ak, value: av, ..
+            },
+            SchemaType::Map {
+                key: bk, value: bv, ..
+            },
+        ) => assignable(graph, ak, bk, visited) && assignable(graph, av, bv, visited),
 
-        (SchemaType::Option { inner: a }, SchemaType::Option { inner: b }) => {
-            assignable(graph, a, b, visited)
-        }
-        (SchemaType::Result(a), SchemaType::Result(b)) => {
+        (
+            SchemaType::Option { inner: a, .. },
+            SchemaType::Option { inner: b, .. },
+        ) => assignable(graph, a, b, visited),
+        (SchemaType::Result { spec: a, .. }, SchemaType::Result { spec: b, .. }) => {
             let ok_ok = match (&a.ok, &b.ok) {
                 (None, None) => true,
                 (Some(ax), Some(bx)) => assignable(graph, ax, bx, visited),
@@ -164,11 +205,14 @@ fn assignable(
         }
 
         // Capabilities are invariant on kind and on their typed spec.
-        (SchemaType::Secret(a), SchemaType::Secret(b)) => a == b,
-        (SchemaType::QuotaToken(a), SchemaType::QuotaToken(b)) => a == b,
+        (SchemaType::Secret { spec: a, .. }, SchemaType::Secret { spec: b, .. }) => a == b,
+        (
+            SchemaType::QuotaToken { spec: a, .. },
+            SchemaType::QuotaToken { spec: b, .. },
+        ) => a == b,
 
         // Unions: exact match by tag set and per-branch body assignability.
-        (SchemaType::Union(a), SchemaType::Union(b)) => {
+        (SchemaType::Union { spec: a, .. }, SchemaType::Union { spec: b, .. }) => {
             if a.branches.len() != b.branches.len() {
                 return false;
             }
@@ -186,15 +230,21 @@ fn assignable(
 
         // Same-id refs that could not be expanded further (dangling or
         // resolved to themselves) are assumed equal.
-        (SchemaType::Ref(a), SchemaType::Ref(b)) => a == b,
+        (SchemaType::Ref { id: a, .. }, SchemaType::Ref { id: b, .. }) => a == b,
 
         // Future / Stream stubs: same shape, optional inner type assignable.
-        (SchemaType::Future { inner: a }, SchemaType::Future { inner: b }) => match (a, b) {
+        (
+            SchemaType::Future { inner: a, .. },
+            SchemaType::Future { inner: b, .. },
+        ) => match (a, b) {
             (None, None) => true,
             (Some(ai), Some(bi)) => assignable(graph, ai, bi, visited),
             _ => false,
         },
-        (SchemaType::Stream { inner: a }, SchemaType::Stream { inner: b }) => match (a, b) {
+        (
+            SchemaType::Stream { inner: a, .. },
+            SchemaType::Stream { inner: b, .. },
+        ) => match (a, b) {
             (None, None) => true,
             (Some(ai), Some(bi)) => assignable(graph, ai, bi, visited),
             _ => false,
@@ -213,7 +263,7 @@ fn resolve<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> (&'a SchemaTyp
     let mut visited_ids: HashSet<TypeId> = HashSet::new();
     loop {
         match ty {
-            SchemaType::Ref(id) => {
+            SchemaType::Ref { id, .. } => {
                 if !visited_ids.insert(id.clone()) {
                     return (ty, Some(id.clone()));
                 }

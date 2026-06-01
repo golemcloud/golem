@@ -97,45 +97,49 @@ fn encode(
     value: &SchemaValue,
 ) -> Result<Value, RenderError> {
     match (ty, value) {
-        (SchemaType::Ref(_), _) => unreachable!("walker resolves refs"),
+        (SchemaType::Ref { .. }, _) => unreachable!("walker resolves refs"),
 
-        (SchemaType::Bool, SchemaValue::Bool(b)) => Ok(Value::Bool(*b)),
-        (SchemaType::S8, SchemaValue::S8(i)) => Ok(json_number_i64(*i as i64)),
-        (SchemaType::S16, SchemaValue::S16(i)) => Ok(json_number_i64(*i as i64)),
-        (SchemaType::S32, SchemaValue::S32(i)) => Ok(json_number_i64(*i as i64)),
-        (SchemaType::S64, SchemaValue::S64(i)) => Ok(json_number_i64(*i)),
-        (SchemaType::U8, SchemaValue::U8(u)) => Ok(json_number_u64(*u as u64)),
-        (SchemaType::U16, SchemaValue::U16(u)) => Ok(json_number_u64(*u as u64)),
-        (SchemaType::U32, SchemaValue::U32(u)) => Ok(json_number_u64(*u as u64)),
-        (SchemaType::U64, SchemaValue::U64(u)) => Ok(json_number_u64(*u)),
-        (SchemaType::F32, SchemaValue::F32(f)) => json_number_f64(*f as f64, &r.path),
-        (SchemaType::F64, SchemaValue::F64(f)) => json_number_f64(*f, &r.path),
-        (SchemaType::Char, SchemaValue::Char(c)) => Ok(Value::String(c.to_string())),
-        (SchemaType::String, SchemaValue::String(s)) => Ok(Value::String(s.clone())),
+        (SchemaType::Bool { .. }, SchemaValue::Bool(b)) => Ok(Value::Bool(*b)),
+        (SchemaType::S8 { .. }, SchemaValue::S8(i)) => Ok(json_number_i64(*i as i64)),
+        (SchemaType::S16 { .. }, SchemaValue::S16(i)) => Ok(json_number_i64(*i as i64)),
+        (SchemaType::S32 { .. }, SchemaValue::S32(i)) => Ok(json_number_i64(*i as i64)),
+        (SchemaType::S64 { .. }, SchemaValue::S64(i)) => Ok(json_number_i64(*i)),
+        (SchemaType::U8 { .. }, SchemaValue::U8(u)) => Ok(json_number_u64(*u as u64)),
+        (SchemaType::U16 { .. }, SchemaValue::U16(u)) => Ok(json_number_u64(*u as u64)),
+        (SchemaType::U32 { .. }, SchemaValue::U32(u)) => Ok(json_number_u64(*u as u64)),
+        (SchemaType::U64 { .. }, SchemaValue::U64(u)) => Ok(json_number_u64(*u)),
+        (SchemaType::F32 { .. }, SchemaValue::F32(f)) => json_number_f64(*f as f64, &r.path),
+        (SchemaType::F64 { .. }, SchemaValue::F64(f)) => json_number_f64(*f, &r.path),
+        (SchemaType::Char { .. }, SchemaValue::Char(c)) => Ok(Value::String(c.to_string())),
+        (SchemaType::String { .. }, SchemaValue::String(s)) => Ok(Value::String(s.clone())),
 
-        (SchemaType::Text(_), SchemaValue::Text(p)) => Ok(canonical::text::to_json(p)),
-        (SchemaType::Binary(_), SchemaValue::Binary(p)) => {
+        (SchemaType::Text { .. }, SchemaValue::Text(p)) => Ok(canonical::text::to_json(p)),
+        (SchemaType::Binary { .. }, SchemaValue::Binary(p)) => {
             canonical::binary::to_json(p).map_err(RenderError::from)
         }
-        (SchemaType::Path(_), SchemaValue::Path { path }) => {
+        (SchemaType::Path { .. }, SchemaValue::Path { path }) => {
             canonical::path::to_json(path).map_err(RenderError::from)
         }
-        (SchemaType::Url(_), SchemaValue::Url { url }) => {
+        (SchemaType::Url { .. }, SchemaValue::Url { url }) => {
             canonical::url::to_json(url).map_err(RenderError::from)
         }
-        (SchemaType::Datetime, SchemaValue::Datetime { value }) => {
+        (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
             canonical::datetime::to_json(value).map_err(RenderError::from)
         }
-        (SchemaType::Duration, SchemaValue::Duration(p)) => Ok(canonical::duration::to_json(p)),
-        (SchemaType::Quantity(_), SchemaValue::Quantity(q)) => Ok(canonical::quantity::to_json(q)),
-        (SchemaType::Secret(_), SchemaValue::Secret(p)) => {
+        (SchemaType::Duration { .. }, SchemaValue::Duration(p)) => {
+            Ok(canonical::duration::to_json(p))
+        }
+        (SchemaType::Quantity { .. }, SchemaValue::Quantity(q)) => {
+            Ok(canonical::quantity::to_json(q))
+        }
+        (SchemaType::Secret { .. }, SchemaValue::Secret(p)) => {
             canonical::secret::to_json(p).map_err(RenderError::from)
         }
-        (SchemaType::QuotaToken(_), SchemaValue::QuotaToken(p)) => {
+        (SchemaType::QuotaToken { .. }, SchemaValue::QuotaToken(p)) => {
             canonical::quota_token::to_json(p).map_err(RenderError::from)
         }
 
-        (SchemaType::Record { fields }, SchemaValue::Record { fields: vs }) => {
+        (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: vs }) => {
             if fields.len() != vs.len() {
                 return Err(r.mismatch(format!(
                     "record arity: expected {}, found {}",
@@ -153,7 +157,7 @@ fn encode(
             Ok(Value::Object(obj))
         }
 
-        (SchemaType::Variant { cases }, SchemaValue::Variant(vp)) => {
+        (SchemaType::Variant { cases, .. }, SchemaValue::Variant(vp)) => {
             let case_index = vp.case as usize;
             if case_index >= cases.len() {
                 return Err(r.mismatch(format!(
@@ -180,7 +184,7 @@ fn encode(
             }
         }
 
-        (SchemaType::Enum { cases }, SchemaValue::Enum { case }) => {
+        (SchemaType::Enum { cases, .. }, SchemaValue::Enum { case }) => {
             let idx = *case as usize;
             if idx >= cases.len() {
                 return Err(r.mismatch(format!(
@@ -192,7 +196,7 @@ fn encode(
             Ok(Value::String(cases[idx].clone()))
         }
 
-        (SchemaType::Flags { flags }, SchemaValue::Flags { bits }) => {
+        (SchemaType::Flags { flags, .. }, SchemaValue::Flags { bits }) => {
             if flags.len() != bits.len() {
                 return Err(r.mismatch(format!(
                     "flags arity: expected {}, found {}",
@@ -209,7 +213,7 @@ fn encode(
             Ok(Value::Array(selected))
         }
 
-        (SchemaType::Tuple { elements }, SchemaValue::Tuple { elements: vs }) => {
+        (SchemaType::Tuple { elements, .. }, SchemaValue::Tuple { elements: vs }) => {
             if elements.len() != vs.len() {
                 return Err(r.mismatch(format!(
                     "tuple arity: expected {}, found {}",
@@ -227,7 +231,7 @@ fn encode(
             Ok(Value::Array(out))
         }
 
-        (SchemaType::List { element }, SchemaValue::List { elements }) => {
+        (SchemaType::List { element, .. }, SchemaValue::List { elements }) => {
             let mut out = Vec::with_capacity(elements.len());
             for (i, ev) in elements.iter().enumerate() {
                 r.path.push(PathSegment::Index(i));
@@ -238,7 +242,12 @@ fn encode(
             Ok(Value::Array(out))
         }
 
-        (SchemaType::FixedList { element, length }, SchemaValue::FixedList { elements }) => {
+        (
+            SchemaType::FixedList {
+                element, length, ..
+            },
+            SchemaValue::FixedList { elements },
+        ) => {
             if elements.len() as u32 != *length {
                 return Err(r.mismatch(format!(
                     "fixed list length: expected {}, found {}",
@@ -256,7 +265,7 @@ fn encode(
             Ok(Value::Array(out))
         }
 
-        (SchemaType::Map { key, value }, SchemaValue::Map { entries }) => {
+        (SchemaType::Map { key, value, .. }, SchemaValue::Map { entries }) => {
             let mut out = Vec::with_capacity(entries.len());
             for (i, (k, v)) in entries.iter().enumerate() {
                 r.path.push(PathSegment::MapKey(i));
@@ -270,7 +279,7 @@ fn encode(
             Ok(Value::Array(out))
         }
 
-        (SchemaType::Option { inner }, SchemaValue::Option { inner: v }) => match v {
+        (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: v }) => match v {
             None => Ok(Value::Null),
             Some(inner_value) => {
                 r.path.push(PathSegment::OptionInner);
@@ -280,11 +289,11 @@ fn encode(
             }
         },
 
-        (SchemaType::Result(spec), SchemaValue::Result(payload)) => {
+        (SchemaType::Result { spec, .. }, SchemaValue::Result(payload)) => {
             encode_result(r, graph, spec, payload)
         }
 
-        (SchemaType::Union(spec), SchemaValue::Union(payload)) => {
+        (SchemaType::Union { spec, .. }, SchemaValue::Union(payload)) => {
             encode_union(r, graph, spec, payload)
         }
 
@@ -437,40 +446,40 @@ fn from_json_body(
     // scoped to the active stack of references, not the entire walk.
     let mut visited: HashSet<TypeId> = HashSet::new();
     match ty {
-        SchemaType::Ref(_) => unreachable!("ref resolved by resolve_ref"),
-        SchemaType::Bool => match json.as_bool() {
+        SchemaType::Ref { .. } => unreachable!("ref resolved by resolve_ref"),
+        SchemaType::Bool { .. } => match json.as_bool() {
             Some(b) => Ok(SchemaValue::Bool(b)),
             None => Err(mismatch(path, "expected JSON boolean".to_string())),
         },
-        SchemaType::S8 => {
+        SchemaType::S8 { .. } => {
             check_int_range::<i8>(json, path)?;
             Ok(SchemaValue::S8(json_i64(json, path)? as i8))
         }
-        SchemaType::S16 => {
+        SchemaType::S16 { .. } => {
             check_int_range::<i16>(json, path)?;
             Ok(SchemaValue::S16(json_i64(json, path)? as i16))
         }
-        SchemaType::S32 => {
+        SchemaType::S32 { .. } => {
             check_int_range::<i32>(json, path)?;
             Ok(SchemaValue::S32(json_i64(json, path)? as i32))
         }
-        SchemaType::S64 => Ok(SchemaValue::S64(json_i64(json, path)?)),
-        SchemaType::U8 => {
+        SchemaType::S64 { .. } => Ok(SchemaValue::S64(json_i64(json, path)?)),
+        SchemaType::U8 { .. } => {
             check_int_range::<u8>(json, path)?;
             Ok(SchemaValue::U8(json_u64(json, path)? as u8))
         }
-        SchemaType::U16 => {
+        SchemaType::U16 { .. } => {
             check_int_range::<u16>(json, path)?;
             Ok(SchemaValue::U16(json_u64(json, path)? as u16))
         }
-        SchemaType::U32 => {
+        SchemaType::U32 { .. } => {
             check_int_range::<u32>(json, path)?;
             Ok(SchemaValue::U32(json_u64(json, path)? as u32))
         }
-        SchemaType::U64 => Ok(SchemaValue::U64(json_u64(json, path)?)),
-        SchemaType::F32 => Ok(SchemaValue::F32(json_f64(json, path)? as f32)),
-        SchemaType::F64 => Ok(SchemaValue::F64(json_f64(json, path)?)),
-        SchemaType::Char => match json.as_str() {
+        SchemaType::U64 { .. } => Ok(SchemaValue::U64(json_u64(json, path)?)),
+        SchemaType::F32 { .. } => Ok(SchemaValue::F32(json_f64(json, path)? as f32)),
+        SchemaType::F64 { .. } => Ok(SchemaValue::F64(json_f64(json, path)?)),
+        SchemaType::Char { .. } => match json.as_str() {
             Some(s) => {
                 let mut chars = s.chars();
                 match (chars.next(), chars.next()) {
@@ -483,49 +492,49 @@ fn from_json_body(
             }
             None => Err(mismatch(path, "expected JSON string".to_string())),
         },
-        SchemaType::String => match json.as_str() {
+        SchemaType::String { .. } => match json.as_str() {
             Some(s) => Ok(SchemaValue::String(s.to_string())),
             None => Err(mismatch(path, "expected JSON string".to_string())),
         },
 
-        SchemaType::Text(_) => {
+        SchemaType::Text { .. } => {
             let p = canonical::text::from_json(json)?;
             Ok(SchemaValue::Text(p))
         }
-        SchemaType::Binary(_) => {
+        SchemaType::Binary { .. } => {
             let p = canonical::binary::from_json(json)?;
             Ok(SchemaValue::Binary(p))
         }
-        SchemaType::Path(_) => {
+        SchemaType::Path { .. } => {
             let s = canonical::path::from_json(json)?;
             Ok(SchemaValue::Path { path: s })
         }
-        SchemaType::Url(_) => {
+        SchemaType::Url { .. } => {
             let s = canonical::url::from_json(json)?;
             Ok(SchemaValue::Url { url: s })
         }
-        SchemaType::Datetime => {
+        SchemaType::Datetime { .. } => {
             let dt = canonical::datetime::from_json(json)?;
             Ok(SchemaValue::Datetime { value: dt })
         }
-        SchemaType::Duration => {
+        SchemaType::Duration { .. } => {
             let p = canonical::duration::from_json(json)?;
             Ok(SchemaValue::Duration(p))
         }
-        SchemaType::Quantity(_) => {
+        SchemaType::Quantity { .. } => {
             let q = canonical::quantity::from_json(json)?;
             Ok(SchemaValue::Quantity(q))
         }
-        SchemaType::Secret(_) => {
+        SchemaType::Secret { .. } => {
             let p = canonical::secret::from_json(json)?;
             Ok(SchemaValue::Secret(p))
         }
-        SchemaType::QuotaToken(_) => {
+        SchemaType::QuotaToken { .. } => {
             let p = canonical::quota_token::from_json(json)?;
             Ok(SchemaValue::QuotaToken(p))
         }
 
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             let obj = json
                 .as_object()
                 .ok_or_else(|| mismatch(path, "expected JSON object for record".to_string()))?;
@@ -553,7 +562,7 @@ fn from_json_body(
             Ok(SchemaValue::Record { fields: out })
         }
 
-        SchemaType::Variant { cases } => match json {
+        SchemaType::Variant { cases, .. } => match json {
             Value::String(name) => {
                 let (idx, case) = find_variant_case(cases, name)
                     .ok_or_else(|| mismatch(path, format!("unknown variant case `{name}`")))?;
@@ -592,7 +601,7 @@ fn from_json_body(
             )),
         },
 
-        SchemaType::Enum { cases } => {
+        SchemaType::Enum { cases, .. } => {
             let name = json
                 .as_str()
                 .ok_or_else(|| mismatch(path, "expected JSON string for enum".to_string()))?;
@@ -603,7 +612,7 @@ fn from_json_body(
             Ok(SchemaValue::Enum { case: idx as u32 })
         }
 
-        SchemaType::Flags { flags } => {
+        SchemaType::Flags { flags, .. } => {
             let arr = json
                 .as_array()
                 .ok_or_else(|| mismatch(path, "expected JSON array for flags".to_string()))?;
@@ -628,7 +637,7 @@ fn from_json_body(
             Ok(SchemaValue::Flags { bits })
         }
 
-        SchemaType::Tuple { elements } => {
+        SchemaType::Tuple { elements, .. } => {
             let arr = json
                 .as_array()
                 .ok_or_else(|| mismatch(path, "expected JSON array for tuple".to_string()))?;
@@ -652,7 +661,7 @@ fn from_json_body(
             Ok(SchemaValue::Tuple { elements: out })
         }
 
-        SchemaType::List { element } => {
+        SchemaType::List { element, .. } => {
             let arr = json
                 .as_array()
                 .ok_or_else(|| mismatch(path, "expected JSON array for list".to_string()))?;
@@ -666,7 +675,9 @@ fn from_json_body(
             Ok(SchemaValue::List { elements: out })
         }
 
-        SchemaType::FixedList { element, length } => {
+        SchemaType::FixedList {
+            element, length, ..
+        } => {
             let arr = json
                 .as_array()
                 .ok_or_else(|| mismatch(path, "expected JSON array for fixed list".to_string()))?;
@@ -690,7 +701,7 @@ fn from_json_body(
             Ok(SchemaValue::FixedList { elements: out })
         }
 
-        SchemaType::Map { key, value } => {
+        SchemaType::Map { key, value, .. } => {
             let arr = json
                 .as_array()
                 .ok_or_else(|| mismatch(path, "expected JSON array for map".to_string()))?;
@@ -719,7 +730,7 @@ fn from_json_body(
             Ok(SchemaValue::Map { entries: out })
         }
 
-        SchemaType::Option { inner } => match json {
+        SchemaType::Option { inner, .. } => match json {
             Value::Null => Ok(SchemaValue::Option { inner: None }),
             other => {
                 path.push(PathSegment::OptionInner);
@@ -731,9 +742,9 @@ fn from_json_body(
             }
         },
 
-        SchemaType::Result(spec) => decode_result(graph, spec, json, path, &mut visited),
+        SchemaType::Result { spec, .. } => decode_result(graph, spec, json, path, &mut visited),
 
-        SchemaType::Union(spec) => decode_union(graph, spec, json, path),
+        SchemaType::Union { spec, .. } => decode_union(graph, spec, json, path),
 
         SchemaType::Future { .. } | SchemaType::Stream { .. } => Err(RenderError::Unsupported(
             "future/stream values have no JSON representation",
@@ -943,20 +954,20 @@ fn mismatch(path: &PathStack, reason: String) -> RenderError {
 
 fn type_name(ty: &SchemaType) -> &'static str {
     match ty {
-        SchemaType::Ref(_) => "ref",
-        SchemaType::Bool => "bool",
-        SchemaType::S8 => "s8",
-        SchemaType::S16 => "s16",
-        SchemaType::S32 => "s32",
-        SchemaType::S64 => "s64",
-        SchemaType::U8 => "u8",
-        SchemaType::U16 => "u16",
-        SchemaType::U32 => "u32",
-        SchemaType::U64 => "u64",
-        SchemaType::F32 => "f32",
-        SchemaType::F64 => "f64",
-        SchemaType::Char => "char",
-        SchemaType::String => "string",
+        SchemaType::Ref { .. } => "ref",
+        SchemaType::Bool { .. } => "bool",
+        SchemaType::S8 { .. } => "s8",
+        SchemaType::S16 { .. } => "s16",
+        SchemaType::S32 { .. } => "s32",
+        SchemaType::S64 { .. } => "s64",
+        SchemaType::U8 { .. } => "u8",
+        SchemaType::U16 { .. } => "u16",
+        SchemaType::U32 { .. } => "u32",
+        SchemaType::U64 { .. } => "u64",
+        SchemaType::F32 { .. } => "f32",
+        SchemaType::F64 { .. } => "f64",
+        SchemaType::Char { .. } => "char",
+        SchemaType::String { .. } => "string",
         SchemaType::Record { .. } => "record",
         SchemaType::Variant { .. } => "variant",
         SchemaType::Enum { .. } => "enum",
@@ -966,17 +977,17 @@ fn type_name(ty: &SchemaType) -> &'static str {
         SchemaType::FixedList { .. } => "fixed-list",
         SchemaType::Map { .. } => "map",
         SchemaType::Option { .. } => "option",
-        SchemaType::Result(_) => "result",
-        SchemaType::Text(_) => "text",
-        SchemaType::Binary(_) => "binary",
-        SchemaType::Path(_) => "path",
-        SchemaType::Url(_) => "url",
-        SchemaType::Datetime => "datetime",
-        SchemaType::Duration => "duration",
-        SchemaType::Quantity(_) => "quantity",
-        SchemaType::Union(_) => "union",
-        SchemaType::Secret(_) => "secret",
-        SchemaType::QuotaToken(_) => "quota-token",
+        SchemaType::Result { .. } => "result",
+        SchemaType::Text { .. } => "text",
+        SchemaType::Binary { .. } => "binary",
+        SchemaType::Path { .. } => "path",
+        SchemaType::Url { .. } => "url",
+        SchemaType::Datetime { .. } => "datetime",
+        SchemaType::Duration { .. } => "duration",
+        SchemaType::Quantity { .. } => "quantity",
+        SchemaType::Union { .. } => "union",
+        SchemaType::Secret { .. } => "secret",
+        SchemaType::QuotaToken { .. } => "quota-token",
         SchemaType::Future { .. } => "future",
         SchemaType::Stream { .. } => "stream",
     }

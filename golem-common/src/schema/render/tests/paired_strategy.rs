@@ -39,56 +39,50 @@ pub fn paired_strategy() -> impl Strategy<Value = (SchemaType, SchemaValue)> {
 
 fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
     prop_oneof![
-        Just((SchemaType::Bool, SchemaValue::Bool(false))),
-        any::<i8>().prop_map(|i| (SchemaType::S8, SchemaValue::S8(i))),
-        any::<i16>().prop_map(|i| (SchemaType::S16, SchemaValue::S16(i))),
-        any::<i32>().prop_map(|i| (SchemaType::S32, SchemaValue::S32(i))),
+        Just((SchemaType::bool(), SchemaValue::Bool(false))),
+        any::<i8>().prop_map(|i| (SchemaType::s8(), SchemaValue::S8(i))),
+        any::<i16>().prop_map(|i| (SchemaType::s16(), SchemaValue::S16(i))),
+        any::<i32>().prop_map(|i| (SchemaType::s32(), SchemaValue::S32(i))),
         (-1_000_000_000_000_000_000i64..1_000_000_000_000_000_000i64)
-            .prop_map(|i| (SchemaType::S64, SchemaValue::S64(i))),
-        any::<u8>().prop_map(|i| (SchemaType::U8, SchemaValue::U8(i))),
-        any::<u16>().prop_map(|i| (SchemaType::U16, SchemaValue::U16(i))),
-        any::<u32>().prop_map(|i| (SchemaType::U32, SchemaValue::U32(i))),
-        (0u64..1_000_000_000_000_000_000u64).prop_map(|u| (SchemaType::U64, SchemaValue::U64(u))),
-        (-1.0e6_f32..1.0e6_f32).prop_map(|f| (SchemaType::F32, SchemaValue::F32(f))),
-        (-1.0e6_f64..1.0e6_f64).prop_map(|f| (SchemaType::F64, SchemaValue::F64(f))),
-        any::<char>().prop_map(|c| (SchemaType::Char, SchemaValue::Char(c))),
-        "[ -~]{0,8}".prop_map(|s: String| (SchemaType::String, SchemaValue::String(s))),
+            .prop_map(|i| (SchemaType::s64(), SchemaValue::S64(i))),
+        any::<u8>().prop_map(|i| (SchemaType::u8(), SchemaValue::U8(i))),
+        any::<u16>().prop_map(|i| (SchemaType::u16(), SchemaValue::U16(i))),
+        any::<u32>().prop_map(|i| (SchemaType::u32(), SchemaValue::U32(i))),
+        (0u64..1_000_000_000_000_000_000u64).prop_map(|u| (SchemaType::u64(), SchemaValue::U64(u))),
+        (-1.0e6_f32..1.0e6_f32).prop_map(|f| (SchemaType::f32(), SchemaValue::F32(f))),
+        (-1.0e6_f64..1.0e6_f64).prop_map(|f| (SchemaType::f64(), SchemaValue::F64(f))),
+        any::<char>().prop_map(|c| (SchemaType::char(), SchemaValue::Char(c))),
+        "[ -~]{0,8}".prop_map(|s: String| (SchemaType::string(), SchemaValue::String(s))),
         Just((
-            SchemaType::Enum {
-                cases: vec!["a".to_string(), "b".to_string()],
-            },
+            SchemaType::r#enum(vec!["a".to_string(), "b".to_string()]),
             SchemaValue::Enum { case: 0 },
         )),
         Just((
-            SchemaType::Enum {
-                cases: vec!["a".to_string(), "b".to_string()],
-            },
+            SchemaType::r#enum(vec!["a".to_string(), "b".to_string()]),
             SchemaValue::Enum { case: 1 },
         )),
         Just((
-            SchemaType::Flags {
-                flags: vec!["x".to_string(), "y".to_string()],
-            },
+            SchemaType::flags(vec!["x".to_string(), "y".to_string()]),
             SchemaValue::Flags {
                 bits: vec![true, false],
             },
         )),
         "[ -~]{0,8}".prop_map(|s: String| (
-            SchemaType::Text(TextRestrictions::default()),
+            SchemaType::text(TextRestrictions::default()),
             SchemaValue::Text(TextValuePayload {
                 text: s,
                 language: None,
             }),
         )),
         proptest::collection::vec(any::<u8>(), 0..8).prop_map(|bytes| (
-            SchemaType::Binary(BinaryRestrictions::default()),
+            SchemaType::binary(BinaryRestrictions::default()),
             SchemaValue::Binary(BinaryValuePayload {
                 bytes,
                 mime_type: None,
             }),
         )),
         "[a-zA-Z][a-zA-Z0-9/._-]{0,8}".prop_map(|p: String| (
-            SchemaType::Path(PathSpec {
+            SchemaType::path(PathSpec {
                 direction: PathDirection::Input,
                 kind: PathKind::Any,
                 allowed_mime_types: None,
@@ -97,7 +91,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
             SchemaValue::Path { path: p },
         )),
         Just((
-            SchemaType::Url(UrlRestrictions::default()),
+            SchemaType::url(UrlRestrictions::default()),
             SchemaValue::Url {
                 url: "https://example.com/".to_string(),
             },
@@ -106,17 +100,17 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
         // canonical RFC 3339 round-trip (the canonical year domain is
         // `0000..=9999`).
         (0i64..4_000_000_000i64).prop_map(|s| (
-            SchemaType::Datetime,
+            SchemaType::datetime(),
             SchemaValue::Datetime {
                 value: Utc.timestamp_opt(s, 0).single().unwrap(),
             },
         )),
         any::<i64>().prop_map(|n| (
-            SchemaType::Duration,
+            SchemaType::duration(),
             SchemaValue::Duration(DurationValuePayload { nanoseconds: n }),
         )),
         (-1000i64..1000i64).prop_map(|m| (
-            SchemaType::Quantity(QuantitySpec {
+            SchemaType::quantity(QuantitySpec {
                 base_unit: "kg".to_string(),
                 allowed_suffixes: vec![],
                 min: None,
@@ -129,7 +123,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
             }),
         )),
         "[a-z][a-z0-9-]{0,8}".prop_map(|r: String| (
-            SchemaType::Secret(SecretSpec::default()),
+            SchemaType::secret(SecretSpec::default()),
             SchemaValue::Secret(SecretValuePayload {
                 secret_ref: if r.is_empty() { "x".to_string() } else { r },
             }),
@@ -137,9 +131,8 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
         "[a-z][a-z0-9-]{0,4}".prop_map(|r: String| {
             let resource = if r.is_empty() { "r".to_string() } else { r };
             (
-                SchemaType::QuotaToken(QuotaTokenSpec {
+                SchemaType::quota_token(QuotaTokenSpec {
                     resource_name: Some(resource.clone()),
-                    metadata: Default::default(),
                 }),
                 SchemaValue::QuotaToken(QuotaTokenValuePayload {
                     environment_id: uuid::Uuid::nil(),
@@ -176,7 +169,7 @@ fn composite_paired(
                 values.push(v);
             }
             (
-                SchemaType::Record { fields },
+                SchemaType::record(fields),
                 SchemaValue::Record { fields: values },
             )
         }),
@@ -184,27 +177,19 @@ fn composite_paired(
         vec(inner.clone(), 0..3).prop_map(|pairs| {
             let (elements, values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
             (
-                SchemaType::Tuple { elements },
+                SchemaType::tuple(elements),
                 SchemaValue::Tuple { elements: values },
             )
         }),
         // list — all elements share the same type, so replicate the head value.
         (inner.clone(), 0u8..3u8).prop_map(|((t, v), n)| {
             let elements: Vec<SchemaValue> = (0..n).map(|_| v.clone()).collect();
-            (
-                SchemaType::List {
-                    element: Box::new(t),
-                },
-                SchemaValue::List { elements },
-            )
+            (SchemaType::list(t), SchemaValue::List { elements })
         }),
         // fixed list of length 2
         inner.clone().prop_map(|(t, v)| {
             (
-                SchemaType::FixedList {
-                    element: Box::new(t),
-                    length: 2,
-                },
+                SchemaType::fixed_list(t, 2),
                 SchemaValue::FixedList {
                     elements: vec![v.clone(), v],
                 },
@@ -217,7 +202,7 @@ fn composite_paired(
         inner.clone().prop_map(|(t, v)| {
             let (t, v) = wrap_if_nullable(t, v);
             (
-                SchemaType::Option { inner: Box::new(t) },
+                SchemaType::option(t),
                 SchemaValue::Option {
                     inner: Some(Box::new(v)),
                 },
@@ -227,14 +212,14 @@ fn composite_paired(
         inner.clone().prop_map(|(t, _v)| {
             let (t, _) = wrap_if_nullable(t, SchemaValue::Bool(false));
             (
-                SchemaType::Option { inner: Box::new(t) },
+                SchemaType::option(t),
                 SchemaValue::Option { inner: None },
             )
         }),
         // result (ok)
         inner.clone().prop_map(|(t, v)| {
             (
-                SchemaType::Result(ResultSpec {
+                SchemaType::result(ResultSpec {
                     ok: Some(Box::new(t)),
                     err: None,
                 }),
@@ -246,7 +231,7 @@ fn composite_paired(
         // result (err)
         inner.clone().prop_map(|(t, v)| {
             (
-                SchemaType::Result(ResultSpec {
+                SchemaType::result(ResultSpec {
                     ok: None,
                     err: Some(Box::new(t)),
                 }),
@@ -257,13 +242,11 @@ fn composite_paired(
         }),
         // variant without payload
         Just((
-            SchemaType::Variant {
-                cases: vec![VariantCaseType {
-                    name: "only".to_string(),
-                    payload: None,
-                    metadata: Default::default(),
-                }],
-            },
+            SchemaType::variant(vec![VariantCaseType {
+                name: "only".to_string(),
+                payload: None,
+                metadata: Default::default(),
+            }]),
             SchemaValue::Variant(VariantValuePayload {
                 case: 0,
                 payload: None,
@@ -272,13 +255,11 @@ fn composite_paired(
         // variant with payload
         inner.clone().prop_map(|(t, v)| {
             (
-                SchemaType::Variant {
-                    cases: vec![VariantCaseType {
-                        name: "only".to_string(),
-                        payload: Some(t),
-                        metadata: Default::default(),
-                    }],
-                },
+                SchemaType::variant(vec![VariantCaseType {
+                    name: "only".to_string(),
+                    payload: Some(t),
+                    metadata: Default::default(),
+                }]),
                 SchemaValue::Variant(VariantValuePayload {
                     case: 0,
                     payload: Some(Box::new(v)),
@@ -297,19 +278,16 @@ fn composite_paired(
                 entries.push((SchemaValue::String(k), vv.clone()));
             }
             (
-                SchemaType::Map {
-                    key: Box::new(SchemaType::String),
-                    value: Box::new(vt),
-                },
+                SchemaType::map(SchemaType::string(), vt),
                 SchemaValue::Map { entries },
             )
         }),
         // union with prefix discriminator (string body); body satisfies prefix.
         Just((
-            SchemaType::Union(UnionSpec {
+            SchemaType::union(UnionSpec {
                 branches: vec![UnionBranch {
                     tag: "u".to_string(),
-                    body: SchemaType::String,
+                    body: SchemaType::string(),
                     discriminator: DiscriminatorRule::Prefix {
                         prefix: "k1:".to_string(),
                     },
@@ -323,16 +301,14 @@ fn composite_paired(
         )),
         // union with field-equals discriminator (record body)
         Just((
-            SchemaType::Union(UnionSpec {
+            SchemaType::union(UnionSpec {
                 branches: vec![UnionBranch {
                     tag: "t".to_string(),
-                    body: SchemaType::Record {
-                        fields: vec![NamedFieldType {
-                            name: "kind".to_string(),
-                            body: SchemaType::String,
-                            metadata: Default::default(),
-                        }],
-                    },
+                    body: SchemaType::record(vec![NamedFieldType {
+                        name: "kind".to_string(),
+                        body: SchemaType::string(),
+                        metadata: Default::default(),
+                    }]),
                     discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                         field_name: "kind".to_string(),
                         literal: Some("k1".to_string()),
@@ -355,7 +331,7 @@ fn composite_paired(
 fn is_nullable(ty: &SchemaType) -> bool {
     match ty {
         SchemaType::Option { .. } => true,
-        SchemaType::Union(spec) => spec.branches.iter().any(|b| is_nullable(&b.body)),
+        SchemaType::Union { spec, .. } => spec.branches.iter().any(|b| is_nullable(&b.body)),
         _ => false,
     }
 }
@@ -365,13 +341,11 @@ fn is_nullable(ty: &SchemaType) -> bool {
 /// equivalent to the input under the variant's single case.
 fn wrap_if_nullable(ty: SchemaType, value: SchemaValue) -> (SchemaType, SchemaValue) {
     if is_nullable(&ty) {
-        let wrapped_ty = SchemaType::Variant {
-            cases: vec![VariantCaseType {
-                name: "value".to_string(),
-                payload: Some(ty),
-                metadata: Default::default(),
-            }],
-        };
+        let wrapped_ty = SchemaType::variant(vec![VariantCaseType {
+            name: "value".to_string(),
+            payload: Some(ty),
+            metadata: Default::default(),
+        }]);
         let wrapped_value = SchemaValue::Variant(VariantValuePayload {
             case: 0,
             payload: Some(Box::new(value)),

@@ -38,7 +38,10 @@ pub mod well_formedness;
 #[cfg(test)]
 mod tests;
 
-pub use placement::{PlacementError, SchemaScope, validate_placement};
+pub use placement::{
+    PlacementError, SchemaScope, validate_agent_dependency_placement,
+    validate_agent_type_placement, validate_placement,
+};
 pub use subtyping::is_assignable;
 pub use value::{ValueError, ValuePath, ValuePathSegment, validate_value};
 pub use well_formedness::{SchemaError, validate_graph};

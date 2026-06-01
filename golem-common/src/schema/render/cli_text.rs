@@ -40,10 +40,10 @@ fn type_to_text_inner(
     ty: &SchemaType,
     visited: &mut HashSet<TypeId>,
 ) -> String {
-    match ty {
-        SchemaType::Ref(id) => {
+    let base = match ty {
+        SchemaType::Ref { id, .. } => {
             if !visited.insert(id.clone()) {
-                return id.0.clone();
+                return decorate_with_metadata(id.0.clone(), ty);
             }
             let out = match graph.lookup(id) {
                 Some(def) => def
@@ -55,20 +55,20 @@ fn type_to_text_inner(
             visited.remove(id);
             out
         }
-        SchemaType::Bool => "bool".to_string(),
-        SchemaType::S8 => "s8".to_string(),
-        SchemaType::S16 => "s16".to_string(),
-        SchemaType::S32 => "s32".to_string(),
-        SchemaType::S64 => "s64".to_string(),
-        SchemaType::U8 => "u8".to_string(),
-        SchemaType::U16 => "u16".to_string(),
-        SchemaType::U32 => "u32".to_string(),
-        SchemaType::U64 => "u64".to_string(),
-        SchemaType::F32 => "f32".to_string(),
-        SchemaType::F64 => "f64".to_string(),
-        SchemaType::Char => "char".to_string(),
-        SchemaType::String => "string".to_string(),
-        SchemaType::Record { fields } => {
+        SchemaType::Bool { .. } => "bool".to_string(),
+        SchemaType::S8 { .. } => "s8".to_string(),
+        SchemaType::S16 { .. } => "s16".to_string(),
+        SchemaType::S32 { .. } => "s32".to_string(),
+        SchemaType::S64 { .. } => "s64".to_string(),
+        SchemaType::U8 { .. } => "u8".to_string(),
+        SchemaType::U16 { .. } => "u16".to_string(),
+        SchemaType::U32 { .. } => "u32".to_string(),
+        SchemaType::U64 { .. } => "u64".to_string(),
+        SchemaType::F32 { .. } => "f32".to_string(),
+        SchemaType::F64 { .. } => "f64".to_string(),
+        SchemaType::Char { .. } => "char".to_string(),
+        SchemaType::String { .. } => "string".to_string(),
+        SchemaType::Record { fields, .. } => {
             let inner = fields
                 .iter()
                 .map(|f| {
@@ -82,7 +82,7 @@ fn type_to_text_inner(
                 .join(", ");
             format!("record {{ {inner} }}")
         }
-        SchemaType::Variant { cases } => {
+        SchemaType::Variant { cases, .. } => {
             let inner = cases
                 .iter()
                 .map(|c: &VariantCaseType| match &c.payload {
@@ -95,13 +95,13 @@ fn type_to_text_inner(
                 .join(", ");
             format!("variant {{ {inner} }}")
         }
-        SchemaType::Enum { cases } => {
+        SchemaType::Enum { cases, .. } => {
             format!("enum {{ {} }}", cases.join(", "))
         }
-        SchemaType::Flags { flags } => {
+        SchemaType::Flags { flags, .. } => {
             format!("flags {{ {} }}", flags.join(", "))
         }
-        SchemaType::Tuple { elements } => {
+        SchemaType::Tuple { elements, .. } => {
             let inner = elements
                 .iter()
                 .map(|e| type_to_text_inner(graph, e, visited))
@@ -109,23 +109,28 @@ fn type_to_text_inner(
                 .join(", ");
             format!("tuple<{inner}>")
         }
-        SchemaType::List { element } => {
+        SchemaType::List { element, .. } => {
             format!("list<{}>", type_to_text_inner(graph, element, visited))
         }
-        SchemaType::FixedList { element, length } => format!(
+        SchemaType::FixedList {
+            element, length, ..
+        } => format!(
             "fixed-list<{}, {}>",
             type_to_text_inner(graph, element, visited),
             length
         ),
-        SchemaType::Map { key, value } => format!(
+        SchemaType::Map { key, value, .. } => format!(
             "map<{}, {}>",
             type_to_text_inner(graph, key, visited),
             type_to_text_inner(graph, value, visited)
         ),
-        SchemaType::Option { inner } => {
+        SchemaType::Option { inner, .. } => {
             format!("option<{}>", type_to_text_inner(graph, inner, visited))
         }
-        SchemaType::Result(ResultSpec { ok, err }) => {
+        SchemaType::Result {
+            spec: ResultSpec { ok, err },
+            ..
+        } => {
             let ok_s = ok
                 .as_deref()
                 .map(|t| type_to_text_inner(graph, t, visited))
@@ -136,7 +141,7 @@ fn type_to_text_inner(
                 .unwrap_or_else(|| "_".to_string());
             format!("result<{ok_s}, {err_s}>")
         }
-        SchemaType::Text(r) => {
+        SchemaType::Text { restrictions: r, .. } => {
             let mut parts = Vec::new();
             if let Some(min) = r.min_length {
                 parts.push(format!("min={min}"));
@@ -156,7 +161,7 @@ fn type_to_text_inner(
                 format!("text({})", parts.join(", "))
             }
         }
-        SchemaType::Binary(r) => {
+        SchemaType::Binary { restrictions: r, .. } => {
             let mut parts = Vec::new();
             if let Some(min) = r.min_bytes {
                 parts.push(format!("min={min}"));
@@ -173,7 +178,7 @@ fn type_to_text_inner(
                 format!("binary({})", parts.join(", "))
             }
         }
-        SchemaType::Path(spec) => {
+        SchemaType::Path { spec, .. } => {
             let direction = match spec.direction {
                 crate::schema::schema_type::PathDirection::Input => "in",
                 crate::schema::schema_type::PathDirection::Output => "out",
@@ -193,7 +198,7 @@ fn type_to_text_inner(
             }
             format!("path({})", parts.join(", "))
         }
-        SchemaType::Url(spec) => {
+        SchemaType::Url { restrictions: spec, .. } => {
             let mut parts = Vec::new();
             if let Some(schemes) = &spec.allowed_schemes {
                 parts.push(format!("schemes=[{}]", schemes.join(", ")));
@@ -207,9 +212,9 @@ fn type_to_text_inner(
                 format!("url({})", parts.join(", "))
             }
         }
-        SchemaType::Datetime => "datetime".to_string(),
-        SchemaType::Duration => "duration".to_string(),
-        SchemaType::Quantity(spec) => {
+        SchemaType::Datetime { .. } => "datetime".to_string(),
+        SchemaType::Duration { .. } => "duration".to_string(),
+        SchemaType::Quantity { spec, .. } => {
             let mut parts = vec![spec.base_unit.clone()];
             if !spec.allowed_suffixes.is_empty() {
                 parts.push(format!("suffixes=[{}]", spec.allowed_suffixes.join(", ")));
@@ -222,7 +227,7 @@ fn type_to_text_inner(
             }
             format!("quantity({})", parts.join(", "))
         }
-        SchemaType::Union(spec) => {
+        SchemaType::Union { spec, .. } => {
             let inner = spec
                 .branches
                 .iter()
@@ -233,16 +238,29 @@ fn type_to_text_inner(
                 .join(" | ");
             format!("union {{ {inner} }}")
         }
-        SchemaType::Secret(_) => "secret".to_string(),
-        SchemaType::QuotaToken(_) => "quota-token".to_string(),
-        SchemaType::Future { inner } => match inner {
+        SchemaType::Secret { .. } => "secret".to_string(),
+        SchemaType::QuotaToken { .. } => "quota-token".to_string(),
+        SchemaType::Future { inner, .. } => match inner {
             None => "future".to_string(),
             Some(t) => format!("future<{}>", type_to_text_inner(graph, t, visited)),
         },
-        SchemaType::Stream { inner } => match inner {
+        SchemaType::Stream { inner, .. } => match inner {
             None => "stream".to_string(),
             Some(t) => format!("stream<{}>", type_to_text_inner(graph, t, visited)),
         },
+    };
+    decorate_with_metadata(base, ty)
+}
+
+/// Append per-node metadata annotations (currently `(deprecated)`) so the
+/// rendered text reflects the inline metadata envelope of any
+/// [`SchemaType`] node.
+fn decorate_with_metadata(base: String, ty: &SchemaType) -> String {
+    let meta = ty.metadata();
+    if meta.deprecated.is_some() {
+        format!("{base} (deprecated)")
+    } else {
+        base
     }
 }
 
@@ -332,37 +350,37 @@ fn render_value(
     value: &SchemaValue,
 ) -> Result<String, RenderError> {
     match (ty, value) {
-        (SchemaType::Bool, SchemaValue::Bool(b)) => Ok(b.to_string()),
-        (SchemaType::S8, SchemaValue::S8(i)) => Ok(i.to_string()),
-        (SchemaType::S16, SchemaValue::S16(i)) => Ok(i.to_string()),
-        (SchemaType::S32, SchemaValue::S32(i)) => Ok(i.to_string()),
-        (SchemaType::S64, SchemaValue::S64(i)) => Ok(i.to_string()),
-        (SchemaType::U8, SchemaValue::U8(i)) => Ok(i.to_string()),
-        (SchemaType::U16, SchemaValue::U16(i)) => Ok(i.to_string()),
-        (SchemaType::U32, SchemaValue::U32(i)) => Ok(i.to_string()),
-        (SchemaType::U64, SchemaValue::U64(i)) => Ok(i.to_string()),
-        (SchemaType::F32, SchemaValue::F32(f)) => Ok(f.to_string()),
-        (SchemaType::F64, SchemaValue::F64(f)) => Ok(f.to_string()),
-        (SchemaType::Char, SchemaValue::Char(c)) => Ok(format!("'{c}'")),
-        (SchemaType::String, SchemaValue::String(s)) => Ok(format!("{s:?}")),
+        (SchemaType::Bool { .. }, SchemaValue::Bool(b)) => Ok(b.to_string()),
+        (SchemaType::S8 { .. }, SchemaValue::S8(i)) => Ok(i.to_string()),
+        (SchemaType::S16 { .. }, SchemaValue::S16(i)) => Ok(i.to_string()),
+        (SchemaType::S32 { .. }, SchemaValue::S32(i)) => Ok(i.to_string()),
+        (SchemaType::S64 { .. }, SchemaValue::S64(i)) => Ok(i.to_string()),
+        (SchemaType::U8 { .. }, SchemaValue::U8(i)) => Ok(i.to_string()),
+        (SchemaType::U16 { .. }, SchemaValue::U16(i)) => Ok(i.to_string()),
+        (SchemaType::U32 { .. }, SchemaValue::U32(i)) => Ok(i.to_string()),
+        (SchemaType::U64 { .. }, SchemaValue::U64(i)) => Ok(i.to_string()),
+        (SchemaType::F32 { .. }, SchemaValue::F32(f)) => Ok(f.to_string()),
+        (SchemaType::F64 { .. }, SchemaValue::F64(f)) => Ok(f.to_string()),
+        (SchemaType::Char { .. }, SchemaValue::Char(c)) => Ok(format!("'{c}'")),
+        (SchemaType::String { .. }, SchemaValue::String(s)) => Ok(format!("{s:?}")),
 
-        (SchemaType::Text(_), SchemaValue::Text(p)) => Ok(canonical::text::to_text(p)),
-        (SchemaType::Binary(_), SchemaValue::Binary(p)) => Ok(canonical::binary::to_text(p)?),
-        (SchemaType::Path(_), SchemaValue::Path { path }) => Ok(canonical::path::to_text(path)?),
-        (SchemaType::Url(_), SchemaValue::Url { url }) => Ok(canonical::url::to_text(url)?),
-        (SchemaType::Datetime, SchemaValue::Datetime { value }) => {
+        (SchemaType::Text { .. }, SchemaValue::Text(p)) => Ok(canonical::text::to_text(p)),
+        (SchemaType::Binary { .. }, SchemaValue::Binary(p)) => Ok(canonical::binary::to_text(p)?),
+        (SchemaType::Path { .. }, SchemaValue::Path { path }) => Ok(canonical::path::to_text(path)?),
+        (SchemaType::Url { .. }, SchemaValue::Url { url }) => Ok(canonical::url::to_text(url)?),
+        (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
             Ok(canonical::datetime::to_text(value)?)
         }
-        (SchemaType::Duration, SchemaValue::Duration(p)) => Ok(canonical::duration::to_text(p)),
-        (SchemaType::Quantity(_), SchemaValue::Quantity(q)) => Ok(canonical::quantity::to_text(q)?),
-        (SchemaType::Secret(_), SchemaValue::Secret(p)) => {
+        (SchemaType::Duration { .. }, SchemaValue::Duration(p)) => Ok(canonical::duration::to_text(p)),
+        (SchemaType::Quantity { .. }, SchemaValue::Quantity(q)) => Ok(canonical::quantity::to_text(q)?),
+        (SchemaType::Secret { .. }, SchemaValue::Secret(p)) => {
             if r.redact {
                 Ok("<redacted>".to_string())
             } else {
                 Ok(canonical::secret::to_text(p)?)
             }
         }
-        (SchemaType::QuotaToken(_), SchemaValue::QuotaToken(p)) => {
+        (SchemaType::QuotaToken { .. }, SchemaValue::QuotaToken(p)) => {
             if r.redact {
                 Ok("<redacted>".to_string())
             } else {
@@ -370,7 +388,7 @@ fn render_value(
             }
         }
 
-        (SchemaType::Record { fields }, SchemaValue::Record { fields: vs }) => {
+        (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: vs }) => {
             if fields.len() != vs.len() {
                 return Err(RenderError::ValueMismatch {
                     path: String::new(),
@@ -388,7 +406,7 @@ fn render_value(
             Ok(format!("{{ {} }}", parts?.join(", ")))
         }
 
-        (SchemaType::Variant { cases }, SchemaValue::Variant(vp)) => {
+        (SchemaType::Variant { cases, .. }, SchemaValue::Variant(vp)) => {
             let case_index = vp.case as usize;
             if case_index >= cases.len() {
                 return Err(RenderError::ValueMismatch {
@@ -410,7 +428,7 @@ fn render_value(
             }
         }
 
-        (SchemaType::Enum { cases }, SchemaValue::Enum { case }) => {
+        (SchemaType::Enum { cases, .. }, SchemaValue::Enum { case }) => {
             let idx = *case as usize;
             if idx >= cases.len() {
                 return Err(RenderError::ValueMismatch {
@@ -421,7 +439,7 @@ fn render_value(
             Ok(cases[idx].clone())
         }
 
-        (SchemaType::Flags { flags }, SchemaValue::Flags { bits }) => {
+        (SchemaType::Flags { flags, .. }, SchemaValue::Flags { bits }) => {
             if flags.len() != bits.len() {
                 return Err(RenderError::ValueMismatch {
                     path: String::new(),
@@ -437,7 +455,7 @@ fn render_value(
             Ok(format!("{{{}}}", selected.join(", ")))
         }
 
-        (SchemaType::Tuple { elements }, SchemaValue::Tuple { elements: vs }) => {
+        (SchemaType::Tuple { elements, .. }, SchemaValue::Tuple { elements: vs }) => {
             if elements.len() != vs.len() {
                 return Err(RenderError::ValueMismatch {
                     path: String::new(),
@@ -452,7 +470,7 @@ fn render_value(
             Ok(format!("({})", parts?.join(", ")))
         }
 
-        (SchemaType::List { element }, SchemaValue::List { elements }) => {
+        (SchemaType::List { element, .. }, SchemaValue::List { elements }) => {
             let parts: Result<Vec<String>, RenderError> = elements
                 .iter()
                 .map(|v| drive(walk(r, graph, element, v)))
@@ -460,7 +478,12 @@ fn render_value(
             Ok(format!("[{}]", parts?.join(", ")))
         }
 
-        (SchemaType::FixedList { element, length }, SchemaValue::FixedList { elements }) => {
+        (
+            SchemaType::FixedList {
+                element, length, ..
+            },
+            SchemaValue::FixedList { elements },
+        ) => {
             if elements.len() as u32 != *length {
                 return Err(RenderError::ValueMismatch {
                     path: String::new(),
@@ -474,7 +497,7 @@ fn render_value(
             Ok(format!("[{}]", parts?.join(", ")))
         }
 
-        (SchemaType::Map { key, value }, SchemaValue::Map { entries }) => {
+        (SchemaType::Map { key, value, .. }, SchemaValue::Map { entries }) => {
             let parts: Result<Vec<String>, RenderError> = entries
                 .iter()
                 .map(|(k, v)| {
@@ -486,7 +509,7 @@ fn render_value(
             Ok(format!("{{{}}}", parts?.join(", ")))
         }
 
-        (SchemaType::Option { inner }, SchemaValue::Option { inner: v }) => match v {
+        (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: v }) => match v {
             None => Ok("none".to_string()),
             Some(v) => {
                 let inner_s = drive(walk(r, graph, inner, v))?;
@@ -494,7 +517,7 @@ fn render_value(
             }
         },
 
-        (SchemaType::Result(spec), SchemaValue::Result(payload)) => match payload {
+        (SchemaType::Result { spec, .. }, SchemaValue::Result(payload)) => match payload {
             ResultValuePayload::Ok { value: v } => {
                 let inner = match (spec.ok.as_deref(), v.as_deref()) {
                     (None, None) => String::new(),
@@ -531,7 +554,7 @@ fn render_value(
             }
         },
 
-        (SchemaType::Union(spec), SchemaValue::Union(payload)) => {
+        (SchemaType::Union { spec, .. }, SchemaValue::Union(payload)) => {
             render_union(r, graph, spec, payload)
         }
 

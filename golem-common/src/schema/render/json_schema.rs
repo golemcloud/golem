@@ -66,8 +66,10 @@ pub fn to_json_schema(graph: &SchemaGraph, ty: &SchemaType) -> Value {
 pub(super) fn render_defs(graph: &SchemaGraph) -> Map<String, Value> {
     let mut defs = Map::new();
     for def in &graph.defs {
+        // The def's metadata now lives on `def.body` directly; `render_type`
+        // already attaches inline-node metadata, so no extra `attach_metadata`
+        // call is required here.
         let mut body = render_type(graph, &def.body, false);
-        attach_metadata(&mut body, &def.metadata);
         if let Some(name) = &def.name
             && let Some(obj) = body.as_object_mut()
         {
@@ -99,7 +101,7 @@ fn collect_union_branch_defs(
     emitted: &mut std::collections::HashSet<String>,
 ) {
     match ty {
-        SchemaType::Union(spec) => {
+        SchemaType::Union { spec, .. } => {
             for branch in spec.branches.iter() {
                 let key = branch_def_key(&branch.tag);
                 if emitted.insert(key.clone()) {
@@ -117,33 +119,33 @@ fn collect_union_branch_defs(
                 collect_union_branch_defs(graph, &branch.body, defs, emitted);
             }
         }
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             for f in fields {
                 collect_union_branch_defs(graph, &f.body, defs, emitted);
             }
         }
-        SchemaType::Variant { cases } => {
+        SchemaType::Variant { cases, .. } => {
             for case in cases {
                 if let Some(p) = &case.payload {
                     collect_union_branch_defs(graph, p, defs, emitted);
                 }
             }
         }
-        SchemaType::Tuple { elements } => {
+        SchemaType::Tuple { elements, .. } => {
             for e in elements {
                 collect_union_branch_defs(graph, e, defs, emitted);
             }
         }
-        SchemaType::List { element }
+        SchemaType::List { element, .. }
         | SchemaType::FixedList { element, .. }
-        | SchemaType::Option { inner: element } => {
+        | SchemaType::Option { inner: element, .. } => {
             collect_union_branch_defs(graph, element, defs, emitted);
         }
-        SchemaType::Map { key, value } => {
+        SchemaType::Map { key, value, .. } => {
             collect_union_branch_defs(graph, key, defs, emitted);
             collect_union_branch_defs(graph, value, defs, emitted);
         }
-        SchemaType::Result(spec) => {
+        SchemaType::Result { spec, .. } => {
             if let Some(t) = &spec.ok {
                 collect_union_branch_defs(graph, t, defs, emitted);
             }
@@ -151,7 +153,7 @@ fn collect_union_branch_defs(
                 collect_union_branch_defs(graph, t, defs, emitted);
             }
         }
-        SchemaType::Future { inner } | SchemaType::Stream { inner } => {
+        SchemaType::Future { inner, .. } | SchemaType::Stream { inner, .. } => {
             if let Some(t) = inner {
                 collect_union_branch_defs(graph, t, defs, emitted);
             }
@@ -224,27 +226,29 @@ fn apply_discriminator_constraint(obj: &mut Map<String, Value>, rule: &Discrimin
 }
 
 pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> Value {
-    match ty {
-        SchemaType::Ref(id) => obj([("$ref", Value::String(ref_pointer(id, root)))]),
+    let mut rendered = match ty {
+        SchemaType::Ref { id, .. } => obj([("$ref", Value::String(ref_pointer(id, root)))]),
 
-        SchemaType::Bool => obj([("type", Value::String("boolean".to_string()))]),
-        SchemaType::S8 => integer_schema(i8::MIN as i64, i8::MAX as i64),
-        SchemaType::S16 => integer_schema(i16::MIN as i64, i16::MAX as i64),
-        SchemaType::S32 => integer_schema(i32::MIN as i64, i32::MAX as i64),
-        SchemaType::S64 => integer_schema(i64::MIN, i64::MAX),
-        SchemaType::U8 => integer_schema(0, u8::MAX as i64),
-        SchemaType::U16 => integer_schema(0, u16::MAX as i64),
-        SchemaType::U32 => integer_schema(0, u32::MAX as i64),
-        SchemaType::U64 => unsigned_64_schema(),
-        SchemaType::F32 | SchemaType::F64 => obj([("type", Value::String("number".to_string()))]),
-        SchemaType::Char => obj([
+        SchemaType::Bool { .. } => obj([("type", Value::String("boolean".to_string()))]),
+        SchemaType::S8 { .. } => integer_schema(i8::MIN as i64, i8::MAX as i64),
+        SchemaType::S16 { .. } => integer_schema(i16::MIN as i64, i16::MAX as i64),
+        SchemaType::S32 { .. } => integer_schema(i32::MIN as i64, i32::MAX as i64),
+        SchemaType::S64 { .. } => integer_schema(i64::MIN, i64::MAX),
+        SchemaType::U8 { .. } => integer_schema(0, u8::MAX as i64),
+        SchemaType::U16 { .. } => integer_schema(0, u16::MAX as i64),
+        SchemaType::U32 { .. } => integer_schema(0, u32::MAX as i64),
+        SchemaType::U64 { .. } => unsigned_64_schema(),
+        SchemaType::F32 { .. } | SchemaType::F64 { .. } => {
+            obj([("type", Value::String("number".to_string()))])
+        }
+        SchemaType::Char { .. } => obj([
             ("type", Value::String("string".to_string())),
             ("minLength", Value::Number(1.into())),
             ("maxLength", Value::Number(1.into())),
         ]),
-        SchemaType::String => obj([("type", Value::String("string".to_string()))]),
+        SchemaType::String { .. } => obj([("type", Value::String("string".to_string()))]),
 
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             let mut props = Map::new();
             let mut required = Vec::with_capacity(fields.len());
             for field in fields {
@@ -261,9 +265,9 @@ pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> V
             ])
         }
 
-        SchemaType::Variant { cases } => Value::Object(variant_schema(graph, cases)),
+        SchemaType::Variant { cases, .. } => Value::Object(variant_schema(graph, cases)),
 
-        SchemaType::Enum { cases } => obj([
+        SchemaType::Enum { cases, .. } => obj([
             ("type", Value::String("string".to_string())),
             (
                 "enum",
@@ -271,7 +275,7 @@ pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> V
             ),
         ]),
 
-        SchemaType::Flags { flags } => obj([
+        SchemaType::Flags { flags, .. } => obj([
             ("type", Value::String("array".to_string())),
             (
                 "items",
@@ -286,7 +290,7 @@ pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> V
             ("uniqueItems", Value::Bool(true)),
         ]),
 
-        SchemaType::Tuple { elements } => {
+        SchemaType::Tuple { elements, .. } => {
             if elements.is_empty() {
                 // JSON Schema 2020-12 requires `prefixItems` to be a
                 // non-empty array, so the empty-tuple shape uses
@@ -314,19 +318,21 @@ pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> V
             }
         }
 
-        SchemaType::List { element } => obj([
+        SchemaType::List { element, .. } => obj([
             ("type", Value::String("array".to_string())),
             ("items", render_type(graph, element, false)),
         ]),
 
-        SchemaType::FixedList { element, length } => obj([
+        SchemaType::FixedList {
+            element, length, ..
+        } => obj([
             ("type", Value::String("array".to_string())),
             ("items", render_type(graph, element, false)),
             ("minItems", Value::Number((*length).into())),
             ("maxItems", Value::Number((*length).into())),
         ]),
 
-        SchemaType::Map { key, value } => {
+        SchemaType::Map { key, value, .. } => {
             let pair = obj([
                 ("type", Value::String("array".to_string())),
                 (
@@ -346,7 +352,7 @@ pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> V
             ])
         }
 
-        SchemaType::Option { inner } => obj([(
+        SchemaType::Option { inner, .. } => obj([(
             "oneOf",
             Value::Array(vec![
                 obj([("type", Value::String("null".to_string()))]),
@@ -354,26 +360,35 @@ pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> V
             ]),
         )]),
 
-        SchemaType::Result(spec) => Value::Object(result_schema(graph, spec)),
+        SchemaType::Result { spec, .. } => Value::Object(result_schema(graph, spec)),
 
-        SchemaType::Text(restrictions) => Value::Object(text_schema(restrictions)),
-        SchemaType::Binary(restrictions) => Value::Object(binary_schema(restrictions)),
-        SchemaType::Path(spec) => Value::Object(path_schema(spec)),
-        SchemaType::Url(restrictions) => Value::Object(url_schema(restrictions)),
-        SchemaType::Datetime => obj([
+        SchemaType::Text {
+            restrictions,
+            ..
+        } => Value::Object(text_schema(restrictions)),
+        SchemaType::Binary {
+            restrictions,
+            ..
+        } => Value::Object(binary_schema(restrictions)),
+        SchemaType::Path { spec, .. } => Value::Object(path_schema(spec)),
+        SchemaType::Url {
+            restrictions,
+            ..
+        } => Value::Object(url_schema(restrictions)),
+        SchemaType::Datetime { .. } => obj([
             ("type", Value::String("string".to_string())),
             ("format", Value::String("date-time".to_string())),
         ]),
-        SchemaType::Duration => obj([
+        SchemaType::Duration { .. } => obj([
             ("type", Value::String("string".to_string())),
             ("format", Value::String("duration".to_string())),
         ]),
-        SchemaType::Quantity(spec) => Value::Object(quantity_schema(spec)),
+        SchemaType::Quantity { spec, .. } => Value::Object(quantity_schema(spec)),
 
-        SchemaType::Union(spec) => Value::Object(union_schema(graph, spec)),
+        SchemaType::Union { spec, .. } => Value::Object(union_schema(graph, spec)),
 
-        SchemaType::Secret(spec) => Value::Object(secret_schema(spec)),
-        SchemaType::QuotaToken(spec) => Value::Object(quota_token_schema(spec)),
+        SchemaType::Secret { spec, .. } => Value::Object(secret_schema(spec)),
+        SchemaType::QuotaToken { spec, .. } => Value::Object(quota_token_schema(spec)),
 
         SchemaType::Future { .. } | SchemaType::Stream { .. } => obj([
             ("type", Value::String("null".to_string())),
@@ -382,7 +397,14 @@ pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> V
                 Value::String("WASI P3 placeholder".to_string()),
             ),
         ]),
-    }
+    };
+
+    // Per-node metadata: attach docs / examples / deprecated for every
+    // SchemaType node so inline-typed positions (record fields, list
+    // elements, etc.) propagate their metadata into the generated JSON
+    // Schema, not only named definitions.
+    attach_metadata(&mut rendered, ty.metadata());
+    rendered
 }
 
 fn ref_pointer(id: &TypeId, _root: bool) -> String {

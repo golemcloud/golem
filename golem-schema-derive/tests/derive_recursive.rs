@@ -37,15 +37,15 @@ fn recursive_struct_emits_single_def_and_inner_ref() {
 
     let body = &graph.defs[0].body;
     let next_field = match body {
-        SchemaType::Record { fields } => &fields[0],
+        SchemaType::Record { fields, .. } => &fields[0],
         other => panic!("expected record body, got {other:?}"),
     };
     assert_eq!(next_field.name, "next");
     let inner = match &next_field.body {
-        SchemaType::Option { inner } => inner,
+        SchemaType::Option { inner, .. } => inner,
         other => panic!("expected option, got {other:?}"),
     };
-    assert_eq!(inner.as_ref(), &SchemaType::Ref(id.clone()));
+    assert_eq!(inner.as_ref(), &SchemaType::ref_to(id.clone()));
 }
 
 #[derive(IntoSchema, FromSchema, Debug, PartialEq)]
@@ -72,11 +72,11 @@ fn mutually_recursive_structs_register_both_definitions() {
     // Verify A's body has an inner reference to B
     let a_def = graph.defs.iter().find(|d| d.id == A::type_id()).unwrap();
     match &a_def.body {
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             let b_field = fields.iter().find(|f| f.name == "b").unwrap();
             match &b_field.body {
-                SchemaType::Option { inner } => {
-                    assert_eq!(inner.as_ref(), &SchemaType::Ref(B::type_id()));
+                SchemaType::Option { inner, .. } => {
+                    assert_eq!(inner.as_ref(), &SchemaType::ref_to(B::type_id()));
                 }
                 other => panic!("expected option, got {other:?}"),
             }
@@ -97,11 +97,11 @@ fn vec_self_is_anonymous() {
     let graph = try_into_schema_graph::<N>().expect("graph should be well-formed");
     assert_eq!(graph.defs.len(), 1);
     match &graph.defs[0].body {
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             let children = &fields[0];
             match &children.body {
-                SchemaType::List { element } => {
-                    assert_eq!(**element, SchemaType::Ref(N::type_id()));
+                SchemaType::List { element, .. } => {
+                    assert_eq!(**element, SchemaType::ref_to(N::type_id()));
                 }
                 other => panic!("expected list, got {other:?}"),
             }

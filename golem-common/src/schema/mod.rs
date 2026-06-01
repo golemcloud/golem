@@ -20,6 +20,8 @@
 //! is gated on the `full` feature because it depends on the `wit-bindgen` /
 //! `wasmtime` bindings re-exported from `golem-wasm`.
 
+#[cfg(feature = "full")]
+pub mod adapters;
 pub mod agent;
 pub mod canonical;
 pub mod conversion;
@@ -37,10 +39,12 @@ pub mod wit;
 mod tests;
 
 pub use agent::{
+    AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
     AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema, ParsedAgentId,
 };
 pub use conversion::{
-    DecodeError, FromSchema, FromSchemaError, IntoSchema, SchemaBuilder, try_into_schema_graph,
+    DecodeError, FromSchema, FromSchemaError, IntoSchema, MergeError, SchemaBuilder,
+    merge_agent_graphs, try_into_schema_graph,
 };
 pub use golem_schema_derive::{FromSchema, IntoSchema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};

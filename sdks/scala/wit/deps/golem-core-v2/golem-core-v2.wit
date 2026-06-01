@@ -81,13 +81,15 @@ interface types {
     }
 
     /// A named type definition inside a `schema-graph`.
+    ///
+    /// The def itself does not carry metadata; metadata lives on the
+    /// referenced `schema-type-node` so there is one source of truth for
+    /// docs / aliases / examples / deprecation / role on each type.
     record schema-type-def {
         /// Stable identifier; unique within the enclosing graph.
         id: type-id,
         /// Optional human-readable qualified name (display only).
         name: option<string>,
-        /// Per-def metadata (docs, aliases, examples, deprecation, role).
-        metadata: metadata-envelope,
         /// Index into the enclosing graph's `type-nodes` for this def's body.
         body: type-node-index,
     }
@@ -119,8 +121,16 @@ interface types {
     // Schema type
     // ============================================================
 
-    /// One node in a `schema-graph`. Recursive positions reference other nodes
-    /// (or named definitions) by index.
+    /// One node in a `schema-graph`. Carries the type body and a per-node
+    /// metadata envelope (docs, aliases, examples, deprecation, role).
+    /// Recursive positions reference other nodes (or named definitions) by
+    /// index inside the body.
+    record schema-type-node {
+        body: schema-type-body,
+        metadata: metadata-envelope,
+    }
+
+    /// The structural body of a `schema-type-node`.
     ///
     /// Closed sum types come in two shapes that differ by how the decoder
     /// learns which branch a value belongs to:
@@ -139,7 +149,7 @@ interface types {
     ///     value (a URL whose scheme picks the handler, a JSON object whose
     ///     `"kind"` field picks the variant, an MCP content block whose
     ///     `"type"` field picks the part shape, …).
-    variant schema-type-node {
+    variant schema-type-body {
         // --- Reference to a named definition in the same `schema-graph` ---
         ref-type(def-index),
 
@@ -350,14 +360,12 @@ interface types {
     record secret-spec {
         /// Optional categorisation (e.g., `"api-key"`, `"oauth-token"`).
         category: option<string>,
-        metadata: metadata-envelope,
     }
 
     record quota-token-spec {
         /// Resource name this token covers (e.g., declared in the agent manifest).
         /// `none` = any resource permitted.
         resource-name: option<string>,
-        metadata: metadata-envelope,
     }
 
     // ============================================================

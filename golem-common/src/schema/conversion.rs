@@ -81,6 +81,99 @@ pub fn try_into_schema_graph<T: IntoSchema + ?Sized>() -> Result<SchemaGraph, Sc
     }
 }
 
+/// Errors produced by [`merge_agent_graphs`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MergeError {
+    /// Two input graphs declare the same [`TypeId`] with divergent
+    /// definition bodies. The agent's shared name pool requires every
+    /// `TypeId` to resolve to exactly one body; same id with the same
+    /// body is fine, same id with different bodies is rejected.
+    ConflictingDefinitions {
+        id: TypeId,
+        first_name: Option<String>,
+        second_name: Option<String>,
+    },
+}
+
+impl Display for MergeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            MergeError::ConflictingDefinitions {
+                id,
+                first_name,
+                second_name,
+            } => write!(
+                f,
+                "conflicting definitions for TypeId `{id}` while merging agent graphs \
+                 (first name = {first_name:?}, second name = {second_name:?})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MergeError {}
+
+/// Merge the named definitions from any number of per-root
+/// [`SchemaGraph`]s into a single agent-level graph.
+///
+/// Intended for SDK / derive-crate codegen that produces one
+/// [`crate::schema::agent::AgentTypeSchema`] per agent: each constructor
+/// input, method input, and method output type is converted via
+/// [`try_into_schema_graph`] or [`IntoSchema::register_in`], then all
+/// resulting graphs are merged here to produce the agent's shared
+/// [`crate::schema::agent::AgentTypeSchema::schema`] field (see §4.22).
+///
+/// Behaviour:
+///
+/// - The merged graph carries a sentinel root via
+///   [`SchemaGraph::empty`]; only its `defs` are meaningful.
+///   **Input graph roots are ignored.** Callers must retain the
+///   original [`SchemaType`] roots themselves and install them into
+///   the agent's constructor/method input/output slots.
+/// - Definitions are deduplicated by [`TypeId`]: identical bodies under
+///   the same id are merged into a single entry.
+/// - Same id with **divergent** bodies fails with
+///   [`MergeError::ConflictingDefinitions`]. Conflict detection uses
+///   exact [`SchemaType`] equality (including metadata).
+///   [`SchemaTypeDef::name`] is display-only and does not participate
+///   in conflict detection; when duplicates have identical bodies, the
+///   first-seen definition (including its `name`) is retained.
+/// - The order of definitions in the result follows first-seen
+///   insertion order across the input iterator.
+///
+/// Call this **once per carrier**: separately for the parent
+/// [`crate::schema::agent::AgentTypeSchema::schema`] and separately for
+/// each [`crate::schema::agent::AgentDependencySchema::schema`].
+/// Dependencies own independent graphs (§4.22) — do not merge their
+/// definitions into the parent agent's graph.
+pub fn merge_agent_graphs(
+    graphs: impl IntoIterator<Item = SchemaGraph>,
+) -> Result<SchemaGraph, MergeError> {
+    let mut merged: Vec<SchemaTypeDef> = Vec::new();
+
+    for graph in graphs {
+        for def in graph.defs {
+            if let Some(existing) = merged.iter().find(|d| d.id == def.id) {
+                if existing.body != def.body {
+                    return Err(MergeError::ConflictingDefinitions {
+                        id: def.id,
+                        first_name: existing.name.clone(),
+                        second_name: def.name,
+                    });
+                }
+                // identical body — skip, first-seen wins
+            } else {
+                merged.push(def);
+            }
+        }
+    }
+
+    Ok(SchemaGraph {
+        defs: merged,
+        root: SchemaGraph::empty().root,
+    })
+}
+
 // =====================================================================
 // Builder
 // =====================================================================
@@ -116,6 +209,10 @@ impl SchemaBuilder {
     }
 
     /// Promote a reservation to a real definition.
+    ///
+    /// `metadata` is attached to the body's [`MetadataEnvelope`] (every
+    /// [`SchemaType`] node carries metadata directly; the def no longer has
+    /// a separate slot for it).
     pub fn commit(
         &mut self,
         id: TypeId,
@@ -124,23 +221,14 @@ impl SchemaBuilder {
         body: SchemaType,
     ) {
         self.reserved.remove(&id);
+        let body = body.with_metadata(metadata);
         // De-duplicate: if a definition with this id already exists
         // (because of a parallel registration in a sibling subtree) the
         // first one wins; later registrations are idempotent overwrites.
         if let Some(existing) = self.defs.iter_mut().find(|d| d.id == id) {
-            *existing = SchemaTypeDef {
-                id,
-                name,
-                metadata,
-                body,
-            };
+            *existing = SchemaTypeDef { id, name, body };
         } else {
-            self.defs.push(SchemaTypeDef {
-                id,
-                name,
-                metadata,
-                body,
-            });
+            self.defs.push(SchemaTypeDef { id, name, body });
         }
     }
 
@@ -440,25 +528,25 @@ macro_rules! impl_primitive {
     };
 }
 
-impl_primitive!(bool, "bool", SchemaType::Bool, Bool);
-impl_primitive!(i8, "i8", SchemaType::S8, S8);
-impl_primitive!(i16, "i16", SchemaType::S16, S16);
-impl_primitive!(i32, "i32", SchemaType::S32, S32);
-impl_primitive!(i64, "i64", SchemaType::S64, S64);
-impl_primitive!(u8, "u8", SchemaType::U8, U8);
-impl_primitive!(u16, "u16", SchemaType::U16, U16);
-impl_primitive!(u32, "u32", SchemaType::U32, U32);
-impl_primitive!(u64, "u64", SchemaType::U64, U64);
-impl_primitive!(f32, "f32", SchemaType::F32, F32);
-impl_primitive!(f64, "f64", SchemaType::F64, F64);
-impl_primitive!(char, "char", SchemaType::Char, Char);
+impl_primitive!(bool, "bool", SchemaType::bool(), Bool);
+impl_primitive!(i8, "i8", SchemaType::s8(), S8);
+impl_primitive!(i16, "i16", SchemaType::s16(), S16);
+impl_primitive!(i32, "i32", SchemaType::s32(), S32);
+impl_primitive!(i64, "i64", SchemaType::s64(), S64);
+impl_primitive!(u8, "u8", SchemaType::u8(), U8);
+impl_primitive!(u16, "u16", SchemaType::u16(), U16);
+impl_primitive!(u32, "u32", SchemaType::u32(), U32);
+impl_primitive!(u64, "u64", SchemaType::u64(), U64);
+impl_primitive!(f32, "f32", SchemaType::f32(), F32);
+impl_primitive!(f64, "f64", SchemaType::f64(), F64);
+impl_primitive!(char, "char", SchemaType::char(), Char);
 
 impl IntoSchema for String {
     fn type_id() -> TypeId {
         TypeId::new("alloc.string.String")
     }
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::String
+        SchemaType::string()
     }
     fn to_value(&self) -> SchemaValue {
         SchemaValue::String(self.clone())
@@ -541,9 +629,7 @@ impl<T: IntoSchema> IntoSchema for Option<T> {
         type_id_with_args("core.option.Option", &[T::type_id()])
     }
     fn register_in(b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::Option {
-            inner: Box::new(T::register_in(b)),
-        }
+        SchemaType::option(T::register_in(b))
     }
     fn to_value(&self) -> SchemaValue {
         SchemaValue::Option {
@@ -571,9 +657,7 @@ impl<T: IntoSchema> IntoSchema for Vec<T> {
         type_id_with_args("alloc.vec.Vec", &[T::type_id()])
     }
     fn register_in(b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::List {
-            element: Box::new(T::register_in(b)),
-        }
+        SchemaType::list(T::register_in(b))
     }
     fn to_value(&self) -> SchemaValue {
         SchemaValue::List {
@@ -600,10 +684,7 @@ impl<K: IntoSchema, V: IntoSchema> IntoSchema for HashMap<K, V> {
         type_id_with_args("std.collections.HashMap", &[K::type_id(), V::type_id()])
     }
     fn register_in(b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::Map {
-            key: Box::new(K::register_in(b)),
-            value: Box::new(V::register_in(b)),
-        }
+        SchemaType::map(K::register_in(b), V::register_in(b))
     }
     fn to_value(&self) -> SchemaValue {
         SchemaValue::Map {
@@ -640,10 +721,7 @@ impl<K: IntoSchema, V: IntoSchema> IntoSchema for BTreeMap<K, V> {
         type_id_with_args("alloc.collections.BTreeMap", &[K::type_id(), V::type_id()])
     }
     fn register_in(b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::Map {
-            key: Box::new(K::register_in(b)),
-            value: Box::new(V::register_in(b)),
-        }
+        SchemaType::map(K::register_in(b), V::register_in(b))
     }
     fn to_value(&self) -> SchemaValue {
         SchemaValue::Map {
@@ -686,9 +764,7 @@ macro_rules! impl_tuple {
                 type_id_with_args($name, &[ $( <$t as IntoSchema>::type_id() ),+ ])
             }
             fn register_in(b: &mut SchemaBuilder) -> SchemaType {
-                SchemaType::Tuple {
-                    elements: vec![ $( <$t as IntoSchema>::register_in(b) ),+ ],
-                }
+                SchemaType::tuple(vec![ $( <$t as IntoSchema>::register_in(b) ),+ ])
             }
             fn to_value(&self) -> SchemaValue {
                 SchemaValue::Tuple {
@@ -734,7 +810,7 @@ impl IntoSchema for () {
         TypeId::new("core.tuple.Unit")
     }
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::Tuple { elements: vec![] }
+        SchemaType::tuple(vec![])
     }
     fn to_value(&self) -> SchemaValue {
         SchemaValue::Tuple { elements: vec![] }
@@ -763,7 +839,7 @@ impl<T: IntoSchema, E: IntoSchema> IntoSchema for Result<T, E> {
         type_id_with_args("core.result.Result", &[T::type_id(), E::type_id()])
     }
     fn register_in(b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::Result(crate::schema::schema_type::ResultSpec {
+        SchemaType::result(crate::schema::schema_type::ResultSpec {
             ok: Some(Box::new(T::register_in(b))),
             err: Some(Box::new(E::register_in(b))),
         })
@@ -812,7 +888,7 @@ impl IntoSchema for chrono::DateTime<chrono::Utc> {
         TypeId::new("chrono.DateTime<chrono.Utc>")
     }
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::Datetime
+        SchemaType::datetime()
     }
     fn to_value(&self) -> SchemaValue {
         SchemaValue::Datetime { value: *self }
@@ -837,7 +913,7 @@ impl IntoSchema for std::time::Duration {
         TypeId::new("core.time.Duration")
     }
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::Duration
+        SchemaType::duration()
     }
     fn to_value(&self) -> SchemaValue {
         let nanos = self.as_nanos();
@@ -878,7 +954,7 @@ impl IntoSchema for chrono::Duration {
         TypeId::new("chrono.Duration")
     }
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::Duration
+        SchemaType::duration()
     }
     fn to_value(&self) -> SchemaValue {
         SchemaValue::Duration(DurationValuePayload {
@@ -899,5 +975,121 @@ impl FromSchema for chrono::Duration {
                 "chrono::Duration",
             )),
         }
+    }
+}
+
+// =====================================================================
+// Tests for merge_agent_graphs
+// =====================================================================
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    use test_r::test;
+
+    fn def(id: &str, body: SchemaType) -> SchemaTypeDef {
+        SchemaTypeDef {
+            id: TypeId::new(id),
+            name: None,
+            body,
+        }
+    }
+
+    #[test]
+    fn empty_input_produces_empty_merged_graph() {
+        let merged = merge_agent_graphs(std::iter::empty()).unwrap();
+        assert!(merged.defs.is_empty());
+        // root is the sentinel from SchemaGraph::empty()
+        assert_eq!(merged.root, SchemaGraph::empty().root);
+    }
+
+    #[test]
+    fn defs_are_deduplicated_by_type_id_when_bodies_match() {
+        let g1 = SchemaGraph {
+            defs: vec![def("a.Foo", SchemaType::s32())],
+            root: SchemaType::ref_to(TypeId::new("a.Foo")),
+        };
+        let g2 = SchemaGraph {
+            defs: vec![def("a.Foo", SchemaType::s32())],
+            root: SchemaType::ref_to(TypeId::new("a.Foo")),
+        };
+        let merged = merge_agent_graphs([g1, g2]).unwrap();
+        assert_eq!(merged.defs.len(), 1);
+        assert_eq!(merged.defs[0].id, TypeId::new("a.Foo"));
+    }
+
+    #[test]
+    fn defs_with_same_id_but_divergent_bodies_are_rejected() {
+        let g1 = SchemaGraph {
+            defs: vec![def("a.Foo", SchemaType::s32())],
+            root: SchemaType::ref_to(TypeId::new("a.Foo")),
+        };
+        let g2 = SchemaGraph {
+            defs: vec![def("a.Foo", SchemaType::string())],
+            root: SchemaType::ref_to(TypeId::new("a.Foo")),
+        };
+        let err = merge_agent_graphs([g1, g2]).unwrap_err();
+        assert!(matches!(
+            err,
+            MergeError::ConflictingDefinitions { ref id, .. } if id == &TypeId::new("a.Foo")
+        ));
+    }
+
+    #[test]
+    fn first_seen_insertion_order_is_preserved() {
+        let g1 = SchemaGraph {
+            defs: vec![
+                def("a.Alpha", SchemaType::bool()),
+                def("a.Beta", SchemaType::s64()),
+            ],
+            root: SchemaType::ref_to(TypeId::new("a.Alpha")),
+        };
+        let g2 = SchemaGraph {
+            defs: vec![
+                def("a.Gamma", SchemaType::u32()),
+                def("a.Alpha", SchemaType::bool()), // dup, identical
+            ],
+            root: SchemaType::ref_to(TypeId::new("a.Gamma")),
+        };
+        let merged = merge_agent_graphs([g1, g2]).unwrap();
+        let ids: Vec<_> = merged.defs.iter().map(|d| d.id.as_str().to_string()).collect();
+        assert_eq!(ids, vec!["a.Alpha", "a.Beta", "a.Gamma"]);
+    }
+
+    #[test]
+    fn duplicate_id_with_same_body_keeps_first_seen_name() {
+        // `SchemaTypeDef::name` is display-only and does not affect
+        // dedup. When the same id appears twice with the same body but
+        // different display names, the first-seen name is retained.
+        let g1 = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: TypeId::new("a.Foo"),
+                name: Some("FooFirst".into()),
+                body: SchemaType::s32(),
+            }],
+            root: SchemaType::ref_to(TypeId::new("a.Foo")),
+        };
+        let g2 = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: TypeId::new("a.Foo"),
+                name: Some("FooSecond".into()),
+                body: SchemaType::s32(),
+            }],
+            root: SchemaType::ref_to(TypeId::new("a.Foo")),
+        };
+        let merged = merge_agent_graphs([g1, g2]).unwrap();
+        assert_eq!(merged.defs.len(), 1);
+        assert_eq!(merged.defs[0].name.as_deref(), Some("FooFirst"));
+    }
+
+    #[test]
+    fn merged_graph_uses_sentinel_root() {
+        // Even when input graphs have non-trivial roots (which would
+        // happen in practice — each one is a per-type try_into_schema_graph
+        // result), the merged carrier's root is always the sentinel,
+        // because the agent layer is a multi-root carrier.
+        let g = SchemaGraph::anonymous(SchemaType::s32());
+        let merged = merge_agent_graphs([g]).unwrap();
+        assert_eq!(merged.root, SchemaGraph::empty().root);
     }
 }

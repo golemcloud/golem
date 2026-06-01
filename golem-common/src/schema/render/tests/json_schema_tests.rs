@@ -23,24 +23,22 @@ use test_r::test;
 
 #[test]
 fn record_emits_object_with_properties() {
-    let ty = SchemaType::Record {
-        fields: vec![
-            NamedFieldType {
-                name: "id".to_string(),
-                body: SchemaType::U32,
-                metadata: Default::default(),
-            },
-            NamedFieldType {
-                name: "name".to_string(),
-                body: SchemaType::Text(TextRestrictions {
-                    min_length: Some(1),
-                    max_length: Some(64),
-                    ..Default::default()
-                }),
-                metadata: Default::default(),
-            },
-        ],
-    };
+    let ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "id".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "name".to_string(),
+            body: SchemaType::text(TextRestrictions {
+                min_length: Some(1),
+                max_length: Some(64),
+                ..Default::default()
+            }),
+            metadata: Default::default(),
+        },
+    ]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("object"));
@@ -57,7 +55,7 @@ fn record_emits_object_with_properties() {
 
 #[test]
 fn primitive_integer_carries_min_max() {
-    let ty = SchemaType::S8;
+    let ty = SchemaType::s8();
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("integer"));
@@ -67,9 +65,7 @@ fn primitive_integer_carries_min_max() {
 
 #[test]
 fn list_emits_array_with_items() {
-    let ty = SchemaType::List {
-        element: Box::new(SchemaType::String),
-    };
+    let ty = SchemaType::list(SchemaType::string());
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("array"));
@@ -78,10 +74,7 @@ fn list_emits_array_with_items() {
 
 #[test]
 fn fixed_list_emits_min_max() {
-    let ty = SchemaType::FixedList {
-        element: Box::new(SchemaType::Bool),
-        length: 3,
-    };
+    let ty = SchemaType::fixed_list(SchemaType::bool(), 3);
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["minItems"], json!(3));
@@ -90,10 +83,7 @@ fn fixed_list_emits_min_max() {
 
 #[test]
 fn map_emits_array_of_pairs() {
-    let ty = SchemaType::Map {
-        key: Box::new(SchemaType::U32),
-        value: Box::new(SchemaType::String),
-    };
+    let ty = SchemaType::map(SchemaType::u32(), SchemaType::string());
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("array"));
@@ -106,9 +96,7 @@ fn map_emits_array_of_pairs() {
 
 #[test]
 fn option_emits_one_of_null_and_inner() {
-    let ty = SchemaType::Option {
-        inner: Box::new(SchemaType::Bool),
-    };
+    let ty = SchemaType::option(SchemaType::bool());
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     let one_of = schema["oneOf"].as_array().expect("oneOf is array");
@@ -117,20 +105,18 @@ fn option_emits_one_of_null_and_inner() {
 
 #[test]
 fn variant_emits_one_of_with_const_or_object() {
-    let ty = SchemaType::Variant {
-        cases: vec![
-            crate::schema::schema_type::VariantCaseType {
-                name: "ready".to_string(),
-                payload: None,
-                metadata: Default::default(),
-            },
-            crate::schema::schema_type::VariantCaseType {
-                name: "value".to_string(),
-                payload: Some(SchemaType::U32),
-                metadata: Default::default(),
-            },
-        ],
-    };
+    let ty = SchemaType::variant(vec![
+        crate::schema::schema_type::VariantCaseType {
+            name: "ready".to_string(),
+            payload: None,
+            metadata: Default::default(),
+        },
+        crate::schema::schema_type::VariantCaseType {
+            name: "value".to_string(),
+            payload: Some(SchemaType::u32()),
+            metadata: Default::default(),
+        },
+    ]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     let one_of = schema["oneOf"].as_array().expect("oneOf is array");
@@ -141,17 +127,15 @@ fn variant_emits_one_of_with_const_or_object() {
 
 #[test]
 fn union_with_field_equals_emits_discriminator() {
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "left".to_string(),
-                body: SchemaType::Record {
-                    fields: vec![NamedFieldType {
-                        name: "kind".to_string(),
-                        body: SchemaType::String,
-                        metadata: Default::default(),
-                    }],
-                },
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "kind".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
                 discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name: "kind".to_string(),
                     literal: Some("a".to_string()),
@@ -160,13 +144,11 @@ fn union_with_field_equals_emits_discriminator() {
             },
             UnionBranch {
                 tag: "right".to_string(),
-                body: SchemaType::Record {
-                    fields: vec![NamedFieldType {
-                        name: "kind".to_string(),
-                        body: SchemaType::String,
-                        metadata: Default::default(),
-                    }],
-                },
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "kind".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
                 discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name: "kind".to_string(),
                     literal: Some("b".to_string()),
@@ -186,9 +168,7 @@ fn union_with_field_equals_emits_discriminator() {
 
 #[test]
 fn enum_emits_string_enum() {
-    let ty = SchemaType::Enum {
-        cases: vec!["red".into(), "green".into(), "blue".into()],
-    };
+    let ty = SchemaType::r#enum(vec!["red".into(), "green".into(), "blue".into()]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("string"));
@@ -198,9 +178,7 @@ fn enum_emits_string_enum() {
 
 #[test]
 fn flags_emits_array_of_string_enum() {
-    let ty = SchemaType::Flags {
-        flags: vec!["a".into(), "b".into()],
-    };
+    let ty = SchemaType::flags(vec!["a".into(), "b".into()]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("array"));
@@ -209,7 +187,7 @@ fn flags_emits_array_of_string_enum() {
 
 #[test]
 fn secret_emits_canonical_object_shape() {
-    let ty = SchemaType::Secret(crate::schema::schema_type::SecretSpec::default());
+    let ty = SchemaType::secret(crate::schema::schema_type::SecretSpec::default());
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("object"));
@@ -226,7 +204,7 @@ fn secret_emits_canonical_object_shape() {
 
 #[test]
 fn datetime_emits_date_time_format() {
-    let ty = SchemaType::Datetime;
+    let ty = SchemaType::datetime();
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("string"));
@@ -235,7 +213,7 @@ fn datetime_emits_date_time_format() {
 
 #[test]
 fn root_schema_carries_draft_2020_12_marker() {
-    let graph = SchemaGraph::anonymous(SchemaType::Bool);
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
     let schema = to_json_schema(&graph, &graph.root);
     assert_eq!(
         schema["$schema"],
@@ -245,9 +223,11 @@ fn root_schema_carries_draft_2020_12_marker() {
 
 #[test]
 fn tuple_carries_min_items_equal_to_arity() {
-    let ty = SchemaType::Tuple {
-        elements: vec![SchemaType::U32, SchemaType::String, SchemaType::Bool],
-    };
+    let ty = SchemaType::tuple(vec![
+        SchemaType::u32(),
+        SchemaType::string(),
+        SchemaType::bool(),
+    ]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["minItems"], json!(3));
@@ -263,10 +243,9 @@ fn type_id_with_slash_is_pointer_escaped() {
         defs: vec![SchemaTypeDef {
             id: id.clone(),
             name: None,
-            metadata: Default::default(),
-            body: SchemaType::Bool,
+            body: SchemaType::bool(),
         }],
-        root: SchemaType::Ref(id),
+        root: SchemaType::ref_to(id),
     };
     let schema = to_json_schema(&graph, &graph.root);
     // The root schema is the $ref pointer; slashes inside the token must
@@ -277,7 +256,7 @@ fn type_id_with_slash_is_pointer_escaped() {
 
 #[test]
 fn binary_emits_canonical_object_shape() {
-    let ty = SchemaType::Binary(crate::schema::schema_type::BinaryRestrictions::default());
+    let ty = SchemaType::binary(crate::schema::schema_type::BinaryRestrictions::default());
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("object"));
@@ -298,7 +277,7 @@ fn binary_emits_canonical_object_shape() {
 
 #[test]
 fn quota_token_emits_canonical_object_shape() {
-    let ty = SchemaType::QuotaToken(crate::schema::schema_type::QuotaTokenSpec::default());
+    let ty = SchemaType::quota_token(crate::schema::schema_type::QuotaTokenSpec::default());
     let graph = SchemaGraph::anonymous(ty.clone());
     let schema = to_json_schema(&graph, &ty);
     assert_eq!(schema["type"], json!("object"));
@@ -333,17 +312,15 @@ fn quota_token_emits_canonical_object_shape() {
 
 #[test]
 fn union_emits_per_branch_defs() {
-    let ty = SchemaType::Union(UnionSpec {
+    let ty = SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "left".to_string(),
-                body: SchemaType::Record {
-                    fields: vec![NamedFieldType {
-                        name: "kind".to_string(),
-                        body: SchemaType::String,
-                        metadata: Default::default(),
-                    }],
-                },
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "kind".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
                 discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name: "kind".to_string(),
                     literal: Some("L".to_string()),
@@ -352,13 +329,11 @@ fn union_emits_per_branch_defs() {
             },
             UnionBranch {
                 tag: "right".to_string(),
-                body: SchemaType::Record {
-                    fields: vec![NamedFieldType {
-                        name: "kind".to_string(),
-                        body: SchemaType::String,
-                        metadata: Default::default(),
-                    }],
-                },
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "kind".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
                 discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                     field_name: "kind".to_string(),
                     literal: Some("R".to_string()),

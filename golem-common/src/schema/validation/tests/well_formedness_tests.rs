@@ -47,17 +47,15 @@ fn duplicate_type_id_is_reported() {
             SchemaTypeDef {
                 id: TypeId::new("dup"),
                 name: None,
-                metadata: Default::default(),
-                body: SchemaType::Bool,
+            body: SchemaType::bool(),
             },
             SchemaTypeDef {
                 id: TypeId::new("dup"),
                 name: None,
-                metadata: Default::default(),
-                body: SchemaType::S32,
+            body: SchemaType::s32(),
             },
         ],
-        root: SchemaType::Ref(TypeId::new("dup")),
+        root: SchemaType::ref_to(TypeId::new("dup")),
     };
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::DuplicateTypeId(TypeId::new("dup"))));
@@ -65,28 +63,28 @@ fn duplicate_type_id_is_reported() {
 
 #[test]
 fn dangling_ref_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Ref(TypeId::new("missing")));
+    let graph = SchemaGraph::anonymous(SchemaType::ref_to(TypeId::new("missing")));
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::DanglingRef(TypeId::new("missing"))));
 }
 
 #[test]
 fn empty_variant_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Variant { cases: vec![] });
+    let graph = SchemaGraph::anonymous(SchemaType::Variant { cases: vec![], metadata: Default::default()});
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::EmptyVariant));
 }
 
 #[test]
 fn empty_enum_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Enum { cases: vec![] });
+    let graph = SchemaGraph::anonymous(SchemaType::Enum { cases: vec![], metadata: Default::default()});
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::EmptyEnum));
 }
 
 #[test]
 fn empty_union_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Union(UnionSpec { branches: vec![] }));
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec { branches: vec![] }));
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::EmptyUnion));
 }
@@ -97,15 +95,16 @@ fn duplicate_record_field_is_reported() {
         fields: vec![
             NamedFieldType {
                 name: "a".to_string(),
-                body: SchemaType::Bool,
+                body: SchemaType::bool(),
                 metadata: Default::default(),
             },
             NamedFieldType {
                 name: "a".to_string(),
-                body: SchemaType::S32,
+                body: SchemaType::s32(),
                 metadata: Default::default(),
             },
         ],
+        metadata: Default::default(),
     });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::DuplicateFieldName("a".to_string())));
@@ -114,8 +113,9 @@ fn duplicate_record_field_is_reported() {
 #[test]
 fn map_key_not_primitive_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::Map {
-        key: Box::new(SchemaType::Record { fields: vec![] }),
-        value: Box::new(SchemaType::Bool),
+        key: Box::new(SchemaType::Record { fields: vec![], metadata: Default::default()}),
+        value: Box::new(SchemaType::bool()),
+        metadata: Default::default(),
     });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::MapKeyNotPrimitive));
@@ -124,8 +124,9 @@ fn map_key_not_primitive_is_reported() {
 #[test]
 fn fixed_list_zero_length_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::FixedList {
-        element: Box::new(SchemaType::Bool),
+        element: Box::new(SchemaType::bool()),
         length: 0,
+        metadata: Default::default(),
     });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::FixedListZeroLength));
@@ -133,7 +134,7 @@ fn fixed_list_zero_length_is_reported() {
 
 #[test]
 fn quantity_min_gt_max_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Quantity(QuantitySpec {
+    let graph = SchemaGraph::anonymous(SchemaType::quantity(QuantitySpec {
         base_unit: "kg".to_string(),
         allowed_suffixes: vec![],
         min: Some(QuantityValue {
@@ -153,7 +154,7 @@ fn quantity_min_gt_max_is_reported() {
 
 #[test]
 fn quantity_unit_mismatch_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Quantity(QuantitySpec {
+    let graph = SchemaGraph::anonymous(SchemaType::quantity(QuantitySpec {
         base_unit: "kg".to_string(),
         allowed_suffixes: vec![],
         min: Some(QuantityValue {
@@ -177,10 +178,10 @@ fn quantity_unit_mismatch_is_reported() {
 
 #[test]
 fn string_pattern_rule_on_record_body_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Union(UnionSpec {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "t".to_string(),
-            body: SchemaType::Record { fields: vec![] },
+            body: SchemaType::Record { fields: vec![], metadata: Default::default()},
             discriminator: DiscriminatorRule::Prefix {
                 prefix: "x".to_string(),
             },
@@ -197,15 +198,16 @@ fn string_pattern_rule_on_record_body_is_reported() {
 
 #[test]
 fn field_equals_literal_on_non_string_field_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Union(UnionSpec {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "t".to_string(),
             body: SchemaType::Record {
                 fields: vec![NamedFieldType {
                     name: "n".to_string(),
-                    body: SchemaType::S32,
+                    body: SchemaType::s32(),
                     metadata: Default::default(),
                 }],
+                metadata: Default::default(),
             },
             discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                 field_name: "n".to_string(),
@@ -225,10 +227,10 @@ fn field_equals_literal_on_non_string_field_is_reported() {
 
 #[test]
 fn field_rule_on_non_record_body_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Union(UnionSpec {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "t".to_string(),
-            body: SchemaType::S32,
+            body: SchemaType::s32(),
             discriminator: DiscriminatorRule::FieldAbsent {
                 field_name: "x".to_string(),
             },
@@ -251,13 +253,12 @@ fn ref_resolution_in_union_branch_body() {
         defs: vec![SchemaTypeDef {
             id: TypeId::new("S"),
             name: None,
-            metadata: Default::default(),
-            body: SchemaType::String,
+            body: SchemaType::string(),
         }],
-        root: SchemaType::Union(UnionSpec {
+        root: SchemaType::union(UnionSpec {
             branches: vec![UnionBranch {
                 tag: "t".to_string(),
-                body: SchemaType::Ref(TypeId::new("S")),
+                body: SchemaType::ref_to(TypeId::new("S")),
                 discriminator: DiscriminatorRule::Prefix {
                     prefix: "x".to_string(),
                 },
@@ -270,7 +271,7 @@ fn ref_resolution_in_union_branch_body() {
 
 #[test]
 fn empty_flags_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Flags { flags: vec![] });
+    let graph = SchemaGraph::anonymous(SchemaType::Flags { flags: vec![], metadata: Default::default()});
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::EmptyFlags));
 }
@@ -290,6 +291,7 @@ fn duplicate_variant_case_is_reported() {
                 metadata: Default::default(),
             },
         ],
+        metadata: Default::default(),
     });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::DuplicateVariantCase("a".to_string())));
@@ -299,6 +301,7 @@ fn duplicate_variant_case_is_reported() {
 fn duplicate_enum_case_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::Enum {
         cases: vec!["x".to_string(), "x".to_string()],
+        metadata: Default::default(),
     });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::DuplicateEnumCase("x".to_string())));
@@ -308,6 +311,7 @@ fn duplicate_enum_case_is_reported() {
 fn duplicate_flag_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::Flags {
         flags: vec!["f".to_string(), "f".to_string()],
+        metadata: Default::default(),
     });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::DuplicateFlagName("f".to_string())));
@@ -315,11 +319,11 @@ fn duplicate_flag_is_reported() {
 
 #[test]
 fn duplicate_union_tag_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Union(UnionSpec {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "x".to_string(),
-                body: SchemaType::String,
+                body: SchemaType::string(),
                 discriminator: DiscriminatorRule::Prefix {
                     prefix: "alpha".to_string(),
                 },
@@ -327,7 +331,7 @@ fn duplicate_union_tag_is_reported() {
             },
             UnionBranch {
                 tag: "x".to_string(),
-                body: SchemaType::String,
+                body: SchemaType::string(),
                 discriminator: DiscriminatorRule::Prefix {
                     prefix: "beta".to_string(),
                 },
@@ -341,10 +345,10 @@ fn duplicate_union_tag_is_reported() {
 
 #[test]
 fn field_equals_missing_field_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Union(UnionSpec {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "t".to_string(),
-            body: SchemaType::Record { fields: vec![] },
+            body: SchemaType::Record { fields: vec![], metadata: Default::default()},
             discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                 field_name: "missing".to_string(),
                 literal: None,
@@ -365,12 +369,12 @@ fn map_key_ref_to_string_is_accepted() {
         defs: vec![SchemaTypeDef {
             id: TypeId::new("StringDef"),
             name: None,
-            metadata: Default::default(),
-            body: SchemaType::String,
+            body: SchemaType::string(),
         }],
         root: SchemaType::Map {
-            key: Box::new(SchemaType::Ref(TypeId::new("StringDef"))),
-            value: Box::new(SchemaType::Bool),
+            key: Box::new(SchemaType::ref_to(TypeId::new("StringDef"))),
+            value: Box::new(SchemaType::bool()),
+            metadata: Default::default(),
         },
     };
     assert!(validate_graph(&graph).is_ok());
@@ -378,7 +382,7 @@ fn map_key_ref_to_string_is_accepted() {
 
 #[test]
 fn one_sided_quantity_min_unit_mismatch_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Quantity(QuantitySpec {
+    let graph = SchemaGraph::anonymous(SchemaType::quantity(QuantitySpec {
         base_unit: "kg".to_string(),
         allowed_suffixes: vec![],
         min: Some(QuantityValue {
@@ -398,7 +402,7 @@ fn one_sided_quantity_min_unit_mismatch_is_reported() {
 
 #[test]
 fn one_sided_quantity_max_unit_mismatch_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Quantity(QuantitySpec {
+    let graph = SchemaGraph::anonymous(SchemaType::quantity(QuantitySpec {
         base_unit: "kg".to_string(),
         allowed_suffixes: vec![],
         min: None,
@@ -418,7 +422,7 @@ fn one_sided_quantity_max_unit_mismatch_is_reported() {
 
 #[test]
 fn quantity_comparison_overflow_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Quantity(QuantitySpec {
+    let graph = SchemaGraph::anonymous(SchemaType::quantity(QuantitySpec {
         base_unit: "kg".to_string(),
         allowed_suffixes: vec![],
         min: Some(QuantityValue {
@@ -442,11 +446,11 @@ fn quantity_comparison_overflow_is_reported() {
 
 #[test]
 fn union_discriminator_overlap_prefix_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Union(UnionSpec {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![
             UnionBranch {
                 tag: "a".to_string(),
-                body: SchemaType::String,
+                body: SchemaType::string(),
                 discriminator: DiscriminatorRule::Prefix {
                     prefix: "a".to_string(),
                 },
@@ -454,7 +458,7 @@ fn union_discriminator_overlap_prefix_is_reported() {
             },
             UnionBranch {
                 tag: "b".to_string(),
-                body: SchemaType::String,
+                body: SchemaType::string(),
                 discriminator: DiscriminatorRule::Prefix {
                     prefix: "ab".to_string(),
                 },
@@ -472,10 +476,10 @@ fn union_discriminator_overlap_prefix_is_reported() {
 
 #[test]
 fn invalid_regex_on_union_branch_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Union(UnionSpec {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "t".to_string(),
-            body: SchemaType::String,
+            body: SchemaType::string(),
             discriminator: DiscriminatorRule::Regex {
                 regex: "(".to_string(),
             },
@@ -492,15 +496,16 @@ fn invalid_regex_on_union_branch_is_reported() {
 
 #[test]
 fn unsatisfiable_field_absent_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Union(UnionSpec {
+    let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "t".to_string(),
             body: SchemaType::Record {
                 fields: vec![NamedFieldType {
                     name: "kind".to_string(),
-                    body: SchemaType::String,
+                    body: SchemaType::string(),
                     metadata: Default::default(),
                 }],
+                metadata: Default::default(),
             },
             discriminator: DiscriminatorRule::FieldAbsent {
                 field_name: "kind".to_string(),
@@ -518,7 +523,7 @@ fn unsatisfiable_field_absent_is_reported() {
 
 #[test]
 fn inverted_text_length_range_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Text(TextRestrictions {
+    let graph = SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
         languages: None,
         min_length: Some(20),
         max_length: Some(10),
@@ -530,7 +535,7 @@ fn inverted_text_length_range_is_reported() {
 
 #[test]
 fn inverted_binary_byte_range_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Binary(BinaryRestrictions {
+    let graph = SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions {
         mime_types: None,
         min_bytes: Some(100),
         max_bytes: Some(50),
@@ -541,7 +546,7 @@ fn inverted_binary_byte_range_is_reported() {
 
 #[test]
 fn invalid_text_regex_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Text(TextRestrictions {
+    let graph = SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
         languages: None,
         min_length: None,
         max_length: None,
@@ -559,8 +564,10 @@ fn invalid_text_regex_is_reported() {
 fn nested_option_of_option_is_rejected() {
     let graph = SchemaGraph::anonymous(SchemaType::Option {
         inner: Box::new(SchemaType::Option {
-            inner: Box::new(SchemaType::U32),
+            inner: Box::new(SchemaType::u32()),
+            metadata: Default::default(),
         }),
+        metadata: Default::default(),
     });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(
@@ -573,11 +580,12 @@ fn nested_option_of_option_is_rejected() {
 #[test]
 fn option_of_union_with_nullable_branch_is_rejected() {
     let graph = SchemaGraph::anonymous(SchemaType::Option {
-        inner: Box::new(SchemaType::Union(UnionSpec {
+        inner: Box::new(SchemaType::union(UnionSpec {
             branches: vec![UnionBranch {
                 tag: "t".to_string(),
                 body: SchemaType::Option {
-                    inner: Box::new(SchemaType::U32),
+                    inner: Box::new(SchemaType::u32()),
+                    metadata: Default::default(),
                 },
                 discriminator: DiscriminatorRule::Prefix {
                     prefix: "x".to_string(),
@@ -585,6 +593,7 @@ fn option_of_union_with_nullable_branch_is_rejected() {
                 metadata: Default::default(),
             }],
         })),
+        metadata: Default::default(),
     });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(
@@ -601,13 +610,14 @@ fn option_of_ref_resolving_to_option_is_rejected() {
         defs: vec![SchemaTypeDef {
             id: inner_id.clone(),
             name: None,
-            metadata: Default::default(),
             body: SchemaType::Option {
-                inner: Box::new(SchemaType::U32),
+                inner: Box::new(SchemaType::u32()),
+                metadata: Default::default(),
             },
         }],
         root: SchemaType::Option {
-            inner: Box::new(SchemaType::Ref(inner_id)),
+            inner: Box::new(SchemaType::ref_to(inner_id)),
+            metadata: Default::default(),
         },
     };
     let errors = validate_graph(&graph).expect_err("should fail");
@@ -629,12 +639,12 @@ fn option_of_self_recursive_ref_terminates() {
         defs: vec![SchemaTypeDef {
             id: id.clone(),
             name: None,
-            metadata: Default::default(),
             body: SchemaType::Option {
-                inner: Box::new(SchemaType::Ref(id.clone())),
+                inner: Box::new(SchemaType::ref_to(id.clone())),
+                metadata: Default::default(),
             },
         }],
-        root: SchemaType::Ref(id),
+        root: SchemaType::ref_to(id),
     };
     let _ = validate_graph(&graph);
 }

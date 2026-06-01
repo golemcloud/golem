@@ -80,7 +80,6 @@ pub fn decode_graph(wire_graph: &wire::SchemaGraph) -> Result<SchemaGraph, Decod
             Ok(SchemaTypeDef {
                 id: TypeId(d.id.clone()),
                 name: d.name.clone(),
-                metadata: decode_metadata(&d.metadata),
                 body,
             })
         })
@@ -138,29 +137,33 @@ impl<'a> GraphCtx<'a> {
         node: &wire::SchemaTypeNode,
         visiting: &mut HashSet<wire::TypeNodeIndex>,
     ) -> Result<SchemaType, DecodeError> {
-        let out = match node {
-            wire::SchemaTypeNode::RefType(def_idx) => {
+        let metadata = decode_metadata(&node.metadata);
+        let out = match &node.body {
+            wire::SchemaTypeBody::RefType(def_idx) => {
                 let def = self
                     .wire
                     .defs
                     .get(usize_index(*def_idx)?)
                     .ok_or(DecodeError::DefIndexOutOfRange(*def_idx))?;
-                SchemaType::Ref(TypeId(def.id.clone()))
+                SchemaType::Ref {
+                    id: TypeId(def.id.clone()),
+                    metadata,
+                }
             }
-            wire::SchemaTypeNode::BoolType => SchemaType::Bool,
-            wire::SchemaTypeNode::S8Type => SchemaType::S8,
-            wire::SchemaTypeNode::S16Type => SchemaType::S16,
-            wire::SchemaTypeNode::S32Type => SchemaType::S32,
-            wire::SchemaTypeNode::S64Type => SchemaType::S64,
-            wire::SchemaTypeNode::U8Type => SchemaType::U8,
-            wire::SchemaTypeNode::U16Type => SchemaType::U16,
-            wire::SchemaTypeNode::U32Type => SchemaType::U32,
-            wire::SchemaTypeNode::U64Type => SchemaType::U64,
-            wire::SchemaTypeNode::F32Type => SchemaType::F32,
-            wire::SchemaTypeNode::F64Type => SchemaType::F64,
-            wire::SchemaTypeNode::CharType => SchemaType::Char,
-            wire::SchemaTypeNode::StringType => SchemaType::String,
-            wire::SchemaTypeNode::RecordType(fields) => {
+            wire::SchemaTypeBody::BoolType => SchemaType::Bool { metadata },
+            wire::SchemaTypeBody::S8Type => SchemaType::S8 { metadata },
+            wire::SchemaTypeBody::S16Type => SchemaType::S16 { metadata },
+            wire::SchemaTypeBody::S32Type => SchemaType::S32 { metadata },
+            wire::SchemaTypeBody::S64Type => SchemaType::S64 { metadata },
+            wire::SchemaTypeBody::U8Type => SchemaType::U8 { metadata },
+            wire::SchemaTypeBody::U16Type => SchemaType::U16 { metadata },
+            wire::SchemaTypeBody::U32Type => SchemaType::U32 { metadata },
+            wire::SchemaTypeBody::U64Type => SchemaType::U64 { metadata },
+            wire::SchemaTypeBody::F32Type => SchemaType::F32 { metadata },
+            wire::SchemaTypeBody::F64Type => SchemaType::F64 { metadata },
+            wire::SchemaTypeBody::CharType => SchemaType::Char { metadata },
+            wire::SchemaTypeBody::StringType => SchemaType::String { metadata },
+            wire::SchemaTypeBody::RecordType(fields) => {
                 let decoded = fields
                     .iter()
                     .map(|f| {
@@ -171,9 +174,12 @@ impl<'a> GraphCtx<'a> {
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                SchemaType::Record { fields: decoded }
+                SchemaType::Record {
+                    fields: decoded,
+                    metadata,
+                }
             }
-            wire::SchemaTypeNode::VariantType(cases) => {
+            wire::SchemaTypeBody::VariantType(cases) => {
                 let decoded = cases
                     .iter()
                     .map(|c| {
@@ -188,36 +194,48 @@ impl<'a> GraphCtx<'a> {
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                SchemaType::Variant { cases: decoded }
+                SchemaType::Variant {
+                    cases: decoded,
+                    metadata,
+                }
             }
-            wire::SchemaTypeNode::EnumType(cases) => SchemaType::Enum {
+            wire::SchemaTypeBody::EnumType(cases) => SchemaType::Enum {
                 cases: cases.clone(),
+                metadata,
             },
-            wire::SchemaTypeNode::FlagsType(flags) => SchemaType::Flags {
+            wire::SchemaTypeBody::FlagsType(flags) => SchemaType::Flags {
                 flags: flags.clone(),
+                metadata,
             },
-            wire::SchemaTypeNode::TupleType(elements) => {
+            wire::SchemaTypeBody::TupleType(elements) => {
                 let decoded = elements
                     .iter()
                     .map(|e| self.decode_type(*e, visiting))
                     .collect::<Result<Vec<_>, _>>()?;
-                SchemaType::Tuple { elements: decoded }
+                SchemaType::Tuple {
+                    elements: decoded,
+                    metadata,
+                }
             }
-            wire::SchemaTypeNode::ListType(element) => SchemaType::List {
+            wire::SchemaTypeBody::ListType(element) => SchemaType::List {
                 element: Box::new(self.decode_type(*element, visiting)?),
+                metadata,
             },
-            wire::SchemaTypeNode::FixedListType(spec) => SchemaType::FixedList {
+            wire::SchemaTypeBody::FixedListType(spec) => SchemaType::FixedList {
                 element: Box::new(self.decode_type(spec.element, visiting)?),
                 length: spec.length,
+                metadata,
             },
-            wire::SchemaTypeNode::MapType(spec) => SchemaType::Map {
+            wire::SchemaTypeBody::MapType(spec) => SchemaType::Map {
                 key: Box::new(self.decode_type(spec.key, visiting)?),
                 value: Box::new(self.decode_type(spec.value, visiting)?),
+                metadata,
             },
-            wire::SchemaTypeNode::OptionType(inner) => SchemaType::Option {
+            wire::SchemaTypeBody::OptionType(inner) => SchemaType::Option {
                 inner: Box::new(self.decode_type(*inner, visiting)?),
+                metadata,
             },
-            wire::SchemaTypeNode::ResultType(spec) => {
+            wire::SchemaTypeBody::ResultType(spec) => {
                 let ok = match spec.ok {
                     Some(idx) => Some(Box::new(self.decode_type(idx, visiting)?)),
                     None => None,
@@ -226,81 +244,107 @@ impl<'a> GraphCtx<'a> {
                     Some(idx) => Some(Box::new(self.decode_type(idx, visiting)?)),
                     None => None,
                 };
-                SchemaType::Result(ResultSpec { ok, err })
+                SchemaType::Result {
+                    spec: ResultSpec { ok, err },
+                    metadata,
+                }
             }
-            wire::SchemaTypeNode::TextType(r) => SchemaType::Text(TextRestrictions {
-                languages: r.languages.clone(),
-                min_length: r.min_length,
-                max_length: r.max_length,
-                regex: r.regex.clone(),
-            }),
-            wire::SchemaTypeNode::BinaryType(r) => SchemaType::Binary(BinaryRestrictions {
-                mime_types: r.mime_types.clone(),
-                min_bytes: r.min_bytes,
-                max_bytes: r.max_bytes,
-            }),
-            wire::SchemaTypeNode::PathType(p) => SchemaType::Path(PathSpec {
-                direction: match p.direction {
-                    wire::PathDirection::Input => PathDirection::Input,
-                    wire::PathDirection::Output => PathDirection::Output,
-                    wire::PathDirection::InOut => PathDirection::InOut,
+            wire::SchemaTypeBody::TextType(r) => SchemaType::Text {
+                restrictions: TextRestrictions {
+                    languages: r.languages.clone(),
+                    min_length: r.min_length,
+                    max_length: r.max_length,
+                    regex: r.regex.clone(),
                 },
-                kind: match p.kind {
-                    wire::PathKind::File => PathKind::File,
-                    wire::PathKind::Directory => PathKind::Directory,
-                    wire::PathKind::Any => PathKind::Any,
+                metadata,
+            },
+            wire::SchemaTypeBody::BinaryType(r) => SchemaType::Binary {
+                restrictions: BinaryRestrictions {
+                    mime_types: r.mime_types.clone(),
+                    min_bytes: r.min_bytes,
+                    max_bytes: r.max_bytes,
                 },
-                allowed_mime_types: p.allowed_mime_types.clone(),
-                allowed_extensions: p.allowed_extensions.clone(),
-            }),
-            wire::SchemaTypeNode::UrlType(r) => SchemaType::Url(UrlRestrictions {
-                allowed_schemes: r.allowed_schemes.clone(),
-                allowed_hosts: r.allowed_hosts.clone(),
-            }),
-            wire::SchemaTypeNode::DatetimeType => SchemaType::Datetime,
-            wire::SchemaTypeNode::DurationType => SchemaType::Duration,
-            wire::SchemaTypeNode::QuantityType(q) => SchemaType::Quantity(QuantitySpec {
-                base_unit: q.base_unit.clone(),
-                allowed_suffixes: q.allowed_suffixes.clone(),
-                min: q.min.as_ref().map(decode_quantity_value),
-                max: q.max.as_ref().map(decode_quantity_value),
-            }),
-            wire::SchemaTypeNode::UnionType(u) => {
+                metadata,
+            },
+            wire::SchemaTypeBody::PathType(p) => SchemaType::Path {
+                spec: PathSpec {
+                    direction: match p.direction {
+                        wire::PathDirection::Input => PathDirection::Input,
+                        wire::PathDirection::Output => PathDirection::Output,
+                        wire::PathDirection::InOut => PathDirection::InOut,
+                    },
+                    kind: match p.kind {
+                        wire::PathKind::File => PathKind::File,
+                        wire::PathKind::Directory => PathKind::Directory,
+                        wire::PathKind::Any => PathKind::Any,
+                    },
+                    allowed_mime_types: p.allowed_mime_types.clone(),
+                    allowed_extensions: p.allowed_extensions.clone(),
+                },
+                metadata,
+            },
+            wire::SchemaTypeBody::UrlType(r) => SchemaType::Url {
+                restrictions: UrlRestrictions {
+                    allowed_schemes: r.allowed_schemes.clone(),
+                    allowed_hosts: r.allowed_hosts.clone(),
+                },
+                metadata,
+            },
+            wire::SchemaTypeBody::DatetimeType => SchemaType::Datetime { metadata },
+            wire::SchemaTypeBody::DurationType => SchemaType::Duration { metadata },
+            wire::SchemaTypeBody::QuantityType(q) => SchemaType::Quantity {
+                spec: QuantitySpec {
+                    base_unit: q.base_unit.clone(),
+                    allowed_suffixes: q.allowed_suffixes.clone(),
+                    min: q.min.as_ref().map(decode_quantity_value),
+                    max: q.max.as_ref().map(decode_quantity_value),
+                },
+                metadata,
+            },
+            wire::SchemaTypeBody::UnionType(u) => {
                 let branches = u
                     .branches
                     .iter()
                     .map(|b| {
+                        let body = self.decode_type(b.body, visiting)?;
                         Ok(UnionBranch {
                             tag: b.tag.clone(),
-                            body: self.decode_type(b.body, visiting)?,
+                            body,
                             discriminator: decode_discriminator(&b.discriminator),
                             metadata: decode_metadata(&b.metadata),
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                SchemaType::Union(UnionSpec { branches })
+                SchemaType::Union {
+                    spec: UnionSpec { branches },
+                    metadata,
+                }
             }
-            wire::SchemaTypeNode::SecretType(s) => SchemaType::Secret(SecretSpec {
-                category: s.category.clone(),
-                metadata: decode_metadata(&s.metadata),
-            }),
-            wire::SchemaTypeNode::QuotaTokenType(q) => SchemaType::QuotaToken(QuotaTokenSpec {
-                resource_name: q.resource_name.clone(),
-                metadata: decode_metadata(&q.metadata),
-            }),
-            wire::SchemaTypeNode::FutureType(inner) => {
+            wire::SchemaTypeBody::SecretType(s) => SchemaType::Secret {
+                spec: SecretSpec {
+                    category: s.category.clone(),
+                },
+                metadata,
+            },
+            wire::SchemaTypeBody::QuotaTokenType(q) => SchemaType::QuotaToken {
+                spec: QuotaTokenSpec {
+                    resource_name: q.resource_name.clone(),
+                },
+                metadata,
+            },
+            wire::SchemaTypeBody::FutureType(inner) => {
                 let inner = match inner {
                     Some(i) => Some(Box::new(self.decode_type(*i, visiting)?)),
                     None => None,
                 };
-                SchemaType::Future { inner }
+                SchemaType::Future { inner, metadata }
             }
-            wire::SchemaTypeNode::StreamType(inner) => {
+            wire::SchemaTypeBody::StreamType(inner) => {
                 let inner = match inner {
                     Some(i) => Some(Box::new(self.decode_type(*i, visiting)?)),
                     None => None,
                 };
-                SchemaType::Stream { inner }
+                SchemaType::Stream { inner, metadata }
             }
         };
         Ok(out)

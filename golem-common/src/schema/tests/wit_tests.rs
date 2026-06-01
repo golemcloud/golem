@@ -74,17 +74,15 @@ fn duplicate_def_id_is_rejected_on_encode() {
             SchemaTypeDef {
                 id: TypeId::new("dup"),
                 name: None,
-                metadata: Default::default(),
-                body: SchemaType::S32,
+                body: SchemaType::s32(),
             },
             SchemaTypeDef {
                 id: TypeId::new("dup"),
                 name: None,
-                metadata: Default::default(),
-                body: SchemaType::S64,
+                body: SchemaType::s64(),
             },
         ],
-        root: SchemaType::Ref(TypeId::new("dup")),
+        root: SchemaType::ref_to(TypeId::new("dup")),
     };
     let err = encode_graph(&graph).expect_err("should fail");
     assert!(matches!(err, EncodeError::DuplicateTypeId(_)));
@@ -92,7 +90,7 @@ fn duplicate_def_id_is_rejected_on_encode() {
 
 #[test]
 fn unknown_ref_is_rejected_on_encode() {
-    let graph = SchemaGraph::anonymous(SchemaType::Ref(TypeId::new("missing")));
+    let graph = SchemaGraph::anonymous(SchemaType::ref_to(TypeId::new("missing")));
     let err = encode_graph(&graph).expect_err("should fail");
     assert!(matches!(err, EncodeError::UnknownTypeId(_)));
 }
@@ -100,18 +98,19 @@ fn unknown_ref_is_rejected_on_encode() {
 #[test]
 fn duplicate_def_id_is_rejected_on_decode() {
     let graph = wire::SchemaGraph {
-        type_nodes: vec![wire::SchemaTypeNode::S32Type],
+        type_nodes: vec![wire::SchemaTypeNode {
+            body: wire::SchemaTypeBody::S32Type,
+            metadata: empty_metadata(),
+        }],
         defs: vec![
             wire::SchemaTypeDef {
                 id: "dup".to_string(),
                 name: None,
-                metadata: empty_metadata(),
                 body: 0,
             },
             wire::SchemaTypeDef {
                 id: "dup".to_string(),
                 name: None,
-                metadata: empty_metadata(),
                 body: 0,
             },
         ],
@@ -145,7 +144,10 @@ fn value_node_out_of_range_is_rejected_on_decode() {
 #[test]
 fn def_index_out_of_range_is_rejected_on_decode() {
     let graph = wire::SchemaGraph {
-        type_nodes: vec![wire::SchemaTypeNode::RefType(99)],
+        type_nodes: vec![wire::SchemaTypeNode {
+            body: wire::SchemaTypeBody::RefType(99),
+            metadata: empty_metadata(),
+        }],
         defs: vec![],
         root: 0,
     };
@@ -170,7 +172,7 @@ fn invalid_datetime_is_rejected_on_decode() {
 fn empty_typed_schema_value_round_trips() {
     // A minimal smoke check: an anonymous `Bool` paired with `Bool(false)`.
     let typed = TypedSchemaValue::new(
-        SchemaGraph::anonymous(SchemaType::Bool),
+        SchemaGraph::anonymous(SchemaType::bool()),
         crate::schema::schema_value::SchemaValue::Bool(false),
     );
     let wire = encode_typed(&typed).expect("encode");

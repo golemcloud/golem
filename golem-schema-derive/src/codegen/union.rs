@@ -67,16 +67,16 @@ pub fn expand_union_into_schema(
             fn register_in(builder: &mut #private::SchemaBuilder) -> #private::SchemaType {
                 let id = <Self as #private::IntoSchema>::type_id();
                 if builder.is_registered(&id) {
-                    return #private::SchemaType::Ref(id);
+                    return #private::SchemaType::ref_to(id);
                 }
                 builder.reserve(id.clone());
-                let body: #private::SchemaType = #private::SchemaType::Union(
+                let body: #private::SchemaType = #private::SchemaType::union(
                     #private::UnionSpec {
                         branches: ::std::vec![ #( #branch_tokens ),* ],
                     },
                 );
                 builder.commit(id.clone(), #display, #metadata, body);
-                #private::SchemaType::Ref(id)
+                #private::SchemaType::ref_to(id)
             }
 
             fn to_value(&self) -> #private::SchemaValue {

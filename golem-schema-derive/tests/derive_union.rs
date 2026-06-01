@@ -37,7 +37,7 @@ fn union_into_schema_emits_branches_with_discriminators() {
 
     assert_eq!(graph.defs.len(), 1);
     match &graph.defs[0].body {
-        SchemaType::Union(spec) => {
+        SchemaType::Union { spec, .. } => {
             assert_eq!(spec.branches.len(), 2);
             assert_eq!(spec.branches[0].tag, "ssh");
             assert_eq!(spec.branches[1].tag, "web");
@@ -53,8 +53,8 @@ fn union_into_schema_emits_branches_with_discriminators() {
                     prefix: "https://".to_string(),
                 }
             );
-            assert_eq!(spec.branches[0].body, SchemaType::String);
-            assert_eq!(spec.branches[1].body, SchemaType::String);
+            assert_eq!(spec.branches[0].body, SchemaType::string());
+            assert_eq!(spec.branches[1].body, SchemaType::string());
         }
         other => panic!("expected union body, got {other:?}"),
     }
@@ -95,7 +95,7 @@ fn union_supports_all_discriminator_kinds() {
         .find(|d| d.id == MixedDisc::type_id())
         .expect("mixed disc def");
     let body = match &def.body {
-        SchemaType::Union(spec) => spec,
+        SchemaType::Union { spec, .. } => spec,
         other => panic!("expected union body, got {other:?}"),
     };
     assert_eq!(body.branches.len(), 5);

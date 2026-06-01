@@ -45,10 +45,9 @@ fn walker_resolves_ref_before_dispatch() {
         defs: vec![SchemaTypeDef {
             id: id.clone(),
             name: None,
-            metadata: Default::default(),
-            body: SchemaType::U32,
+            body: SchemaType::u32(),
         }],
-        root: SchemaType::Ref(id.clone()),
+        root: SchemaType::ref_to(id.clone()),
     };
     let mut walker = CountingWalker { count: 0 };
     let res = walk(&mut walker, &graph, &graph.root, &SchemaValue::U32(7));
@@ -65,17 +64,15 @@ fn walker_detects_ref_cycle() {
             SchemaTypeDef {
                 id: a.clone(),
                 name: None,
-                metadata: Default::default(),
-                body: SchemaType::Ref(b.clone()),
+                body: SchemaType::ref_to(b.clone()),
             },
             SchemaTypeDef {
                 id: b.clone(),
                 name: None,
-                metadata: Default::default(),
-                body: SchemaType::Ref(a.clone()),
+                body: SchemaType::ref_to(a.clone()),
             },
         ],
-        root: SchemaType::Ref(a),
+        root: SchemaType::ref_to(a),
     };
     let mut walker = CountingWalker { count: 0 };
     let res = walk(&mut walker, &graph, &graph.root, &SchemaValue::U32(0));
@@ -86,7 +83,7 @@ fn walker_detects_ref_cycle() {
 fn walker_reports_dangling_ref() {
     let graph = SchemaGraph {
         defs: vec![],
-        root: SchemaType::Ref(TypeId::new("missing")),
+        root: SchemaType::ref_to(TypeId::new("missing")),
     };
     let mut walker = CountingWalker { count: 0 };
     let res = walk(&mut walker, &graph, &graph.root, &SchemaValue::U32(0));

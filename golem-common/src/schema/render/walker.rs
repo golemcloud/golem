@@ -111,7 +111,7 @@ where
     let mut entered: Vec<TypeId> = Vec::new();
     let result = loop {
         match current {
-            SchemaType::Ref(id) => {
+            SchemaType::Ref { id, .. } => {
                 if !visited.insert(id.clone()) {
                     break Err(WalkerError::RefCycle(id.clone()));
                 }

@@ -97,7 +97,6 @@ impl GraphCtx {
             ctx.defs.push(wire::SchemaTypeDef {
                 id: def.id.0.clone(),
                 name: def.name.clone(),
-                metadata: encode_metadata(&def.metadata),
                 body: -1,
             });
         }
@@ -110,78 +109,87 @@ impl GraphCtx {
         Ok(ctx)
     }
 
-    fn push(&mut self, node: wire::SchemaTypeNode) -> wire::TypeNodeIndex {
+    fn push_body(
+        &mut self,
+        body: wire::SchemaTypeBody,
+        metadata: &MetadataEnvelope,
+    ) -> wire::TypeNodeIndex {
         let idx = self.type_nodes.len() as wire::TypeNodeIndex;
-        self.type_nodes.push(node);
+        self.type_nodes.push(wire::SchemaTypeNode {
+            body,
+            metadata: encode_metadata(metadata),
+        });
         idx
     }
 
     fn encode_type(&mut self, ty: &SchemaType) -> Result<wire::TypeNodeIndex, EncodeError> {
-        let node = match ty {
-            SchemaType::Ref(id) => {
+        let body = match ty {
+            SchemaType::Ref { id, .. } => {
                 let def_idx = *self
                     .def_index
                     .get(id)
                     .ok_or_else(|| EncodeError::UnknownTypeId(id.clone()))?;
-                wire::SchemaTypeNode::RefType(def_idx)
+                wire::SchemaTypeBody::RefType(def_idx)
             }
-            SchemaType::Bool => wire::SchemaTypeNode::BoolType,
-            SchemaType::S8 => wire::SchemaTypeNode::S8Type,
-            SchemaType::S16 => wire::SchemaTypeNode::S16Type,
-            SchemaType::S32 => wire::SchemaTypeNode::S32Type,
-            SchemaType::S64 => wire::SchemaTypeNode::S64Type,
-            SchemaType::U8 => wire::SchemaTypeNode::U8Type,
-            SchemaType::U16 => wire::SchemaTypeNode::U16Type,
-            SchemaType::U32 => wire::SchemaTypeNode::U32Type,
-            SchemaType::U64 => wire::SchemaTypeNode::U64Type,
-            SchemaType::F32 => wire::SchemaTypeNode::F32Type,
-            SchemaType::F64 => wire::SchemaTypeNode::F64Type,
-            SchemaType::Char => wire::SchemaTypeNode::CharType,
-            SchemaType::String => wire::SchemaTypeNode::StringType,
-            SchemaType::Record { fields } => {
+            SchemaType::Bool { .. } => wire::SchemaTypeBody::BoolType,
+            SchemaType::S8 { .. } => wire::SchemaTypeBody::S8Type,
+            SchemaType::S16 { .. } => wire::SchemaTypeBody::S16Type,
+            SchemaType::S32 { .. } => wire::SchemaTypeBody::S32Type,
+            SchemaType::S64 { .. } => wire::SchemaTypeBody::S64Type,
+            SchemaType::U8 { .. } => wire::SchemaTypeBody::U8Type,
+            SchemaType::U16 { .. } => wire::SchemaTypeBody::U16Type,
+            SchemaType::U32 { .. } => wire::SchemaTypeBody::U32Type,
+            SchemaType::U64 { .. } => wire::SchemaTypeBody::U64Type,
+            SchemaType::F32 { .. } => wire::SchemaTypeBody::F32Type,
+            SchemaType::F64 { .. } => wire::SchemaTypeBody::F64Type,
+            SchemaType::Char { .. } => wire::SchemaTypeBody::CharType,
+            SchemaType::String { .. } => wire::SchemaTypeBody::StringType,
+            SchemaType::Record { fields, .. } => {
                 let encoded = fields
                     .iter()
                     .map(|f| self.encode_field(f))
                     .collect::<Result<Vec<_>, _>>()?;
-                wire::SchemaTypeNode::RecordType(encoded)
+                wire::SchemaTypeBody::RecordType(encoded)
             }
-            SchemaType::Variant { cases } => {
+            SchemaType::Variant { cases, .. } => {
                 let encoded = cases
                     .iter()
                     .map(|c| self.encode_case(c))
                     .collect::<Result<Vec<_>, _>>()?;
-                wire::SchemaTypeNode::VariantType(encoded)
+                wire::SchemaTypeBody::VariantType(encoded)
             }
-            SchemaType::Enum { cases } => wire::SchemaTypeNode::EnumType(cases.clone()),
-            SchemaType::Flags { flags } => wire::SchemaTypeNode::FlagsType(flags.clone()),
-            SchemaType::Tuple { elements } => {
+            SchemaType::Enum { cases, .. } => wire::SchemaTypeBody::EnumType(cases.clone()),
+            SchemaType::Flags { flags, .. } => wire::SchemaTypeBody::FlagsType(flags.clone()),
+            SchemaType::Tuple { elements, .. } => {
                 let encoded = elements
                     .iter()
                     .map(|e| self.encode_type(e))
                     .collect::<Result<Vec<_>, _>>()?;
-                wire::SchemaTypeNode::TupleType(encoded)
+                wire::SchemaTypeBody::TupleType(encoded)
             }
-            SchemaType::List { element } => {
+            SchemaType::List { element, .. } => {
                 let inner = self.encode_type(element)?;
-                wire::SchemaTypeNode::ListType(inner)
+                wire::SchemaTypeBody::ListType(inner)
             }
-            SchemaType::FixedList { element, length } => {
+            SchemaType::FixedList {
+                element, length, ..
+            } => {
                 let inner = self.encode_type(element)?;
-                wire::SchemaTypeNode::FixedListType(wire::FixedListSpec {
+                wire::SchemaTypeBody::FixedListType(wire::FixedListSpec {
                     element: inner,
                     length: *length,
                 })
             }
-            SchemaType::Map { key, value } => {
+            SchemaType::Map { key, value, .. } => {
                 let key = self.encode_type(key)?;
                 let value = self.encode_type(value)?;
-                wire::SchemaTypeNode::MapType(wire::MapSpec { key, value })
+                wire::SchemaTypeBody::MapType(wire::MapSpec { key, value })
             }
-            SchemaType::Option { inner } => {
+            SchemaType::Option { inner, .. } => {
                 let inner = self.encode_type(inner)?;
-                wire::SchemaTypeNode::OptionType(inner)
+                wire::SchemaTypeBody::OptionType(inner)
             }
-            SchemaType::Result(spec) => {
+            SchemaType::Result { spec, .. } => {
                 let ok = match &spec.ok {
                     Some(t) => Some(self.encode_type(t)?),
                     None => None,
@@ -190,49 +198,57 @@ impl GraphCtx {
                     Some(t) => Some(self.encode_type(t)?),
                     None => None,
                 };
-                wire::SchemaTypeNode::ResultType(wire::ResultSpec { ok, err })
+                wire::SchemaTypeBody::ResultType(wire::ResultSpec { ok, err })
             }
-            SchemaType::Text(r) => wire::SchemaTypeNode::TextType(encode_text(r)),
-            SchemaType::Binary(r) => wire::SchemaTypeNode::BinaryType(encode_binary(r)),
-            SchemaType::Path(p) => wire::SchemaTypeNode::PathType(encode_path(p)),
-            SchemaType::Url(r) => wire::SchemaTypeNode::UrlType(encode_url(r)),
-            SchemaType::Datetime => wire::SchemaTypeNode::DatetimeType,
-            SchemaType::Duration => wire::SchemaTypeNode::DurationType,
-            SchemaType::Quantity(q) => wire::SchemaTypeNode::QuantityType(encode_quantity(q)),
-            SchemaType::Union(u) => {
-                let branches = u
+            SchemaType::Text { restrictions, .. } => {
+                wire::SchemaTypeBody::TextType(encode_text(restrictions))
+            }
+            SchemaType::Binary { restrictions, .. } => {
+                wire::SchemaTypeBody::BinaryType(encode_binary(restrictions))
+            }
+            SchemaType::Path { spec, .. } => wire::SchemaTypeBody::PathType(encode_path(spec)),
+            SchemaType::Url { restrictions, .. } => {
+                wire::SchemaTypeBody::UrlType(encode_url(restrictions))
+            }
+            SchemaType::Datetime { .. } => wire::SchemaTypeBody::DatetimeType,
+            SchemaType::Duration { .. } => wire::SchemaTypeBody::DurationType,
+            SchemaType::Quantity { spec, .. } => {
+                wire::SchemaTypeBody::QuantityType(encode_quantity(spec))
+            }
+            SchemaType::Union { spec, .. } => {
+                let branches = spec
                     .branches
                     .iter()
                     .map(|b| self.encode_branch(b))
                     .collect::<Result<Vec<_>, _>>()?;
-                wire::SchemaTypeNode::UnionType(wire::UnionSpec { branches })
+                wire::SchemaTypeBody::UnionType(wire::UnionSpec { branches })
             }
-            SchemaType::Secret(s) => wire::SchemaTypeNode::SecretType(wire::SecretSpec {
-                category: s.category.clone(),
-                metadata: encode_metadata(&s.metadata),
-            }),
-            SchemaType::QuotaToken(q) => {
-                wire::SchemaTypeNode::QuotaTokenType(wire::QuotaTokenSpec {
-                    resource_name: q.resource_name.clone(),
-                    metadata: encode_metadata(&q.metadata),
+            SchemaType::Secret { spec, .. } => {
+                wire::SchemaTypeBody::SecretType(wire::SecretSpec {
+                    category: spec.category.clone(),
                 })
             }
-            SchemaType::Future { inner } => {
-                let inner = match inner {
-                    Some(t) => Some(self.encode_type(t)?),
-                    None => None,
-                };
-                wire::SchemaTypeNode::FutureType(inner)
+            SchemaType::QuotaToken { spec, .. } => {
+                wire::SchemaTypeBody::QuotaTokenType(wire::QuotaTokenSpec {
+                    resource_name: spec.resource_name.clone(),
+                })
             }
-            SchemaType::Stream { inner } => {
+            SchemaType::Future { inner, .. } => {
                 let inner = match inner {
                     Some(t) => Some(self.encode_type(t)?),
                     None => None,
                 };
-                wire::SchemaTypeNode::StreamType(inner)
+                wire::SchemaTypeBody::FutureType(inner)
+            }
+            SchemaType::Stream { inner, .. } => {
+                let inner = match inner {
+                    Some(t) => Some(self.encode_type(t)?),
+                    None => None,
+                };
+                wire::SchemaTypeBody::StreamType(inner)
             }
         };
-        Ok(self.push(node))
+        Ok(self.push_body(body, ty.metadata()))
     }
 
     fn encode_field(

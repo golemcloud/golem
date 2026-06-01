@@ -25,24 +25,22 @@ use test_r::test;
 
 #[test]
 fn type_record_renders_concise_form() {
-    let ty = SchemaType::Record {
-        fields: vec![
-            NamedFieldType {
-                name: "id".to_string(),
-                body: SchemaType::U32,
-                metadata: Default::default(),
-            },
-            NamedFieldType {
-                name: "name".to_string(),
-                body: SchemaType::Text(TextRestrictions {
-                    min_length: Some(1),
-                    max_length: Some(100),
-                    ..Default::default()
-                }),
-                metadata: Default::default(),
-            },
-        ],
-    };
+    let ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "id".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "name".to_string(),
+            body: SchemaType::text(TextRestrictions {
+                min_length: Some(1),
+                max_length: Some(100),
+                ..Default::default()
+            }),
+            metadata: Default::default(),
+        },
+    ]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let text = type_to_cli_text(&graph, &ty);
     assert_eq!(text, "record { id: u32, name: text(min=1, max=100) }");
@@ -50,36 +48,32 @@ fn type_record_renders_concise_form() {
 
 #[test]
 fn type_list_renders_with_angles() {
-    let ty = SchemaType::List {
-        element: Box::new(SchemaType::Text(TextRestrictions::default())),
-    };
+    let ty = SchemaType::list(SchemaType::text(TextRestrictions::default()));
     let graph = SchemaGraph::anonymous(ty.clone());
     assert_eq!(type_to_cli_text(&graph, &ty), "list<text>");
 }
 
 #[test]
 fn type_secret_renders_as_secret() {
-    let ty = SchemaType::Secret(crate::schema::schema_type::SecretSpec::default());
+    let ty = SchemaType::secret(crate::schema::schema_type::SecretSpec::default());
     let graph = SchemaGraph::anonymous(ty.clone());
     assert_eq!(type_to_cli_text(&graph, &ty), "secret");
 }
 
 #[test]
 fn value_record_renders_concise_form() {
-    let ty = SchemaType::Record {
-        fields: vec![
-            NamedFieldType {
-                name: "id".to_string(),
-                body: SchemaType::U32,
-                metadata: Default::default(),
-            },
-            NamedFieldType {
-                name: "name".to_string(),
-                body: SchemaType::Text(TextRestrictions::default()),
-                metadata: Default::default(),
-            },
-        ],
-    };
+    let ty = SchemaType::record(vec![
+        NamedFieldType {
+            name: "id".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "name".to_string(),
+            body: SchemaType::text(TextRestrictions::default()),
+            metadata: Default::default(),
+        },
+    ]);
     let graph = SchemaGraph::anonymous(ty.clone());
     let value = SchemaValue::Record {
         fields: vec![
@@ -96,9 +90,7 @@ fn value_record_renders_concise_form() {
 
 #[test]
 fn value_list_renders_with_brackets() {
-    let ty = SchemaType::List {
-        element: Box::new(SchemaType::U32),
-    };
+    let ty = SchemaType::list(SchemaType::u32());
     let graph = SchemaGraph::anonymous(ty.clone());
     let value = SchemaValue::List {
         elements: vec![SchemaValue::U32(1), SchemaValue::U32(2)],
@@ -109,7 +101,7 @@ fn value_list_renders_with_brackets() {
 
 #[test]
 fn secret_value_is_redacted_by_default() {
-    let ty = SchemaType::Secret(SecretSpec::default());
+    let ty = SchemaType::secret(SecretSpec::default());
     let graph = SchemaGraph::anonymous(ty.clone());
     let value = SchemaValue::Secret(SecretValuePayload {
         secret_ref: "shhh".to_string(),
@@ -123,7 +115,7 @@ fn secret_value_is_redacted_by_default() {
 
 #[test]
 fn text_value_emits_raw_canonical_form() {
-    let ty = SchemaType::Text(TextRestrictions::default());
+    let ty = SchemaType::text(TextRestrictions::default());
     let graph = SchemaGraph::anonymous(ty.clone());
     let value = SchemaValue::Text(TextValuePayload {
         text: "hello".to_string(),
@@ -136,7 +128,7 @@ fn text_value_emits_raw_canonical_form() {
 
 #[test]
 fn type_to_cli_text_includes_text_regex_and_languages() {
-    let ty = SchemaType::Text(TextRestrictions {
+    let ty = SchemaType::text(TextRestrictions {
         languages: Some(vec!["en".to_string(), "fr".to_string()]),
         min_length: None,
         max_length: None,
@@ -150,7 +142,7 @@ fn type_to_cli_text_includes_text_regex_and_languages() {
 
 #[test]
 fn datetime_value_uses_canonical_form() {
-    let ty = SchemaType::Datetime;
+    let ty = SchemaType::datetime();
     let graph = SchemaGraph::anonymous(ty.clone());
     let dt = Utc.timestamp_opt(0, 0).single().unwrap();
     let value = SchemaValue::Datetime { value: dt };

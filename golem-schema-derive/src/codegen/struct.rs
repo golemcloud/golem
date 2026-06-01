@@ -54,12 +54,12 @@ pub fn expand_struct_into_schema(
             fn register_in(builder: &mut #private::SchemaBuilder) -> #private::SchemaType {
                 let id = <Self as #private::IntoSchema>::type_id();
                 if builder.is_registered(&id) {
-                    return #private::SchemaType::Ref(id);
+                    return #private::SchemaType::ref_to(id);
                 }
                 builder.reserve(id.clone());
                 let body: #private::SchemaType = #body_expr;
                 builder.commit(id.clone(), #display, #metadata, body);
-                #private::SchemaType::Ref(id)
+                #private::SchemaType::ref_to(id)
             }
 
             fn to_value(&self) -> #private::SchemaValue {
@@ -116,9 +116,7 @@ fn struct_body_expr(fields: &Fields, type_attrs: &TypeAttrs) -> syn::Result<Toke
                 field_tokens.push(named_field_token(f, type_attrs, &attrs)?);
             }
             Ok(quote! {
-                #private::SchemaType::Record {
-                    fields: ::std::vec![ #( #field_tokens ),* ],
-                }
+                #private::SchemaType::record(::std::vec![ #( #field_tokens ),* ])
             })
         }
         Fields::Unnamed(unnamed) => {
@@ -128,15 +126,11 @@ fn struct_body_expr(fields: &Fields, type_attrs: &TypeAttrs) -> syn::Result<Toke
                 .map(unnamed_element_body)
                 .collect::<syn::Result<_>>()?;
             Ok(quote! {
-                #private::SchemaType::Tuple {
-                    elements: ::std::vec![ #( #element_tokens ),* ],
-                }
+                #private::SchemaType::tuple(::std::vec![ #( #element_tokens ),* ])
             })
         }
         Fields::Unit => Ok(quote! {
-            #private::SchemaType::Record {
-                fields: ::std::vec::Vec::new(),
-            }
+            #private::SchemaType::record(::std::vec::Vec::new())
         }),
     }
 }

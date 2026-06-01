@@ -231,13 +231,13 @@ fn check_type(
     errors: &mut Vec<SchemaError>,
 ) {
     match ty {
-        SchemaType::Ref(id) => {
+        SchemaType::Ref { id, .. } => {
             if !known.contains(id) {
                 errors.push(SchemaError::DanglingRef(id.clone()));
             }
         }
 
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             let mut seen: HashSet<&str> = HashSet::new();
             for field in fields {
                 if !seen.insert(field.name.as_str()) {
@@ -247,7 +247,7 @@ fn check_type(
             }
         }
 
-        SchemaType::Variant { cases } => {
+        SchemaType::Variant { cases, .. } => {
             if cases.is_empty() {
                 errors.push(SchemaError::EmptyVariant);
             }
@@ -262,7 +262,7 @@ fn check_type(
             }
         }
 
-        SchemaType::Enum { cases } => {
+        SchemaType::Enum { cases, .. } => {
             if cases.is_empty() {
                 errors.push(SchemaError::EmptyEnum);
             }
@@ -274,7 +274,7 @@ fn check_type(
             }
         }
 
-        SchemaType::Flags { flags } => {
+        SchemaType::Flags { flags, .. } => {
             if flags.is_empty() {
                 errors.push(SchemaError::EmptyFlags);
             }
@@ -286,26 +286,28 @@ fn check_type(
             }
         }
 
-        SchemaType::Tuple { elements } => {
+        SchemaType::Tuple { elements, .. } => {
             for e in elements {
                 check_type(graph, e, known, errors);
             }
         }
-        SchemaType::List { element } => check_type(graph, element, known, errors),
-        SchemaType::FixedList { element, length } => {
+        SchemaType::List { element, .. } => check_type(graph, element, known, errors),
+        SchemaType::FixedList {
+            element, length, ..
+        } => {
             if *length == 0 {
                 errors.push(SchemaError::FixedListZeroLength);
             }
             check_type(graph, element, known, errors);
         }
-        SchemaType::Map { key, value } => {
+        SchemaType::Map { key, value, .. } => {
             if !is_primitive_key_resolved(graph, key) {
                 errors.push(SchemaError::MapKeyNotPrimitive);
             }
             check_type(graph, key, known, errors);
             check_type(graph, value, known, errors);
         }
-        SchemaType::Option { inner } => {
+        SchemaType::Option { inner, .. } => {
             if is_nullable(graph, inner, &mut HashSet::new()) {
                 errors.push(SchemaError::NullableNesting {
                     inner: describe_nullable(inner),
@@ -313,7 +315,7 @@ fn check_type(
             }
             check_type(graph, inner, known, errors);
         }
-        SchemaType::Result(spec) => {
+        SchemaType::Result { spec, .. } => {
             if let Some(t) = &spec.ok {
                 check_type(graph, t, known, errors);
             }
@@ -322,45 +324,46 @@ fn check_type(
             }
         }
 
-        SchemaType::Quantity(spec) => check_quantity(spec, errors),
+        SchemaType::Quantity { spec, .. } => check_quantity(spec, errors),
 
-        SchemaType::Text(restrictions) => check_text_restrictions(restrictions, errors),
-        SchemaType::Binary(restrictions) => check_binary_restrictions(restrictions, errors),
-        SchemaType::Path(spec) => check_path_spec(spec, errors),
-        SchemaType::Url(spec) => check_url_spec(spec, errors),
+        SchemaType::Text { restrictions, .. } => check_text_restrictions(restrictions, errors),
+        SchemaType::Binary { restrictions, .. } => check_binary_restrictions(restrictions, errors),
+        SchemaType::Path { spec, .. } => check_path_spec(spec, errors),
+        SchemaType::Url { restrictions, .. } => check_url_spec(restrictions, errors),
 
-        SchemaType::Union(spec) => {
-            validate_union(graph, spec, known, errors);
+        SchemaType::Union { spec, metadata } => {
+            let is_multimodal = matches!(metadata.role, Some(crate::schema::metadata::Role::Multimodal));
+            validate_union(graph, spec, known, errors, is_multimodal);
         }
 
-        SchemaType::Future { inner } => {
+        SchemaType::Future { inner, .. } => {
             if let Some(t) = inner {
                 check_type(graph, t, known, errors);
             }
         }
-        SchemaType::Stream { inner } => {
+        SchemaType::Stream { inner, .. } => {
             if let Some(t) = inner {
                 check_type(graph, t, known, errors);
             }
         }
 
-        SchemaType::Bool
-        | SchemaType::S8
-        | SchemaType::S16
-        | SchemaType::S32
-        | SchemaType::S64
-        | SchemaType::U8
-        | SchemaType::U16
-        | SchemaType::U32
-        | SchemaType::U64
-        | SchemaType::F32
-        | SchemaType::F64
-        | SchemaType::Char
-        | SchemaType::String
-        | SchemaType::Datetime
-        | SchemaType::Duration
-        | SchemaType::Secret(_)
-        | SchemaType::QuotaToken(_) => {}
+        SchemaType::Bool { .. }
+        | SchemaType::S8 { .. }
+        | SchemaType::S16 { .. }
+        | SchemaType::S32 { .. }
+        | SchemaType::S64 { .. }
+        | SchemaType::U8 { .. }
+        | SchemaType::U16 { .. }
+        | SchemaType::U32 { .. }
+        | SchemaType::U64 { .. }
+        | SchemaType::F32 { .. }
+        | SchemaType::F64 { .. }
+        | SchemaType::Char { .. }
+        | SchemaType::String { .. }
+        | SchemaType::Datetime { .. }
+        | SchemaType::Duration { .. }
+        | SchemaType::Secret { .. }
+        | SchemaType::QuotaToken { .. } => {}
     }
 }
 
@@ -371,7 +374,7 @@ fn is_primitive_key_resolved(graph: &SchemaGraph, ty: &SchemaType) -> bool {
     let mut current = ty;
     loop {
         match current {
-            SchemaType::Ref(id) => {
+            SchemaType::Ref { id, .. } => {
                 if !visited.insert(id.clone()) {
                     return false;
                 }
@@ -388,19 +391,19 @@ fn is_primitive_key_resolved(graph: &SchemaGraph, ty: &SchemaType) -> bool {
 fn is_primitive_key(ty: &SchemaType) -> bool {
     matches!(
         ty,
-        SchemaType::Bool
-            | SchemaType::S8
-            | SchemaType::S16
-            | SchemaType::S32
-            | SchemaType::S64
-            | SchemaType::U8
-            | SchemaType::U16
-            | SchemaType::U32
-            | SchemaType::U64
-            | SchemaType::F32
-            | SchemaType::F64
-            | SchemaType::Char
-            | SchemaType::String
+        SchemaType::Bool { .. }
+            | SchemaType::S8 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::S64 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::U64 { .. }
+            | SchemaType::F32 { .. }
+            | SchemaType::F64 { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::String { .. }
     )
 }
 
@@ -491,6 +494,7 @@ fn validate_union(
     spec: &UnionSpec,
     known: &HashSet<TypeId>,
     errors: &mut Vec<SchemaError>,
+    is_multimodal: bool,
 ) {
     if spec.branches.is_empty() {
         errors.push(SchemaError::EmptyUnion);
@@ -500,21 +504,29 @@ fn validate_union(
         if !seen.insert(branch.tag.as_str()) {
             errors.push(SchemaError::DuplicateUnionTag(branch.tag.clone()));
         }
-        check_union_branch(graph, branch, errors);
+        // Multimodal unions carry per-branch tags but are not resolved by the
+        // generic discriminator pipeline (the alternative is carried by the
+        // protocol envelope). Skip the per-branch structural discriminator
+        // check and the cross-branch ambiguity check for those.
+        if !is_multimodal {
+            check_union_branch(graph, branch, errors);
+        }
         check_type(graph, &branch.body, known, errors);
     }
 
-    // Discriminator ambiguity check.
-    for i in 0..spec.branches.len() {
-        for j in (i + 1)..spec.branches.len() {
-            let a = &spec.branches[i];
-            let b = &spec.branches[j];
-            if let Some(reason) = discriminators_overlap(&a.discriminator, &b.discriminator) {
-                errors.push(SchemaError::UnionAmbiguousDiscriminators {
-                    tag_a: a.tag.clone(),
-                    tag_b: b.tag.clone(),
-                    reason,
-                });
+    if !is_multimodal {
+        // Discriminator ambiguity check.
+        for i in 0..spec.branches.len() {
+            for j in (i + 1)..spec.branches.len() {
+                let a = &spec.branches[i];
+                let b = &spec.branches[j];
+                if let Some(reason) = discriminators_overlap(&a.discriminator, &b.discriminator) {
+                    errors.push(SchemaError::UnionAmbiguousDiscriminators {
+                        tag_a: a.tag.clone(),
+                        tag_b: b.tag.clone(),
+                        reason,
+                    });
+                }
             }
         }
     }
@@ -701,11 +713,11 @@ fn discriminators_overlap(a: &DiscriminatorRule, b: &DiscriminatorRule) -> Optio
 fn is_nullable(graph: &SchemaGraph, ty: &SchemaType, visited: &mut HashSet<TypeId>) -> bool {
     match ty {
         SchemaType::Option { .. } => true,
-        SchemaType::Union(spec) => spec
+        SchemaType::Union { spec, .. } => spec
             .branches
             .iter()
             .any(|b| is_nullable(graph, &b.body, visited)),
-        SchemaType::Ref(id) => {
+        SchemaType::Ref { id, .. } => {
             if !visited.insert(id.clone()) {
                 return false;
             }
@@ -725,8 +737,8 @@ fn is_nullable(graph: &SchemaGraph, ty: &SchemaType, visited: &mut HashSet<TypeI
 fn describe_nullable(ty: &SchemaType) -> String {
     match ty {
         SchemaType::Option { .. } => "option<_>".to_string(),
-        SchemaType::Union(_) => "union".to_string(),
-        SchemaType::Ref(id) => format!("ref `{id}`"),
+        SchemaType::Union { .. } => "union".to_string(),
+        SchemaType::Ref { id, .. } => format!("ref `{id}`"),
         _ => "nullable".to_string(),
     }
 }
@@ -744,7 +756,7 @@ fn resolved_shape<'a>(
     visited: &mut HashSet<TypeId>,
 ) -> BodyShape<'a> {
     match ty {
-        SchemaType::Ref(id) => {
+        SchemaType::Ref { id, .. } => {
             if !visited.insert(id.clone()) {
                 return BodyShape::Other;
             }
@@ -753,10 +765,11 @@ fn resolved_shape<'a>(
                 None => BodyShape::Other,
             }
         }
-        SchemaType::String | SchemaType::Text(_) | SchemaType::Url(_) | SchemaType::Path(_) => {
-            BodyShape::String
-        }
-        SchemaType::Record { fields } => BodyShape::Record(
+        SchemaType::String { .. }
+        | SchemaType::Text { .. }
+        | SchemaType::Url { .. }
+        | SchemaType::Path { .. } => BodyShape::String,
+        SchemaType::Record { fields, .. } => BodyShape::Record(
             fields
                 .iter()
                 .map(|f| (f.name.clone(), &f.body))

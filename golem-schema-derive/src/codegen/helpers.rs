@@ -338,7 +338,7 @@ fn rich_spec_to_body(rich: &RichSpec) -> TokenStream {
             let max = option_u32(spec.max);
             let regex = option_string(spec.regex.as_deref());
             quote! {
-                #private::SchemaType::Text(#private::TextRestrictions {
+                #private::SchemaType::text(#private::TextRestrictions {
                     languages: #languages,
                     min_length: #min,
                     max_length: #max,
@@ -363,7 +363,7 @@ fn rich_spec_to_body(rich: &RichSpec) -> TokenStream {
             let min = option_u32(spec.min_bytes);
             let max = option_u32(spec.max_bytes);
             quote! {
-                #private::SchemaType::Binary(#private::BinaryRestrictions {
+                #private::SchemaType::binary(#private::BinaryRestrictions {
                     mime_types: #mime_types,
                     min_bytes: #min,
                     max_bytes: #max,
@@ -375,7 +375,7 @@ fn rich_spec_to_body(rich: &RichSpec) -> TokenStream {
             let schemes = option_string_vec(spec.allowed_schemes.as_deref());
             let hosts = option_string_vec(spec.allowed_hosts.as_deref());
             quote! {
-                #private::SchemaType::Url(#private::UrlRestrictions {
+                #private::SchemaType::url(#private::UrlRestrictions {
                     allowed_schemes: #schemes,
                     allowed_hosts: #hosts,
                 })
@@ -390,7 +390,7 @@ fn rich_spec_to_body(rich: &RichSpec) -> TokenStream {
             let min = parse_quantity_opt_token(spec.min.as_deref(), &spec.base_unit);
             let max = parse_quantity_opt_token(spec.max.as_deref(), &spec.base_unit);
             quote! {
-                #private::SchemaType::Quantity(#private::QuantitySpec {
+                #private::SchemaType::quantity(#private::QuantitySpec {
                     base_unit: ::std::string::String::from(#base),
                     allowed_suffixes: ::std::vec![ #( ::std::string::String::from(#suffix_lits) ),* ],
                     min: #min,
@@ -401,18 +401,16 @@ fn rich_spec_to_body(rich: &RichSpec) -> TokenStream {
         RichSpec::Secret(spec) => {
             let category = option_string(spec.category.as_deref());
             quote! {
-                #private::SchemaType::Secret(#private::SecretSpec {
+                #private::SchemaType::secret(#private::SecretSpec {
                     category: #category,
-                    metadata: #private::MetadataEnvelope::default(),
                 })
             }
         }
         RichSpec::QuotaToken(spec) => {
             let resource = option_string(spec.resource_name.as_deref());
             quote! {
-                #private::SchemaType::QuotaToken(#private::QuotaTokenSpec {
+                #private::SchemaType::quota_token(#private::QuotaTokenSpec {
                     resource_name: #resource,
-                    metadata: #private::MetadataEnvelope::default(),
                 })
             }
         }
@@ -445,7 +443,7 @@ fn path_spec_body(spec: &PathAttrSpec) -> TokenStream {
     let allowed_mime = option_string_vec(spec.allowed_mime_types.as_deref());
     let allowed_ext = option_string_vec(spec.allowed_extensions.as_deref());
     quote! {
-        #private::SchemaType::Path(#private::PathSpec {
+        #private::SchemaType::path(#private::PathSpec {
             direction: #direction,
             kind: #kind,
             allowed_mime_types: #allowed_mime,

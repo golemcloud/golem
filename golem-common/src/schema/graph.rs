@@ -26,6 +26,21 @@ use serde::{Deserialize, Serialize};
 ///
 /// Recursive references between types go through [`SchemaType::Ref`], pointing
 /// at named definitions in [`SchemaGraph::defs`].
+///
+/// ## Single-root vs multi-root carriers
+///
+/// The common case is single-root: one `SchemaGraph` describes one
+/// payload, with `root` as the entry type and `defs` as the named-type
+/// registry reachable from it.
+///
+/// Multi-root carriers (today, agent-layer carriers such as
+/// [`crate::schema::agent::AgentTypeSchema`] and
+/// [`crate::schema::agent::AgentDependencySchema`]) use the same shape
+/// purely as a definition registry: many roots embedded elsewhere in the
+/// carrier reference shared types in `defs`, and the `SchemaGraph::root`
+/// field is a sentinel (see [`SchemaGraph::empty`]). Such carriers must
+/// not be passed to root-oriented walkers/renderers as if `root` were the
+/// payload root.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchemaGraph {
     /// Named type definitions in this graph. The defining set is exactly the
@@ -48,6 +63,24 @@ impl SchemaGraph {
         }
     }
 
+    /// Convenience: an empty graph with no definitions and a sentinel root.
+    ///
+    /// Used as the initial value for multi-root carriers such as
+    /// [`crate::schema::agent::AgentTypeSchema`] and
+    /// [`crate::schema::agent::AgentDependencySchema`], where the agent's
+    /// constructor and methods each act as their own root and only the
+    /// `defs` registry is consulted. The `root` field is a placeholder
+    /// (empty record) and is not consumed by agent-layer helpers.
+    pub fn empty() -> Self {
+        Self {
+            defs: Vec::new(),
+            root: SchemaType::Record {
+                fields: Vec::new(),
+                metadata: MetadataEnvelope::default(),
+            },
+        }
+    }
+
     /// Look up a named definition by its [`TypeId`].
     pub fn lookup(&self, id: &TypeId) -> Option<&SchemaTypeDef> {
         self.defs.iter().find(|d| &d.id == id)
@@ -55,6 +88,10 @@ impl SchemaGraph {
 }
 
 /// A named type definition inside a [`SchemaGraph`].
+///
+/// The def itself does not carry metadata; metadata lives on the
+/// [`SchemaType`] body so there is one source of truth for docs / aliases /
+/// examples / deprecation / role per type.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchemaTypeDef {
     /// Stable identifier; unique within the enclosing graph.
@@ -62,10 +99,8 @@ pub struct SchemaTypeDef {
     /// Optional human-readable qualified name (display only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Per-def metadata (docs, aliases, examples, deprecation, role).
-    #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
-    pub metadata: MetadataEnvelope,
-    /// The body of this definition.
+    /// The body of this definition. Its metadata envelope is the def's
+    /// metadata.
     pub body: SchemaType,
 }
 

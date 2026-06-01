@@ -44,7 +44,6 @@ pub fn wellformed_schema_graph_strategy() -> impl Strategy<Value = SchemaGraph> 
             .map(|d| SchemaTypeDef {
                 id: d.id.clone(),
                 name: d.name.clone(),
-                metadata: d.metadata.clone(),
                 body: sanitise_type(&d.body, &known),
             })
             .collect();
@@ -61,7 +60,6 @@ pub fn wellformed_schema_graph_strategy() -> impl Strategy<Value = SchemaGraph> 
             .map(|d| SchemaTypeDef {
                 id: d.id.clone(),
                 name: d.name.clone(),
-                metadata: d.metadata.clone(),
                 body: unnest_nullable_options(&d.body, &g_snapshot),
             })
             .collect();
@@ -72,20 +70,16 @@ pub fn wellformed_schema_graph_strategy() -> impl Strategy<Value = SchemaGraph> 
 
 fn unnest_nullable_options(ty: &SchemaType, graph: &SchemaGraph) -> SchemaType {
     match ty {
-        SchemaType::Option { inner } => {
+        SchemaType::Option { inner, .. } => {
             let new_inner = unnest_nullable_options(inner, graph);
             if resolved_is_nullable(&new_inner, graph, &mut HashSet::new()) {
-                SchemaType::Option {
-                    inner: Box::new(wrap_in_variant(new_inner)),
-                }
+                SchemaType::option(wrap_in_variant(new_inner))
             } else {
-                SchemaType::Option {
-                    inner: Box::new(new_inner),
-                }
+                SchemaType::option(new_inner)
             }
         }
-        SchemaType::Record { fields } => SchemaType::Record {
-            fields: fields
+        SchemaType::Record { fields, .. } => SchemaType::record(
+            fields
                 .iter()
                 .map(|f| NamedFieldType {
                     name: f.name.clone(),
@@ -93,9 +87,9 @@ fn unnest_nullable_options(ty: &SchemaType, graph: &SchemaGraph) -> SchemaType {
                     metadata: f.metadata.clone(),
                 })
                 .collect(),
-        },
-        SchemaType::Variant { cases } => SchemaType::Variant {
-            cases: cases
+        ),
+        SchemaType::Variant { cases, .. } => SchemaType::variant(
+            cases
                 .iter()
                 .map(|c| VariantCaseType {
                     name: c.name.clone(),
@@ -106,35 +100,36 @@ fn unnest_nullable_options(ty: &SchemaType, graph: &SchemaGraph) -> SchemaType {
                     metadata: c.metadata.clone(),
                 })
                 .collect(),
-        },
-        SchemaType::Tuple { elements } => SchemaType::Tuple {
-            elements: elements
+        ),
+        SchemaType::Tuple { elements, .. } => SchemaType::tuple(
+            elements
                 .iter()
                 .map(|e| unnest_nullable_options(e, graph))
                 .collect(),
-        },
-        SchemaType::List { element } => SchemaType::List {
-            element: Box::new(unnest_nullable_options(element, graph)),
-        },
-        SchemaType::FixedList { element, length } => SchemaType::FixedList {
-            element: Box::new(unnest_nullable_options(element, graph)),
-            length: *length,
-        },
-        SchemaType::Map { key, value } => SchemaType::Map {
-            key: Box::new(unnest_nullable_options(key, graph)),
-            value: Box::new(unnest_nullable_options(value, graph)),
-        },
-        SchemaType::Result(spec) => SchemaType::Result(crate::schema::schema_type::ResultSpec {
-            ok: spec
-                .ok
-                .as_ref()
-                .map(|t| Box::new(unnest_nullable_options(t, graph))),
-            err: spec
-                .err
-                .as_ref()
-                .map(|t| Box::new(unnest_nullable_options(t, graph))),
-        }),
-        SchemaType::Union(spec) => SchemaType::Union(UnionSpec {
+        ),
+        SchemaType::List { element, .. } => {
+            SchemaType::list(unnest_nullable_options(element, graph))
+        }
+        SchemaType::FixedList {
+            element, length, ..
+        } => SchemaType::fixed_list(unnest_nullable_options(element, graph), *length),
+        SchemaType::Map { key, value, .. } => SchemaType::map(
+            unnest_nullable_options(key, graph),
+            unnest_nullable_options(value, graph),
+        ),
+        SchemaType::Result { spec, .. } => {
+            SchemaType::result(crate::schema::schema_type::ResultSpec {
+                ok: spec
+                    .ok
+                    .as_ref()
+                    .map(|t| Box::new(unnest_nullable_options(t, graph))),
+                err: spec
+                    .err
+                    .as_ref()
+                    .map(|t| Box::new(unnest_nullable_options(t, graph))),
+            })
+        }
+        SchemaType::Union { spec, .. } => SchemaType::union(UnionSpec {
             branches: spec
                 .branches
                 .iter()
@@ -157,11 +152,11 @@ fn resolved_is_nullable(
 ) -> bool {
     match ty {
         SchemaType::Option { .. } => true,
-        SchemaType::Union(spec) => spec
+        SchemaType::Union { spec, .. } => spec
             .branches
             .iter()
             .any(|b| resolved_is_nullable(&b.body, graph, visited)),
-        SchemaType::Ref(id) => {
+        SchemaType::Ref { id, .. } => {
             if !visited.insert(id.clone()) {
                 return false;
             }
@@ -178,15 +173,15 @@ fn resolved_is_nullable(
 
 fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
     match ty {
-        SchemaType::Ref(id) => {
+        SchemaType::Ref { id, .. } => {
             if known.contains(id) {
-                SchemaType::Ref(id.clone())
+                SchemaType::ref_to(id.clone())
             } else {
                 // Replace dangling refs with a harmless primitive.
-                SchemaType::Bool
+                SchemaType::bool()
             }
         }
-        SchemaType::Record { fields } => {
+        SchemaType::Record { fields, .. } => {
             let mut seen = HashSet::new();
             let new_fields: Vec<NamedFieldType> = fields
                 .iter()
@@ -197,9 +192,9 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
                     metadata: f.metadata.clone(),
                 })
                 .collect();
-            SchemaType::Record { fields: new_fields }
+            SchemaType::record(new_fields)
         }
-        SchemaType::Variant { cases } => {
+        SchemaType::Variant { cases, .. } => {
             let mut seen = HashSet::new();
             let mut new_cases: Vec<VariantCaseType> = cases
                 .iter()
@@ -217,9 +212,9 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
                     metadata: Default::default(),
                 });
             }
-            SchemaType::Variant { cases: new_cases }
+            SchemaType::variant(new_cases)
         }
-        SchemaType::Enum { cases } => {
+        SchemaType::Enum { cases, .. } => {
             let mut seen = HashSet::new();
             let mut new_cases: Vec<String> = cases
                 .iter()
@@ -229,9 +224,9 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
             if new_cases.is_empty() {
                 new_cases.push("default".to_string());
             }
-            SchemaType::Enum { cases: new_cases }
+            SchemaType::r#enum(new_cases)
         }
-        SchemaType::Flags { flags } => {
+        SchemaType::Flags { flags, .. } => {
             let mut seen = HashSet::new();
             let mut new_flags: Vec<String> = flags
                 .iter()
@@ -241,25 +236,21 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
             if new_flags.is_empty() {
                 new_flags.push("default".to_string());
             }
-            SchemaType::Flags { flags: new_flags }
+            SchemaType::flags(new_flags)
         }
-        SchemaType::Tuple { elements } => SchemaType::Tuple {
-            elements: elements.iter().map(|e| sanitise_type(e, known)).collect(),
-        },
-        SchemaType::List { element } => SchemaType::List {
-            element: Box::new(sanitise_type(element, known)),
-        },
-        SchemaType::FixedList { element, length } => SchemaType::FixedList {
-            element: Box::new(sanitise_type(element, known)),
-            length: (*length).max(1),
-        },
-        SchemaType::Map { key: _, value } => SchemaType::Map {
+        SchemaType::Tuple { elements, .. } => SchemaType::tuple(
+            elements.iter().map(|e| sanitise_type(e, known)).collect(),
+        ),
+        SchemaType::List { element, .. } => SchemaType::list(sanitise_type(element, known)),
+        SchemaType::FixedList {
+            element, length, ..
+        } => SchemaType::fixed_list(sanitise_type(element, known), (*length).max(1)),
+        SchemaType::Map { value, .. } => {
             // Force the key to a fixed primitive type to satisfy the map-key
             // policy.
-            key: Box::new(SchemaType::String),
-            value: Box::new(sanitise_type(value, known)),
-        },
-        SchemaType::Option { inner } => {
+            SchemaType::map(SchemaType::string(), sanitise_type(value, known))
+        }
+        SchemaType::Option { inner, .. } => {
             let inner_sanitised = sanitise_type(inner, known);
             // Reject nullable-nesting at the strategy level: an `option<X>`
             // where `X` can itself encode as `null` collapses on the canonical
@@ -270,24 +261,26 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
             } else {
                 inner_sanitised
             };
-            SchemaType::Option {
-                inner: Box::new(inner_body),
-            }
+            SchemaType::option(inner_body)
         }
-        SchemaType::Result(spec) => SchemaType::Result(crate::schema::schema_type::ResultSpec {
-            ok: spec.ok.as_ref().map(|t| Box::new(sanitise_type(t, known))),
-            err: spec.err.as_ref().map(|t| Box::new(sanitise_type(t, known))),
-        }),
-        SchemaType::Quantity(spec) => SchemaType::Quantity(sanitise_quantity(spec)),
-        SchemaType::Text(restrictions) => SchemaType::Text(sanitise_text(restrictions)),
-        SchemaType::Binary(restrictions) => SchemaType::Binary(sanitise_binary(restrictions)),
-        SchemaType::Union(spec) => SchemaType::Union(sanitise_union(spec, known)),
-        SchemaType::Future { inner } => SchemaType::Future {
-            inner: inner.as_ref().map(|t| Box::new(sanitise_type(t, known))),
-        },
-        SchemaType::Stream { inner } => SchemaType::Stream {
-            inner: inner.as_ref().map(|t| Box::new(sanitise_type(t, known))),
-        },
+        SchemaType::Result { spec, .. } => {
+            SchemaType::result(crate::schema::schema_type::ResultSpec {
+                ok: spec.ok.as_ref().map(|t| Box::new(sanitise_type(t, known))),
+                err: spec.err.as_ref().map(|t| Box::new(sanitise_type(t, known))),
+            })
+        }
+        SchemaType::Quantity { spec, .. } => SchemaType::quantity(sanitise_quantity(spec)),
+        SchemaType::Text { restrictions, .. } => SchemaType::text(sanitise_text(restrictions)),
+        SchemaType::Binary { restrictions, .. } => {
+            SchemaType::binary(sanitise_binary(restrictions))
+        }
+        SchemaType::Union { spec, .. } => SchemaType::union(sanitise_union(spec, known)),
+        SchemaType::Future { inner, .. } => SchemaType::future(
+            inner.as_ref().map(|t| sanitise_type(t, known)),
+        ),
+        SchemaType::Stream { inner, .. } => SchemaType::stream(
+            inner.as_ref().map(|t| sanitise_type(t, known)),
+        ),
         other => other.clone(),
     }
 }
@@ -338,7 +331,7 @@ fn sanitise_union(spec: &UnionSpec, known: &HashSet<TypeId>) -> UnionSpec {
     if branches.is_empty() {
         branches.push(UnionBranch {
             tag: "default".to_string(),
-            body: SchemaType::String,
+            body: SchemaType::string(),
             discriminator: DiscriminatorRule::Prefix {
                 prefix: "default".to_string(),
             },
@@ -359,38 +352,36 @@ fn sanitise_union_branch(
     // worry about discriminator overlap.
     let (body, discriminator) = match &branch.discriminator {
         DiscriminatorRule::Prefix { .. } => (
-            SchemaType::String,
+            SchemaType::string(),
             DiscriminatorRule::Prefix {
                 prefix: format!("prefix-{index}-"),
             },
         ),
         DiscriminatorRule::Suffix { .. } => (
-            SchemaType::String,
+            SchemaType::string(),
             DiscriminatorRule::Suffix {
                 suffix: format!("-{index}-suffix"),
             },
         ),
         DiscriminatorRule::Contains { .. } => (
-            SchemaType::String,
+            SchemaType::string(),
             DiscriminatorRule::Contains {
                 substring: format!("contains-{index}"),
             },
         ),
         DiscriminatorRule::Regex { .. } => (
-            SchemaType::String,
+            SchemaType::string(),
             DiscriminatorRule::Regex {
                 regex: format!("re-{index}-pattern"),
             },
         ),
         DiscriminatorRule::FieldEquals(disc) => {
             let field_name = format!("disc{index}");
-            let body = SchemaType::Record {
-                fields: vec![NamedFieldType {
-                    name: field_name.clone(),
-                    body: SchemaType::String,
-                    metadata: Default::default(),
-                }],
-            };
+            let body = SchemaType::record(vec![NamedFieldType {
+                name: field_name.clone(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            }]);
             (
                 body,
                 DiscriminatorRule::FieldEquals(FieldDiscriminator {
@@ -402,7 +393,7 @@ fn sanitise_union_branch(
         DiscriminatorRule::FieldAbsent { .. } => {
             // Record-shape required; field-absent must reference a field not
             // present in the body, so use a unique sentinel name.
-            let body = SchemaType::Record { fields: vec![] };
+            let body = SchemaType::record(vec![]);
             (
                 body,
                 DiscriminatorRule::FieldAbsent {
@@ -453,7 +444,7 @@ fn sanitise_binary(restrictions: &BinaryRestrictions) -> BinaryRestrictions {
 fn would_be_nullable(ty: &SchemaType, _known: &HashSet<TypeId>) -> bool {
     match ty {
         SchemaType::Option { .. } => true,
-        SchemaType::Union(spec) => spec
+        SchemaType::Union { spec, .. } => spec
             .branches
             .iter()
             .any(|b| would_be_nullable(&b.body, _known)),
@@ -462,11 +453,9 @@ fn would_be_nullable(ty: &SchemaType, _known: &HashSet<TypeId>) -> bool {
 }
 
 fn wrap_in_variant(inner: SchemaType) -> SchemaType {
-    SchemaType::Variant {
-        cases: vec![VariantCaseType {
-            name: "value".to_string(),
-            payload: Some(inner),
-            metadata: Default::default(),
-        }],
-    }
+    SchemaType::variant(vec![VariantCaseType {
+        name: "value".to_string(),
+        payload: Some(inner),
+        metadata: Default::default(),
+    }])
 }
