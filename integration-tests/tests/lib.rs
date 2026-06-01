@@ -63,8 +63,25 @@ impl Tracing {
     }
 }
 
+// Trivial `HostedDep` impl so that `Tracing` can be registered with
+// `scope = Hosted` (see `tracing_host` below). The host-tagged `Tracing`
+// dep exists only to initialise a tracing subscriber on the parent
+// process — no test or constructor on the worker side consumes it, so
+// `from_descriptor` is never actually invoked.
+impl test_r::core::HostedDep for Tracing {
+    fn descriptor(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn from_descriptor(_bytes: &[u8]) -> Self {
+        Self
+    }
+}
+
 #[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl))]
-pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
+pub async fn create_deps(
+    #[tagged_as("host")] _tracing: &Tracing,
+) -> EnvBasedTestDependencies {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 3,
         ..EnvBasedTestDependenciesConfig::new()
@@ -77,7 +94,13 @@ pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
     deps
 }
 
-#[test_dep(scope = Hosted)]
+// Host-side tracing subscriber: required so that `tracing::info!` calls
+// emitted on the parent process (e.g. by `ChildProcessLogger` background
+// threads forwarding the spawned dependency processes' stdout/stderr) are
+// actually displayed when running with `-- --nocapture`. Without this, the
+// `PerWorker` `tracing` dep below only installs a subscriber inside worker
+// subprocesses, and any parent-side tracing events are silently dropped.
+#[test_dep(tagged_as = "host", scope = Hosted)]
 pub fn tracing_host() -> Tracing {
     Tracing::init()
 }
