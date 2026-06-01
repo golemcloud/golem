@@ -19,7 +19,7 @@ use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::*;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::LegacyParsedAgentId;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
 use rmcp::model::{
@@ -45,7 +45,7 @@ pub async fn invoke_tool(
             },
         )?;
 
-    let parsed_agent_id = ParsedAgentId::new_auto_phantom(
+    let parsed_agent_id = LegacyParsedAgentId::new_auto_phantom(
         mcp_tool.agent_type_name.clone(),
         DataValue::Tuple(ElementValues {
             elements: constructor_params

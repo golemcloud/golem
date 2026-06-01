@@ -22,7 +22,7 @@ use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
 use golem_common::model::agent::{
-    AgentConfigDeclaration, AgentConfigSource, AgentTypeName, ParsedAgentId,
+    AgentConfigDeclaration, AgentConfigSource, AgentTypeName, LegacyParsedAgentId,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::oplog::host_functions::{
@@ -243,7 +243,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 agent_type.agent_type.constructor.input_schema,
             ) {
                 Ok(input) => {
-                    let agent_id = ParsedAgentId::new(
+                    let agent_id = LegacyParsedAgentId::new(
                         AgentTypeName(agent_type_name),
                         input,
                         phantom_id.map(|id| id.into()),
@@ -265,7 +265,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
         let component_metadata = &self.component_metadata().metadata;
-        match ParsedAgentId::parse(agent_id, component_metadata) {
+        match LegacyParsedAgentId::parse(agent_id, component_metadata) {
             Ok(agent_id) => Ok(Ok((
                 agent_id.agent_type.to_string(),
                 agent_id.parameters.into(),

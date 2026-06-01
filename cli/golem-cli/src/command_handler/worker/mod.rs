@@ -64,8 +64,8 @@ use golem_client::model::{
 };
 use golem_common::model::agent::{
     AgentMode, AgentType, AgentTypeName, ComponentModelElementValue, DataSchema, DataValue,
-    ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
-    ParsedAgentId, UntypedJsonDataValue,
+    ElementSchema, ElementValue, ElementValues, LegacyParsedAgentId, NamedElementSchema,
+    NamedElementSchemas, UntypedJsonDataValue,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -1067,7 +1067,7 @@ impl WorkerCommandHandler {
                     .await?;
 
                 let parsed_agent_type_name =
-                    ParsedAgentId::parse_agent_type_name(&raw_agent_name).ok();
+                    LegacyParsedAgentId::parse_agent_type_name(&raw_agent_name).ok();
 
                 let defaults = parsed_agent_type_name
                     .as_ref()
@@ -1096,7 +1096,7 @@ impl WorkerCommandHandler {
 
                 if source_language.is_known()
                     && let Ok(parsed) =
-                        ParsedAgentId::parse(&raw_agent_name, &worker_component.metadata)
+                        LegacyParsedAgentId::parse(&raw_agent_name, &worker_component.metadata)
                 {
                     agent_view.agent_name =
                         crate::agent_id_display::render_agent_id(&parsed, &source_language).into();
@@ -1578,7 +1578,7 @@ impl WorkerCommandHandler {
         plugin_name: &str,
         explicit_priority: Option<i32>,
     ) -> anyhow::Result<i32> {
-        let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_name.0)
+        let agent_type_name = LegacyParsedAgentId::parse_agent_type_name(&agent_name.0)
             .map(|n| n.0)
             .unwrap_or_default();
 
@@ -2197,10 +2197,10 @@ impl WorkerCommandHandler {
 pub(crate) fn try_recanonicalize_agent_name_with_parsed(
     agent_name: &RawAgentId,
     component: &ComponentDto,
-) -> (RawAgentId, Option<ParsedAgentId>) {
+) -> (RawAgentId, Option<LegacyParsedAgentId>) {
     let raw = &agent_name.0;
 
-    // Extract type name and params using ParsedAgentId::parse_agent_type_name
+    // Extract type name and params using LegacyParsedAgentId::parse_agent_type_name
     // and manual splitting for the params portion
     let Some(paren_pos) = raw.find('(') else {
         return (agent_name.clone(), None);
@@ -2275,7 +2275,8 @@ pub(crate) fn try_recanonicalize_agent_name_with_parsed(
         new_id.push_str(phantom);
     }
 
-    let parsed = ParsedAgentId::new(agent_type.type_name.clone(), data_value, phantom_uuid).ok();
+    let parsed =
+        LegacyParsedAgentId::new(agent_type.type_name.clone(), data_value, phantom_uuid).ok();
 
     (RawAgentId(new_id), parsed)
 }
@@ -2321,7 +2322,7 @@ impl WorkerCommandHandler {
         environment: ResolvedEnvironmentIdentity,
         agent_name: String,
     ) -> anyhow::Result<AgentNameMatch> {
-        let parsed_agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_name) {
+        let parsed_agent_type_name = match LegacyParsedAgentId::parse_agent_type_name(&agent_name) {
             Ok(agent_type_name) => agent_type_name,
             Err(err) => {
                 logln("");
@@ -2513,12 +2514,12 @@ impl WorkerCommandHandler {
         component: &ComponentDto,
         agent_name: &RawAgentId,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<(ParsedAgentId, AgentType)>> {
+    ) -> anyhow::Result<Option<(LegacyParsedAgentId, AgentType)>> {
         if !component.metadata.is_agent() {
             return Ok(None);
         }
 
-        match ParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
+        match LegacyParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
             Ok((agent_id, agent_type)) => match function_name {
                 Some(function_name) => {
                     let parsed = match ParsedFunctionName::parse(function_name) {
@@ -2574,7 +2575,7 @@ impl WorkerCommandHandler {
             },
             Err(err) => {
                 let parsed_agent_type_name =
-                    ParsedAgentId::parse_agent_type_name(&agent_name.0).ok();
+                    LegacyParsedAgentId::parse_agent_type_name(&agent_name.0).ok();
 
                 logln("");
                 log_error(format!(
@@ -2969,8 +2970,8 @@ fn build_repl_agent_id(
     agent_type: &AgentType,
     typed_parameters: DataValue,
     phantom_id: Option<Uuid>,
-) -> anyhow::Result<ParsedAgentId> {
-    ParsedAgentId::new_auto_phantom(
+) -> anyhow::Result<LegacyParsedAgentId> {
+    LegacyParsedAgentId::new_auto_phantom(
         agent_type.type_name.clone(),
         typed_parameters,
         phantom_id,
@@ -2980,9 +2981,9 @@ fn build_repl_agent_id(
 }
 
 fn normalize_public_agent_id(
-    agent_id: &ParsedAgentId,
+    agent_id: &LegacyParsedAgentId,
     agent_type: &AgentType,
-) -> anyhow::Result<ParsedAgentId> {
+) -> anyhow::Result<LegacyParsedAgentId> {
     build_repl_agent_id(agent_type, agent_id.parameters.clone(), agent_id.phantom_id)
 }
 
@@ -2996,8 +2997,8 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::agent::{
         AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryDescriptor,
-        DataSchema, ElementSchema, ElementValue, ElementValues, NamedElementSchemas, ParsedAgentId,
-        Snapshotting, TextDescriptor,
+        DataSchema, ElementSchema, ElementValue, ElementValues, LegacyParsedAgentId,
+        NamedElementSchemas, Snapshotting, TextDescriptor,
     };
     use pretty_assertions::assert_eq;
     use test_r::test;
@@ -3128,7 +3129,7 @@ mod tests {
     #[test]
     fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
         let agent_id =
-            ParsedAgentId::new(AgentTypeName("repl-agent".to_string()), empty_tuple(), None)
+            LegacyParsedAgentId::new(AgentTypeName("repl-agent".to_string()), empty_tuple(), None)
                 .unwrap();
         let normalized =
             normalize_public_agent_id(&agent_id, &test_agent_type(AgentMode::Ephemeral)).unwrap();

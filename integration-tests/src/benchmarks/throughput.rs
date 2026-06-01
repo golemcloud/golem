@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
 use golem_client::api::RegistryServiceClient;
-use golem_common::base_model::agent::{DataValue, ParsedAgentId};
+use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -356,8 +356,8 @@ impl Benchmark for ThroughputCpuIntensive {
 #[derive(Debug, Clone)]
 pub struct AgentIdPair {
     pub component_id: ComponentId,
-    pub parent: ParsedAgentId,
-    pub child: ParsedAgentId,
+    pub parent: LegacyParsedAgentId,
+    pub child: LegacyParsedAgentId,
 }
 
 impl AgentIdPair {
@@ -379,7 +379,7 @@ impl AgentIdPair {
 enum AgentInvocationTarget {
     Single {
         component: ComponentDto,
-        agent_id: ParsedAgentId,
+        agent_id: LegacyParsedAgentId,
     },
     Pair {
         component: ComponentDto,
@@ -395,7 +395,7 @@ impl AgentInvocationTarget {
         }
     }
 
-    pub fn agent_id(&self) -> &ParsedAgentId {
+    pub fn agent_id(&self) -> &LegacyParsedAgentId {
         match self {
             AgentInvocationTarget::Single { agent_id, .. } => agent_id,
             AgentInvocationTarget::Pair { pair, .. } => &pair.parent,
@@ -421,10 +421,10 @@ pub struct IterationContext {
     domain: Domain,
     rust_agent_component: ComponentDto,
     ts_agent_component: ComponentDto,
-    rust_agent_ids: Vec<ParsedAgentId>,
-    ts_agent_ids: Vec<ParsedAgentId>,
-    rust_agent_ids_for_http: Vec<ParsedAgentId>,
-    ts_agent_ids_for_http: Vec<ParsedAgentId>,
+    rust_agent_ids: Vec<LegacyParsedAgentId>,
+    ts_agent_ids: Vec<LegacyParsedAgentId>,
+    rust_agent_ids_for_http: Vec<LegacyParsedAgentId>,
+    ts_agent_ids_for_http: Vec<LegacyParsedAgentId>,
     length: usize,
     routing_table: RoutingTable,
     ts_rpc_agent_id_pairs: Vec<AgentIdPair>,
@@ -441,7 +441,7 @@ pub struct ThroughputBenchmark {
     call_count: usize,
 }
 
-fn agent_ids_to_agent_ids(component_id: ComponentId, ids: &[ParsedAgentId]) -> Vec<AgentId> {
+fn agent_ids_to_agent_ids(component_id: ComponentId, ids: &[LegacyParsedAgentId]) -> Vec<AgentId> {
     ids.iter()
         .filter_map(|id| AgentId::from_agent_id(component_id, id).ok())
         .collect()
@@ -612,7 +612,7 @@ impl ThroughputBenchmark {
         async fn warmup_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
             component: &ComponentDto,
-            ids: &[ParsedAgentId],
+            ids: &[LegacyParsedAgentId],
             method_name: &str,
             params: &(dyn Fn(usize) -> DataValue + Send + Sync + 'static),
             length: usize,

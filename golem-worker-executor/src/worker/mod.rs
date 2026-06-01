@@ -55,7 +55,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
-    AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
+    AgentMode, LegacyParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
@@ -102,7 +102,7 @@ use wasmtime::{Store, UpdateDeadline};
 /// Every worker invocation should be done through this service.
 pub struct Worker<Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
-    parsed_agent_id: Option<ParsedAgentId>,
+    parsed_agent_id: Option<LegacyParsedAgentId>,
 
     oplog: Arc<dyn Oplog>,
     worker_event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -1848,7 +1848,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let current_status = Arc::new(RwLock::new(current_status));
 
                 let agent_id = if initial_component.metadata.is_agent() {
-                    let agent_id = ParsedAgentId::parse(
+                    let agent_id = LegacyParsedAgentId::parse(
                         &owned_agent_id.agent_id.agent_id,
                         &initial_component.metadata,
                     )
@@ -1905,7 +1905,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await?;
 
                 let agent_id = if component.metadata.is_agent() {
-                    let agent_id = ParsedAgentId::parse(
+                    let agent_id = LegacyParsedAgentId::parse(
                         &owned_agent_id.agent_id.agent_id,
                         &component.metadata,
                     )
@@ -3061,7 +3061,7 @@ struct ResolvedAgentProperties {
 
 fn resolve_agent_properties<T: HasConfig>(
     deps: &T,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&LegacyParsedAgentId>,
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> ResolvedAgentProperties {
     let resolved_agent_type =
@@ -3165,7 +3165,7 @@ struct GetOrCreateWorkerResult {
     initial_worker_metadata: AgentMetadata,
     current_status: Arc<RwLock<AgentStatusRecord>>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    agent_id: Option<ParsedAgentId>,
+    agent_id: Option<LegacyParsedAgentId>,
     snapshot_policy: SnapshotPolicy,
     oplog: Arc<dyn Oplog>,
 }

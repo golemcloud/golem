@@ -938,9 +938,9 @@ pub struct NamedElementValues {
 
 /// Identifies a deployed, instantiated agent.
 ///
-/// ParsedAgentId is convertible to and from string, and is used as _agent ids_.
+/// LegacyParsedAgentId is convertible to and from string, and is used as _agent ids_.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParsedAgentId {
+pub struct LegacyParsedAgentId {
     pub agent_type: AgentTypeName,
     pub parameters: DataValue,
     pub phantom_id: Option<Uuid>,

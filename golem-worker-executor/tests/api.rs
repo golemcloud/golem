@@ -646,7 +646,7 @@ async fn get_workers_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::base_model::agent::ParsedAgentId,
+        caller_agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
         name_filter: Option<String>,
         expected_count: usize,
         executor: &TestWorkerExecutor,
@@ -777,7 +777,7 @@ async fn get_metadata_from_worker(
 
     fn get_agent_id_val(
         component_id: &ComponentId,
-        agent_id: &golem_common::base_model::agent::ParsedAgentId,
+        agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
     ) -> Value {
         let component_id_val = {
             let (high, low) = component_id.0.as_u64_pair();
@@ -789,8 +789,8 @@ async fn get_metadata_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::base_model::agent::ParsedAgentId,
-        other_agent_id: &golem_common::base_model::agent::ParsedAgentId,
+        caller_agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
+        other_agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
         executor: &TestWorkerExecutor,
     ) -> anyhow::Result<()> {
         let agent_id_val1 = get_agent_id_val(&component.id, caller_agent_id);

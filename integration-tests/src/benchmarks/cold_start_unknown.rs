@@ -15,7 +15,7 @@
 use crate::benchmarks::{delete_workers, invoke_and_await_agent};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::base_model::agent::LegacyParsedAgentId;
 use golem_common::model::AgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::{agent_id, data_value};
@@ -195,7 +195,7 @@ impl Benchmark for ColdStartUnknownMedium {
 
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
-    agents: Vec<(ComponentDto, ParsedAgentId)>,
+    agents: Vec<(ComponentDto, LegacyParsedAgentId)>,
 }
 
 pub struct ColdStartUnknownBenchmark {

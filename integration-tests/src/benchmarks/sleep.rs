@@ -15,7 +15,7 @@
 use crate::benchmarks::delete_workers;
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::base_model::agent::LegacyParsedAgentId;
 use golem_common::model::AgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::{agent_id, data_value};
@@ -38,7 +38,7 @@ pub struct SleepBenchmarkContext {
 pub struct SleepIterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
-    agent_ids: Vec<ParsedAgentId>,
+    agent_ids: Vec<LegacyParsedAgentId>,
 }
 
 #[async_trait]

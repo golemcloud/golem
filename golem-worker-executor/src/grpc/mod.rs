@@ -52,7 +52,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, UntypedDataValue};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal, UntypedDataValue};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -1117,7 +1117,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
-        if let Ok(agent_id) = ParsedAgentId::parse(
+        if let Ok(agent_id) = LegacyParsedAgentId::parse(
             &owned_agent_id.agent_id.agent_id,
             &component_metadata.metadata,
         ) && let Some(agent_type) = component_metadata
@@ -1143,7 +1143,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .component_service()
             .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
             .await
-            && let Ok(agent_id) = ParsedAgentId::parse(
+            && let Ok(agent_id) = LegacyParsedAgentId::parse(
                 &owned_agent_id.agent_id.agent_id,
                 &target_component_metadata.metadata,
             )
@@ -1340,7 +1340,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let agent_type_name =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
         let agent_mode = self
@@ -1444,7 +1444,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let agent_type_name =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
         let agent_mode = self
@@ -1695,7 +1695,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
 
                 let agent_type =
-                    ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+                    LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id)
+                        .ok();
 
                 let installation = agent_type
                     .as_ref()
@@ -1767,7 +1768,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
         let agent_type =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
         let installation = agent_type
             .as_ref()
             .and_then(|t| component_metadata.metadata.agent_type_plugins(t))

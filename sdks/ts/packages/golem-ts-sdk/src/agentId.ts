@@ -19,7 +19,7 @@ import { Uuid as RawUuid } from 'golem:core/types@1.5.0';
 /**
  * Globally unique ID of an `agent`.
  *
- * A ParsedAgentId wraps the string representation of an agent ID and can parse it
+ * A LegacyParsedAgentId wraps the string representation of an agent ID and can parse it
  * into its constituent parts: agent type name, constructor parameters, and optional phantom ID.
  */
 export class ParsedAgentId {

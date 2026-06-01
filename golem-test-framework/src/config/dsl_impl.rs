@@ -29,7 +29,7 @@ use golem_client::api::{
     WorkerError,
 };
 use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetadataRequest};
-use golem_common::base_model::agent::{DataValue, ParsedAgentId};
+use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
@@ -330,7 +330,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: LegacyParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
@@ -356,7 +356,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
@@ -402,7 +402,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
         method_name: &str,

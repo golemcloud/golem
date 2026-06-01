@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::LegacyParsedAgentId;
 use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -106,7 +106,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         )
         .map_err(|err| anyhow::anyhow!("Invalid constructor input: {err}"))?;
 
-        let agent_id = golem_common::model::agent::ParsedAgentId::new(
+        let agent_id = golem_common::model::agent::LegacyParsedAgentId::new(
             golem_common::model::agent::AgentTypeName(agent_type_name),
             input,
             phantom_id.map(|id| id.into()),
@@ -1370,7 +1370,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
     default_retry_policy: NamedRetryPolicy,
     agent_config_retry_policies: Vec<NamedRetryPolicy>,
     runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
-    enrichment: Option<(&ParsedAgentId, bool)>,
+    enrichment: Option<(&LegacyParsedAgentId, bool)>,
     max_in_function_retry_delay: Duration,
     worker: Arc<crate::worker::Worker<Ctx>>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,

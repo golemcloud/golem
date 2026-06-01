@@ -28,8 +28,8 @@ use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::agent::{
     BinaryReference, BinaryReferenceValue, ComponentModelElementValue, DataValue, ElementValue,
-    ElementValues, OidcPrincipal, ParsedAgentId, Principal, TextReference, TextReferenceValue,
-    UntypedDataValue, UntypedElementValue,
+    ElementValues, LegacyParsedAgentId, OidcPrincipal, Principal, TextReference,
+    TextReferenceValue, UntypedDataValue, UntypedElementValue,
 };
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
@@ -149,7 +149,7 @@ impl CallAgentHandler {
 
         let phantom_id = phantom.then(Uuid::new_v4);
 
-        let agent_id = ParsedAgentId::new(agent_type.clone(), data_value, phantom_id)
+        let agent_id = LegacyParsedAgentId::new(agent_type.clone(), data_value, phantom_id)
             .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
         Ok(AgentId {
