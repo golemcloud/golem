@@ -16,6 +16,7 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_common::error_forwarding;
 use golem_common::model::account::{Account, AccountEmail, AccountId, AccountRevision};
 use golem_common::model::auth::AccountRole;
+use golem_common::model::card::CardId;
 use golem_common::model::plan::PlanId;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::SqlDateTime;
@@ -40,6 +41,8 @@ pub struct AccountRecord {
     pub account_id: Uuid,
 
     pub email: String,
+    pub token_root_card_id: Option<Uuid>,
+    pub token_root_card_epoch: i64,
 
     #[sqlx(flatten)]
     pub audit: AuditFields,
@@ -98,6 +101,8 @@ impl AccountRevisionRecord {
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountExtRevisionRecord {
     pub entity_created_at: SqlDateTime,
+    pub token_root_card_id: Option<Uuid>,
+    pub token_root_card_epoch: i64,
 
     #[sqlx(flatten)]
     pub revision: AccountRevisionRecord,
@@ -113,6 +118,8 @@ impl TryFrom<AccountExtRevisionRecord> for Account {
             email: AccountEmail::new(value.revision.email),
             plan_id: PlanId(value.revision.plan_id),
             roles: roles_from_bit_vector(value.revision.roles),
+            token_root_card_id: value.token_root_card_id.map(CardId),
+            token_root_card_epoch: value.token_root_card_epoch.try_into()?,
         })
     }
 }

@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
+use crate::repo::model::card::CardRepoError;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
+use golem_common::model::card::CardId;
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareData, PermissionShareId, PermissionShareName,
     PermissionShareRevision,
@@ -27,6 +29,10 @@ use uuid::Uuid;
 pub enum PermissionShareRepoError {
     #[error("There is already a permission share with this name")]
     ShareViolatesUniqueness,
+    #[error("Parent card {0} does not exist")]
+    ParentCardNotFound(Uuid),
+    #[error("Card tree changed during deletion")]
+    CardTreeChangedDuringDelete,
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error(transparent)]
@@ -34,6 +40,17 @@ pub enum PermissionShareRepoError {
 }
 
 error_forwarding!(PermissionShareRepoError, RepoError);
+
+impl From<CardRepoError> for PermissionShareRepoError {
+    fn from(value: CardRepoError) -> Self {
+        match value {
+            CardRepoError::ParentNotFound(card_id) => Self::ParentCardNotFound(card_id),
+            CardRepoError::CardTreeChangedDuringDelete => Self::CardTreeChangedDuringDelete,
+            CardRepoError::ConcurrentModification => Self::ConcurrentModification,
+            CardRepoError::InternalError(err) => Self::InternalError(err),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
 pub struct PermissionShareDataRecord {
@@ -71,7 +88,6 @@ pub struct PermissionShareRecord {
     pub owner_account_id: Uuid,
     pub target_account_id: Uuid,
     pub name: String,
-    pub current_card_id: Option<Uuid>,
 
     #[sqlx(flatten)]
     pub audit: AuditFields,
@@ -113,7 +129,7 @@ impl PermissionShareRevisionRecord {
             permission_share_id: value.id.0,
             revision_id: value.revision.into(),
             name: value.name.0,
-            card_id: value.current_card_id,
+            card_id: value.current_card_id.map(|id| id.0),
             data: Blob::new(value.data.into()),
             audit,
         }
@@ -124,7 +140,6 @@ impl PermissionShareRevisionRecord {
 pub struct PermissionShareExtRevisionRecord {
     pub owner_account_id: Uuid,
     pub target_account_id: Uuid,
-    pub current_card_id: Option<Uuid>,
 
     #[sqlx(flatten)]
     pub revision: PermissionShareRevisionRecord,
@@ -140,7 +155,7 @@ impl TryFrom<PermissionShareExtRevisionRecord> for PermissionShare {
             owner_account_id: AccountId(value.owner_account_id),
             target_account_id: AccountId(value.target_account_id),
             name: PermissionShareName(value.revision.name),
-            current_card_id: value.current_card_id,
+            current_card_id: value.revision.card_id.map(CardId),
             data: value.revision.data.into_value().into(),
         })
     }

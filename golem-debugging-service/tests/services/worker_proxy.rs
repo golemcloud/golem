@@ -154,6 +154,7 @@ impl WorkerProxy for TestWorkerProxy {
             account_id: self.test_ctx.account_id,
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
+            token_root_card_id: None,
         });
 
         let result = loop {
@@ -209,6 +210,7 @@ impl WorkerProxy for TestWorkerProxy {
             account_id: self.test_ctx.account_id,
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
+            token_root_card_id: None,
         });
 
         let result = self
@@ -256,6 +258,7 @@ impl WorkerProxy for TestWorkerProxy {
             account_id: self.test_ctx.account_id,
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
+            token_root_card_id: None,
         });
 
         let result = self

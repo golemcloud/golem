@@ -14,7 +14,7 @@
 
 use chrono::{DateTime, Utc};
 use golem_common::error_forwarding;
-use golem_common::model::card::{Card, CardManagedBy, PermissionPattern};
+use golem_common::model::card::{Card, CardId, CardManagedBy, PermissionPattern};
 use golem_service_base::repo::{Blob, RepoError, SqlDateTime};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -23,6 +23,10 @@ use uuid::Uuid;
 pub enum CardRepoError {
     #[error("Parent card {0} does not exist")]
     ParentNotFound(Uuid),
+    #[error("Card tree changed during deletion")]
+    CardTreeChangedDuringDelete,
+    #[error("Concurrent modification")]
+    ConcurrentModification,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -46,7 +50,6 @@ pub struct CardRecord {
     pub expires_at: Option<SqlDateTime>,
     pub system_card: bool,
     pub managed_by: Option<Blob<CardManagedBy>>,
-    pub polymorphic: bool,
 }
 
 impl TryFrom<CardRecord> for Card {
@@ -56,8 +59,8 @@ impl TryFrom<CardRecord> for Card {
         let data = value.data.into_value();
 
         Ok(Card {
-            card_id: value.card_id,
-            parent_ids: data.parent_ids,
+            card_id: CardId(value.card_id),
+            parent_ids: data.parent_ids.into_iter().map(CardId).collect(),
             lower_positive: data.lower_positive,
             lower_negative: data.lower_negative,
             upper_positive: data.upper_positive,
@@ -72,8 +75,8 @@ impl TryFrom<CardRecord> for Card {
 
 impl CardRecord {
     pub fn creation(
-        card_id: Uuid,
-        parent_ids: Vec<Uuid>,
+        card_id: CardId,
+        parent_ids: Vec<CardId>,
         lower_positive: Vec<PermissionPattern>,
         lower_negative: Vec<PermissionPattern>,
         upper_positive: Vec<PermissionPattern>,
@@ -81,12 +84,11 @@ impl CardRecord {
         expires_at: Option<DateTime<Utc>>,
         system_card: bool,
         managed_by: Option<CardManagedBy>,
-        polymorphic: bool,
     ) -> Self {
         Self {
-            card_id,
+            card_id: card_id.0,
             data: Blob::new(CardDataRecord {
-                parent_ids,
+                parent_ids: parent_ids.into_iter().map(|id| id.0).collect(),
                 lower_positive,
                 lower_negative,
                 upper_positive,
@@ -96,7 +98,6 @@ impl CardRecord {
             expires_at: expires_at.map(Into::into),
             system_card,
             managed_by: managed_by.map(Blob::new),
-            polymorphic,
         }
     }
 }

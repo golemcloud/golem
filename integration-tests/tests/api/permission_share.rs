@@ -47,7 +47,10 @@ async fn create_list_update_and_delete_permission_share(
     let creation = PermissionShareCreation {
         target_account_id: target.account_id,
         name: PermissionShareName("team-access".to_string()),
-        data: share_data("environment(owner/app/prod) @ * : deploy : prod"),
+        data: share_data(&format!(
+            "application(owner) @ {} : view : shop",
+            target.account_email.as_str()
+        )),
     };
 
     let share = client
@@ -57,7 +60,7 @@ async fn create_list_update_and_delete_permission_share(
     assert_eq!(share.owner_account_id, owner.account_id);
     assert_eq!(share.target_account_id, target.account_id);
     assert_eq!(share.name, creation.name);
-    assert_eq!(share.current_card_id, None);
+    assert!(share.current_card_id.is_some());
     assert_eq!(share.data, creation.data);
 
     {
@@ -90,14 +93,15 @@ async fn create_list_update_and_delete_permission_share(
     let update = PermissionShareUpdate {
         current_revision: share.revision,
         name: PermissionShareName("team-access-renamed".to_string()),
-        data: share_data("environment(owner/app/prod) @ * : rollback : prod@rev=42"),
+        data: share_data("application(owner) @ * : create : *"),
     };
 
     let updated = client.update_permission_share(&share.id.0, &update).await?;
     assert_eq!(updated.revision, share.revision.next()?);
     assert_eq!(updated.name, update.name);
     assert_eq!(updated.data, update.data);
-    assert_eq!(updated.current_card_id, None);
+    assert!(updated.current_card_id.is_some());
+    assert_ne!(updated.current_card_id, share.current_card_id);
 
     client
         .delete_permission_share(&updated.id.0, updated.revision.into())
@@ -153,6 +157,40 @@ async fn permission_share_names_are_unique_per_owner(
         result,
         Err(golem_client::Error::Item(
             RegistryServiceCreatePermissionShareError::Error409(_)
+        ))
+    ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn permission_share_rejects_third_party_recipient(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let target = deps.user().await?;
+    let third_party = deps.user().await?;
+
+    let client = deps.registry_service().client(&owner.token).await;
+
+    let creation = PermissionShareCreation {
+        target_account_id: target.account_id,
+        name: PermissionShareName("bad-recipient".to_string()),
+        data: share_data(&format!(
+            "application(owner) @ {} : view : shop",
+            third_party.account_email.as_str()
+        )),
+    };
+
+    let result = client
+        .create_permission_share(&owner.account_id.0, &creation)
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceCreatePermissionShareError::Error400(_)
         ))
     ));
 

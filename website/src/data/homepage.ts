@@ -209,6 +209,7 @@ export const customerLogos = {
     { kind: "image", filename: "warpmind.png", alt: "WarpMind" },
     { kind: "image", filename: "seeta-ai-assistant.png", alt: "Seeta AI Assistant" },
     { kind: "image", filename: "golem-journai.png", alt: "JournAI" },
+    { kind: "image", filename: "johnethel-lms.png", alt: "Johnethel LMS" },
   ] as CustomerLogo[],
 };
 
@@ -513,7 +514,7 @@ export const customerStories = {
     },
     {
       quote:
-        "Like AWS Lambda, but the function has memory across invocations and durable reminders out of the box. Durability is invisible — exactly how infrastructure should feel.",
+        "Like AWS Lambda, but the function has memory across invocations and durable reminders. Durability is invisible — exactly how infrastructure should feel.",
       name: "Seeta Vadali",
       role: "Senior Consultant",
       company: "Building Seeta AI",
@@ -531,6 +532,15 @@ export const customerStories = {
       company: "Building JournAI",
       avatar: { filename: "daniele-torelli.png", alt: "Daniele Torelli" },
       productLogo: { filename: "golem-journai.png", alt: "JournAI" },
+    },
+    {
+      quote:
+        "Tried Temporal, Dapr, Restate, and Fermyon Spin. Golem gives me what I'd given up on finding: code-level customizability with no-code-level operational simplicity.",
+      name: "Samuel Iyeh",
+      role: "AI Software Engineer",
+      company: "Building Johnethel LMS",
+      avatar: { filename: "samuel-iyeh.jpg", alt: "Samuel Iyeh" },
+      productLogo: { filename: "johnethel-lms.png", alt: "Johnethel LMS" },
     },
   ] as Testimonial[],
 };

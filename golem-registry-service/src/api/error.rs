@@ -629,6 +629,10 @@ impl From<PermissionShareError> for ApiError {
             PermissionShareError::TargetAccountNotFound(_) => {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }
+            PermissionShareError::InvalidGrant { .. }
+            | PermissionShareError::InvalidRecipient { .. } => {
+                Self::bad_request(api::error_code::INVALID_PERMISSION_SHARE_GRANT, error)
+            }
             PermissionShareError::Unauthorized(inner) => inner.into(),
             PermissionShareError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
