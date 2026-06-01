@@ -38,7 +38,7 @@ use golem_common::model::agent::{
     ElementValues, OidcPrincipal, ParsedAgentId, Principal, ReadOnlyConfig, TextReference,
     TextReferenceValue, UntypedDataValue, UntypedElementValue,
 };
-use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
 use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::ValueAndType;
@@ -125,13 +125,18 @@ impl CallAgentHandler {
 
         debug!("Received agent response: {agent_response:?}");
 
-        // The executor returns the oplog index that the response's body was
-        // committed at. Using this index as the validator avoids TOCTOU:
-        // because the cached entry stores the same index, a subsequent cache
-        // hit produces the same ETag, and any non-read-only write between two
-        // reads bumps the cache epoch and forces a new invocation whose
-        // recorded index will be strictly greater.
-        let read_only_oplog_index = agent_response.read_only_oplog_index;
+        // The executor returns the oplog index of the agent right after the
+        // invocation, paired with the per-instance agent fingerprint of the
+        // worker that produced it. Using this index+fingerprint pair as the
+        // ETag validator avoids TOCTOU: because the cached entry stores the
+        // same pair, a subsequent cache hit produces the same ETag; any
+        // non-read-only write between two reads bumps the cache epoch and
+        // forces a new invocation whose recorded index will be strictly
+        // greater; and the fingerprint ensures that a deleted-then-recreated
+        // agent that coincidentally lands at the same oplog index does not
+        // collide with a previously-cached client-side ETag.
+        let oplog_index = agent_response.oplog_index;
+        let agent_fingerprint = agent_response.agent_fingerprint;
 
         let agent_result = match agent_response.result {
             golem_common::model::AgentInvocationResult::AgentMethod { output } => Some(output),
@@ -150,7 +155,8 @@ impl CallAgentHandler {
             add_read_only_cache_headers(
                 &mut route_result.headers,
                 &agent_id,
-                read_only_oplog_index,
+                oplog_index,
+                agent_fingerprint,
                 read_only,
                 behaviour,
                 resolved_route,
@@ -168,8 +174,8 @@ impl CallAgentHandler {
 
     /// Pre-invocation `If-None-Match` revalidation. When the request supplies
     /// an `If-None-Match` header containing the ETag for the agent's current
-    /// oplog index, we short-circuit with `304 Not Modified` and do not touch
-    /// the executor at all.
+    /// `(fingerprint, oplog index)` pair, we short-circuit with
+    /// `304 Not Modified` and do not touch the executor at all.
     async fn try_handle_if_none_match(
         &self,
         request: &RichRequest,
@@ -191,14 +197,14 @@ impl CallAgentHandler {
             return Ok(None);
         }
 
-        let Some(current_oplog) = self
-            .fetch_current_oplog_index(resolved_route, agent_id)
+        let Some((current_fingerprint, current_oplog)) = self
+            .fetch_current_validator(resolved_route, agent_id)
             .await?
         else {
             return Ok(None);
         };
 
-        if !if_none_match_hits(&entries, agent_id, current_oplog) {
+        if !if_none_match_hits(&entries, agent_id, current_fingerprint, current_oplog) {
             return Ok(None);
         }
 
@@ -207,6 +213,7 @@ impl CallAgentHandler {
             &mut headers,
             agent_id,
             Some(current_oplog),
+            Some(current_fingerprint),
             read_only,
             behaviour,
             resolved_route,
@@ -219,17 +226,21 @@ impl CallAgentHandler {
         }))
     }
 
-    async fn fetch_current_oplog_index(
+    /// Fetch the agent's current `(fingerprint, last_oplog_index)` pair, used
+    /// as the strong-validator value for `If-None-Match` revalidation. The
+    /// pair must come from the same metadata snapshot so the fingerprint and
+    /// the oplog index describe the same agent instance.
+    async fn fetch_current_validator(
         &self,
         resolved_route: &ResolvedRouteEntry,
         agent_id: &AgentId,
-    ) -> Result<Option<OplogIndex>, RequestHandlerError> {
+    ) -> Result<Option<(AgentFingerprint, OplogIndex)>, RequestHandlerError> {
         match self
             .worker_service
             .get_metadata(agent_id, AuthCtx::agent(resolved_route.route.account_id))
             .await
         {
-            Ok(metadata) => Ok(Some(metadata.last_oplog_index)),
+            Ok(metadata) => Ok(Some((metadata.fingerprint, metadata.last_oplog_index))),
             Err(err) => {
                 // Failing to fetch metadata must not block the response. We
                 // simply skip the cache-headers / 304 path and let the regular
@@ -411,6 +422,15 @@ impl CallAgentHandler {
     }
 }
 
+/// HTTP methods for which the worker-service emits read-only cache headers
+/// (`ETag`, `Cache-Control`) and serves `304 Not Modified` from
+/// `If-None-Match`.
+///
+/// This set MUST be kept in sync with
+/// `golem_registry_service::services::deployment::route_compilation::collect_read_only_warnings`,
+/// which warns the user at deploy time when a read-only `AgentMethod` is bound
+/// to an HTTP verb that is **not** in this whitelist (because the worker-
+/// service will then never emit cache headers for that binding).
 fn is_cacheable_method(method: &Method) -> bool {
     matches!(*method, Method::GET | Method::HEAD)
 }
@@ -424,6 +444,7 @@ fn add_read_only_cache_headers(
     headers: &mut HashMap<http::HeaderName, String>,
     agent_id: &AgentId,
     oplog_index: Option<OplogIndex>,
+    agent_fingerprint: Option<AgentFingerprint>,
     read_only: &ReadOnlyConfig,
     behaviour: &CallAgentBehaviour,
     resolved_route: &ResolvedRouteEntry,
@@ -434,16 +455,18 @@ fn add_read_only_cache_headers(
     );
 
     // `CachePolicy::NoCache` explicitly opts out of HTTP caching: no ETag, and
-    // therefore no 304 path. Otherwise emit an ETag for the supplied oplog
-    // index: on the `200` path this is the executor-reported post-commit (or
-    // cache-entry) index of the read-only invocation; on the `304` path this
-    // is the worker's `last_oplog_index` observed before short-circuiting.
-    // Skip the ETag entirely if no index is available (e.g. metadata fetch
-    // failed, or the executor did not return one).
+    // therefore no 304 path. Otherwise emit an ETag built from the supplied
+    // `(agent_fingerprint, oplog_index)` pair: on the `200` path both come
+    // from the executor-reported post-commit (or cache-entry) values for the
+    // read-only invocation; on the `304` path both come from the same
+    // metadata snapshot observed before short-circuiting. Skip the ETag
+    // entirely if either half of the validator is unavailable (e.g. metadata
+    // fetch failed, or the executor did not return one — for example because
+    // it is a legacy build that predates the fingerprint field).
     if supports_http_revalidation(read_only)
-        && let Some(idx) = oplog_index
+        && let (Some(idx), Some(fp)) = (oplog_index, agent_fingerprint)
     {
-        headers.insert(cache_header::ETAG, build_etag_value(agent_id, idx));
+        headers.insert(cache_header::ETAG, build_etag_value(agent_id, fp, idx));
     }
 
     // Vary on every request header that may influence the response: the

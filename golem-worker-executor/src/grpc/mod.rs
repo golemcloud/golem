@@ -1839,7 +1839,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     consumed_fuel: None,
                     invocation_status: Some(inv_status),
                     component_revision: None,
-                    read_only_oplog_index: None,
+                    oplog_index: None,
+                    agent_fingerprint: None,
                 }),
                 None,
             ));
@@ -2126,6 +2127,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .map(|region| region.into())
                 .collect(),
             oplog_idx: u64::from(latest_status.oplog_idx),
+            fingerprint: Some(metadata.fingerprint.0.into()),
         })
     }
 }
@@ -2969,7 +2971,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     fuel_consumed,
                     component_revision,
                     invocation_status,
-                    read_only_oplog_index,
+                    oplog_index,
+                    agent_fingerprint,
                 ) = match result {
                     Some(output) => {
                         let value = match &output.result {
@@ -2986,10 +2989,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             output.consumed_fuel,
                             output.component_revision.map(|r| r.get()),
                             proto_status,
-                            output.read_only_oplog_index.map(u64::from),
+                            output.oplog_index.map(u64::from),
+                            output.agent_fingerprint.map(|fp| fp.0.into()),
                         )
                     }
-                    None => (None, None, None, None, None),
+                    None => (None, None, None, None, None, None),
                 };
                 record.succeed(Ok(Response::new(InvokeAgentResponse {
                     result: Some(
@@ -2999,7 +3003,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 fuel_consumed,
                                 component_revision,
                                 status: invocation_status,
-                                read_only_oplog_index,
+                                oplog_index,
+                                agent_fingerprint,
                             },
                         ),
                     ),

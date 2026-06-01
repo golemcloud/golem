@@ -4,6 +4,7 @@ package golem.worker;
 
 import "golem/common/account_id.proto";
 import "golem/common/environment.proto";
+import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/worker_id.proto";
@@ -33,6 +34,11 @@ message AgentMetadata {
   golem.common.EnvironmentId environment_id = 18;
   // Latest known oplog index for this agent.
   uint64 oplog_idx = 19;
+  // Per-instance fingerprint for this agent: a random UUID generated at agent
+  // creation, globally unique across recreations of the same `AgentId`.
+  // Distinguishes a freshly-created agent from a previous, now-deleted
+  // instance that shared the same `AgentId`.
+  golem.common.UUID fingerprint = 20;
 }
 
 message UpdateRecord {

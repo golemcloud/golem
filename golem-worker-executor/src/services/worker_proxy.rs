@@ -398,21 +398,26 @@ impl WorkerProxy for RemoteWorkerProxy {
                         .ok()
                         .map(InvocationStatus::from)
                 });
-                let read_only_oplog_index = success.read_only_oplog_index.map(OplogIndex::from_u64);
+                let oplog_index = success.oplog_index.map(OplogIndex::from_u64);
+                let agent_fingerprint = success
+                    .agent_fingerprint
+                    .map(|uuid| AgentFingerprint(uuid.into()));
                 let output = match result {
                     Some(output) => AgentInvocationOutput {
                         result: AgentInvocationResult::AgentMethod { output },
                         consumed_fuel: success.fuel_consumed,
                         invocation_status,
                         component_revision,
-                        read_only_oplog_index,
+                        oplog_index,
+                        agent_fingerprint,
                     },
                     None => AgentInvocationOutput {
                         result: AgentInvocationResult::AgentInitialization,
                         consumed_fuel: success.fuel_consumed,
                         invocation_status,
                         component_revision,
-                        read_only_oplog_index,
+                        oplog_index,
+                        agent_fingerprint,
                     },
                 };
                 Ok(output)

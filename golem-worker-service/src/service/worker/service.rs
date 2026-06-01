@@ -1653,7 +1653,8 @@ mod tests {
                 consumed_fuel: None,
                 invocation_status: None,
                 component_revision: Some(component_revision),
-                read_only_oplog_index: None,
+                oplog_index: None,
+                agent_fingerprint: None,
             }));
             let registry = Arc::new(TestRegistryService {
                 resolved: ResolvedAgentType {

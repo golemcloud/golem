@@ -1801,7 +1801,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
             result
-                .cache(&self.owned_agent_id, self.agent_mode(), self)
+                .cache(
+                    &self.owned_agent_id,
+                    self.agent_mode(),
+                    self.initial_worker_metadata.fingerprint,
+                    self,
+                )
                 .await;
             lookup_result_from_cached_result(&status, key, result)
         } else {
@@ -3153,6 +3158,7 @@ impl InvocationResult {
         &mut self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        agent_fingerprint: AgentFingerprint,
         services: &T,
     ) {
         if let Self::Lazy { oplog_idx } = self {
@@ -3176,10 +3182,14 @@ impl InvocationResult {
                         consumed_fuel: Some(consumed_fuel as u64),
                         invocation_status: None,
                         component_revision: Some(component_revision),
-                        // `oplog_idx` here is the index of the matched
-                        // `AgentInvocationFinished` entry, which is exactly
-                        // what the read-only HTTP cache uses as its ETag.
-                        read_only_oplog_index: Some(oplog_idx),
+                        // `oplog_idx` is the index of the matched
+                        // `AgentInvocationFinished` entry. The fingerprint is
+                        // the current worker's per-instance fingerprint: the
+                        // oplog is owned by a single worker instance, so any
+                        // `AgentInvocationFinished` we read from it was
+                        // necessarily produced by that instance.
+                        oplog_index: Some(oplog_idx),
+                        agent_fingerprint: Some(agent_fingerprint),
                     })
                 }
                 OplogEntry::Error {

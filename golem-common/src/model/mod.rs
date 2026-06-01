@@ -915,10 +915,14 @@ pub struct AgentInvocationOutput {
     pub consumed_fuel: Option<u64>,
     pub invocation_status: Option<InvocationStatus>,
     pub component_revision: Option<ComponentRevision>,
-    /// For read-only agent methods, the oplog index that the cached
-    /// representation was committed at. `None` for non-read-only methods or
-    /// for legacy executors that did not report it.
-    pub read_only_oplog_index: Option<OplogIndex>,
+    /// Oplog index of the agent right after this invocation completed. `None`
+    /// for synthetic outputs (e.g. lookup-only status responses) or for legacy
+    /// executors that did not report it.
+    pub oplog_index: Option<OplogIndex>,
+    /// Per-instance fingerprint of the agent that produced this invocation
+    /// result. `None` for synthetic outputs (e.g. lookup-only status responses)
+    /// or for legacy executors that did not report it.
+    pub agent_fingerprint: Option<AgentFingerprint>,
 }
 
 fn value_replay_equivalent(a: &Value, b: &Value) -> bool {

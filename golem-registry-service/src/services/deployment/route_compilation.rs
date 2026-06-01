@@ -194,6 +194,12 @@ fn collect_read_only_warnings(
         ));
     }
 
+    // The whitelist below MUST stay consistent with the worker-service's
+    // `is_cacheable_method` predicate
+    // (`golem-worker-service/src/custom_api/call_agent/mod.rs`). If a future
+    // HTTP method becomes cacheable on the worker-service side, this warning
+    // must accept it too — otherwise users would be warned about a binding
+    // that is actually fine.
     for http_endpoint in &agent_method.http_endpoint {
         if !matches!(
             http_endpoint.http_method,

@@ -954,7 +954,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             consumed_fuel: Some(consumed_fuel),
             invocation_status: None,
             component_revision: Some(component_revision),
-            read_only_oplog_index: None,
+            oplog_index: None,
+            agent_fingerprint: None,
         };
         match self
             .store

@@ -27,9 +27,8 @@
 //! [`read-only-agent-methods.md`](../../../../read-only-agent-methods.md) for
 //! the full design.
 
-use golem_common::model::AgentId;
-use golem_common::model::OplogIndex;
 use golem_common::model::agent::{CachePolicy, ReadOnlyConfig};
+use golem_common::model::{AgentFingerprint, AgentId, OplogIndex};
 use http::HeaderName;
 use http::header;
 
@@ -63,26 +62,37 @@ impl CacheVisibility {
 
 /// Build the value for the `ETag` response header for a read-only invocation.
 ///
-/// The format is `"<agent-id>:<oplog-index>"`, with surrounding quotes so the
-/// value is syntactically a strong validator. The agent name is URL-encoded
-/// via [`AgentId::agent_name_encoded`] so it can never contain commas,
-/// quotes, or other characters that would otherwise confuse HTTP parsers or
-/// the `If-None-Match` splitter.
-pub fn build_etag_value(agent_id: &AgentId, oplog_index: OplogIndex) -> String {
+/// The format is `"<agent-id>/<fingerprint>:<oplog-index>"`, with surrounding
+/// quotes so the value is syntactically a strong validator. The agent name is
+/// URL-encoded via [`AgentId::agent_name_encoded`] so it can never contain
+/// commas, quotes, or other characters that would otherwise confuse HTTP
+/// parsers or the `If-None-Match` splitter.
+///
+/// Including the per-instance agent fingerprint guards against the (rare)
+/// case of an agent being deleted and a fresh agent being created at the same
+/// `AgentId` that happens to reach the same oplog index: without the
+/// fingerprint, a previously-cached client-side ETag would incorrectly match
+/// the new instance.
+pub fn build_etag_value(
+    agent_id: &AgentId,
+    fingerprint: AgentFingerprint,
+    oplog_index: OplogIndex,
+) -> String {
     format!(
         "\"{}:{}\"",
-        agent_id_etag_token(agent_id),
+        agent_id_etag_token(agent_id, fingerprint),
         u64::from(oplog_index)
     )
 }
 
 /// Same format as [`build_etag_value`] but without the surrounding quotes,
 /// used for parsing/comparison.
-pub fn agent_id_etag_token(agent_id: &AgentId) -> String {
+pub fn agent_id_etag_token(agent_id: &AgentId, fingerprint: AgentFingerprint) -> String {
     format!(
-        "{}/{}",
+        "{}/{}/{}",
         agent_id.component_id,
-        agent_id.agent_name_encoded()
+        agent_id.agent_name_encoded(),
+        fingerprint,
     )
 }
 
@@ -153,13 +163,17 @@ pub fn parse_if_none_match_entries(header_value: &str) -> Vec<(String, u64)> {
 }
 
 /// Returns true if any entry from `parse_if_none_match_entries` matches the
-/// given agent id at the given oplog index.
+/// given agent id, agent fingerprint, and oplog index. Both halves of the
+/// validator must match: a client-side ETag that was minted for a previous
+/// instance of the same `AgentId` (different fingerprint) will not match the
+/// current instance, even if the oplog index happens to coincide.
 pub fn if_none_match_hits(
     entries: &[(String, u64)],
     agent_id: &AgentId,
+    fingerprint: AgentFingerprint,
     current_oplog: OplogIndex,
 ) -> bool {
-    let expected_token = agent_id_etag_token(agent_id);
+    let expected_token = agent_id_etag_token(agent_id, fingerprint);
     let expected_idx = u64::from(current_oplog);
     entries
         .iter()
@@ -219,6 +233,10 @@ mod tests {
             component_id: ComponentId(uuid!("00000000-0000-0000-0000-000000000001")),
             agent_id: "demo".to_string(),
         }
+    }
+
+    fn fingerprint_for_test() -> AgentFingerprint {
+        AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000aaa"))
     }
 
     fn public_no_cache() -> ReadOnlyConfig {
@@ -289,37 +307,52 @@ mod tests {
     }
 
     #[test]
-    fn etag_value_contains_component_and_agent_id() {
+    fn etag_value_contains_component_agent_id_and_fingerprint() {
         let agent_id = agent_id_for_test();
-        let etag = build_etag_value(&agent_id, OplogIndex::from_u64(42));
+        let fingerprint = fingerprint_for_test();
+        let etag = build_etag_value(&agent_id, fingerprint, OplogIndex::from_u64(42));
         assert!(etag.starts_with('"') && etag.ends_with('"'));
         assert!(etag.contains("00000000-0000-0000-0000-000000000001"));
+        assert!(etag.contains(&fingerprint.to_string()));
         assert!(etag.contains(":42\""));
-        assert!(etag.contains("/demo:"));
+        assert!(etag.contains("/demo/"));
     }
 
     #[test]
     fn parse_if_none_match_recognises_quoted_entry() {
-        let raw = "\"00000000-0000-0000-0000-000000000001/demo:42\", \"00000000-0000-0000-0000-000000000001/demo:43\"";
+        let raw = "\"00000000-0000-0000-0000-000000000001/demo/00000000-0000-0000-0000-000000000aaa:42\", \"00000000-0000-0000-0000-000000000001/demo/00000000-0000-0000-0000-000000000aaa:43\"";
         let entries = parse_if_none_match_entries(raw);
         assert_eq!(entries.len(), 2);
         assert_eq!(
             entries[0],
-            ("00000000-0000-0000-0000-000000000001/demo".to_string(), 42)
+            (
+                "00000000-0000-0000-0000-000000000001/demo/00000000-0000-0000-0000-000000000aaa"
+                    .to_string(),
+                42
+            )
         );
         assert_eq!(
             entries[1],
-            ("00000000-0000-0000-0000-000000000001/demo".to_string(), 43)
+            (
+                "00000000-0000-0000-0000-000000000001/demo/00000000-0000-0000-0000-000000000aaa"
+                    .to_string(),
+                43
+            )
         );
     }
 
     #[test]
     fn parse_if_none_match_recognises_weak_etag() {
-        let entries =
-            parse_if_none_match_entries("W/\"00000000-0000-0000-0000-000000000001/demo:7\"");
+        let entries = parse_if_none_match_entries(
+            "W/\"00000000-0000-0000-0000-000000000001/demo/00000000-0000-0000-0000-000000000aaa:7\"",
+        );
         assert_eq!(
             entries,
-            vec![("00000000-0000-0000-0000-000000000001/demo".to_string(), 7)]
+            vec![(
+                "00000000-0000-0000-0000-000000000001/demo/00000000-0000-0000-0000-000000000aaa"
+                    .to_string(),
+                7
+            )]
         );
     }
 
@@ -333,11 +366,16 @@ mod tests {
     #[test]
     fn if_none_match_hits_when_token_and_idx_match() {
         let agent_id = agent_id_for_test();
-        let entries =
-            parse_if_none_match_entries(&build_etag_value(&agent_id, OplogIndex::from_u64(10)));
+        let fingerprint = fingerprint_for_test();
+        let entries = parse_if_none_match_entries(&build_etag_value(
+            &agent_id,
+            fingerprint,
+            OplogIndex::from_u64(10),
+        ));
         assert!(if_none_match_hits(
             &entries,
             &agent_id,
+            fingerprint,
             OplogIndex::from_u64(10)
         ));
     }
@@ -345,12 +383,39 @@ mod tests {
     #[test]
     fn if_none_match_misses_when_idx_differs() {
         let agent_id = agent_id_for_test();
-        let entries =
-            parse_if_none_match_entries(&build_etag_value(&agent_id, OplogIndex::from_u64(10)));
+        let fingerprint = fingerprint_for_test();
+        let entries = parse_if_none_match_entries(&build_etag_value(
+            &agent_id,
+            fingerprint,
+            OplogIndex::from_u64(10),
+        ));
         assert!(!if_none_match_hits(
             &entries,
             &agent_id,
+            fingerprint,
             OplogIndex::from_u64(11)
+        ));
+    }
+
+    /// A previously-cached ETag minted for a now-deleted instance of the
+    /// agent must NOT match the new instance, even if both reached the same
+    /// oplog index. This is what the fingerprint half of the validator
+    /// guards against.
+    #[test]
+    fn if_none_match_misses_when_fingerprint_differs() {
+        let agent_id = agent_id_for_test();
+        let old_fingerprint = AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000aaa"));
+        let new_fingerprint = AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000bbb"));
+        let oplog = OplogIndex::from_u64(10);
+
+        let stale_etag = build_etag_value(&agent_id, old_fingerprint, oplog);
+        let entries = parse_if_none_match_entries(&stale_etag);
+
+        assert!(!if_none_match_hits(
+            &entries,
+            &agent_id,
+            new_fingerprint,
+            oplog
         ));
     }
 
@@ -401,8 +466,8 @@ mod tests {
     // `read-only-agent-methods.md` (section 14.4). The full server-to-server
     // integration coverage lives in `integration-tests/tests/custom_api/`
     // (follow-up); the tests below cover the cache-header layer that powers
-    // the H1..H5 behaviours and which the executor's
-    // `read_only_oplog_index` plumbing is consumed by.
+    // the H1..H5 behaviours and which the executor's `oplog_index` plumbing
+    // is consumed by.
     // ----------------------------------------------------------------
 
     /// H1: `GET` on a read-only method emits both `ETag` and `Cache-Control`.
@@ -410,8 +475,9 @@ mod tests {
     fn h1_get_returns_etag_and_cache_control_for_until_write() {
         let read_only = public_no_cache();
         let agent_id = agent_id_for_test();
+        let fingerprint = fingerprint_for_test();
 
-        let etag = build_etag_value(&agent_id, OplogIndex::from_u64(42));
+        let etag = build_etag_value(&agent_id, fingerprint, OplogIndex::from_u64(42));
         let cache_control = build_cache_control_value(&read_only);
 
         assert!(etag.starts_with('"') && etag.ends_with('"'));
@@ -425,30 +491,42 @@ mod tests {
     #[test]
     fn h2_if_none_match_with_current_oplog_hits() {
         let agent_id = agent_id_for_test();
+        let fingerprint = fingerprint_for_test();
         let current = OplogIndex::from_u64(99);
-        let etag = build_etag_value(&agent_id, current);
+        let etag = build_etag_value(&agent_id, fingerprint, current);
 
         let entries = parse_if_none_match_entries(&etag);
 
-        assert!(if_none_match_hits(&entries, &agent_id, current));
+        assert!(if_none_match_hits(
+            &entries,
+            &agent_id,
+            fingerprint,
+            current
+        ));
     }
 
     /// H3: after a non-read-only write the agent's oplog index advances, so
     /// the previous ETag no longer matches and the response is no longer a
     /// cache hit. (The read-only cache's epoch bump on writes is what causes
     /// the next invocation to record a strictly greater index in the
-    /// `read_only_oplog_index` field returned by the executor.)
+    /// `oplog_index` field returned by the executor.)
     #[test]
     fn h3_etag_invalidates_after_write_bumps_oplog() {
         let agent_id = agent_id_for_test();
+        let fingerprint = fingerprint_for_test();
         let before_write = OplogIndex::from_u64(10);
         let after_write = OplogIndex::from_u64(11);
 
-        let stale_etag = build_etag_value(&agent_id, before_write);
+        let stale_etag = build_etag_value(&agent_id, fingerprint, before_write);
         let entries = parse_if_none_match_entries(&stale_etag);
 
         // Old ETag must not match the post-write oplog index.
-        assert!(!if_none_match_hits(&entries, &agent_id, after_write));
+        assert!(!if_none_match_hits(
+            &entries,
+            &agent_id,
+            fingerprint,
+            after_write
+        ));
     }
 
     /// H4: a read-only method whose `uses_principal == false` is cacheable by
@@ -516,13 +594,17 @@ mod tests {
             component_id: ComponentId(uuid!("00000000-0000-0000-0000-000000000001")),
             agent_id: "agent-7([12,13,14])".to_string(),
         };
+        let fingerprint = fingerprint_for_test();
 
-        let etag = build_etag_value(&agent_id, OplogIndex::from_u64(7));
+        let etag = build_etag_value(&agent_id, fingerprint, OplogIndex::from_u64(7));
 
-        // No raw comma, no nested quote in the rendered token.
+        // No raw comma, no nested quote in the rendered token (the encoded
+        // agent name is the second '/'-separated component of the token,
+        // sitting between the component id and the fingerprint).
         let token_part = etag.trim_matches('"');
-        let (_, token) = token_part.split_once('/').unwrap();
-        let (encoded_name, _) = token.rsplit_once(':').unwrap();
+        let mut parts = token_part.splitn(3, '/');
+        let _component_id = parts.next().unwrap();
+        let encoded_name = parts.next().unwrap();
         assert!(
             !encoded_name.contains(','),
             "expected encoded agent name to be comma-free, got {encoded_name}"
@@ -534,6 +616,7 @@ mod tests {
         assert!(if_none_match_hits(
             &entries,
             &agent_id,
+            fingerprint,
             OplogIndex::from_u64(7)
         ));
     }

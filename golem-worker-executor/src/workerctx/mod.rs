@@ -322,8 +322,8 @@ pub trait InvocationHooks {
     ///
     /// The implementation may populate fields on `output` that are only known
     /// after the success has been persisted to the oplog — for example
-    /// `read_only_oplog_index` on the `AgentInvocationFinished` entry's
-    /// committed index.
+    /// `oplog_index` and `agent_fingerprint` derived from the committed
+    /// `AgentInvocationFinished` entry.
     async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,

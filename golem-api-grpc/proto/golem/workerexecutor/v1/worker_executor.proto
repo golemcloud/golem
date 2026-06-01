@@ -468,9 +468,11 @@ message InvokeAgentSuccess {
   optional uint64 fuel_consumed = 2;
   optional uint64 component_revision = 3;
   optional golem.worker.InvocationStatus status = 4;
-  // For read-only agent methods, the oplog index that the representation
-  // returned in `result` was committed at.
-  optional uint64 read_only_oplog_index = 5;
+  // Oplog index of the agent right after this invocation completed.
+  optional uint64 oplog_index = 5;
+  // Per-instance agent fingerprint (UUID) of the agent that produced this
+  // invocation result.
+  optional golem.common.UUID agent_fingerprint = 6;
 }
 
 message ProcessOplogEntriesRequest {

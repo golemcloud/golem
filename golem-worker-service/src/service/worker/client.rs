@@ -1334,7 +1334,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                                     fuel_consumed,
                                     component_revision,
                                     status,
-                                    read_only_oplog_index,
+                                    oplog_index,
+                                    agent_fingerprint,
                                 },
                             )),
                     } => {
@@ -1359,7 +1360,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                                 .map(ComponentRevision::new)
                                 .transpose()
                                 .map_err(|err| WorkerExecutorError::unknown(err.to_string()))?,
-                            read_only_oplog_index: read_only_oplog_index.map(OplogIndex::from_u64),
+                            oplog_index: oplog_index.map(OplogIndex::from_u64),
+                            agent_fingerprint: agent_fingerprint
+                                .map(|uuid| AgentFingerprint(uuid.into())),
                         })
                     }
                     workerexecutor::v1::InvokeAgentResponse {
