@@ -298,7 +298,9 @@ impl DbPermissionShareRepo<PostgresPool> {
 
         Ok(())
     }
+}
 
+impl DbPermissionShareRepo<PostgresPool> {
     async fn invalidate_token_root_card_without_epoch_bump_in_tx(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         account_id: Uuid,
@@ -323,6 +325,36 @@ impl DbPermissionShareRepo<PostgresPool> {
 
         if let Some(token_root_card_id) = token_root_card_id.flatten() {
             DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, CardId(token_root_card_id)).await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl DbPermissionShareRepo<SqlitePool> {
+    async fn invalidate_token_root_card_without_epoch_bump_in_tx(
+        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+    ) -> Result<(), PermissionShareRepoError> {
+        let row = tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT token_root_card_id
+                    FROM accounts
+                    WHERE account_id = $1
+                      AND deleted_at IS NULL
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        let token_root_card_id = row
+            .map(|row| row.try_get::<Option<Uuid>, _>("token_root_card_id"))
+            .transpose()
+            .map_err(RepoError::from)?;
+
+        if let Some(token_root_card_id) = token_root_card_id.flatten() {
+            DbCardRepo::<SqlitePool>::delete_tree_in_tx(tx, CardId(token_root_card_id)).await?;
         }
 
         Ok(())
