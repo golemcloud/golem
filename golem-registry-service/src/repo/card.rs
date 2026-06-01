@@ -167,11 +167,16 @@ impl DbCardRepo<PostgresPool> {
             .fetch_all(
                 sqlx::query(indoc! { r#"
                     WITH RECURSIVE to_delete(card_id) AS (
-                        SELECT $1
+                        SELECT card_id FROM cards WHERE card_id = $1
                         UNION
                         SELECT cp.card_id
                         FROM card_parents cp
                         JOIN to_delete td ON cp.parent_id = td.card_id
+                    ),
+                    delete_parent_links AS (
+                        -- Side-effect CTE: remove all edges touching the subtree before deleting cards.
+                        DELETE FROM card_parents
+                        WHERE card_id IN (SELECT card_id FROM to_delete)
                     )
                     DELETE FROM cards
                     WHERE card_id IN (SELECT card_id FROM to_delete)
