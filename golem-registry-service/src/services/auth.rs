@@ -106,6 +106,7 @@ impl AuthService {
                 let token_root_card_id = self
                     .ensure_token_root_card(
                         target_account.id,
+                        target_account.account_root_card_id,
                         target_account.token_root_card_id,
                         target_account.token_root_card_epoch,
                     )
@@ -152,6 +153,7 @@ impl AuthService {
                 let token_root_card_id = self
                     .ensure_token_root_card(
                         target_account.id,
+                        target_account.account_root_card_id,
                         target_account.token_root_card_id,
                         target_account.token_root_card_epoch,
                     )
@@ -171,6 +173,7 @@ impl AuthService {
     async fn ensure_token_root_card(
         &self,
         account_id: AccountId,
+        account_root_card_id: CardId,
         snapshot_card_id: Option<CardId>,
         snapshot_epoch: TokenRootCardEpoch,
     ) -> Result<CardId, AuthError> {
@@ -194,13 +197,14 @@ impl AuthService {
                 expected_epoch = account.token_root_card_epoch;
             }
 
-            let parent_ids = self
-                .permission_share_service
-                .active_share_cards_for_target(account_id)
-                .await?
-                .into_iter()
-                .map(|card| card.card_id)
-                .collect();
+            let mut parent_ids = vec![account_root_card_id];
+            parent_ids.extend(
+                self.permission_share_service
+                    .active_share_cards_for_target(account_id)
+                    .await?
+                    .into_iter()
+                    .map(|card| card.card_id),
+            );
 
             if let Some(card_id) = self
                 .insert_token_root_card(account_id, expected_epoch, parent_ids)

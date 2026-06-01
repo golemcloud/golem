@@ -193,7 +193,7 @@ impl DbCardRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbCardRepo<PostgresPool> {
-    async fn create_in_tx(
+    pub(crate) async fn create_in_tx(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         record: CardRecord,
     ) -> Result<CardRecord, CardRepoError> {

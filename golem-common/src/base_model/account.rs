@@ -115,6 +115,7 @@ declare_structs! {
         pub email: AccountEmail,
         pub plan_id: PlanId,
         pub roles: Vec<AccountRole>,
+        pub account_root_card_id: CardId,
         pub token_root_card_id: Option<CardId>,
         pub token_root_card_epoch: TokenRootCardEpoch
     }
@@ -128,16 +129,12 @@ declare_structs! {
     pub struct AccountCreation {
         pub name: String,
         pub email: AccountEmail,
+        pub roles: Vec<AccountRole>
     }
 
     pub struct AccountUpdate {
         pub current_revision: AccountRevision,
         pub name: Option<String>,
-    }
-
-    pub struct AccountSetRoles {
-        pub current_revision: AccountRevision,
-        pub roles: Vec<AccountRole>
     }
 
     pub struct AccountSetPlan {

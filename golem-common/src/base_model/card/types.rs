@@ -17,7 +17,6 @@ use super::{
 };
 use crate::base_model::account::AccountId;
 use crate::base_model::environment::EnvironmentId;
-use crate::model::auth::TokenId;
 use crate::{declare_revision, newtype_uuid};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -34,7 +33,6 @@ pub enum CardManagedBy {
     TokenRoot { account_id: AccountId },
     EnvironmentDefault { environment_id: EnvironmentId },
     PermissionShare { permission_share_id: Uuid },
-    Token { token_id: TokenId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

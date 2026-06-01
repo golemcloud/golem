@@ -47,7 +47,6 @@ pub enum AccountVerb {
     View,
     Update,
     Delete,
-    SetRoles,
     SetPlan,
 }
 impl VerbPattern for AccountVerb {
@@ -56,7 +55,6 @@ impl VerbPattern for AccountVerb {
             "view" => Some(Self::View),
             "update" => Some(Self::Update),
             "delete" => Some(Self::Delete),
-            "set-roles" => Some(Self::SetRoles),
             "set-plan" => Some(Self::SetPlan),
             _ => None,
         }

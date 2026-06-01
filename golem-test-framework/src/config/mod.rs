@@ -32,7 +32,7 @@ pub use env::{
     WorkerExecutorClusterControlStub,
 };
 use golem_client::api::RegistryServiceClient;
-use golem_client::model::{AccountSetRoles, TokenCreation};
+use golem_client::model::TokenCreation;
 use golem_common::model::account::{AccountCreation, AccountEmail};
 use golem_common::model::auth::AccountRole;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
@@ -91,6 +91,7 @@ pub trait TestDependencies: Send + Sync + Clone {
         let account_data = AccountCreation {
             email: AccountEmail::new(format!("{name}@golem.cloud")),
             name,
+            roles: Vec::new(),
         };
 
         let account = client.create_account(&account_data).await?;
@@ -129,19 +130,10 @@ pub trait TestDependencies: Send + Sync + Clone {
         let account_data = AccountCreation {
             email: AccountEmail::new(format!("{name}@golem.cloud")),
             name,
+            roles: roles.to_vec(),
         };
 
         let account = client.create_account(&account_data).await?;
-
-        client
-            .set_account_roles(
-                &account.id.0,
-                &AccountSetRoles {
-                    current_revision: account.revision,
-                    roles: roles.to_vec(),
-                },
-            )
-            .await?;
 
         let token = client
             .create_token(
