@@ -145,11 +145,22 @@ impl PromiseService for LazyPromiseService {
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
+        crate::metrics::promises::record_promise_data_size(data.len());
+        let start = std::time::Instant::now();
+
         let lock = self.0.read().await;
-        lock.as_ref().unwrap().complete(promise_id, data).await
+        let result = lock.as_ref().unwrap().complete(promise_id, data).await;
+
+        let outcome = match &result {
+            Ok(true) => "fulfilled",
+            Ok(false) => "already_fulfilled",
+            Err(_) => "failed",
+        };
+        crate::metrics::promises::record_promise_completion(start.elapsed(), outcome);
+
+        result
     }
 
-    // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
     async fn cleanup(&self) {
         let lock = self.0.read().await;
         lock.as_ref().unwrap().cleanup().await
