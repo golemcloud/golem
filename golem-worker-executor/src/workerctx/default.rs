@@ -416,7 +416,7 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_success(full_function_name, consumed_fuel, output)

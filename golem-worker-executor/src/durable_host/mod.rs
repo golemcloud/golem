@@ -2545,7 +2545,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         let is_live = self.state.is_live();
 
@@ -2573,6 +2573,25 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::Always)
                     .await;
+
+                // Capture the agent's oplog index right after
+                // `AgentInvocationFinished` was committed, together with the
+                // worker's per-instance fingerprint, so the response carries
+                // an unambiguous identification of the agent state it was
+                // produced from.
+                output.oplog_index = Some(
+                    self.public_state
+                        .worker()
+                        .oplog()
+                        .current_oplog_index()
+                        .await,
+                );
+                output.agent_fingerprint = Some(
+                    self.public_state
+                        .worker()
+                        .get_initial_worker_metadata()
+                        .fingerprint,
+                );
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
@@ -3050,11 +3069,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             }) => {
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
-                                let output = AgentInvocationOutput {
+                                let mut output = AgentInvocationOutput {
                                     result: invocation_result,
                                     consumed_fuel: Some(consumed_fuel),
                                     invocation_status: None,
                                     component_revision: Some(component_revision),
+                                    oplog_index: None,
+                                    agent_fingerprint: None,
                                 };
                                 if let Err(err) = store
                                     .as_context_mut()
@@ -3062,7 +3083,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     .on_agent_invocation_success(
                                         &full_function_name,
                                         consumed_fuel,
-                                        &output,
+                                        &mut output,
                                     )
                                     .await
                                 {

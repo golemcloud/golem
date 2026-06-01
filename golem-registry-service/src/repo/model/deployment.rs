@@ -103,6 +103,7 @@ impl CurrentDeploymentRevisionRecord {
             version,
             deployment_hash,
             current_revision: self.revision_id.try_into()?,
+            validation_warnings: Vec::new(),
         })
     }
 }

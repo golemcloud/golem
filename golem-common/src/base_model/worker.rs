@@ -19,7 +19,9 @@ use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::json::NormalizedJsonValue;
 use crate::base_model::oplog::AgentResourceId;
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::{AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp};
+use crate::base_model::{
+    AgentFingerprint, AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp,
+};
 use crate::{declare_enums, declare_structs, declare_unions};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm_derive::{FromValue, IntoValue};
@@ -127,7 +129,18 @@ declare_structs! {
         /// recorded oplog entries will be skipped on retry.
         pub skipped_regions: Vec<OplogRegion>,
         /// Oplog regions permanently deleted from the workers using the revert functionality.
-        pub deleted_regions: Vec<OplogRegion>
+        pub deleted_regions: Vec<OplogRegion>,
+        /// Latest known oplog index for this agent. Increases monotonically as
+        /// the agent executes and can be used as a revision marker for the
+        /// agent's persisted state.
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub last_oplog_index: OplogIndex,
+        /// Per-instance fingerprint for this agent: a random UUID generated at
+        /// agent creation, globally unique across recreations of the same
+        /// `AgentId`. Distinguishes a freshly-created agent from a previous,
+        /// now-deleted instance that shared the same `AgentId`.
+        pub fingerprint: AgentFingerprint
     }
 
     #[derive(IntoValue, FromValue)]

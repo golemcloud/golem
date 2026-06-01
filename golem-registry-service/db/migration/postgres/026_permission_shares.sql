@@ -4,7 +4,6 @@ CREATE TABLE permission_shares
     owner_account_id    UUID      NOT NULL,
     target_account_id   UUID      NOT NULL,
     name                TEXT      NOT NULL,
-    current_card_id     UUID,
 
     created_at          TIMESTAMP NOT NULL,
     updated_at          TIMESTAMP NOT NULL,
@@ -18,18 +17,12 @@ CREATE TABLE permission_shares
     CONSTRAINT permission_shares_owner_accounts_fk
         FOREIGN KEY (owner_account_id) REFERENCES accounts (account_id),
     CONSTRAINT permission_shares_target_accounts_fk
-        FOREIGN KEY (target_account_id) REFERENCES accounts (account_id),
-    CONSTRAINT permission_shares_current_cards_fk
-        FOREIGN KEY (current_card_id) REFERENCES cards (card_id) ON DELETE SET NULL
+        FOREIGN KEY (target_account_id) REFERENCES accounts (account_id)
 );
 
 CREATE UNIQUE INDEX permission_shares_owner_name_uk
     ON permission_shares (owner_account_id, name)
     WHERE deleted_at IS NULL;
-
-CREATE UNIQUE INDEX permission_shares_current_card_id_uk
-    ON permission_shares (current_card_id)
-    WHERE current_card_id IS NOT NULL;
 
 CREATE INDEX permission_shares_owner_account_id_idx
     ON permission_shares (owner_account_id);

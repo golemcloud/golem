@@ -137,6 +137,7 @@ impl DeploymentContext {
     pub fn compile_http_api_routes(
         &self,
         errors: &mut Vec<DeployValidationError>,
+        warnings: &mut Vec<super::DeployValidationWarning>,
     ) -> Vec<UnboundCompiledRoute> {
         let mut current_route_id: i32 = 0;
         let mut all_routes = Vec::new();
@@ -209,6 +210,7 @@ impl DeploymentContext {
                     &mut current_route_id,
                     &mut deployment_routes,
                     errors,
+                    warnings,
                 );
 
                 add_webhook_callback_routes(
