@@ -53,6 +53,27 @@ pub trait SimpleCache<K, V, E> {
     fn get_or_insert_simple<F>(&self, key: &K, f: F) -> impl Future<Output = Result<V, E>>
     where
         F: AsyncFnOnce() -> Result<V, E>;
+
+    /// Cancellation-safe variant of [`Self::get_or_insert_simple`].
+    ///
+    /// The owner future is spawned on the Tokio runtime, so dropping the
+    /// caller (e.g. a cancelled request) does NOT leave the pending cache
+    /// entry stuck forever. The caller subscribes to the same watch channel
+    /// as other waiters and receives the spawned future's `Result<V, E>` as
+    /// usual.
+    ///
+    /// Use this variant when the closure captures shared state that must
+    /// survive caller cancellation (for example a per-worker read-only
+    /// invocation that is already enqueued and is going to complete on the
+    /// worker even if the originating gRPC call is cancelled).
+    fn get_or_insert_simple_spawned<F, Fut>(
+        &self,
+        key: &K,
+        f: F,
+    ) -> impl Future<Output = Result<V, E>>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<V, E>> + Send + 'static;
 }
 
 struct CacheState<K, PV, V, E> {
@@ -74,6 +95,15 @@ impl<
         F: AsyncFnOnce() -> Result<V, E>,
     {
         self.get_or_insert(key, || (), async |_| f().await).await
+    }
+
+    async fn get_or_insert_simple_spawned<F, Fut>(&self, key: &K, f: F) -> Result<V, E>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<V, E>> + Send + 'static,
+    {
+        self.get_or_insert_spawned(key, || (), move |_| Box::pin(f()))
+            .await
     }
 }
 
@@ -265,6 +295,93 @@ impl<
         }
 
         result
+    }
+
+    /// Cancellation-safe variant of [`Self::get_or_insert`].
+    ///
+    /// Behaves like `get_or_insert`, but the owner future is spawned via
+    /// `tokio::task::spawn` instead of being awaited inline. The caller
+    /// subscribes to the same `tokio::sync::watch` channel as other waiters,
+    /// so if the caller's future is dropped the spawned owner still runs to
+    /// completion and resolves the pending entry — either upserting the
+    /// cached value (on `Ok`) or removing the pending entry (on `Err`).
+    ///
+    /// Without this guarantee, a cancelled caller could leave the pending
+    /// entry in the map forever, permanently blocking subsequent callers
+    /// for the same key.
+    pub async fn get_or_insert_spawned<F1, F2>(&self, key: &K, f1: F1, f2: F2) -> Result<V, E>
+    where
+        F1: FnOnce() -> PV,
+        F2: FnOnce(&PV) -> Pin<Box<dyn Future<Output = Result<V, E>> + Send>> + Send + 'static,
+    {
+        let own_id = self.state.last_id.fetch_add(1, Ordering::SeqCst);
+        let result = self.get_or_add_as_pending(key, own_id, f1).await?;
+        match result {
+            Item::Pending {
+                ref tx,
+                id,
+                pending_value,
+            } => {
+                if id == own_id {
+                    record_cache_miss(self.name);
+                    // Owner: spawn the producer so cancellation of the caller
+                    // does not abandon the pending entry.
+                    let key_clone = key.clone();
+                    let tx_clone = tx.clone();
+                    let self_clone = self.clone();
+                    let mut eviction_needed = false;
+                    tokio::task::spawn(
+                        async move {
+                            let value = f2(&pending_value).await;
+                            if let Ok(success_value) = &value {
+                                self_clone
+                                    .state
+                                    .items
+                                    .upsert_async(
+                                        key_clone.clone(),
+                                        Item::Cached {
+                                            value: success_value.clone(),
+                                            last_access: Instant::now(),
+                                        },
+                                    )
+                                    .await;
+                                let old_count =
+                                    self_clone.state.count.fetch_add(1, Ordering::SeqCst);
+
+                                record_cache_size(self_clone.name, old_count.saturating_add(1));
+
+                                if Some(old_count) == self_clone.capacity {
+                                    eviction_needed = true;
+                                }
+                            } else {
+                                self_clone.state.items.remove_async(&key_clone).await;
+                            }
+                            let _ = tx_clone.send(Some(value));
+                            if eviction_needed {
+                                self_clone.evict().await;
+                            }
+                        }
+                        .in_current_span(),
+                    );
+                } else {
+                    record_cache_hit(self.name);
+                }
+                // Owner and all waiters subscribe to the same watch and
+                // receive the spawned future's `Result<V, E>`.
+                let mut rx = tx.subscribe();
+                let val = rx
+                    .wait_for(|v| v.is_some())
+                    .await
+                    .expect("cache watch sender dropped without sending");
+                val.clone()
+                    .expect("watch value must be Some after wait_for")
+            }
+            Item::Cached { value, .. } => {
+                record_cache_hit(self.name);
+                self.update_last_access(key).await;
+                Ok(value)
+            }
+        }
     }
 
     /// Gets a cached value for a given key, or inserts a new one with the given async function but immediately
@@ -1700,5 +1817,73 @@ mod tests {
         for r in results {
             assert_eq!(r, Ok(42));
         }
+    }
+
+    // ---- get_or_insert_simple_spawned cancellation safety ----
+
+    #[test]
+    async fn spawned_owner_survives_caller_cancellation() {
+        let cache = test_cache("spawned_cancellation");
+        let call_count = Arc::new(AtomicU64::new(0));
+
+        // Owner: spawn a get_or_insert_simple_spawned that sleeps for 200ms
+        // before resolving, then immediately abort it so the original caller
+        // never sees the result.
+        let owner = {
+            let cache = cache.clone();
+            let call_count = call_count.clone();
+            tokio::spawn(async move {
+                cache
+                    .get_or_insert_simple_spawned(&7, move || async move {
+                        call_count.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        Ok(99u64)
+                    })
+                    .await
+            })
+        };
+
+        // Give the owner task a moment to register the pending entry.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        owner.abort();
+        let _ = owner.await;
+
+        // Even after the owner is aborted, the spawned producer must have
+        // resolved the pending entry. A second caller must observe the
+        // cached value within a sane timeout.
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            cache.get_or_insert_simple_spawned(&7, || async {
+                // Not expected to be invoked because either:
+                //  - the pending entry from the first call resolved, in
+                //    which case this caller hits the Cached path; or
+                //  - the pending entry is still in flight, in which case
+                //    this caller is a waiter on the existing watch.
+                Ok(0u64)
+            }),
+        )
+        .await
+        .expect("second call must not hang on an abandoned pending entry");
+
+        assert_eq!(result, Ok(99u64));
+        // The producer ran exactly once (the spawned owner's call).
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn spawned_failure_removes_pending_and_allows_retry() {
+        let cache: Cache<u64, (), u64, String> = test_cache("spawned_failure");
+
+        let first = cache
+            .get_or_insert_simple_spawned(&3, || async { Err::<u64, _>("transient".to_string()) })
+            .await;
+        assert_eq!(first, Err("transient".to_string()));
+
+        // After failure, a follow-up call must run its own producer
+        // (failures must not poison the cache).
+        let second = cache
+            .get_or_insert_simple_spawned(&3, || async { Ok::<u64, String>(123) })
+            .await;
+        assert_eq!(second, Ok(123));
     }
 }

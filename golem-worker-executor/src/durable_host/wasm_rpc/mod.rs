@@ -161,10 +161,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<
         Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
     > {
-        // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem::rpc::wasm-rpc::invoke-and-await")
-            .map_err(wasmtime::Error::from)?;
-
         let mut env =
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
@@ -299,10 +295,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Result<(), RpcError>> {
-        // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem::rpc::wasm-rpc::invoke")
-            .map_err(wasmtime::Error::from)?;
-
         let mut env =
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
@@ -408,10 +400,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
-        // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem::rpc::wasm-rpc::async-invoke-and-await")
-            .map_err(wasmtime::Error::from)?;
-
         let mut env =
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
@@ -575,10 +563,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Resource<CancellationToken>> {
-        // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem::rpc::wasm-rpc::schedule-cancelable-invocation")
-            .map_err(wasmtime::Error::from)?;
-
         let durability = Durability::<GolemRpcWasmRpcScheduleInvocation>::new(
             self,
             DurableFunctionType::WriteRemote,
@@ -988,10 +972,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::future-invoke-result", "cancel");
 
-        // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem::rpc::future-invoke-result::cancel")
-            .map_err(wasmtime::Error::from)?;
-
         let (should_attempt_remote_cancel, remote_agent_id, idempotency_key, request) = {
             let entry = self.table().get(&this)?;
             let state = entry
@@ -1134,10 +1114,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
-        // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem::rpc::cancellation-token::cancel")
-            .map_err(wasmtime::Error::from)?;
-
         let entry = self.table().get(&this)?;
         let serialized_schedule_id: SerializableScheduleId = deserialize(&entry.schedule_id)
             .map_err(|err| {

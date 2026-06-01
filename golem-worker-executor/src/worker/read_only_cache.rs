@@ -14,15 +14,28 @@
 
 //! Per-worker read-only method result cache.
 //!
-//! - looked up at `Worker::invoke` (covers gRPC and wasm-rpc);
-//! - cache misses do not coalesce: each miss enqueues normally and a detached
-//!   observer fills the cache on completion, so fire-and-forget callers never
-//!   block;
+//! - looked up at `Worker::invoke` and `Worker::invoke_and_await` (covers
+//!   gRPC and wasm-rpc);
+//! - on the Await path (`Worker::invoke_and_await`), concurrent first-time
+//!   misses on the same `ReadOnlyCacheKey` *coalesce* through
+//!   `golem_common::cache::Cache::get_or_insert_simple`: only the first
+//!   caller runs the underlying invocation and populates the cache, every
+//!   concurrent Await caller receives the same result;
+//! - on the fire-and-forget path (`Worker::invoke`), misses do not block:
+//!   each miss enqueues normally and a detached observer fills the cache on
+//!   completion. The Await coalescer and the fire-and-forget observer use
+//!   identical key/entry shapes, so an Await coalesce and a concurrent
+//!   observer fill produce the same `ReadOnlyCacheEntry` and the race is
+//!   benign;
 //! - the key embeds the per-worker epoch and component revision, so mutations
-//!   and updates invalidate lazily on the next lookup;
+//!   (and component updates / reverts) invalidate lazily on the next lookup;
+//! - the epoch is bumped when a *mutating invocation successfully completes*
+//!   (in [`DurableWorkerCtx::on_agent_invocation_success`]), NOT when it is
+//!   merely enqueued. This is what lets a cached read-only value keep serving
+//!   while a slow / queued mutation is in flight;
 //! - the observer fills under the epoch captured at enqueue, never the epoch
-//!   at completion, so a pre-mutation result cannot be stored under a
-//!   post-mutation epoch;
+//!   at completion, and `populate_read_only_cache` rechecks the live epoch
+//!   before insert to drop populates raced by an intervening mutation;
 //! - dropped together with the `Worker`.
 
 use golem_common::model::AgentInvocation;
@@ -69,9 +82,16 @@ impl ReadOnlyCacheEntry {
 
 /// How an invocation affects the read-only cache.
 ///
-/// - `ReadOnly`: never bumps the epoch.
-/// - `Mutating`: bumps the epoch before the pending entry becomes visible.
+/// - `ReadOnly`: captures the current epoch for later cache fill.
+/// - `Mutating`: epoch invalidation is deferred to *successful completion*,
+///   so a queued/running mutation does not invalidate
+///   the cache for the duration of its run.
 /// - `UnknownAssumeMutating`: classification failed; treat as `Mutating`.
+///
+/// Updates and reverts still bump the epoch eagerly (see
+/// `Worker::enqueue_update` and `Worker::revert`), because they describe a
+/// state change that is effectively in flight regardless of how the next
+/// invocation goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvocationEffect {
     ReadOnly,
@@ -80,7 +100,11 @@ pub enum InvocationEffect {
 }
 
 impl InvocationEffect {
-    pub fn should_bump_epoch(self) -> bool {
+    /// True if the effect represents a state-changing invocation. Today this
+    /// is informational — the actual epoch bump happens on successful
+    /// completion in `DurableWorkerCtx::on_agent_invocation_success`, not at
+    /// enqueue.
+    pub fn is_mutating(self) -> bool {
         match self {
             InvocationEffect::ReadOnly => false,
             InvocationEffect::Mutating | InvocationEffect::UnknownAssumeMutating => true,
@@ -170,17 +194,70 @@ pub fn build_read_only_cache_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::base_model::Empty;
+    use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentId;
     use golem_common::model::agent::{
-        AgentPrincipal, UntypedElementValue, UntypedNamedElementValue,
+        AgentConstructor, AgentMode, AgentPrincipal, AgentType, AgentTypeName, CachePolicy,
+        DataSchema, NamedElementSchemas, ReadOnlyConfig, Snapshotting, UntypedElementValue,
+        UntypedNamedElementValue,
     };
     use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::component_metadata::ComponentMetadata;
     use golem_wasm::Value;
+    use std::collections::BTreeMap;
     use test_r::test;
     use uuid::Uuid;
 
     fn rev(n: u64) -> ComponentRevision {
         ComponentRevision::new(n).unwrap()
+    }
+
+    fn empty_schema() -> DataSchema {
+        DataSchema::Tuple(NamedElementSchemas { elements: vec![] })
+    }
+
+    fn read_only_method(name: &str, ro: Option<ReadOnlyConfig>) -> AgentMethod {
+        AgentMethod {
+            name: name.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: empty_schema(),
+            output_schema: empty_schema(),
+            http_endpoint: vec![],
+            read_only: ro,
+        }
+    }
+
+    fn metadata_with_one_agent_type(
+        agent_type: AgentTypeName,
+        methods: Vec<AgentMethod>,
+    ) -> ComponentMetadata {
+        let at = AgentType {
+            type_name: agent_type,
+            description: String::new(),
+            source_language: String::new(),
+            constructor: AgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: empty_schema(),
+            },
+            methods,
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        };
+        ComponentMetadata::from_parts(
+            KnownExports::default(),
+            vec![],
+            None,
+            None,
+            vec![at],
+            BTreeMap::new(),
+        )
     }
 
     fn principal(seed: u128) -> Principal {
@@ -299,6 +376,65 @@ mod tests {
             classify_invocation(None, None, &m),
             InvocationEffect::Mutating
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_read_only_method: lookup that gates read-only strictness in
+    // `Worker::invoke`. Verifies that the lookup returns the right method
+    // value (including its `read_only` config), discriminates between
+    // read-only and non-read-only methods, and handles unknown method /
+    // unknown agent-type inputs cleanly.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_read_only_method_returns_method_with_read_only_config() {
+        let agent_type = AgentTypeName("TestAgent".to_string());
+        let cfg = ReadOnlyConfig {
+            cache_policy: CachePolicy::UntilWrite(Empty {}),
+            uses_principal: false,
+        };
+        let metadata = metadata_with_one_agent_type(
+            agent_type.clone(),
+            vec![
+                read_only_method("get", Some(cfg.clone())),
+                read_only_method("set", None),
+            ],
+        );
+
+        let got =
+            resolve_read_only_method(&metadata, &agent_type, "get").expect("get must resolve");
+        assert_eq!(got.read_only, Some(cfg));
+    }
+
+    #[test]
+    fn resolve_read_only_method_returns_non_read_only_method_as_is() {
+        let agent_type = AgentTypeName("TestAgent".to_string());
+        let metadata =
+            metadata_with_one_agent_type(agent_type.clone(), vec![read_only_method("set", None)]);
+
+        let got =
+            resolve_read_only_method(&metadata, &agent_type, "set").expect("set must resolve");
+        assert!(
+            got.read_only.is_none(),
+            "non-read-only method must round-trip with read_only == None"
+        );
+    }
+
+    #[test]
+    fn resolve_read_only_method_returns_none_for_unknown_method_name() {
+        let agent_type = AgentTypeName("TestAgent".to_string());
+        let metadata =
+            metadata_with_one_agent_type(agent_type.clone(), vec![read_only_method("get", None)]);
+        assert!(resolve_read_only_method(&metadata, &agent_type, "missing").is_none());
+    }
+
+    #[test]
+    fn resolve_read_only_method_returns_none_for_unknown_agent_type() {
+        let agent_type = AgentTypeName("TestAgent".to_string());
+        let metadata =
+            metadata_with_one_agent_type(agent_type, vec![read_only_method("get", None)]);
+        let wrong = AgentTypeName("OtherAgent".to_string());
+        assert!(resolve_read_only_method(&metadata, &wrong, "get").is_none());
     }
 
     #[test]
