@@ -22,7 +22,7 @@ use uuid::Uuid;
 #[derive(Debug, thiserror::Error)]
 pub enum CardRepoError {
     #[error("Parent card {0} does not exist")]
-    ParentNotFound(CardId),
+    ParentNotFound(Uuid),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }

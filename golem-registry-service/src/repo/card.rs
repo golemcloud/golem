@@ -104,17 +104,17 @@ impl<DBP: Pool> DbCardRepo<DBP> {
 impl DbCardRepo<PostgresPool> {
     async fn insert_parent_links(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
-        card_id: CardId,
+        card_id: Uuid,
         parent_ids: &[Uuid],
     ) -> Result<(), CardRepoError> {
         for parent_id in parent_ids {
             tx.execute(
                 sqlx::query("INSERT INTO card_parents (card_id, parent_id) VALUES ($1, $2)")
-                    .bind(card_id.0)
-                    .bind(*parent_id),
+                    .bind(card_id)
+                    .bind(parent_id),
             )
             .await
-            .to_error_on_foreign_key_violation(CardRepoError::ParentNotFound(card_id))?;
+            .to_error_on_foreign_key_violation(CardRepoError::ParentNotFound(*parent_id))?;
         }
 
         Ok(())
@@ -177,7 +177,7 @@ impl DbCardRepo<PostgresPool> {
                 .await?;
 
             if row.is_none() {
-                return Err(CardRepoError::ParentNotFound(CardId(*parent_id)));
+                return Err(CardRepoError::ParentNotFound(*parent_id));
             }
         }
 
@@ -228,7 +228,7 @@ impl CardRepo for DbCardRepo<PostgresPool> {
 
                     Self::insert_parent_links(
                         tx,
-                        CardId(inserted.card_id),
+                        inserted.card_id,
                         inserted.data.value().parent_ids.as_slice(),
                     )
                     .await?;
