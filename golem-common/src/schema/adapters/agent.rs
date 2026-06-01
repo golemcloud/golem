@@ -179,7 +179,7 @@ pub fn agent_type_to_schema(ty: &AgentType) -> Result<AgentTypeSchema, SchemaAda
             .iter()
             .map(agent_dependency_to_schema)
             .collect::<Result<_, _>>()?,
-        mode: ty.mode.clone(),
+        mode: ty.mode,
         http_mount: ty.http_mount.clone(),
         snapshotting: ty.snapshotting.clone(),
         config: ty.config.clone(),
@@ -207,10 +207,9 @@ pub fn schema_agent_type_to_legacy(ty: &AgentTypeSchema) -> Result<AgentType, Sc
             .iter()
             .map(schema_agent_dependency_to_legacy)
             .collect::<Result<_, _>>()?,
-        mode: ty.mode.clone(),
+        mode: ty.mode,
         http_mount: ty.http_mount.clone(),
         snapshotting: ty.snapshotting.clone(),
         config: ty.config.clone(),
     })
 }
-

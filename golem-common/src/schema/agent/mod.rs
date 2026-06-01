@@ -33,8 +33,7 @@
 
 use crate::base_model::agent::{
     AgentConfigDeclaration, AgentMode, AgentTypeName, HttpEndpointDetails, HttpMountDetails,
-    ReadOnlyConfig,
-    Snapshotting,
+    ReadOnlyConfig, Snapshotting,
 };
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::MetadataEnvelope;
@@ -79,7 +78,7 @@ pub enum OutputSchema {
     /// Method returns no value.
     Unit,
     /// Method returns exactly one value, shaped by the inner schema.
-    Single(SchemaType),
+    Single(Box<SchemaType>),
 }
 
 impl OutputSchema {

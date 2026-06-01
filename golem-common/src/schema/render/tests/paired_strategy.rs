@@ -211,10 +211,7 @@ fn composite_paired(
         // option (none)
         inner.clone().prop_map(|(t, _v)| {
             let (t, _) = wrap_if_nullable(t, SchemaValue::Bool(false));
-            (
-                SchemaType::option(t),
-                SchemaValue::Option { inner: None },
-            )
+            (SchemaType::option(t), SchemaValue::Option { inner: None })
         }),
         // result (ok)
         inner.clone().prop_map(|(t, v)| {

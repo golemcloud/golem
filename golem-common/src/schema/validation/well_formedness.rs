@@ -332,7 +332,10 @@ fn check_type(
         SchemaType::Url { restrictions, .. } => check_url_spec(restrictions, errors),
 
         SchemaType::Union { spec, metadata } => {
-            let is_multimodal = matches!(metadata.role, Some(crate::schema::metadata::Role::Multimodal));
+            let is_multimodal = matches!(
+                metadata.role,
+                Some(crate::schema::metadata::Role::Multimodal)
+            );
             validate_union(graph, spec, known, errors, is_multimodal);
         }
 

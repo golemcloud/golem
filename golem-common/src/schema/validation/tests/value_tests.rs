@@ -140,7 +140,8 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
             let resource = if r.is_empty() { "r".to_string() } else { r };
             (
                 SchemaType::quota_token(QuotaTokenSpec {
-                    resource_name: Some(resource.clone()),}),
+                    resource_name: Some(resource.clone()),
+                }),
                 SchemaValue::QuotaToken(QuotaTokenValuePayload {
                     environment_id: uuid::Uuid::nil(),
                     resource_name: resource,
@@ -171,7 +172,10 @@ fn composite_paired(
                 values.push(v);
             }
             (
-                SchemaType::Record { fields, metadata: Default::default()},
+                SchemaType::Record {
+                    fields,
+                    metadata: Default::default(),
+                },
                 SchemaValue::Record { fields: values },
             )
         }),
@@ -179,7 +183,10 @@ fn composite_paired(
         proptest::collection::vec(inner.clone(), 0..3).prop_map(|pairs| {
             let (elements, values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
             (
-                SchemaType::Tuple { elements, metadata: Default::default()},
+                SchemaType::Tuple {
+                    elements,
+                    metadata: Default::default(),
+                },
                 SchemaValue::Tuple { elements: values },
             )
         }),
@@ -211,7 +218,10 @@ fn composite_paired(
         // option (some)
         inner.clone().prop_map(|(t, v)| {
             (
-                SchemaType::Option { inner: Box::new(t), metadata: Default::default()},
+                SchemaType::Option {
+                    inner: Box::new(t),
+                    metadata: Default::default(),
+                },
                 SchemaValue::Option {
                     inner: Some(Box::new(v)),
                 },
@@ -220,7 +230,10 @@ fn composite_paired(
         // option (none)
         inner.clone().prop_map(|(t, _v)| {
             (
-                SchemaType::Option { inner: Box::new(t), metadata: Default::default()},
+                SchemaType::Option {
+                    inner: Box::new(t),
+                    metadata: Default::default(),
+                },
                 SchemaValue::Option { inner: None },
             )
         }),

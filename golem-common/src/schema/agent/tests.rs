@@ -33,7 +33,11 @@ use uuid::Uuid;
 fn input_schema_parameters_builder_collects_fields() {
     let s = InputSchema::parameters([
         NamedField::user_supplied("name", SchemaType::string()),
-        NamedField::auto_injected("principal", AutoInjectedKind::Principal, SchemaType::string()),
+        NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        ),
     ]);
     assert_eq!(s.fields().len(), 2);
     assert_eq!(s.fields()[0].name, "name");
@@ -47,7 +51,7 @@ fn input_schema_parameters_builder_collects_fields() {
 #[test]
 fn output_schema_schema_returns_none_for_unit() {
     assert!(OutputSchema::Unit.schema().is_none());
-    let s = OutputSchema::Single(SchemaType::s32());
+    let s = OutputSchema::Single(Box::new(SchemaType::s32()));
     assert!(matches!(s.schema(), Some(SchemaType::S32 { .. })));
 }
 
@@ -55,7 +59,10 @@ fn output_schema_schema_returns_none_for_unit() {
 
 #[test]
 fn input_schema_parameters_serde_shape() {
-    let s = InputSchema::Parameters(vec![NamedField::user_supplied("name", SchemaType::string())]);
+    let s = InputSchema::Parameters(vec![NamedField::user_supplied(
+        "name",
+        SchemaType::string(),
+    )]);
     let v = serde_json::to_value(&s).unwrap();
     assert_eq!(v["tag"], "parameters");
     assert!(v["value"].is_array());
@@ -71,7 +78,7 @@ fn output_schema_unit_serde_shape() {
 
 #[test]
 fn output_schema_single_serde_shape() {
-    let v = serde_json::to_value(OutputSchema::Single(SchemaType::s32())).unwrap();
+    let v = serde_json::to_value(OutputSchema::Single(Box::new(SchemaType::s32()))).unwrap();
     assert_eq!(v["tag"], "single");
     assert!(v["value"].is_object());
 }
@@ -100,7 +107,11 @@ fn auto_injected_kind_serde_is_kebab_case_string() {
 fn input_schema_round_trip_mixed_sources() {
     let s = InputSchema::Parameters(vec![
         NamedField::user_supplied("name", SchemaType::string()),
-        NamedField::auto_injected("principal", AutoInjectedKind::Principal, SchemaType::string()),
+        NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        ),
     ]);
     let json = serde_json::to_string(&s).unwrap();
     let back: InputSchema = serde_json::from_str(&json).unwrap();

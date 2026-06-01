@@ -103,9 +103,11 @@ pub fn legacy_type_id(
     match (owner, name) {
         (None, None) => Ok(None),
         (None, Some(name)) => Ok(Some(TypeId(normalise(name)))),
-        (Some(owner), Some(name)) => {
-            Ok(Some(TypeId(format!("{}.{}", normalise(owner), normalise(name)))))
-        }
+        (Some(owner), Some(name)) => Ok(Some(TypeId(format!(
+            "{}.{}",
+            normalise(owner),
+            normalise(name)
+        )))),
         (Some(owner), None) => Err(SchemaAdapterError::UnsupportedLegacyMetadata(format!(
             "owner `{owner}` provided without a name"
         ))),

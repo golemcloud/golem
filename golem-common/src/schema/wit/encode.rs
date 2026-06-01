@@ -223,11 +223,9 @@ impl GraphCtx {
                     .collect::<Result<Vec<_>, _>>()?;
                 wire::SchemaTypeBody::UnionType(wire::UnionSpec { branches })
             }
-            SchemaType::Secret { spec, .. } => {
-                wire::SchemaTypeBody::SecretType(wire::SecretSpec {
-                    category: spec.category.clone(),
-                })
-            }
+            SchemaType::Secret { spec, .. } => wire::SchemaTypeBody::SecretType(wire::SecretSpec {
+                category: spec.category.clone(),
+            }),
             SchemaType::QuotaToken { spec, .. } => {
                 wire::SchemaTypeBody::QuotaTokenType(wire::QuotaTokenSpec {
                     resource_name: spec.resource_name.clone(),

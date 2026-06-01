@@ -565,12 +565,7 @@ impl DeploymentService {
         auth: &AuthCtx,
     ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
         let legacy = self
-            .get_deployment_agent_type(
-                environment_id,
-                deployment_revision,
-                agent_type_name,
-                auth,
-            )
+            .get_deployment_agent_type(environment_id, deployment_revision, agent_type_name, auth)
             .await?;
         DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
     }

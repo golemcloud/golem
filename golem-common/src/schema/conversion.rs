@@ -1052,7 +1052,11 @@ mod merge_tests {
             root: SchemaType::ref_to(TypeId::new("a.Gamma")),
         };
         let merged = merge_agent_graphs([g1, g2]).unwrap();
-        let ids: Vec<_> = merged.defs.iter().map(|d| d.id.as_str().to_string()).collect();
+        let ids: Vec<_> = merged
+            .defs
+            .iter()
+            .map(|d| d.id.as_str().to_string())
+            .collect();
         assert_eq!(ids, vec!["a.Alpha", "a.Beta", "a.Gamma"]);
     }
 

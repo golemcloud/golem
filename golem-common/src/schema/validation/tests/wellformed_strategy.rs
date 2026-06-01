@@ -238,9 +238,9 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
             }
             SchemaType::flags(new_flags)
         }
-        SchemaType::Tuple { elements, .. } => SchemaType::tuple(
-            elements.iter().map(|e| sanitise_type(e, known)).collect(),
-        ),
+        SchemaType::Tuple { elements, .. } => {
+            SchemaType::tuple(elements.iter().map(|e| sanitise_type(e, known)).collect())
+        }
         SchemaType::List { element, .. } => SchemaType::list(sanitise_type(element, known)),
         SchemaType::FixedList {
             element, length, ..
@@ -275,12 +275,12 @@ fn sanitise_type(ty: &SchemaType, known: &HashSet<TypeId>) -> SchemaType {
             SchemaType::binary(sanitise_binary(restrictions))
         }
         SchemaType::Union { spec, .. } => SchemaType::union(sanitise_union(spec, known)),
-        SchemaType::Future { inner, .. } => SchemaType::future(
-            inner.as_ref().map(|t| sanitise_type(t, known)),
-        ),
-        SchemaType::Stream { inner, .. } => SchemaType::stream(
-            inner.as_ref().map(|t| sanitise_type(t, known)),
-        ),
+        SchemaType::Future { inner, .. } => {
+            SchemaType::future(inner.as_ref().map(|t| sanitise_type(t, known)))
+        }
+        SchemaType::Stream { inner, .. } => {
+            SchemaType::stream(inner.as_ref().map(|t| sanitise_type(t, known)))
+        }
         other => other.clone(),
     }
 }

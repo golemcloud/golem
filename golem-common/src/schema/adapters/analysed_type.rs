@@ -35,9 +35,7 @@ use golem_wasm::analysis::{
 use crate::schema::adapters::error::{SchemaAdapterError, legacy_type_id};
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
-use crate::schema::schema_type::{
-    NamedFieldType, ResultSpec, SchemaType, VariantCaseType,
-};
+use crate::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
 
 /// Convert a legacy [`AnalysedType`] tree into an inline [`SchemaType`] tree.
 ///
@@ -52,9 +50,7 @@ pub fn analysed_type_to_schema_type_inline(
 /// Convert a legacy [`AnalysedType`] tree into a self-contained
 /// [`SchemaGraph`]. Named composites become [`SchemaTypeDef`] entries
 /// referenced via [`SchemaType::Ref`]; anonymous composites stay inline.
-pub fn analysed_type_to_schema_graph(
-    ty: &AnalysedType,
-) -> Result<SchemaGraph, SchemaAdapterError> {
+pub fn analysed_type_to_schema_graph(ty: &AnalysedType) -> Result<SchemaGraph, SchemaAdapterError> {
     let mut builder = GraphBuilder::default();
     let root = builder.lower(ty)?;
     Ok(SchemaGraph {
@@ -107,7 +103,10 @@ fn inline_no_naming(ty: &AnalysedType) -> Result<SchemaType, SchemaAdapterError>
             Ok(SchemaType::list(inline_no_naming(inner)?))
         }
         AnalysedType::Tuple(TypeTuple { items, .. }) => Ok(SchemaType::tuple(
-            items.iter().map(inline_no_naming).collect::<Result<_, _>>()?,
+            items
+                .iter()
+                .map(inline_no_naming)
+                .collect::<Result<_, _>>()?,
         )),
         AnalysedType::Record(TypeRecord { fields, .. }) => {
             let fields = fields
@@ -225,9 +224,7 @@ impl GraphBuilder {
             AnalysedType::Chr(_) => Ok(SchemaType::char()),
             AnalysedType::Str(_) => Ok(SchemaType::string()),
             AnalysedType::Handle(_) => Err(SchemaAdapterError::LegacyHandle),
-            AnalysedType::List(TypeList { inner, .. }) => {
-                Ok(SchemaType::list(self.lower(inner)?))
-            }
+            AnalysedType::List(TypeList { inner, .. }) => Ok(SchemaType::list(self.lower(inner)?)),
             AnalysedType::Tuple(TypeTuple { items, .. }) => {
                 let items = items
                     .iter()
@@ -504,11 +501,7 @@ impl<'a> ReverseCtx<'a> {
 /// Re-attach a legacy display name (and synthesised owner from the TypeId
 /// prefix) to a converted `AnalysedType`. Only applies to composite variants
 /// that actually have `name`/`owner` fields.
-fn reattach_name(
-    ty: AnalysedType,
-    display_name: Option<&str>,
-    id: &TypeId,
-) -> AnalysedType {
+fn reattach_name(ty: AnalysedType, display_name: Option<&str>, id: &TypeId) -> AnalysedType {
     let (owner, name) = split_type_id(id, display_name);
     match ty {
         AnalysedType::Record(mut r) => {

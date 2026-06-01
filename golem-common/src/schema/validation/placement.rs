@@ -318,7 +318,9 @@ fn is_multimodal_list_of_union(
 
     let (list_metadata, element) = match resolved {
         SchemaType::List { element, metadata } => (metadata, element),
-        SchemaType::FixedList { element, metadata, .. } => (metadata, element),
+        SchemaType::FixedList {
+            element, metadata, ..
+        } => (metadata, element),
         _ => return false,
     };
 

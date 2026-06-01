@@ -97,17 +97,14 @@ pub fn schema_type_to_element_schema(
                         .into(),
                 ));
             }
-            let restrictions = restrictions
-                .languages
-                .as_ref()
-                .map(|langs| {
-                    langs
-                        .iter()
-                        .map(|code| TextType {
-                            language_code: code.clone(),
-                        })
-                        .collect()
-                });
+            let restrictions = restrictions.languages.as_ref().map(|langs| {
+                langs
+                    .iter()
+                    .map(|code| TextType {
+                        language_code: code.clone(),
+                    })
+                    .collect()
+            });
             Ok(ElementSchema::UnstructuredText(TextDescriptor {
                 restrictions,
             }))
@@ -119,17 +116,14 @@ pub fn schema_type_to_element_schema(
                         .into(),
                 ));
             }
-            let restrictions = restrictions
-                .mime_types
-                .as_ref()
-                .map(|mimes| {
-                    mimes
-                        .iter()
-                        .map(|m| BinaryType {
-                            mime_type: m.clone(),
-                        })
-                        .collect()
-                });
+            let restrictions = restrictions.mime_types.as_ref().map(|mimes| {
+                mimes
+                    .iter()
+                    .map(|m| BinaryType {
+                        mime_type: m.clone(),
+                    })
+                    .collect()
+            });
             Ok(ElementSchema::UnstructuredBinary(BinaryDescriptor {
                 restrictions,
             }))

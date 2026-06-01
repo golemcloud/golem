@@ -362,19 +362,10 @@ pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> V
 
         SchemaType::Result { spec, .. } => Value::Object(result_schema(graph, spec)),
 
-        SchemaType::Text {
-            restrictions,
-            ..
-        } => Value::Object(text_schema(restrictions)),
-        SchemaType::Binary {
-            restrictions,
-            ..
-        } => Value::Object(binary_schema(restrictions)),
+        SchemaType::Text { restrictions, .. } => Value::Object(text_schema(restrictions)),
+        SchemaType::Binary { restrictions, .. } => Value::Object(binary_schema(restrictions)),
         SchemaType::Path { spec, .. } => Value::Object(path_schema(spec)),
-        SchemaType::Url {
-            restrictions,
-            ..
-        } => Value::Object(url_schema(restrictions)),
+        SchemaType::Url { restrictions, .. } => Value::Object(url_schema(restrictions)),
         SchemaType::Datetime { .. } => obj([
             ("type", Value::String("string".to_string())),
             ("format", Value::String("date-time".to_string())),

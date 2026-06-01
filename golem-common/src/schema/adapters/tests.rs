@@ -24,9 +24,9 @@
 
 use test_r::test;
 
+use golem_wasm::ValueAndType;
 use golem_wasm::analysis::analysed_type::{field, record, s32, str, u32};
 use golem_wasm::analysis::proptest_strategies::arb_type_and_value;
-use golem_wasm::ValueAndType;
 use proptest::proptest;
 
 use crate::base_model::agent::{
@@ -381,11 +381,14 @@ fn data_schema_multimodal_output_round_trip() {
     let output = data_schema_to_output_schema(&ds).unwrap();
     // Forward should produce `Single(list<union<...> with Role::Multimodal>)`.
     match &output {
-        OutputSchema::Single(SchemaType::List { element, .. }) => match element.as_ref() {
-            SchemaType::Union { metadata, .. } => {
-                assert_eq!(metadata.role, Some(Role::Multimodal));
-            }
-            other => panic!("expected list element to be Union, got {other:?}"),
+        OutputSchema::Single(boxed) => match boxed.as_ref() {
+            SchemaType::List { element, .. } => match element.as_ref() {
+                SchemaType::Union { metadata, .. } => {
+                    assert_eq!(metadata.role, Some(Role::Multimodal));
+                }
+                other => panic!("expected list element to be Union, got {other:?}"),
+            },
+            other => panic!("expected Single(List(...)), got {other:?}"),
         },
         other => panic!("expected Single(List(...)), got {other:?}"),
     }
@@ -513,7 +516,7 @@ fn agent_type_reverse_resolves_parent_refs() {
                 "id",
                 SchemaType::ref_to(user_id.clone()),
             )]),
-            output_schema: OutputSchema::Single(SchemaType::ref_to(user_id.clone())),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::ref_to(user_id.clone()))),
             http_endpoint: vec![],
             read_only: None,
         }],
@@ -632,9 +635,7 @@ fn agent_type_reverse_rejects_unresolvable_ref() {
     use crate::base_model::Empty;
     use crate::base_model::agent::{AgentMode, Snapshotting};
     use crate::schema::adapters::agent::schema_agent_type_to_legacy;
-    use crate::schema::agent::{
-        AgentConstructorSchema, AgentTypeSchema, InputSchema, NamedField,
-    };
+    use crate::schema::agent::{AgentConstructorSchema, AgentTypeSchema, InputSchema, NamedField};
     use crate::schema::graph::SchemaGraph;
     use crate::schema::metadata::TypeId;
     use crate::schema::schema_type::SchemaType;
@@ -881,4 +882,3 @@ fn strip_value_and_type_names(vat: ValueAndType) -> ValueAndType {
         typ: strip_names(vat.typ),
     }
 }
-

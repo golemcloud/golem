@@ -302,8 +302,7 @@ fn composite_schema_type_strategy(
         // list
         inner.clone().prop_map(SchemaType::list),
         // fixed list
-        (inner.clone(), any::<u32>())
-            .prop_map(|(t, length)| SchemaType::fixed_list(t, length)),
+        (inner.clone(), any::<u32>()).prop_map(|(t, length)| SchemaType::fixed_list(t, length)),
         // map
         (inner.clone(), inner.clone()).prop_map(|(k, v)| SchemaType::map(k, v)),
         // option

@@ -254,12 +254,12 @@ fn cycle_does_not_loop() {
             SchemaTypeDef {
                 id: TypeId::new("A"),
                 name: None,
-            body: SchemaType::ref_to(TypeId::new("B")),
+                body: SchemaType::ref_to(TypeId::new("B")),
             },
             SchemaTypeDef {
                 id: TypeId::new("B"),
                 name: None,
-            body: SchemaType::ref_to(TypeId::new("A")),
+                body: SchemaType::ref_to(TypeId::new("A")),
             },
         ],
         root: SchemaType::ref_to(TypeId::new("A")),
@@ -275,7 +275,11 @@ fn cycle_does_not_loop() {
 #[test]
 fn primitive_kind_mismatch_rejected() {
     let graph = SchemaGraph::anonymous(SchemaType::bool());
-    assert!(!is_assignable(&graph, &SchemaType::s32(), &SchemaType::s64()));
+    assert!(!is_assignable(
+        &graph,
+        &SchemaType::s32(),
+        &SchemaType::s64()
+    ));
 }
 
 #[test]

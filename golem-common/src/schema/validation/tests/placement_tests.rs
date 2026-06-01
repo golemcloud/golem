@@ -46,8 +46,10 @@ fn quota_token_in_constructor_is_rejected() {
 
 #[test]
 fn multimodal_list_in_constructor_is_rejected_via_field_metadata() {
-    let mut multimodal = MetadataEnvelope::default();
-    multimodal.role = Some(Role::Multimodal);
+    let multimodal = MetadataEnvelope {
+        role: Some(Role::Multimodal),
+        ..Default::default()
+    };
 
     let graph = SchemaGraph::anonymous(SchemaType::Record {
         fields: vec![NamedFieldType {
@@ -76,8 +78,10 @@ fn multimodal_list_in_constructor_is_rejected_via_field_metadata() {
 
 #[test]
 fn multimodal_list_in_persisted_is_allowed() {
-    let mut multimodal = MetadataEnvelope::default();
-    multimodal.role = Some(Role::Multimodal);
+    let multimodal = MetadataEnvelope {
+        role: Some(Role::Multimodal),
+        ..Default::default()
+    };
 
     let graph = SchemaGraph::anonymous(SchemaType::Record {
         fields: vec![NamedFieldType {
@@ -105,8 +109,10 @@ fn multimodal_list_in_persisted_is_allowed() {
 
 #[test]
 fn multimodal_list_in_constructor_is_rejected_via_def_metadata() {
-    let mut multimodal = MetadataEnvelope::default();
-    multimodal.role = Some(Role::Multimodal);
+    let multimodal = MetadataEnvelope {
+        role: Some(Role::Multimodal),
+        ..Default::default()
+    };
 
     let graph = SchemaGraph {
         defs: vec![SchemaTypeDef {
@@ -361,7 +367,9 @@ mod agent {
             description: String::new(),
             prompt_hint: None,
             input_schema: InputSchema::Parameters(vec![]),
-            output_schema: OutputSchema::Single(SchemaType::secret(SecretSpec::default())),
+            output_schema: OutputSchema::Single(Box::new(
+                SchemaType::secret(SecretSpec::default()),
+            )),
             http_endpoint: vec![],
             read_only: None,
         });
@@ -390,8 +398,10 @@ mod agent {
         // reject this even though the multimodal role itself lives on
         // the enclosing field metadata rather than on the list/union
         // nodes.
-        let mut field_md = MetadataEnvelope::default();
-        field_md.role = Some(Role::Multimodal);
+        let field_md = MetadataEnvelope {
+            role: Some(Role::Multimodal),
+            ..Default::default()
+        };
 
         let list_union = SchemaType::List {
             element: Box::new(SchemaType::union(UnionSpec {

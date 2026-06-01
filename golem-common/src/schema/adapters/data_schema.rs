@@ -105,9 +105,9 @@ pub fn data_schema_to_output_schema(
     match schema {
         DataSchema::Tuple(NamedElementSchemas { elements }) => match elements.as_slice() {
             [] => Ok(OutputSchema::Unit),
-            [single] => Ok(OutputSchema::Single(element_schema_to_schema_type(
-                &single.schema,
-            )?)),
+            [single] => Ok(OutputSchema::Single(Box::new(
+                element_schema_to_schema_type(&single.schema)?,
+            ))),
             many => {
                 let fields = many
                     .iter()
@@ -119,7 +119,7 @@ pub fn data_schema_to_output_schema(
                         })
                     })
                     .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
-                Ok(OutputSchema::Single(SchemaType::record(fields)))
+                Ok(OutputSchema::Single(Box::new(SchemaType::record(fields))))
             }
         },
         DataSchema::Multimodal(NamedElementSchemas { elements }) => {
@@ -151,7 +151,7 @@ pub fn data_schema_to_output_schema(
                 .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
             let mut union = SchemaType::union(UnionSpec { branches });
             union.metadata_mut().role = Some(Role::Multimodal);
-            Ok(OutputSchema::Single(SchemaType::list(union)))
+            Ok(OutputSchema::Single(Box::new(SchemaType::list(union))))
         }
     }
 }
@@ -213,20 +213,20 @@ pub fn output_schema_to_data_schema(
         OutputSchema::Single(top_ty) => match resolve_ref(graph, top_ty)? {
             SchemaType::List { element, .. } => {
                 // Multimodal output: `list<union<...> with Role::Multimodal>`.
-                if let SchemaType::Union { spec, metadata } = resolve_ref(graph, element)? {
-                    if metadata.role == Some(Role::Multimodal) {
-                        let elements = spec
-                            .branches
-                            .iter()
-                            .map(|UnionBranch { tag, body, .. }| {
-                                Ok(NamedElementSchema {
-                                    name: tag.clone(),
-                                    schema: schema_type_to_element_schema(graph, body)?,
-                                })
+                if let SchemaType::Union { spec, metadata } = resolve_ref(graph, element)?
+                    && metadata.role == Some(Role::Multimodal)
+                {
+                    let elements = spec
+                        .branches
+                        .iter()
+                        .map(|UnionBranch { tag, body, .. }| {
+                            Ok(NamedElementSchema {
+                                name: tag.clone(),
+                                schema: schema_type_to_element_schema(graph, body)?,
                             })
-                            .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
-                        return Ok(DataSchema::Multimodal(NamedElementSchemas { elements }));
-                    }
+                        })
+                        .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
+                    return Ok(DataSchema::Multimodal(NamedElementSchemas { elements }));
                 }
                 synthetic_single_element(graph, top_ty)
             }
@@ -259,4 +259,3 @@ fn synthetic_single_element(
         }],
     }))
 }
-

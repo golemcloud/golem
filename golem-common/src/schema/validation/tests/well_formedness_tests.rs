@@ -47,12 +47,12 @@ fn duplicate_type_id_is_reported() {
             SchemaTypeDef {
                 id: TypeId::new("dup"),
                 name: None,
-            body: SchemaType::bool(),
+                body: SchemaType::bool(),
             },
             SchemaTypeDef {
                 id: TypeId::new("dup"),
                 name: None,
-            body: SchemaType::s32(),
+                body: SchemaType::s32(),
             },
         ],
         root: SchemaType::ref_to(TypeId::new("dup")),
@@ -70,14 +70,20 @@ fn dangling_ref_is_reported() {
 
 #[test]
 fn empty_variant_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Variant { cases: vec![], metadata: Default::default()});
+    let graph = SchemaGraph::anonymous(SchemaType::Variant {
+        cases: vec![],
+        metadata: Default::default(),
+    });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::EmptyVariant));
 }
 
 #[test]
 fn empty_enum_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Enum { cases: vec![], metadata: Default::default()});
+    let graph = SchemaGraph::anonymous(SchemaType::Enum {
+        cases: vec![],
+        metadata: Default::default(),
+    });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::EmptyEnum));
 }
@@ -113,7 +119,10 @@ fn duplicate_record_field_is_reported() {
 #[test]
 fn map_key_not_primitive_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::Map {
-        key: Box::new(SchemaType::Record { fields: vec![], metadata: Default::default()}),
+        key: Box::new(SchemaType::Record {
+            fields: vec![],
+            metadata: Default::default(),
+        }),
         value: Box::new(SchemaType::bool()),
         metadata: Default::default(),
     });
@@ -181,7 +190,10 @@ fn string_pattern_rule_on_record_body_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "t".to_string(),
-            body: SchemaType::Record { fields: vec![], metadata: Default::default()},
+            body: SchemaType::Record {
+                fields: vec![],
+                metadata: Default::default(),
+            },
             discriminator: DiscriminatorRule::Prefix {
                 prefix: "x".to_string(),
             },
@@ -271,7 +283,10 @@ fn ref_resolution_in_union_branch_body() {
 
 #[test]
 fn empty_flags_is_reported() {
-    let graph = SchemaGraph::anonymous(SchemaType::Flags { flags: vec![], metadata: Default::default()});
+    let graph = SchemaGraph::anonymous(SchemaType::Flags {
+        flags: vec![],
+        metadata: Default::default(),
+    });
     let errors = validate_graph(&graph).expect_err("should fail");
     assert!(errors.contains(&SchemaError::EmptyFlags));
 }
@@ -348,7 +363,10 @@ fn field_equals_missing_field_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
             tag: "t".to_string(),
-            body: SchemaType::Record { fields: vec![], metadata: Default::default()},
+            body: SchemaType::Record {
+                fields: vec![],
+                metadata: Default::default(),
+            },
             discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
                 field_name: "missing".to_string(),
                 literal: None,

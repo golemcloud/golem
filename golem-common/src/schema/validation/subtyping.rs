@@ -113,10 +113,7 @@ fn assignable(
         }
 
         // Records: exact structural match (no width / reorder subtyping).
-        (
-            SchemaType::Record { fields: a, .. },
-            SchemaType::Record { fields: b, .. },
-        ) => {
+        (SchemaType::Record { fields: a, .. }, SchemaType::Record { fields: b, .. }) => {
             if a.len() != b.len() {
                 return false;
             }
@@ -126,10 +123,7 @@ fn assignable(
         }
 
         // Variants: exact case-name match, invariant on payload.
-        (
-            SchemaType::Variant { cases: a, .. },
-            SchemaType::Variant { cases: b, .. },
-        ) => {
+        (SchemaType::Variant { cases: a, .. }, SchemaType::Variant { cases: b, .. }) => {
             a.len() == b.len()
                 && a.iter().zip(b.iter()).all(|(ac, bc)| {
                     ac.name == bc.name
@@ -151,20 +145,16 @@ fn assignable(
         (SchemaType::Flags { flags: a, .. }, SchemaType::Flags { flags: b, .. }) => a == b,
 
         // Tuples: same length, depth-subtyping per element.
-        (
-            SchemaType::Tuple { elements: a, .. },
-            SchemaType::Tuple { elements: b, .. },
-        ) => {
+        (SchemaType::Tuple { elements: a, .. }, SchemaType::Tuple { elements: b, .. }) => {
             a.len() == b.len()
                 && a.iter()
                     .zip(b.iter())
                     .all(|(ae, be)| assignable(graph, ae, be, visited))
         }
 
-        (
-            SchemaType::List { element: a, .. },
-            SchemaType::List { element: b, .. },
-        ) => assignable(graph, a, b, visited),
+        (SchemaType::List { element: a, .. }, SchemaType::List { element: b, .. }) => {
+            assignable(graph, a, b, visited)
+        }
         (
             SchemaType::FixedList {
                 element: a,
@@ -186,10 +176,9 @@ fn assignable(
             },
         ) => assignable(graph, ak, bk, visited) && assignable(graph, av, bv, visited),
 
-        (
-            SchemaType::Option { inner: a, .. },
-            SchemaType::Option { inner: b, .. },
-        ) => assignable(graph, a, b, visited),
+        (SchemaType::Option { inner: a, .. }, SchemaType::Option { inner: b, .. }) => {
+            assignable(graph, a, b, visited)
+        }
         (SchemaType::Result { spec: a, .. }, SchemaType::Result { spec: b, .. }) => {
             let ok_ok = match (&a.ok, &b.ok) {
                 (None, None) => true,
@@ -206,10 +195,7 @@ fn assignable(
 
         // Capabilities are invariant on kind and on their typed spec.
         (SchemaType::Secret { spec: a, .. }, SchemaType::Secret { spec: b, .. }) => a == b,
-        (
-            SchemaType::QuotaToken { spec: a, .. },
-            SchemaType::QuotaToken { spec: b, .. },
-        ) => a == b,
+        (SchemaType::QuotaToken { spec: a, .. }, SchemaType::QuotaToken { spec: b, .. }) => a == b,
 
         // Unions: exact match by tag set and per-branch body assignability.
         (SchemaType::Union { spec: a, .. }, SchemaType::Union { spec: b, .. }) => {
@@ -233,22 +219,20 @@ fn assignable(
         (SchemaType::Ref { id: a, .. }, SchemaType::Ref { id: b, .. }) => a == b,
 
         // Future / Stream stubs: same shape, optional inner type assignable.
-        (
-            SchemaType::Future { inner: a, .. },
-            SchemaType::Future { inner: b, .. },
-        ) => match (a, b) {
-            (None, None) => true,
-            (Some(ai), Some(bi)) => assignable(graph, ai, bi, visited),
-            _ => false,
-        },
-        (
-            SchemaType::Stream { inner: a, .. },
-            SchemaType::Stream { inner: b, .. },
-        ) => match (a, b) {
-            (None, None) => true,
-            (Some(ai), Some(bi)) => assignable(graph, ai, bi, visited),
-            _ => false,
-        },
+        (SchemaType::Future { inner: a, .. }, SchemaType::Future { inner: b, .. }) => {
+            match (a, b) {
+                (None, None) => true,
+                (Some(ai), Some(bi)) => assignable(graph, ai, bi, visited),
+                _ => false,
+            }
+        }
+        (SchemaType::Stream { inner: a, .. }, SchemaType::Stream { inner: b, .. }) => {
+            match (a, b) {
+                (None, None) => true,
+                (Some(ai), Some(bi)) => assignable(graph, ai, bi, visited),
+                _ => false,
+            }
+        }
 
         // Mismatched kinds (post-resolution) are not assignable.
         _ => false,

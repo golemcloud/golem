@@ -141,7 +141,9 @@ fn type_to_text_inner(
                 .unwrap_or_else(|| "_".to_string());
             format!("result<{ok_s}, {err_s}>")
         }
-        SchemaType::Text { restrictions: r, .. } => {
+        SchemaType::Text {
+            restrictions: r, ..
+        } => {
             let mut parts = Vec::new();
             if let Some(min) = r.min_length {
                 parts.push(format!("min={min}"));
@@ -161,7 +163,9 @@ fn type_to_text_inner(
                 format!("text({})", parts.join(", "))
             }
         }
-        SchemaType::Binary { restrictions: r, .. } => {
+        SchemaType::Binary {
+            restrictions: r, ..
+        } => {
             let mut parts = Vec::new();
             if let Some(min) = r.min_bytes {
                 parts.push(format!("min={min}"));
@@ -198,7 +202,9 @@ fn type_to_text_inner(
             }
             format!("path({})", parts.join(", "))
         }
-        SchemaType::Url { restrictions: spec, .. } => {
+        SchemaType::Url {
+            restrictions: spec, ..
+        } => {
             let mut parts = Vec::new();
             if let Some(schemes) = &spec.allowed_schemes {
                 parts.push(format!("schemes=[{}]", schemes.join(", ")));
@@ -366,13 +372,19 @@ fn render_value(
 
         (SchemaType::Text { .. }, SchemaValue::Text(p)) => Ok(canonical::text::to_text(p)),
         (SchemaType::Binary { .. }, SchemaValue::Binary(p)) => Ok(canonical::binary::to_text(p)?),
-        (SchemaType::Path { .. }, SchemaValue::Path { path }) => Ok(canonical::path::to_text(path)?),
+        (SchemaType::Path { .. }, SchemaValue::Path { path }) => {
+            Ok(canonical::path::to_text(path)?)
+        }
         (SchemaType::Url { .. }, SchemaValue::Url { url }) => Ok(canonical::url::to_text(url)?),
         (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
             Ok(canonical::datetime::to_text(value)?)
         }
-        (SchemaType::Duration { .. }, SchemaValue::Duration(p)) => Ok(canonical::duration::to_text(p)),
-        (SchemaType::Quantity { .. }, SchemaValue::Quantity(q)) => Ok(canonical::quantity::to_text(q)?),
+        (SchemaType::Duration { .. }, SchemaValue::Duration(p)) => {
+            Ok(canonical::duration::to_text(p))
+        }
+        (SchemaType::Quantity { .. }, SchemaValue::Quantity(q)) => {
+            Ok(canonical::quantity::to_text(q)?)
+        }
         (SchemaType::Secret { .. }, SchemaValue::Secret(p)) => {
             if r.redact {
                 Ok("<redacted>".to_string())

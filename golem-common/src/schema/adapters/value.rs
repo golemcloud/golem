@@ -77,7 +77,12 @@ pub fn typed_schema_value_to_value_and_type(
 ) -> Result<ValueAndType, SchemaAdapterError> {
     let typ = schema_graph_to_analysed_type(typed.graph())?;
     let mut visiting: Vec<TypeId> = Vec::new();
-    let value = walk_schema_value(typed.graph(), typed.root_type(), typed.value(), &mut visiting)?;
+    let value = walk_schema_value(
+        typed.graph(),
+        typed.root_type(),
+        typed.value(),
+        &mut visiting,
+    )?;
     Ok(ValueAndType { value, typ })
 }
 
@@ -193,7 +198,12 @@ fn walk_value(value: &Value, ty: &AnalysedType) -> Result<SchemaValue, SchemaAda
             }
             Ok(SchemaValue::Flags { bits: bits.clone() })
         }
-        (Value::Option(inner), AnalysedType::Option(TypeOption { inner: ty_inner, .. })) => {
+        (
+            Value::Option(inner),
+            AnalysedType::Option(TypeOption {
+                inner: ty_inner, ..
+            }),
+        ) => {
             let inner = match inner {
                 Some(v) => Some(Box::new(walk_value(v, ty_inner)?)),
                 None => None,
@@ -352,7 +362,12 @@ fn walk_schema_value(
                 .collect::<Result<_, _>>()?;
             Ok(Value::List(items))
         }
-        (SchemaValue::Tuple { elements }, SchemaType::Tuple { elements: types, .. }) => {
+        (
+            SchemaValue::Tuple { elements },
+            SchemaType::Tuple {
+                elements: types, ..
+            },
+        ) => {
             if elements.len() != types.len() {
                 return Err(SchemaAdapterError::ValueShapeMismatch(format!(
                     "tuple arity mismatch: value has {} elements, schema declares {}",
@@ -434,7 +449,12 @@ fn walk_schema_value(
             }
             Ok(Value::Flags(bits.clone()))
         }
-        (SchemaValue::Option { inner }, SchemaType::Option { inner: ty_inner, .. }) => {
+        (
+            SchemaValue::Option { inner },
+            SchemaType::Option {
+                inner: ty_inner, ..
+            },
+        ) => {
             let inner = match inner {
                 Some(v) => Some(Box::new(walk_schema_value(graph, ty_inner, v, visiting)?)),
                 None => None,
@@ -445,7 +465,9 @@ fn walk_schema_value(
             let payload = match payload {
                 ResultValuePayload::Ok { value } => {
                     let value = match (value, &spec.ok) {
-                        (Some(v), Some(t)) => Some(Box::new(walk_schema_value(graph, t, v, visiting)?)),
+                        (Some(v), Some(t)) => {
+                            Some(Box::new(walk_schema_value(graph, t, v, visiting)?))
+                        }
                         (None, None) => None,
                         (Some(_), None) => {
                             return Err(SchemaAdapterError::ValueShapeMismatch(
@@ -462,7 +484,9 @@ fn walk_schema_value(
                 }
                 ResultValuePayload::Err { value } => {
                     let value = match (value, &spec.err) {
-                        (Some(v), Some(t)) => Some(Box::new(walk_schema_value(graph, t, v, visiting)?)),
+                        (Some(v), Some(t)) => {
+                            Some(Box::new(walk_schema_value(graph, t, v, visiting)?))
+                        }
                         (None, None) => None,
                         (Some(_), None) => {
                             return Err(SchemaAdapterError::ValueShapeMismatch(
