@@ -223,33 +223,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Err(other) => Err(other)?,
             };
 
-            crate::metrics::promises::record_promise_data_size(data.len());
-            let completion_start = std::time::Instant::now();
-            let result: anyhow::Result<bool> = if is_local_worker {
+            let promise_completion_result = if is_local_worker {
                 self.public_state
                     .promise_service
                     .complete(promise_id.clone(), data)
-                    .await
-                    .map_err(anyhow::Error::from)
+                    .await?
             } else {
                 // talk to the executor that actually owns the promise
                 self.state
                     .worker_proxy
                     .complete_promise(promise_id.clone(), data, self.created_by())
-                    .await
-                    .map_err(anyhow::Error::from)
+                    .await?
             };
-            let outcome = match &result {
-                Ok(true) => "fulfilled",
-                Ok(false) => "already_fulfilled",
-                Err(_) => "failed",
-            };
-            crate::metrics::promises::record_promise_completion(
-                completion_start.elapsed(),
-                !is_local_worker,
-                outcome,
-            );
-            let promise_completion_result = result?;
 
             durability
                 .persist(

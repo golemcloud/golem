@@ -84,18 +84,6 @@ impl SchedulerStorage for InMemorySchedulerStorage {
 
         let mut entries = self.entries.lock().unwrap();
 
-        // Count due entries whose shard is not owned by this executor (dropped by shard filter).
-        for (_, entry) in entries.iter() {
-            if entry.due_at_ms <= now_ms
-                && entry.lease_until_ms.is_none_or(|lu| lu <= now_ms)
-                && !assignment.shard_ids.contains(&entry.shard_id)
-            {
-                crate::metrics::scheduler::inc_scheduler_actions_dropped(
-                    crate::metrics::scheduler::action_kind_label(&entry.action),
-                );
-            }
-        }
-
         let mut candidates: Vec<(Uuid, i64)> = entries
             .iter()
             .filter(|(_, entry)| {

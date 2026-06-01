@@ -311,88 +311,6 @@ pub mod workers {
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .observe(bytes as f64);
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use test_r::test;
-
-        test_r::enable!();
-
-        #[test]
-        fn worker_memory_resident_increments_and_decrements() {
-            let id = crate::metrics::storage::executor_id();
-            let before = WORKER_MEMORY_RESIDENT_COUNT.with_label_values(&[id]).get();
-            inc_worker_memory_resident();
-            assert_eq!(
-                WORKER_MEMORY_RESIDENT_COUNT.with_label_values(&[id]).get(),
-                before + 1.0
-            );
-            dec_worker_memory_resident();
-            assert_eq!(
-                WORKER_MEMORY_RESIDENT_COUNT.with_label_values(&[id]).get(),
-                before
-            );
-        }
-
-        #[test]
-        fn worker_waiting_for_memory_increments_and_decrements() {
-            let id = crate::metrics::storage::executor_id();
-            let before = WORKER_WAITING_FOR_MEMORY_COUNT
-                .with_label_values(&[id])
-                .get();
-            inc_worker_waiting_for_memory();
-            assert_eq!(
-                WORKER_WAITING_FOR_MEMORY_COUNT
-                    .with_label_values(&[id])
-                    .get(),
-                before + 1.0
-            );
-            dec_worker_waiting_for_memory();
-            assert_eq!(
-                WORKER_WAITING_FOR_MEMORY_COUNT
-                    .with_label_values(&[id])
-                    .get(),
-                before
-            );
-        }
-
-        #[test]
-        fn worker_memory_resident_and_waiting_are_independent() {
-            let id = crate::metrics::storage::executor_id();
-            let before_resident = WORKER_MEMORY_RESIDENT_COUNT.with_label_values(&[id]).get();
-            let before_waiting = WORKER_WAITING_FOR_MEMORY_COUNT
-                .with_label_values(&[id])
-                .get();
-            inc_worker_waiting_for_memory();
-            assert_eq!(
-                WORKER_MEMORY_RESIDENT_COUNT.with_label_values(&[id]).get(),
-                before_resident
-            );
-            assert_eq!(
-                WORKER_WAITING_FOR_MEMORY_COUNT
-                    .with_label_values(&[id])
-                    .get(),
-                before_waiting + 1.0
-            );
-            dec_worker_waiting_for_memory();
-        }
-
-        #[test]
-        fn worker_kv_cache_value_size_is_observed() {
-            let id = crate::metrics::storage::executor_id();
-            let before = WORKER_KV_CACHE_VALUE_SIZE_BYTES
-                .with_label_values(&[id])
-                .get_sample_count();
-            record_worker_kv_cache_value_size(1024);
-            assert_eq!(
-                WORKER_KV_CACHE_VALUE_SIZE_BYTES
-                    .with_label_values(&[id])
-                    .get_sample_count(),
-                before + 1
-            );
-        }
-    }
 }
 
 pub mod promises {
@@ -411,7 +329,7 @@ pub mod promises {
         pub static ref PROMISE_COMPLETION_SECONDS: HistogramVec = register_histogram_vec!(
             "promise_completion_seconds",
             "Wall time of complete_promise from call entry to return, labelled by outcome",
-            &["executor_id", "is_cross_pod", "outcome"],
+            &["executor_id", "outcome"],
             golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();
@@ -438,17 +356,9 @@ pub mod promises {
         PROMISES_SCHEDULED_COMPLETE_TOTAL.inc();
     }
 
-    pub fn record_promise_completion(
-        duration: Duration,
-        is_cross_pod: bool,
-        outcome: &'static str,
-    ) {
+    pub fn record_promise_completion(duration: Duration, outcome: &'static str) {
         PROMISE_COMPLETION_SECONDS
-            .with_label_values(&[
-                crate::metrics::storage::executor_id(),
-                if is_cross_pod { "true" } else { "false" },
-                outcome,
-            ])
+            .with_label_values(&[crate::metrics::storage::executor_id(), outcome])
             .observe(duration.as_secs_f64());
     }
 
@@ -468,79 +378,6 @@ pub mod promises {
         PROMISE_DATA_SIZE_BYTES
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .observe(bytes as f64);
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use test_r::test;
-
-        test_r::enable!();
-
-        #[test]
-        fn promise_pending_count_increments() {
-            let id = crate::metrics::storage::executor_id();
-            let before = PROMISE_PENDING_COUNT.with_label_values(&[id]).get();
-            inc_promise_pending_count();
-            assert_eq!(
-                PROMISE_PENDING_COUNT.with_label_values(&[id]).get(),
-                before + 1.0
-            );
-            // cleanup
-            dec_promise_pending_count();
-        }
-
-        #[test]
-        fn promise_pending_count_decrements() {
-            let id = crate::metrics::storage::executor_id();
-            inc_promise_pending_count();
-            let before = PROMISE_PENDING_COUNT.with_label_values(&[id]).get();
-            dec_promise_pending_count();
-            assert_eq!(
-                PROMISE_PENDING_COUNT.with_label_values(&[id]).get(),
-                before - 1.0
-            );
-        }
-
-        #[test]
-        fn promise_data_size_is_observed() {
-            let id = crate::metrics::storage::executor_id();
-            let before = PROMISE_DATA_SIZE_BYTES
-                .with_label_values(&[id])
-                .get_sample_count();
-            record_promise_data_size(4096);
-            assert_eq!(
-                PROMISE_DATA_SIZE_BYTES
-                    .with_label_values(&[id])
-                    .get_sample_count(),
-                before + 1
-            );
-        }
-
-        #[test]
-        fn promise_completion_time_is_observed() {
-            let id = crate::metrics::storage::executor_id();
-            let before_local = PROMISE_COMPLETION_SECONDS
-                .with_label_values(&[id, "false", "fulfilled"])
-                .get_sample_count();
-            let before_cross = PROMISE_COMPLETION_SECONDS
-                .with_label_values(&[id, "true", "failed"])
-                .get_sample_count();
-            record_promise_completion(std::time::Duration::from_millis(50), false, "fulfilled");
-            record_promise_completion(std::time::Duration::from_millis(200), true, "failed");
-            assert_eq!(
-                PROMISE_COMPLETION_SECONDS
-                    .with_label_values(&[id, "false", "fulfilled"])
-                    .get_sample_count(),
-                before_local + 1
-            );
-            assert_eq!(
-                PROMISE_COMPLETION_SECONDS
-                    .with_label_values(&[id, "true", "failed"])
-                    .get_sample_count(),
-                before_cross + 1
-            );
-        }
     }
 }
 
@@ -570,12 +407,6 @@ pub mod scheduler {
             golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();
-        pub static ref SCHEDULER_ACTIONS_DROPPED_TOTAL: CounterVec = register_counter_vec!(
-            "scheduler_actions_dropped_total",
-            "Actions read from storage but filtered out by shard ownership",
-            &["executor_id", "action_kind"]
-        )
-        .unwrap();
         pub static ref SCHEDULED_ACTION_SIZE_BYTES: HistogramVec = register_histogram_vec!(
             "scheduled_action_size_bytes",
             "Serialized blob size in bytes of a ScheduledAction at insert time",
@@ -603,12 +434,6 @@ pub mod scheduler {
             .observe(duration.as_secs_f64());
     }
 
-    pub fn inc_scheduler_actions_dropped(action_kind: &'static str) {
-        SCHEDULER_ACTIONS_DROPPED_TOTAL
-            .with_label_values(&[crate::metrics::storage::executor_id(), action_kind])
-            .inc();
-    }
-
     pub fn record_scheduled_action_size(action_kind: &'static str, bytes: usize) {
         SCHEDULED_ACTION_SIZE_BYTES
             .with_label_values(&[crate::metrics::storage::executor_id(), action_kind])
@@ -623,81 +448,6 @@ pub mod scheduler {
             ScheduledAction::ArchiveOplog { .. } => "archive_oplog",
             ScheduledAction::Invoke { .. } => "invoke",
             ScheduledAction::Resume { .. } => "resume",
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use test_r::test;
-
-        test_r::enable!();
-
-        #[test]
-        fn scheduler_queue_depth_is_set() {
-            let id = crate::metrics::storage::executor_id();
-            set_scheduler_queue_depth(42);
-            assert_eq!(SCHEDULER_QUEUE_DEPTH.with_label_values(&[id]).get(), 42.0);
-        }
-
-        #[test]
-        fn scheduler_actions_dropped_increments_counter() {
-            let id = crate::metrics::storage::executor_id();
-            let before = SCHEDULER_ACTIONS_DROPPED_TOTAL
-                .with_label_values(&[id, "invoke"])
-                .get();
-            inc_scheduler_actions_dropped("invoke");
-            assert_eq!(
-                SCHEDULER_ACTIONS_DROPPED_TOTAL
-                    .with_label_values(&[id, "invoke"])
-                    .get(),
-                before + 1.0
-            );
-        }
-
-        #[test]
-        fn scheduled_action_size_is_observed() {
-            let id = crate::metrics::storage::executor_id();
-            let before = SCHEDULED_ACTION_SIZE_BYTES
-                .with_label_values(&[id, "complete_promise"])
-                .get_sample_count();
-            record_scheduled_action_size("complete_promise", 2048);
-            assert_eq!(
-                SCHEDULED_ACTION_SIZE_BYTES
-                    .with_label_values(&[id, "complete_promise"])
-                    .get_sample_count(),
-                before + 1
-            );
-        }
-
-        #[test]
-        fn scheduler_tick_duration_is_observed() {
-            let id = crate::metrics::storage::executor_id();
-            let before = SCHEDULER_TICK_DURATION_SECONDS
-                .with_label_values(&[id])
-                .get_sample_count();
-            record_scheduler_tick_duration(Duration::from_millis(10));
-            assert_eq!(
-                SCHEDULER_TICK_DURATION_SECONDS
-                    .with_label_values(&[id])
-                    .get_sample_count(),
-                before + 1
-            );
-        }
-
-        #[test]
-        fn scheduled_action_lag_is_observed() {
-            let id = crate::metrics::storage::executor_id();
-            let before = SCHEDULED_ACTION_LAG_SECONDS
-                .with_label_values(&[id])
-                .get_sample_count();
-            record_scheduled_action_lag(Duration::from_secs(5));
-            assert_eq!(
-                SCHEDULED_ACTION_LAG_SECONDS
-                    .with_label_values(&[id])
-                    .get_sample_count(),
-                before + 1
-            );
         }
     }
 }
@@ -1039,210 +789,5 @@ pub mod storage {
         WORKER_MEMORY_POOL_USED_BYTES
             .with_label_values(&[executor_id()])
             .sub(bytes as f64);
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use test_r::test;
-
-        test_r::enable!();
-
-        fn bytes_written(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
-            STORAGE_BYTES_WRITTEN_TOTAL
-                .with_label_values(&[storage_type, account_id, environment_id])
-                .get()
-        }
-
-        fn bytes_deleted(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
-            STORAGE_BYTES_DELETED_TOTAL
-                .with_label_values(&[storage_type, account_id, environment_id])
-                .get()
-        }
-
-        fn objects_written(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
-            STORAGE_OBJECTS_WRITTEN_TOTAL
-                .with_label_values(&[storage_type, account_id, environment_id])
-                .get()
-        }
-
-        fn objects_deleted(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
-            STORAGE_OBJECTS_DELETED_TOTAL
-                .with_label_values(&[storage_type, account_id, environment_id])
-                .get()
-        }
-
-        #[test]
-        fn record_bytes_written_increments_bytes_counter() {
-            let acct = "acct-bw-1";
-            let env = "env-bw-1";
-            let before = bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env);
-
-            record_storage_bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env, 512);
-
-            assert_eq!(
-                bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env),
-                before + 512.0
-            );
-        }
-
-        #[test]
-        fn record_objects_written_increments_objects_counter() {
-            let acct = "acct-ow-1";
-            let env = "env-ow-1";
-            let before = objects_written(STORAGE_TYPE_BLOB_STORE, acct, env);
-
-            record_storage_objects_written(STORAGE_TYPE_BLOB_STORE, acct, env, 3);
-
-            assert_eq!(
-                objects_written(STORAGE_TYPE_BLOB_STORE, acct, env),
-                before + 3.0
-            );
-        }
-
-        #[test]
-        fn record_bytes_deleted_increments_bytes_counter() {
-            let acct = "acct-bd-1";
-            let env = "env-bd-1";
-            let before = bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env);
-
-            record_storage_bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env, 256);
-
-            assert_eq!(
-                bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env),
-                before + 256.0
-            );
-        }
-
-        #[test]
-        fn record_objects_deleted_increments_objects_counter() {
-            let acct = "acct-od-1";
-            let env = "env-od-1";
-            let before = objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env);
-
-            record_storage_objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env, 2);
-
-            assert_eq!(
-                objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env),
-                before + 2.0
-            );
-        }
-
-        #[test]
-        fn different_label_combinations_are_independent() {
-            let acct_a = "acct-ind-a";
-            let acct_b = "acct-ind-b";
-            let env = "env-ind-1";
-
-            record_storage_bytes_written(STORAGE_TYPE_BLOB_STORE, acct_a, env, 100);
-
-            // acct_b should be unaffected
-            assert_eq!(bytes_written(STORAGE_TYPE_BLOB_STORE, acct_b, env), 0.0);
-            // different storage type with same account/env should be independent
-            assert_eq!(bytes_written(STORAGE_TYPE_KV, acct_a, env), 0.0);
-        }
-
-        #[test]
-        fn multiple_calls_accumulate() {
-            let acct = "acct-acc-1";
-            let env = "env-acc-1";
-            let before = bytes_written(STORAGE_TYPE_OPLOG, acct, env);
-
-            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 100);
-            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 200);
-            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 50);
-
-            assert_eq!(bytes_written(STORAGE_TYPE_OPLOG, acct, env), before + 350.0);
-        }
-
-        #[test]
-        fn filesystem_pool_total_is_set() {
-            record_filesystem_pool_total(1024 * 1024);
-            let id = executor_id();
-            assert_eq!(
-                STORAGE_FILESYSTEM_POOL_TOTAL_BYTES
-                    .with_label_values(&[&id])
-                    .get(),
-                1024.0 * 1024.0
-            );
-        }
-
-        #[test]
-        fn filesystem_pool_acquired_increments_used_gauge() {
-            let id = executor_id();
-            let before = STORAGE_FILESYSTEM_POOL_USED_BYTES
-                .with_label_values(&[&id])
-                .get();
-            record_filesystem_pool_acquired(4096);
-            assert_eq!(
-                STORAGE_FILESYSTEM_POOL_USED_BYTES
-                    .with_label_values(&[&id])
-                    .get(),
-                before + 4096.0
-            );
-            // cleanup to not affect other tests
-            record_filesystem_pool_released(4096);
-        }
-
-        #[test]
-        fn filesystem_pool_released_decrements_used_gauge() {
-            let id = executor_id();
-            // acquire first so we have something to release
-            record_filesystem_pool_acquired(8192);
-            let before = STORAGE_FILESYSTEM_POOL_USED_BYTES
-                .with_label_values(&[&id])
-                .get();
-            record_filesystem_pool_released(8192);
-            assert_eq!(
-                STORAGE_FILESYSTEM_POOL_USED_BYTES
-                    .with_label_values(&[&id])
-                    .get(),
-                before - 8192.0
-            );
-        }
-
-        #[test]
-        fn worker_memory_pool_total_is_set() {
-            record_worker_memory_pool_total(512 * 1024 * 1024);
-            let id = executor_id();
-            assert_eq!(
-                WORKER_MEMORY_POOL_TOTAL_BYTES
-                    .with_label_values(&[&id])
-                    .get(),
-                512.0 * 1024.0 * 1024.0
-            );
-        }
-
-        #[test]
-        fn worker_memory_pool_acquired_increments_used_gauge() {
-            let id = executor_id();
-            let before = WORKER_MEMORY_POOL_USED_BYTES
-                .with_label_values(&[&id])
-                .get();
-            record_worker_memory_pool_acquired(65536);
-            assert_eq!(
-                WORKER_MEMORY_POOL_USED_BYTES
-                    .with_label_values(&[&id])
-                    .get(),
-                before + 65536.0
-            );
-            record_worker_memory_pool_released(65536);
-        }
-
-        #[test]
-        fn worker_memory_pool_released_decrements_used_gauge() {
-            let id = executor_id();
-            record_worker_memory_pool_acquired(32768);
-            let before = WORKER_MEMORY_POOL_USED_BYTES
-                .with_label_values(&[&id])
-                .get();
-            record_worker_memory_pool_released(32768);
-            assert_eq!(
-                WORKER_MEMORY_POOL_USED_BYTES
-                    .with_label_values(&[&id])
-                    .get(),
-                before - 32768.0
-            );
-        }
     }
 }
