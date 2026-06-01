@@ -24,6 +24,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{
     AgentError, AgentTerminatedByQuotaError, EphemeralCannotSuspendError, PersistenceLevel,
+    ReadOnlyViolationError,
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -410,7 +411,36 @@ impl TrapType {
                                 semantic_trap_retry_override: semantic_trap_retry_override.clone(),
                             },
                         },
+                        Some(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+                            method,
+                            host_function,
+                        }) => TrapType::Error {
+                            error: AgentError::ReadOnlyViolation(ReadOnlyViolationError {
+                                method: method.clone(),
+                                host_function: host_function.clone(),
+                            }),
+                            retry_from,
+                            semantic_trap_retry_override: semantic_trap_retry_override.clone(),
+                        },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
+                            // The generic read-only check inside `Durability::new` reports
+                            // violations as `WorkerExecutorError::ReadOnlyViolation` so the
+                            // trap survives `WorkerExecutorError -> wasmtime::Error -> ...`
+                            // conversions (which would otherwise discard the original
+                            // `GolemSpecificWasmTrap`). We map it back to the same
+                            // `AgentError::ReadOnlyViolation` that the per-callsite checks
+                            // produce, so SDK consumers see a uniform error.
+                            Some(WorkerExecutorError::ReadOnlyViolation {
+                                method,
+                                host_function,
+                            }) => TrapType::Error {
+                                error: AgentError::ReadOnlyViolation(ReadOnlyViolationError {
+                                    method: method.clone(),
+                                    host_function: host_function.clone(),
+                                }),
+                                retry_from,
+                                semantic_trap_retry_override: semantic_trap_retry_override.clone(),
+                            },
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error {
                                     error: AgentError::InvalidRequest(details.clone()),

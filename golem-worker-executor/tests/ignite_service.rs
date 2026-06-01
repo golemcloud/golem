@@ -36,7 +36,7 @@ use uuid::Uuid;
 
 // ── test dependencies ─────────────────────────────────────────────────────────
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn ignite_rdb() -> DockerIgniteRdb {
     DockerIgniteRdb::new().await
 }

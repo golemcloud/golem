@@ -34,7 +34,7 @@ components:
 ## Step 2 — Deploy
 
 ```shell
-golem deploy
+golem deploy --yes
 ```
 
 After deployment, newly created agents from this component automatically send telemetry to the configured collector.
@@ -178,3 +178,7 @@ components:
 - Trace context propagates automatically through HTTP routes and RPC calls
 - Use `startSpan` from `golem:api/context@1.5.0` or `tracingChannel` from `node:diagnostics_channel` for custom spans
 - Plugin can be activated/deactivated per agent with `golem agent activate-plugin` / `golem agent deactivate-plugin`
+
+## Related Skills
+
+- Load `golem-manage-plugins` for the general plugin installation model (manifest sections, CLI commands, priority, per-environment configuration)

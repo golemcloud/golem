@@ -238,7 +238,7 @@ impl InvocationHooks for DebugContext {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_success(full_function_name, consumed_fuel, output)
@@ -247,6 +247,14 @@ impl InvocationHooks for DebugContext {
 
     async fn get_current_retry_point(&self) -> OplogIndex {
         self.durable_ctx.get_current_retry_point().await
+    }
+
+    fn enter_read_only_mode(&mut self, method_name: String) {
+        self.durable_ctx.enter_read_only_mode(method_name)
+    }
+
+    fn exit_read_only_mode(&mut self) {
+        self.durable_ctx.exit_read_only_mode()
     }
 }
 

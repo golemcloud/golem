@@ -60,6 +60,24 @@ impl FileSystemBlobStorage {
         Ok(Self { root: canonical })
     }
 
+    /// Attaches synchronously to an already-prepared blob storage root.
+    ///
+    /// Unlike [`Self::new`], this constructor:
+    /// - does **not** create the root, `compilation_cache`, or `custom_data`
+    ///   subdirectories (the caller is responsible for providing a fully
+    ///   prepared root);
+    /// - uses synchronous `std::fs::canonicalize` so it can be called from
+    ///   non-async contexts.
+    ///
+    /// Intended for test-only "attach to a parent-prepared filesystem"
+    /// flows such as the worker-side reconstruction of test fixture
+    /// clusters in the test-r `Hosted` scope.
+    pub fn attach_existing(root: &Path) -> Result<Self, Error> {
+        let canonical = std::fs::canonicalize(root)
+            .map_err(|err| anyhow!("Failed to canonicalize blob storage root: {err}"))?;
+        Ok(Self { root: canonical })
+    }
+
     fn path_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> PathBuf {
         let mut result = self.root.clone();
 

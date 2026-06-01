@@ -1653,6 +1653,8 @@ mod tests {
                 consumed_fuel: None,
                 invocation_status: None,
                 component_revision: Some(component_revision),
+                oplog_index: None,
+                agent_fingerprint: None,
             }));
             let registry = Arc::new(TestRegistryService {
                 resolved: ResolvedAgentType {
@@ -1746,6 +1748,7 @@ mod tests {
                         allowed_patterns: vec![],
                     },
                 }],
+                read_only: None,
             }],
             dependencies: vec![],
             mode,

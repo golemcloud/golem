@@ -55,13 +55,16 @@ object AgentTypeEncoder {
         val metadata          = binding.metadata
         val methodDescription = Option(metadata.description).flatten.getOrElse(metadata.name)
         val endpoints         = encodeHttpEndpoints(metadata.httpEndpoints)
+        val readOnlyJs: js.UndefOr[JsReadOnlyConfig] =
+          Option(metadata.readOnly).flatten.fold[js.UndefOr[JsReadOnlyConfig]](js.undefined)(r => encodeReadOnly(r))
         val methodInfo        = JsAgentMethod(
           name = metadata.name,
           description = methodDescription,
           httpEndpoint = endpoints,
           inputSchema = HostSchemaEncoder.encode(binding.metadata.input),
           outputSchema = HostSchemaEncoder.encode(binding.metadata.output),
-          promptHint = Option(metadata.prompt).flatten.fold[js.UndefOr[String]](js.undefined)(p => p)
+          promptHint = Option(metadata.prompt).flatten.fold[js.UndefOr[String]](js.undefined)(p => p),
+          readOnly = readOnlyJs
         )
         methodsArray.push(methodInfo)
       }
@@ -165,6 +168,15 @@ object AgentTypeEncoder {
         arr.push(JsPathSegment.systemVariable(name.asInstanceOf[JsSystemVariable]))
     }
     arr
+  }
+
+  private def encodeReadOnly(config: ReadOnlyConfig): JsReadOnlyConfig = {
+    val policy = config.cachePolicy match {
+      case CachePolicy.NoCache       => JsCachePolicy.noCache
+      case CachePolicy.UntilWrite    => JsCachePolicy.untilWrite
+      case CachePolicy.Ttl(nanos)    => JsCachePolicy.ttl(js.BigInt(nanos.toString))
+    }
+    JsReadOnlyConfig(policy, config.usesPrincipal)
   }
 
   private def encodeSnapshotting(snapshotting: Snapshotting): JsSnapshotting = snapshotting match {

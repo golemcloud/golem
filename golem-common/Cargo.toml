@@ -23,7 +23,6 @@ full = [
     "golem-wasm/host",
     "dep:golem-api-grpc",
     "dep:applying",
-    "dep:combine",
     "dep:console-subscriber",
     "dep:desert_rust",
     "dep:figment",
@@ -77,7 +76,7 @@ bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
-combine = { workspace = true, optional = true }
+combine = { workspace = true }
 console-subscriber = { workspace = true, optional = true }
 derive_more = { workspace = true }
 desert_rust = { workspace = true, optional = true }
@@ -165,7 +164,7 @@ golem-wasm = { workspace = true, features = ["proptest"] }
 goldenfile = { workspace = true }
 indoc = { workspace = true }
 jsonschema = { workspace = true }
-pretty_assertions = { workspace = true }
+pretty_assertions = { workspace = true, features = ["unstable"] }
 proptest = { workspace = true }
 test-r = { workspace = true }
 tracing-test = { workspace = true }

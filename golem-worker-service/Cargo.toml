@@ -59,7 +59,6 @@ hyper = { workspace = true }
 include_dir = { workspace = true }
 mime = { workspace = true }
 mime_guess = { workspace = true }
-nom = { workspace = true }
 openapiv3 = { workspace = true }
 openidconnect = { workspace = true }
 opentelemetry = { workspace = true }

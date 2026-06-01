@@ -33,6 +33,7 @@
 
 use crate::base_model::agent::{
     AgentConfigDeclaration, AgentMode, AgentTypeName, HttpEndpointDetails, HttpMountDetails,
+    ReadOnlyConfig,
     Snapshotting,
 };
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
@@ -205,9 +206,9 @@ pub struct AgentConstructorSchema {
 ///
 /// Mirrors the legacy `AgentMethod`, with `input_schema` / `output_schema`
 /// replaced by [`InputSchema`] / [`OutputSchema`]. Non-schema fields
-/// (`http_endpoint`) are carried verbatim from the legacy representation
-/// during the transition; they are not part of the schema layer's core
-/// concern.
+/// (`http_endpoint`, `read_only`) are carried verbatim from the legacy
+/// representation during the transition; they are not part of the schema
+/// layer's core concern.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentMethodSchema {
     pub name: String,
@@ -218,6 +219,8 @@ pub struct AgentMethodSchema {
     pub output_schema: OutputSchema,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub http_endpoint: Vec<HttpEndpointDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<ReadOnlyConfig>,
 }
 
 /// Dependent agent type, schema-layer form.

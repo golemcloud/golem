@@ -25,13 +25,13 @@ mod tests {
     };
     use golem_rust::agentic::{Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, ElementValue,
+        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, CachePolicy, ElementValue,
         Snapshotting, SnapshottingConfig,
     };
     use golem_rust::value_and_type::IntoValue;
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, ConfigSchema, MultimodalSchema};
     use golem_rust::{Schema, agent_definition, agent_implementation, agentic::BaseAgent};
-    use golem_rust_macro::{FromValueAndType, IntoValue, description, endpoint, prompt};
+    use golem_rust_macro::{FromValueAndType, IntoValue, description, endpoint, prompt, read_only};
     use std::fmt::Debug;
     use test_r::test;
     use wasip2::clocks::wall_clock::Datetime;
@@ -1399,6 +1399,117 @@ mod tests {
                     "WitTypeNode::PrimStringType".to_string()
                 )
             ]
+        );
+    }
+
+    // --- Read-only marker tests ---
+
+    #[agent_definition]
+    trait ReadOnlyAgent: BaseAgent {
+        fn new(name: String) -> Self;
+
+        #[read_only]
+        fn get_value(&self) -> u32;
+
+        #[read_only(cache = "no_cache")]
+        fn get_value_no_cache(&self) -> u32;
+
+        #[read_only(cache = "until_write")]
+        fn get_value_explicit_until_write(&self) -> u32;
+
+        #[read_only(cache = "ttl", ttl = "30s")]
+        fn get_value_ttl(&self) -> u32;
+
+        #[read_only]
+        fn get_for_user(&self, _principal: Principal) -> u32;
+
+        fn increment(&mut self) -> u32;
+    }
+
+    struct ReadOnlyAgentImpl {}
+
+    #[agent_implementation]
+    impl ReadOnlyAgent for ReadOnlyAgentImpl {
+        fn new(_name: String) -> Self {
+            ReadOnlyAgentImpl {}
+        }
+        fn get_value(&self) -> u32 {
+            0
+        }
+        fn get_value_no_cache(&self) -> u32 {
+            0
+        }
+        fn get_value_explicit_until_write(&self) -> u32 {
+            0
+        }
+        fn get_value_ttl(&self) -> u32 {
+            0
+        }
+        fn get_for_user(&self, _principal: Principal) -> u32 {
+            0
+        }
+        fn increment(&mut self) -> u32 {
+            1
+        }
+    }
+
+    #[test]
+    fn test_read_only_marker() {
+        ReadOnlyAgentImpl::__register_agent_type();
+        let agent_name = AgentTypeName("ReadOnlyAgent".to_string());
+        let agent =
+            golem_rust::agentic::get_agent_type_by_name(&agent_name).expect("Agent type not found");
+
+        let find = |name: &str| {
+            agent
+                .methods
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("method `{}` not found", name))
+        };
+
+        let m_default = find("get_value");
+        let m_no_cache = find("get_value_no_cache");
+        let m_explicit_until_write = find("get_value_explicit_until_write");
+        let m_ttl = find("get_value_ttl");
+        let m_principal = find("get_for_user");
+        let m_increment = find("increment");
+
+        let ro_default = m_default.read_only.as_ref().expect("read_only expected");
+        assert!(matches!(ro_default.cache_policy, CachePolicy::UntilWrite));
+        assert!(!ro_default.uses_principal);
+
+        let ro_no_cache = m_no_cache.read_only.as_ref().expect("read_only expected");
+        assert!(matches!(ro_no_cache.cache_policy, CachePolicy::NoCache));
+        assert!(!ro_no_cache.uses_principal);
+
+        let ro_explicit_until_write = m_explicit_until_write
+            .read_only
+            .as_ref()
+            .expect("read_only expected");
+        assert!(matches!(
+            ro_explicit_until_write.cache_policy,
+            CachePolicy::UntilWrite
+        ));
+        assert!(!ro_explicit_until_write.uses_principal);
+
+        let ro_ttl = m_ttl.read_only.as_ref().expect("read_only expected");
+        match ro_ttl.cache_policy {
+            CachePolicy::Ttl(nanos) => assert_eq!(nanos, 30_000_000_000),
+            _ => panic!("expected Ttl policy"),
+        }
+        assert!(!ro_ttl.uses_principal);
+
+        let ro_principal = m_principal.read_only.as_ref().expect("read_only expected");
+        assert!(matches!(ro_principal.cache_policy, CachePolicy::UntilWrite));
+        assert!(
+            ro_principal.uses_principal,
+            "uses_principal should be derived from the Principal parameter"
+        );
+
+        assert!(
+            m_increment.read_only.is_none(),
+            "non-read-only method should have read_only = None"
         );
     }
 

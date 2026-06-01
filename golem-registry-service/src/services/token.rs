@@ -196,6 +196,7 @@ impl TokenService {
             account_id: account_id.0,
             created_at: created_at.into(),
             expires_at: expires_at.into(),
+            card_id: None,
             impersonated_by: impersonated_by.map(|id| id.0),
         };
 

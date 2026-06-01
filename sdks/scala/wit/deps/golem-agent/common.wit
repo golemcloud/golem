@@ -44,6 +44,18 @@ interface common {
     prompt-hint:   option<string>,
     input-schema:  data-schema,
     output-schema: data-schema,
+    read-only:     option<read-only-config>,
+  }
+
+  record read-only-config {
+    cache-policy:    cache-policy,
+    uses-principal:  bool,
+  }
+
+  variant cache-policy {
+    no-cache,
+    until-write,
+    ttl(duration),
   }
 
   record http-mount-details {

@@ -121,6 +121,15 @@ pub enum WorkerExecutorError {
         error: AgentError,
         stderr: String,
     },
+    /// A read-only agent method attempted to perform a write side effect. This is the
+    /// `WorkerExecutorError` counterpart of `GolemSpecificWasmTrap::WorkerReadOnlyViolation`
+    /// — `Durability::new` produces it for every `Write*` durable function type when the
+    /// worker is in read-only invocation strictness mode, and `TrapType::from_error`
+    /// converts it back into an `AgentError::ReadOnlyViolation`.
+    ReadOnlyViolation {
+        method: String,
+        host_function: String,
+    },
 }
 
 impl WorkerExecutorError {
@@ -308,6 +317,15 @@ impl Display for WorkerExecutorError {
             Self::InvocationFailed { error, stderr } => {
                 write!(f, "Component trapped: {}", error.to_string(stderr))
             }
+            Self::ReadOnlyViolation {
+                method,
+                host_function,
+            } => {
+                write!(
+                    f,
+                    "Read-only agent method '{method}' attempted side effect via '{host_function}'"
+                )
+            }
         }
     }
 }
@@ -350,6 +368,7 @@ impl Error for WorkerExecutorError {
             Self::Unknown { .. } => "Unknown error",
             Self::ShardingNotReady => "Sharding not ready",
             Self::FileSystemError { .. } => "File system error",
+            Self::ReadOnlyViolation { .. } => "Read-only agent method attempted a side effect",
         }
     }
 }
@@ -384,6 +403,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::Unknown { .. } => "Unknown",
             Self::ShardingNotReady => "ShardingNotReady",
             Self::FileSystemError { .. } => "FileSystemError",
+            Self::ReadOnlyViolation { .. } => "ReadOnlyViolation",
         }
     }
 
@@ -415,7 +435,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::PreviousInvocationExited
             | Self::Unknown { .. }
             | Self::ShardingNotReady
-            | Self::FileSystemError { .. } => false,
+            | Self::FileSystemError { .. }
+            | Self::ReadOnlyViolation { .. } => false,
         }
     }
 
@@ -738,6 +759,22 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     }
                 ))
             },
+            // `ReadOnlyViolation` is an in-process marker that `Durability::new` uses
+            // to signal a read-only host trap; it is recovered from the anyhow chain by
+            // `TrapType::from_error` before reaching gRPC, so we fall back to the generic
+            // `RuntimeError` envelope here for completeness.
+            WorkerExecutorError::ReadOnlyViolation {
+                method,
+                host_function,
+            } => Self {
+                error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
+                    golem::worker::v1::RuntimeError {
+                        details: format!(
+                            "Read-only agent method '{method}' attempted side effect via '{host_function}'"
+                        ),
+                    },
+                )),
+            },
         }
     }
 }
@@ -969,6 +1006,12 @@ pub enum GolemSpecificWasmTrap {
         resource_name: ResourceName,
         timestamp: Timestamp,
     },
+    /// A read-only agent method attempted to perform a side effect (outgoing HTTP or RPC)
+    /// while the worker context's invocation strictness mode was set to `ReadOnly`.
+    WorkerReadOnlyViolation {
+        method: String,
+        host_function: String,
+    },
 }
 
 impl Display for GolemSpecificWasmTrap {
@@ -1014,6 +1057,15 @@ impl Display for GolemSpecificWasmTrap {
                 write!(
                     f,
                     "Agent was throttled by quota {environment_id}/{resource_name} with throttle enforcement action"
+                )
+            }
+            Self::WorkerReadOnlyViolation {
+                method,
+                host_function,
+            } => {
+                write!(
+                    f,
+                    "Read-only agent method '{method}' attempted side effect via '{host_function}'"
                 )
             }
         }
@@ -1062,7 +1114,13 @@ mod service {
 
     impl From<WorkerExecutorError> for wasmtime_wasi::p2::StreamError {
         fn from(value: WorkerExecutorError) -> Self {
-            Self::Trap(wasmtime::Error::msg(value.to_string()))
+            // Preserve the original `WorkerExecutorError` in the anyhow chain so
+            // `TrapType::from_error` can still recognise variants like
+            // `ReadOnlyViolation` after a stream-path round trip. `wasmtime::Error::new`
+            // (effectively `anyhow::Error::new`) keeps the typed error reachable via
+            // `root_cause().downcast_ref::<WorkerExecutorError>()`, whereas
+            // `wasmtime::Error::msg(value.to_string())` would discard the type.
+            Self::Trap(wasmtime::Error::new(value))
         }
     }
 
@@ -1070,5 +1128,30 @@ mod service {
         fn from(value: WorkerExecutorError) -> Self {
             Self::trap(value)
         }
+    }
+}
+
+#[cfg(test)]
+mod read_only_violation_trap_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn trap_display_includes_method_and_host_function() {
+        let trap = GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+            method: "lookup".to_string(),
+            host_function: "http::outgoing_handler::handle".to_string(),
+        };
+
+        let rendered = trap.to_string();
+
+        assert!(
+            rendered.contains("lookup"),
+            "expected method name in display, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("http::outgoing_handler::handle"),
+            "expected host function in display, got: {rendered}"
+        );
     }
 }

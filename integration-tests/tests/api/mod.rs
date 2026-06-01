@@ -23,6 +23,7 @@ mod environment;
 mod environment_plugin_grants;
 mod environment_share;
 mod http_api_deployment;
+mod permission_share;
 mod plugin_registration;
 mod reports;
 mod resource_definition;

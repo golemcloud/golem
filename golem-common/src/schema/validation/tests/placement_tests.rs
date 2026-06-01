@@ -256,6 +256,7 @@ mod agent {
             )]),
             output_schema: OutputSchema::Unit,
             http_endpoint: vec![],
+            read_only: None,
         });
         validate_agent_type_placement(&agent)
             .expect("secret in method input should pass at Boundary scope");
@@ -346,6 +347,7 @@ mod agent {
             )]),
             output_schema: OutputSchema::Unit,
             http_endpoint: vec![],
+            read_only: None,
         });
         validate_agent_type_placement(&agent)
             .expect("secret def via method input ref must pass at Boundary scope");
@@ -361,6 +363,7 @@ mod agent {
             input_schema: InputSchema::Parameters(vec![]),
             output_schema: OutputSchema::Single(SchemaType::secret(SecretSpec::default())),
             http_endpoint: vec![],
+            read_only: None,
         });
         validate_agent_type_placement(&agent)
             .expect("secret in method output must pass at Boundary scope");

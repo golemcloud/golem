@@ -235,6 +235,24 @@ impl WasiHttpHooks for DurableHttpHooks {
     }
 }
 
+/// Controls how strictly the host filters side-effects performed by user code during an
+/// agent invocation.
+///
+/// `Normal` is the default and applies to every invocation that is not explicitly marked
+/// read-only. `ReadOnly` is set automatically by the worker-executor around the invocation
+/// of any agent method whose [`AgentMethod::read_only`] metadata is `Some(_)`. While
+/// `ReadOnly` is active, outgoing HTTP and RPC host calls are trapped before they are
+/// performed and before any oplog entry is written, surfacing a typed
+/// [`AgentError::ReadOnlyViolation`] to the SDK.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvocationStrictness {
+    /// No additional restrictions beyond the normal durability/persistence machinery.
+    Normal,
+    /// The invocation is restricted to read-only host calls. Outgoing HTTP and RPC calls
+    /// trap immediately with [`AgentError::ReadOnlyViolation`].
+    ReadOnly,
+}
+
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
@@ -838,6 +856,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => Some(RetryDecision::None),
             TrapType::Error {
+                error: AgentError::ReadOnlyViolation(_),
+                ..
+            } => Some(RetryDecision::None),
+            TrapType::Error {
                 error: AgentError::InternalError(_),
                 ..
             } => Some(RetryDecision::None),
@@ -892,6 +914,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::EphemeralSleepTooLong(_) => "ephemeral-sleep-too-long",
             AgentError::EphemeralFuelExhausted(_) => "ephemeral-fuel-exhausted",
             AgentError::EphemeralCannotSuspend(_) => "ephemeral-cannot-suspend",
+            AgentError::ReadOnlyViolation(_) => "read-only-violation",
         }
     }
 
@@ -2028,6 +2051,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .insert(rep, WebSocketConnectionState { url, headers });
     }
 
+    /// Returns `Ok(())` if the host is in normal strictness mode, or if the host is in read-only
+    /// strictness but the call site has not been restricted (this function is a no-op in normal
+    /// mode).
+    ///
+    /// Returns `Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation)` if the host is in read-only
+    /// strictness mode. The error carries the agent method name and the host function name, so
+    /// the trap can later be converted to a typed `AgentError::ReadOnlyViolation`.
+    ///
+    /// Call sites should invoke this at the very top of any host function that introduces a
+    /// remote side effect (outgoing HTTP, RPC) before any durability machinery runs.
+    pub fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
+        if self.state.invocation_strictness == InvocationStrictness::ReadOnly {
+            let method = self.state.read_only_method_name.clone().unwrap_or_default();
+            Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+                method,
+                host_function: host_function.to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Returns the current invocation strictness mode.
+    pub fn invocation_strictness(&self) -> InvocationStrictness {
+        self.state.invocation_strictness
+    }
+
     pub(crate) fn unregister_open_websocket(&mut self, rep: u32) {
         self.state.open_websocket_connections.remove(&rep);
     }
@@ -2465,11 +2515,37 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         decision
     }
 
+    fn enter_read_only_mode(&mut self, method_name: String) {
+        if self.state.invocation_strictness == InvocationStrictness::ReadOnly {
+            warn!(
+                "enter_read_only_mode called while already in read-only mode (current method: {:?}, new method: {})",
+                self.state.read_only_method_name, method_name
+            );
+        }
+        self.state.invocation_strictness = InvocationStrictness::ReadOnly;
+        self.state.read_only_method_name = Some(method_name);
+    }
+
+    fn exit_read_only_mode(&mut self) {
+        match self.state.invocation_strictness {
+            InvocationStrictness::ReadOnly => {
+                self.state.invocation_strictness = InvocationStrictness::Normal;
+                self.state.read_only_method_name = None;
+            }
+            InvocationStrictness::Normal => {
+                warn!(
+                    "exit_read_only_mode called without a matching enter_read_only_mode; \
+                     invocation strictness left as Normal"
+                );
+            }
+        }
+    }
+
     async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         let is_live = self.state.is_live();
 
@@ -2497,6 +2573,25 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::Always)
                     .await;
+
+                // Capture the agent's oplog index right after
+                // `AgentInvocationFinished` was committed, together with the
+                // worker's per-instance fingerprint, so the response carries
+                // an unambiguous identification of the agent state it was
+                // produced from.
+                output.oplog_index = Some(
+                    self.public_state
+                        .worker()
+                        .oplog()
+                        .current_oplog_index()
+                        .await,
+                );
+                output.agent_fingerprint = Some(
+                    self.public_state
+                        .worker()
+                        .get_initial_worker_metadata()
+                        .fingerprint,
+                );
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
@@ -2974,11 +3069,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             }) => {
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
-                                let output = AgentInvocationOutput {
+                                let mut output = AgentInvocationOutput {
                                     result: invocation_result,
                                     consumed_fuel: Some(consumed_fuel),
                                     invocation_status: None,
                                     component_revision: Some(component_revision),
+                                    oplog_index: None,
+                                    agent_fingerprint: None,
                                 };
                                 if let Err(err) = store
                                     .as_context_mut()
@@ -2986,7 +3083,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     .on_agent_invocation_success(
                                         &full_function_name,
                                         consumed_fuel,
-                                        &output,
+                                        &mut output,
                                     )
                                     .await
                                 {
@@ -3942,6 +4039,15 @@ struct PrivateDurableWorkerState {
 
     snapshotting_mode: Option<PersistenceLevel>,
 
+    /// Tracks whether the currently executing invocation is restricted to read-only side effects.
+    /// When `ReadOnly`, outgoing HTTP and RPC host calls are trapped before any oplog entry is
+    /// written. Defaults to `Normal` and is reset on every invocation exit path.
+    invocation_strictness: InvocationStrictness,
+
+    /// Name of the agent method currently being invoked under read-only strictness. Captured at
+    /// the invocation entry point so it can be reported in `AgentError::ReadOnlyViolation`.
+    read_only_method_name: Option<String>,
+
     component_metadata: Component,
 
     total_linear_memory_size: u64,
@@ -4116,6 +4222,8 @@ impl PrivateDurableWorkerState {
             pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
             snapshotting_mode: None,
+            invocation_strictness: InvocationStrictness::Normal,
+            read_only_method_name: None,
             component_metadata,
             total_linear_memory_size,
             current_filesystem_storage_usage,

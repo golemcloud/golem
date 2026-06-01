@@ -80,11 +80,11 @@ export const featured: FeaturedUseCase[] = [
     fits: [
       {
         title: "One agent per conversation",
-        body: "Each conversation is a stable, single-writer agent with durable state — no router, no registry, no orchestrator code.",
+        body: "Every conversation ID has exactly one live agent instance — no router, no registry, no orchestrator code.",
       },
       {
-        title: "Replays byte-identically",
-        body: "Every effect is journaled and replay is deterministic — state survives crashes, redeploys, and migrations.",
+        title: "Every action recorded",
+        body: "Every state change, every effect, every tool call — all replayable across crashes, redeploys, and migrations.",
       },
       {
         title: "Zero-cost idle",
@@ -108,16 +108,16 @@ export const featured: FeaturedUseCase[] = [
     ],
     fits: [
       {
-        title: "Long-running by construction",
+        title: "Runs for hours, days, or weeks",
         body: "Multi-hour, multi-day workflows are the default — no serverless timeout to design around, no manual checkpointing.",
       },
       {
-        title: "Sandboxed by construction",
+        title: "Every agent in its own sandbox",
         body: "AI code runs inside WebAssembly — isolation at instance cost, no separate sandbox service to wire up.",
       },
       {
         title: "Pause, branch, rewind, replay",
-        body: "Every effect lives in the journal — pause, branch, rewind hours of work, or replay the whole session for debugging.",
+        body: "Every action recorded — pause, branch, rewind hours of work, or replay the whole session for debugging.",
       },
       {
         title: "Built for coding agents",
@@ -142,15 +142,15 @@ export const featured: FeaturedUseCase[] = [
       },
       {
         title: "Per-user agents + permissions",
-        body: "Each user gets their own agent, with permissions in the identity — cross-user leaks are structurally impossible.",
+        body: "Each user gets their own agent, with permissions in the identity — no cross-user leaks, ever.",
       },
       {
         title: "Multi-hour, zero idle cost",
         body: "Analyst loops run for hours over remote APIs; agents suspend on each call and consume no compute when idle.",
       },
       {
-        title: "Audit trail by construction",
-        body: "Every query, retrieval, and tool call appears in the same journal that drives replay — audit isn't bolted on.",
+        title: "Audit trail, automatic",
+        body: "Every query, retrieval, and tool call is logged automatically — that same history drives replay.",
       },
     ],
   },
@@ -167,7 +167,7 @@ export const featured: FeaturedUseCase[] = [
     fits: [
       {
         title: "Per-key agent identity",
-        body: "Single-writer state per key is the runtime's shape — one stable agent per user, addressable from anywhere.",
+        body: "Every agent ID has exactly one live instance — no fan-out, no races, addressable from anywhere.",
       },
       {
         title: "WebAssembly at instance cost",
@@ -175,7 +175,7 @@ export const featured: FeaturedUseCase[] = [
       },
       {
         title: "Isolation between every agent",
-        body: "WASM sandboxing between agents at MB cost — cross-tenant leaks are structurally impossible, not policy-disallowed.",
+        body: "No shared memory, no shared filesystem, no shared anything between agents — at megabyte cost, not gigabyte.",
       },
       {
         title: "Migrates without losing state",
@@ -199,8 +199,8 @@ export const featured: FeaturedUseCase[] = [
         body: "Golem Cloud On-Prem ships our managed-Cloud operations stack inside your AWS, GCP, Azure, or Kubernetes.",
       },
       {
-        title: "The journal is the audit log",
-        body: "Every effect — config reads, tool calls, decisions — appears in the journal for byte-identical audit replay.",
+        title: "Audit log, automatic",
+        body: "Every effect — config reads, tool calls, decisions — is recorded automatically and replayable, identical to the original.",
       },
       {
         title: "WebAssembly isolation",
@@ -228,11 +228,11 @@ export const featured: FeaturedUseCase[] = [
         body: "Each call or thread is a single, durable, addressable agent — no orchestrator routing messages.",
       },
       {
-        title: "Wakes byte-identically",
-        body: "Agents suspend between turns at zero compute, zero memory, and wake byte-identically on the next event.",
+        title: "Wakes where it left off",
+        body: "Agents suspend between turns at zero compute, zero memory, and wake exactly where they left off on the next event.",
       },
       {
-        title: "History in the journal",
+        title: "History recorded automatically",
         body: "Every turn appears in the agent's durable state automatically — no separate conversation store, no syncing logic.",
       },
       {
@@ -248,18 +248,18 @@ export const featured: FeaturedUseCase[] = [
 // =============================================================================
 
 export const classicDE: ClassicDE = {
-  title: "Beyond agents: classic durable execution",
+  title: "Not just agents — any workflow that has to survive",
   overview:
-    "Long-running, multi-step workflows that must not lose or duplicate effects. This is the durable-execution heartland — payments, billing, reconciliation, migrations, cron, and webhook delivery — built on sagas, compensations, exactly-once delivery, and durable timers. It predates the agent era, and on Golem, the same runtime that runs your agents runs it just as well.",
+    "The workflows that have to finish — even through restarts, retries, and outages. Multi-step workflows that span days, payment flows that have to either fully complete or fully roll back, scheduled jobs that have to run on time even through crashes. It predates the agent era, and on Golem, the same runtime that runs your agents runs it just as well.",
   examples: [
-    "Payment sagas with compensating transactions across PSPs and ledgers",
+    "Charge a card, update the ledger, send the receipt — all-or-nothing, even through crashes",
     "Subscription billing engines with retries, dunning, and proration",
     "Cron-driven pipelines replacing Celery, BullMQ, Sidekiq, Step Functions",
     "Webhook reconciliation across systems with different ordering semantics",
   ],
   fits: [
     "Durability is the primitive — no opt-in, no manual checkpoints",
-    "Exactly-once effects via the journal — retries don't double-charge",
+    "No effect ever fires twice — retries don't double-charge",
     "Long-running natively — multi-day workflows, no serverless timeout",
     "Same runtime as your agents — one cluster, one operations surface",
   ],

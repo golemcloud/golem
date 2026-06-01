@@ -33,7 +33,7 @@ fn normalize_server_servers_urls_in_openapi_spec(spec_str: &str, env: &Environme
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     make_test_context(
         deps,

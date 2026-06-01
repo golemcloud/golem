@@ -27,6 +27,7 @@ tags:
   description: The login endpoints are implementing an OAuth2 flow.
 - name: McpDeployment
 - name: Me
+- name: PermissionShares
 - name: Plugin
 - name: RegistryService
 - name: Reports
@@ -199,7 +200,9 @@ paths:
       - Account
       summary: Update account
       description: |-
-        Allows the user to change the account details such as name and email.
+        Allows the user to change mutable account details such as name.
+
+        The account email is immutable after account creation.
 
         Changing the planId is not allowed and the request will be rejected.
         The response is the updated account data.
@@ -6020,6 +6023,510 @@ paths:
       - Cookie: []
       - Token: []
       operationId: list_deployment_mcp_deployments
+  /v1/accounts/{account_id}/permission-shares:
+    post:
+      tags:
+      - RegistryService
+      - PermissionShares
+      - Account
+      summary: Create a new permission share owned by an account.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PermissionShareCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PermissionShare'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_permission_share
+    get:
+      tags:
+      - RegistryService
+      - PermissionShares
+      - Account
+      summary: List permission shares owned by an account.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_PermissionShare'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_owned_permission_shares
+  /v1/accounts/{account_id}/received-permission-shares:
+    get:
+      tags:
+      - RegistryService
+      - PermissionShares
+      - Account
+      summary: List permission shares targeting an account.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_PermissionShare'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_received_permission_shares
+  /v1/permission-shares/{permission_share_id}:
+    get:
+      tags:
+      - RegistryService
+      - PermissionShares
+      summary: Get permission share by id.
+      parameters:
+      - name: permission_share_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PermissionShare'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_permission_share
+    patch:
+      tags:
+      - RegistryService
+      - PermissionShares
+      summary: Update permission share data.
+      parameters:
+      - name: permission_share_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PermissionShareUpdate'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PermissionShare'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: update_permission_share
+    delete:
+      tags:
+      - RegistryService
+      - PermissionShares
+      summary: Delete permission share.
+      parameters:
+      - name: permission_share_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: current_revision
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PermissionShare'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_permission_share
+  /v1/accounts/{account_id}/permission-shares/{name}:
+    get:
+      tags:
+      - RegistryService
+      - PermissionShares
+      - Account
+      summary: Get permission share by owner account and name.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PermissionShare'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_permission_share_by_name
   /v1/accounts/{account_id}/plugins:
     post:
       tags:
@@ -7919,8 +8426,6 @@ components:
           format: uint64
         name:
           type: string
-        email:
-          type: string
     AgentConfigDeclaration:
       type: object
       title: AgentConfigDeclaration
@@ -8037,6 +8542,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/HttpEndpointDetails'
+        readOnly:
+          $ref: '#/components/schemas/ReadOnlyConfig'
     AgentMode:
       type: string
       enum:
@@ -9234,6 +9741,51 @@ components:
       properties:
         mimeType:
           type: string
+    CachePolicy:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/CachePolicy_Empty'
+      - $ref: '#/components/schemas/CachePolicy_Empty'
+      - $ref: '#/components/schemas/CachePolicy_CachePolicyTtl'
+      discriminator:
+        propertyName: type
+        mapping:
+          NoCache: '#/components/schemas/CachePolicy_Empty'
+          UntilWrite: '#/components/schemas/CachePolicy_Empty'
+          Ttl: '#/components/schemas/CachePolicy_CachePolicyTtl'
+    CachePolicyTtl:
+      type: object
+      title: CachePolicyTtl
+      required:
+      - durationNanos
+      properties:
+        durationNanos:
+          type: integer
+          format: uint64
+    CachePolicy_CachePolicyTtl:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Ttl
+            example: Ttl
+      - $ref: '#/components/schemas/CachePolicyTtl'
+    CachePolicy_Empty:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UntilWrite
+            example: UntilWrite
+      - $ref: '#/components/schemas/Empty'
     ComponentCreation:
       type: object
       title: ComponentCreation
@@ -9397,6 +9949,15 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        validationWarnings:
+          type: array
+          description: |-
+            Non-fatal validation warnings produced while compiling the
+            deployment (e.g. read-only methods bound to non-`GET` HTTP verbs).
+            Empty when the deployment is clean.
+          default: []
+          items:
+            $ref: '#/components/schemas/DeployValidationWarning'
     CustomHttpMethod:
       type: object
       title: CustomHttpMethod
@@ -9438,6 +9999,40 @@ components:
             - Multimodal
             example: Multimodal
       - $ref: '#/components/schemas/NamedElementSchemas'
+    DeployValidationWarning:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
+      - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
+      discriminator:
+        propertyName: type
+        mapping:
+          HttpApiReadOnlyMethodBoundToNonGetVerb: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
+          HttpApiReadOnlyTtlBelowOneSecond: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - HttpApiReadOnlyMethodBoundToNonGetVerb
+            example: HttpApiReadOnlyMethodBoundToNonGetVerb
+      - $ref: '#/components/schemas/HttpApiReadOnlyMethodBoundToNonGetVerb'
+    DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - HttpApiReadOnlyTtlBelowOneSecond
+            example: HttpApiReadOnlyTtlBelowOneSecond
+      - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
     DeployedRegisteredAgentType:
       type: object
       title: DeployedRegisteredAgentType
@@ -10190,6 +10785,46 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
+    HttpApiReadOnlyMethodBoundToNonGetVerb:
+      type: object
+      title: HttpApiReadOnlyMethodBoundToNonGetVerb
+      required:
+      - componentId
+      - agentType
+      - methodName
+      - httpMethod
+      - path
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        methodName:
+          type: string
+        httpMethod:
+          $ref: '#/components/schemas/HttpMethod'
+        path:
+          type: string
+    HttpApiReadOnlyTtlBelowOneSecond:
+      type: object
+      title: HttpApiReadOnlyTtlBelowOneSecond
+      required:
+      - componentId
+      - agentType
+      - methodName
+      - ttlNanos
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        methodName:
+          type: string
+        ttlNanos:
+          type: integer
+          format: uint64
     HttpEndpointDetails:
       type: object
       title: HttpEndpointDetails
@@ -10753,6 +11388,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/McpDeployment'
+    Page_PermissionShare:
+      type: object
+      title: Page_PermissionShare
+      required:
+      - values
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionShare'
     Page_PluginRegistrationDto:
       type: object
       title: Page_PluginRegistrationDto
@@ -10861,6 +11506,91 @@ components:
       properties:
         variableName:
           type: string
+    PermissionShare:
+      type: object
+      title: PermissionShare
+      required:
+      - id
+      - revision
+      - ownerAccountId
+      - targetAccountId
+      - name
+      - data
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        ownerAccountId:
+          type: string
+          format: uuid
+        targetAccountId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        currentCardId:
+          type: string
+          format: uuid
+        data:
+          $ref: '#/components/schemas/PermissionShareData'
+    PermissionShareCreation:
+      type: object
+      title: PermissionShareCreation
+      required:
+      - targetAccountId
+      - name
+      - data
+      properties:
+        targetAccountId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        data:
+          $ref: '#/components/schemas/PermissionShareData'
+    PermissionShareData:
+      type: object
+      title: PermissionShareData
+      required:
+      - lowerPositive
+      - lowerNegative
+      - upperPositive
+      - upperNegative
+      properties:
+        lowerPositive:
+          type: array
+          items:
+            type: string
+        lowerNegative:
+          type: array
+          items:
+            type: string
+        upperPositive:
+          type: array
+          items:
+            type: string
+        upperNegative:
+          type: array
+          items:
+            type: string
+    PermissionShareUpdate:
+      type: object
+      title: PermissionShareUpdate
+      required:
+      - currentRevision
+      - name
+      - data
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        name:
+          type: string
+        data:
+          $ref: '#/components/schemas/PermissionShareData'
     Plan:
       type: object
       title: Plan
@@ -11187,6 +11917,17 @@ components:
           type: string
         variableName:
           type: string
+    ReadOnlyConfig:
+      type: object
+      title: ReadOnlyConfig
+      required:
+      - cachePolicy
+      - usesPrincipal
+      properties:
+        cachePolicy:
+          $ref: '#/components/schemas/CachePolicy'
+        usesPrincipal:
+          type: boolean
     RegisteredAgentTypeImplementer:
       type: object
       title: RegisteredAgentTypeImplementer

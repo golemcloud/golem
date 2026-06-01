@@ -96,6 +96,7 @@ pub fn agent_method_to_schema(
         input_schema: data_schema_to_input_schema(&method.input_schema)?,
         output_schema: data_schema_to_output_schema(&method.output_schema)?,
         http_endpoint: method.http_endpoint.clone(),
+        read_only: method.read_only.clone(),
     })
 }
 
@@ -114,6 +115,7 @@ pub fn schema_agent_method_to_legacy(
         input_schema: input_schema_to_data_schema(graph, &method.input_schema)?,
         output_schema: output_schema_to_data_schema(graph, &method.output_schema)?,
         http_endpoint: method.http_endpoint.clone(),
+        read_only: method.read_only.clone(),
     })
 }
 

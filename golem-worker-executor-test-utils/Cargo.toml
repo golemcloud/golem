@@ -38,11 +38,9 @@ tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-tracing-opentelemetry = { workspace = true }
 tower = { workspace = true }
+test-r = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
-
-[dev-dependencies]
-test-r = { workspace = true }

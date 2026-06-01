@@ -148,9 +148,6 @@ impl AccountService {
         if let Some(new_name) = update.name {
             account.name = new_name;
         }
-        if let Some(new_email) = update.email {
-            account.email = new_email
-        }
 
         self.update_internal(account, auth).await
     }

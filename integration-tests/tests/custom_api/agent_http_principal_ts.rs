@@ -27,7 +27,7 @@ use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     make_test_context(
         deps,

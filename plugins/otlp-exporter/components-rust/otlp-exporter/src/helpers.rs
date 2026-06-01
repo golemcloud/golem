@@ -85,5 +85,6 @@ pub(crate) fn worker_error_to_string(e: &WorkerError) -> String {
         WorkerError::EphemeralSleepTooLong(_) => "ephemeral sleep too long".to_string(),
         WorkerError::EphemeralFuelExhausted(_) => "ephemeral fuel exhausted".to_string(),
         WorkerError::EphemeralCannotSuspend(_) => "ephemeral cannot suspend".to_string(),
+        WorkerError::ReadOnlyViolation(_) => "read-only violation".to_string(),
     }
 }

@@ -491,6 +491,8 @@ mod tests {
             consumed_fuel: None,
             invocation_status: None,
             component_revision: None,
+            oplog_index: None,
+            agent_fingerprint: None,
         });
         let tool = AgentMcpTool {
             tool: Tool {
@@ -519,6 +521,7 @@ mod tests {
                 input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
                 output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
                 http_endpoint: vec![],
+                read_only: None,
             },
             component_id: harness.component_id,
             agent_type_name: AgentTypeName("mcp-agent".to_string()),

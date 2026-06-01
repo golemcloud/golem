@@ -37,6 +37,7 @@ pub enum ApiTags {
     Login,
     Me,
     Plugin,
+    PermissionShares,
     Reports,
     RetryPolicies,
     Resources,

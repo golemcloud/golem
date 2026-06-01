@@ -48,13 +48,13 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn postgres() -> DockerPostgresRdb {
     let unique_network_id = Uuid::new_v4().to_string();
     DockerPostgresRdb::new(&unique_network_id, false).await
 }
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn mysql() -> DockerMysqlRdb {
     let unique_network_id = Uuid::new_v4().to_string();
     DockerMysqlRdb::new(&unique_network_id).await

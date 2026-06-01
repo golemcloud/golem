@@ -662,6 +662,10 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         return Ok(Ok(()));
     }
 
+    // The read-only side-effect trap fires earlier: every caller of this helper
+    // (`send` / `receive` / `receive-with-timeout` / `close`) goes through
+    // `Durability::new` with `WriteRemote` first, which routes through
+    // `DurabilityHost::begin_durable_function` — the single central read-only guard.
     let request = match build_request(&info.url, info.headers.as_deref()) {
         Ok(request) => request,
         Err(err) => {

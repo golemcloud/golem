@@ -3068,6 +3068,7 @@ mod tests {
                 input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
                 output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
                 http_endpoint: vec![],
+                read_only: None,
             }],
             dependencies: vec![],
             mode,

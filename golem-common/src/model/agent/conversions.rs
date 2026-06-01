@@ -18,7 +18,9 @@ use super::{
     LiteralSegment, PathSegment, PathVariable, QueryVariable, SystemVariable,
     SystemVariableSegment,
 };
-use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
+use crate::base_model::agent::{
+    CachePolicy, CachePolicyTtl, GolemUserPrincipal, OidcPrincipal, Principal, ReadOnlyConfig,
+};
 use crate::model::Empty;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
@@ -149,6 +151,7 @@ impl From<super::bindings::golem::agent::common::AgentMethod> for AgentMethod {
             input_schema: DataSchema::from(value.input_schema),
             output_schema: DataSchema::from(value.output_schema),
             http_endpoint: value.http_endpoint.into_iter().map(|v| v.into()).collect(),
+            read_only: value.read_only.map(ReadOnlyConfig::from),
         }
     }
 }
@@ -162,6 +165,51 @@ impl From<AgentMethod> for super::bindings::golem::agent::common::AgentMethod {
             input_schema: value.input_schema.into(),
             output_schema: value.output_schema.into(),
             http_endpoint: value.http_endpoint.into_iter().map(|v| v.into()).collect(),
+            read_only: value.read_only.map(Into::into),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::ReadOnlyConfig> for ReadOnlyConfig {
+    fn from(value: super::bindings::golem::agent::common::ReadOnlyConfig) -> Self {
+        Self {
+            cache_policy: value.cache_policy.into(),
+            uses_principal: value.uses_principal,
+        }
+    }
+}
+
+impl From<ReadOnlyConfig> for super::bindings::golem::agent::common::ReadOnlyConfig {
+    fn from(value: ReadOnlyConfig) -> Self {
+        Self {
+            cache_policy: value.cache_policy.into(),
+            uses_principal: value.uses_principal,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::CachePolicy> for CachePolicy {
+    fn from(value: super::bindings::golem::agent::common::CachePolicy) -> Self {
+        match value {
+            super::bindings::golem::agent::common::CachePolicy::NoCache => Self::NoCache(Empty {}),
+            super::bindings::golem::agent::common::CachePolicy::UntilWrite => {
+                Self::UntilWrite(Empty {})
+            }
+            super::bindings::golem::agent::common::CachePolicy::Ttl(nanos) => {
+                Self::Ttl(CachePolicyTtl {
+                    duration_nanos: nanos,
+                })
+            }
+        }
+    }
+}
+
+impl From<CachePolicy> for super::bindings::golem::agent::common::CachePolicy {
+    fn from(value: CachePolicy) -> Self {
+        match value {
+            CachePolicy::NoCache(_) => Self::NoCache,
+            CachePolicy::UntilWrite(_) => Self::UntilWrite,
+            CachePolicy::Ttl(ttl) => Self::Ttl(ttl.duration_nanos),
         }
     }
 }

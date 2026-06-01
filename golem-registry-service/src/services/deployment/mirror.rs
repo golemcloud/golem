@@ -142,6 +142,7 @@ mod tests {
                     input_schema: empty_data_schema(),
                     output_schema: empty_data_schema(),
                     http_endpoint: vec![],
+                    read_only: None,
                 },
                 AgentMethod {
                     name: "describe".to_string(),
@@ -150,6 +151,7 @@ mod tests {
                     input_schema: tuple_data_schema(&["query"]),
                     output_schema: tuple_data_schema(&["summary", "details"]),
                     http_endpoint: vec![],
+                    read_only: None,
                 },
                 AgentMethod {
                     name: "preview".to_string(),
@@ -158,6 +160,7 @@ mod tests {
                     input_schema: empty_data_schema(),
                     output_schema: multimodal_data_schema(&["thumbnail", "caption"]),
                     http_endpoint: vec![],
+                    read_only: None,
                 },
             ],
             dependencies: vec![AgentDependency {
@@ -176,6 +179,7 @@ mod tests {
                     input_schema: tuple_data_schema(&["message"]),
                     output_schema: empty_data_schema(),
                     http_endpoint: vec![],
+                    read_only: None,
                 }],
             }],
             mode: AgentMode::Durable,

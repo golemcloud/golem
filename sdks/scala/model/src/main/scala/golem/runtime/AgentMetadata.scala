@@ -46,7 +46,8 @@ final case class MethodMetadata(
   mode: Option[String],
   input: StructuredSchema,
   output: StructuredSchema,
-  httpEndpoints: List[HttpEndpointDetails] = Nil
+  httpEndpoints: List[HttpEndpointDetails] = Nil,
+  readOnly: Option[ReadOnlyConfig] = None
 )
 
 /**

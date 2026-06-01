@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::DeployValidationError;
+use super::DeployValidationWarning;
 use super::deployment_context::InProgressDeployedRegisteredAgentType;
 use super::http_parameter_conversion::build_http_agent_method_parameters;
 use super::ok_or_continue;
@@ -21,9 +22,12 @@ use crate::model::api_definition::{
 };
 use golem_common::model::Empty;
 use golem_common::model::agent::{
-    AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema, ElementSchema,
+    AgentMethod, AgentMode, AgentType, AgentTypeName, CachePolicy, DataSchema, ElementSchema,
     HttpEndpointDetails, HttpMethod, HttpMountDetails, NamedElementSchemas,
     RegisteredAgentTypeImplementer, SystemVariable,
+};
+use golem_common::model::deployment::{
+    HttpApiReadOnlyMethodBoundToNonGetVerb, HttpApiReadOnlyTtlBelowOneSecond,
 };
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
@@ -53,8 +57,11 @@ pub fn add_agent_method_http_routes(
     current_route_id: &mut i32,
     compiled_routes: &mut Vec<UnboundCompiledRoute>,
     errors: &mut Vec<DeployValidationError>,
+    warnings: &mut Vec<DeployValidationWarning>,
 ) {
     for agent_method in agent_methods {
+        collect_read_only_warnings(implementer, agent, http_mount, agent_method, warnings);
+
         for http_endpoint in &agent_method.http_endpoint {
             let make_route_validation_error = make_invalid_agent_route_error_maker(
                 deployment,
@@ -146,12 +153,77 @@ pub fn add_agent_method_http_routes(
                     method_parameters,
                     expected_agent_response: agent_method.output_schema.clone(),
                     method_description: Some(agent_method.description.clone()),
+                    read_only: agent_method.read_only.clone(),
                 }),
                 security,
                 cors,
             };
 
             compiled_routes.push(compiled);
+        }
+    }
+}
+
+/// Collects non-fatal warnings for a read-only `AgentMethod` and its HTTP
+/// bindings. Currently produces:
+/// - one warning per non-`GET`/`HEAD` HTTP binding (cache headers are only
+///   emitted for cacheable HTTP methods),
+/// - one warning when the method's `CachePolicy::Ttl` rounds down to zero
+///   seconds (`max-age=0` would force revalidation every time).
+fn collect_read_only_warnings(
+    implementer: &RegisteredAgentTypeImplementer,
+    agent: &AgentType,
+    http_mount: &HttpMountDetails,
+    agent_method: &AgentMethod,
+    warnings: &mut Vec<DeployValidationWarning>,
+) {
+    let Some(read_only) = agent_method.read_only.as_ref() else {
+        return;
+    };
+
+    if let CachePolicy::Ttl(ttl) = &read_only.cache_policy
+        && ttl.duration_nanos < 1_000_000_000
+    {
+        warnings.push(DeployValidationWarning::HttpApiReadOnlyTtlBelowOneSecond(
+            HttpApiReadOnlyTtlBelowOneSecond {
+                component_id: implementer.component_id,
+                agent_type: agent.type_name.clone(),
+                method_name: agent_method.name.clone(),
+                ttl_nanos: ttl.duration_nanos,
+            },
+        ));
+    }
+
+    // The whitelist below MUST stay consistent with the worker-service's
+    // `is_cacheable_method` predicate
+    // (`golem-worker-service/src/custom_api/call_agent/mod.rs`). If a future
+    // HTTP method becomes cacheable on the worker-service side, this warning
+    // must accept it too — otherwise users would be warned about a binding
+    // that is actually fine.
+    for http_endpoint in &agent_method.http_endpoint {
+        if !matches!(
+            http_endpoint.http_method,
+            HttpMethod::Get(_) | HttpMethod::Head(_)
+        ) {
+            let rendered = render_agent_http_path(
+                http_mount
+                    .path_prefix
+                    .iter()
+                    .chain(http_endpoint.path_suffix.iter()),
+            );
+            let path = format!("/{rendered}");
+
+            warnings.push(
+                DeployValidationWarning::HttpApiReadOnlyMethodBoundToNonGetVerb(
+                    HttpApiReadOnlyMethodBoundToNonGetVerb {
+                        component_id: implementer.component_id,
+                        agent_type: agent.type_name.clone(),
+                        method_name: agent_method.name.clone(),
+                        http_method: http_endpoint.http_method.clone(),
+                        path,
+                    },
+                ),
+            );
         }
     }
 }
@@ -709,6 +781,7 @@ mod tests {
                         allowed_patterns: vec![],
                     },
                 }],
+                read_only: None,
             }],
             dependencies: vec![],
             mode,
@@ -759,6 +832,7 @@ mod tests {
         let mut current_route_id = 0;
         let mut compiled_routes = Vec::new();
         let mut errors = Vec::new();
+        let mut warnings = Vec::new();
 
         add_agent_method_http_routes(
             &environment,
@@ -772,9 +846,11 @@ mod tests {
             &mut current_route_id,
             &mut compiled_routes,
             &mut errors,
+            &mut warnings,
         );
 
         assert!(errors.is_empty());
+        assert!(warnings.is_empty());
 
         let compiled_route = compiled_routes.into_iter().next().unwrap();
         let RouteBehaviour::CallAgent(call_agent) = compiled_route.behaviour else {
@@ -932,6 +1008,7 @@ mod tests {
                     }],
                     expected_agent_response: DataSchema::Tuple(NamedElementSchemas::empty()),
                     method_description: None,
+                    read_only: None,
                 }),
                 security: UnboundRouteSecurity::None,
                 cors: CorsOptions {
@@ -957,6 +1034,7 @@ mod tests {
                     method_parameters: vec![],
                     expected_agent_response: DataSchema::Tuple(NamedElementSchemas::empty()),
                     method_description: None,
+                    read_only: None,
                 }),
                 security: UnboundRouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
                     header_name: "X-Session".to_string(),
@@ -1021,5 +1099,127 @@ mod tests {
     #[test]
     fn durable_agents_keep_explicit_http_phantom_flag() {
         assert!(compiled_phantom_flag(AgentMode::Durable, true));
+    }
+
+    fn run_route_compilation_for_warnings(agent: AgentType) -> Vec<DeployValidationWarning> {
+        let environment_id = EnvironmentId(Uuid::new_v4());
+        let environment = test_environment(environment_id);
+        let deployment = test_deployment(environment_id);
+        let http_mount = agent.http_mount.clone().unwrap();
+        let implementer = RegisteredAgentTypeImplementer {
+            component_id: ComponentId(Uuid::new_v4()),
+            component_revision: ComponentRevision::INITIAL,
+        };
+        let mut current_route_id = 0;
+        let mut compiled_routes = Vec::new();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+
+        add_agent_method_http_routes(
+            &environment,
+            &deployment,
+            &agent,
+            &implementer,
+            &http_mount,
+            &agent.methods,
+            vec![],
+            &HttpApiDeploymentAgentOptions::default(),
+            &mut current_route_id,
+            &mut compiled_routes,
+            &mut errors,
+            &mut warnings,
+        );
+
+        assert!(errors.is_empty());
+        warnings
+    }
+
+    fn read_only_until_write() -> golem_common::model::agent::ReadOnlyConfig {
+        golem_common::model::agent::ReadOnlyConfig {
+            cache_policy: CachePolicy::UntilWrite(Empty {}),
+            uses_principal: false,
+        }
+    }
+
+    fn read_only_ttl(nanos: u64) -> golem_common::model::agent::ReadOnlyConfig {
+        golem_common::model::agent::ReadOnlyConfig {
+            cache_policy: CachePolicy::Ttl(golem_common::model::agent::CachePolicyTtl {
+                duration_nanos: nanos,
+            }),
+            uses_principal: false,
+        }
+    }
+
+    #[test]
+    fn warning_emitted_for_read_only_method_bound_to_post() {
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].http_endpoint[0].http_method = HttpMethod::Post(Empty {});
+        agent.methods[0].read_only = Some(read_only_until_write());
+
+        let warnings = run_route_compilation_for_warnings(agent);
+
+        assert_eq!(warnings.len(), 1);
+        assert!(matches!(
+            &warnings[0],
+            DeployValidationWarning::HttpApiReadOnlyMethodBoundToNonGetVerb(_)
+        ));
+    }
+
+    #[test]
+    fn no_warning_for_read_only_method_bound_to_get() {
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].read_only = Some(read_only_until_write());
+
+        let warnings = run_route_compilation_for_warnings(agent);
+
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn warning_emitted_for_sub_second_ttl() {
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].read_only = Some(read_only_ttl(500_000_000));
+
+        let warnings = run_route_compilation_for_warnings(agent);
+
+        assert_eq!(warnings.len(), 1);
+        assert!(matches!(
+            &warnings[0],
+            DeployValidationWarning::HttpApiReadOnlyTtlBelowOneSecond(_)
+        ));
+    }
+
+    #[test]
+    fn warning_emitted_for_zero_ttl() {
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].read_only = Some(read_only_ttl(0));
+
+        let warnings = run_route_compilation_for_warnings(agent);
+
+        assert_eq!(warnings.len(), 1);
+        assert!(matches!(
+            &warnings[0],
+            DeployValidationWarning::HttpApiReadOnlyTtlBelowOneSecond(_)
+        ));
+    }
+
+    #[test]
+    fn no_warning_for_one_second_ttl() {
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].read_only = Some(read_only_ttl(1_000_000_000));
+
+        let warnings = run_route_compilation_for_warnings(agent);
+
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn no_warning_for_non_read_only_method_bound_to_post() {
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].http_endpoint[0].http_method = HttpMethod::Post(Empty {});
+
+        let warnings = run_route_compilation_for_warnings(agent);
+
+        assert!(warnings.is_empty());
     }
 }

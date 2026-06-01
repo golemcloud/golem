@@ -319,16 +319,34 @@ pub trait InvocationHooks {
     ) -> RetryDecision;
 
     /// Called when an agent invocation succeeds, with the typed result directly.
+    ///
+    /// The implementation may populate fields on `output` that are only known
+    /// after the success has been persisted to the oplog — for example
+    /// `oplog_index` and `agent_fingerprint` derived from the committed
+    /// `AgentInvocationFinished` entry.
     async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Gets the retry point that should be associated with a current error. Errors are grouped
     /// by this information. The current oplog index is a good default.
     async fn get_current_retry_point(&self) -> OplogIndex;
+
+    /// Switches the invocation strictness mode to `ReadOnly` for the duration of a single agent
+    /// method invocation. Under read-only strictness, outgoing HTTP and RPC host calls trap
+    /// with `AgentError::ReadOnlyViolation` before any oplog entry is written.
+    ///
+    /// `method_name` is captured for diagnostic purposes and surfaced in the trap payload.
+    /// Each call must be paired with [`InvocationHooks::exit_read_only_mode`].
+    fn enter_read_only_mode(&mut self, method_name: String);
+
+    /// Restores the invocation strictness mode to `Normal` after a previous
+    /// [`InvocationHooks::enter_read_only_mode`] call. Calling this without a matching enter is
+    /// a no-op other than a `warn!` trace.
+    fn exit_read_only_mode(&mut self);
 }
 
 #[async_trait]
