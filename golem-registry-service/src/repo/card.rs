@@ -157,7 +157,6 @@ impl DbCardRepo<PostgresPool> {
     }
 }
 
-#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbCardRepo<PostgresPool> {
     pub async fn delete_tree_in_tx(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
@@ -195,6 +194,59 @@ impl DbCardRepo<PostgresPool> {
 
         if !deleted.is_empty() {
             DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                tx,
+                &NewRegistryChangeEvent::cards_revoked(deleted.iter().map(|id| id.0).collect()),
+            )
+            .await?;
+        }
+
+        Ok(deleted)
+    }
+}
+
+impl DbCardRepo<SqlitePool> {
+    pub async fn delete_tree_in_tx(
+        tx: &mut PoolLabelledTransaction<SqlitePool>,
+        card_id: CardId,
+    ) -> Result<Vec<CardId>, CardRepoError> {
+        let rows = tx
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    WITH RECURSIVE to_delete(card_id) AS (
+                        SELECT card_id FROM cards WHERE card_id = $1
+                        UNION
+                        SELECT cp.card_id
+                        FROM card_parents cp
+                        JOIN to_delete td ON cp.parent_id = td.card_id
+                    )
+                    SELECT card_id FROM to_delete
+                "#})
+                .bind(card_id.0),
+            )
+            .await?;
+
+        let mut deleted = Vec::with_capacity(rows.len());
+        for row in rows {
+            let card_id = row.try_get::<Uuid, _>("card_id").map_err(RepoError::from)?;
+
+            tx.execute(sqlx::query("DELETE FROM card_parents WHERE card_id = $1").bind(card_id))
+                .await?;
+
+            if let Some(row) = tx
+                .fetch_optional(
+                    sqlx::query("DELETE FROM cards WHERE card_id = $1 RETURNING card_id")
+                        .bind(card_id),
+                )
+                .await
+                .to_error_on_foreign_key_violation(CardRepoError::CardTreeChangedDuringDelete)?
+            {
+                let deleted_card_id = row.try_get::<Uuid, _>("card_id").map_err(RepoError::from)?;
+                deleted.push(CardId(deleted_card_id));
+            }
+        }
+
+        if !deleted.is_empty() {
+            DbRegistryChangeRepo::<SqlitePool>::create_change_event_in_tx(
                 tx,
                 &NewRegistryChangeEvent::cards_revoked(deleted.iter().map(|id| id.0).collect()),
             )
