@@ -64,7 +64,7 @@ impl Tracing {
 }
 
 #[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl))]
-pub async fn create_deps() -> EnvBasedTestDependencies {
+pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 3,
         ..EnvBasedTestDependenciesConfig::new()
@@ -75,6 +75,11 @@ pub async fn create_deps() -> EnvBasedTestDependencies {
     deps.redis_monitor().assert_valid();
 
     deps
+}
+
+#[test_dep(scope = Hosted)]
+pub fn tracing_host() -> Tracing {
+    Tracing::init()
 }
 
 #[test_dep(scope = PerWorker)]
