@@ -18,6 +18,7 @@ use crate::repo::registry_change::{
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
+use golem_common::model::card::CardId;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
@@ -31,10 +32,10 @@ use uuid::Uuid;
 pub trait CardRepo: Send + Sync {
     async fn create(&self, card: CardRecord) -> Result<CardRecord, CardRepoError>;
 
-    // Delete a card including all descendents. Returns ids of all deleted cards.
-    async fn delete(&self, card_id: Uuid) -> RepoResult<RequiresNotificationSignal<Vec<Uuid>>>;
+    // Delete a card including all descendants. Returns ids of all deleted cards.
+    async fn delete(&self, card_id: CardId) -> RepoResult<RequiresNotificationSignal<Vec<CardId>>>;
 
-    async fn existing(&self, card_ids: Vec<Uuid>) -> RepoResult<Vec<Uuid>>;
+    async fn existing(&self, card_ids: Vec<CardId>) -> RepoResult<Vec<CardId>>;
 }
 
 pub struct LoggedCardRepo<Repo: CardRepo> {
@@ -48,7 +49,7 @@ impl<Repo: CardRepo> LoggedCardRepo<Repo> {
         Self { repo }
     }
 
-    fn span_card_id(card_id: Uuid) -> Span {
+    fn span_card_id(card_id: CardId) -> Span {
         info_span!(SPAN_NAME, card_id = %card_id)
     }
 }
@@ -56,19 +57,19 @@ impl<Repo: CardRepo> LoggedCardRepo<Repo> {
 #[async_trait]
 impl<Repo: CardRepo> CardRepo for LoggedCardRepo<Repo> {
     async fn create(&self, card: CardRecord) -> Result<CardRecord, CardRepoError> {
-        let span = Self::span_card_id(card.card_id);
+        let span = Self::span_card_id(CardId(card.card_id));
 
         self.repo.create(card).instrument(span).await
     }
 
-    async fn delete(&self, card_id: Uuid) -> RepoResult<RequiresNotificationSignal<Vec<Uuid>>> {
+    async fn delete(&self, card_id: CardId) -> RepoResult<RequiresNotificationSignal<Vec<CardId>>> {
         self.repo
             .delete(card_id)
             .instrument(Self::span_card_id(card_id))
             .await
     }
 
-    async fn existing(&self, card_ids: Vec<Uuid>) -> RepoResult<Vec<Uuid>> {
+    async fn existing(&self, card_ids: Vec<CardId>) -> RepoResult<Vec<CardId>> {
         self.repo
             .existing(card_ids)
             .instrument(info_span!(SPAN_NAME))
@@ -110,13 +111,55 @@ impl DbCardRepo<PostgresPool> {
             tx.execute(
                 sqlx::query("INSERT INTO card_parents (card_id, parent_id) VALUES ($1, $2)")
                     .bind(card_id)
-                    .bind(*parent_id),
+                    .bind(parent_id),
             )
             .await
             .to_error_on_foreign_key_violation(CardRepoError::ParentNotFound(*parent_id))?;
         }
 
         Ok(())
+    }
+}
+
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+impl DbCardRepo<PostgresPool> {
+    pub async fn delete_tree_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        card_id: CardId,
+    ) -> RepoResult<Vec<CardId>> {
+        let rows = tx
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    WITH RECURSIVE to_delete(card_id) AS (
+                        SELECT $1
+                        UNION
+                        SELECT cp.card_id
+                        FROM card_parents cp
+                        JOIN to_delete td ON cp.parent_id = td.card_id
+                    )
+                    DELETE FROM cards
+                    WHERE card_id IN (SELECT card_id FROM to_delete)
+                    RETURNING card_id
+                "#})
+                .bind(card_id.0),
+            )
+            .await?;
+
+        let mut deleted = Vec::with_capacity(rows.len());
+        for row in rows {
+            let deleted_card_id = row.try_get::<Uuid, _>("card_id").map_err(RepoError::from)?;
+            deleted.push(CardId(deleted_card_id));
+        }
+
+        if !deleted.is_empty() {
+            DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                tx,
+                &NewRegistryChangeEvent::cards_revoked(deleted.iter().map(|id| id.0).collect()),
+            )
+            .await?;
+        }
+
+        Ok(deleted)
     }
 }
 
@@ -196,63 +239,28 @@ impl CardRepo for DbCardRepo<PostgresPool> {
             .await
     }
 
-    async fn delete(&self, card_id: Uuid) -> RepoResult<RequiresNotificationSignal<Vec<Uuid>>> {
+    async fn delete(&self, card_id: CardId) -> RepoResult<RequiresNotificationSignal<Vec<CardId>>> {
         let deleted = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "hard_delete", |tx| {
-                Box::pin(async move {
-                    let rows = tx
-                        .fetch_all(
-                            sqlx::query(indoc! { r#"
-                                WITH RECURSIVE to_delete(card_id) AS (
-                                    SELECT $1
-                                    UNION
-                                    SELECT cp.card_id
-                                    FROM card_parents cp
-                                    JOIN to_delete td ON cp.parent_id = td.card_id
-                                )
-                                DELETE FROM cards
-                                WHERE card_id IN (SELECT card_id FROM to_delete)
-                                RETURNING card_id
-                            "#})
-                            .bind(card_id),
-                        )
-                        .await?;
-
-                    let mut deleted = Vec::with_capacity(rows.len());
-                    for row in rows {
-                        let deleted_card_id =
-                            row.try_get::<Uuid, _>("card_id").map_err(RepoError::from)?;
-                        deleted.push(deleted_card_id);
-                    }
-
-                    if !deleted.is_empty() {
-                        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
-                            tx,
-                            &NewRegistryChangeEvent::cards_revoked(deleted.clone()),
-                        )
-                        .await?;
-                    }
-
-                    Ok::<_, RepoError>(deleted)
-                })
+                Box::pin(async move { Self::delete_tree_in_tx(tx, card_id).await })
             })
             .await?;
 
         Ok(deleted.requires_notification_signal())
     }
 
-    async fn existing(&self, card_ids: Vec<Uuid>) -> RepoResult<Vec<Uuid>> {
+    async fn existing(&self, card_ids: Vec<CardId>) -> RepoResult<Vec<CardId>> {
         let mut result = Vec::new();
         let mut api = self.with_ro("existing");
         for card_id in card_ids {
             if let Some(row) = api
                 .fetch_optional(
-                    sqlx::query("SELECT card_id FROM cards WHERE card_id = $1").bind(card_id),
+                    sqlx::query("SELECT card_id FROM cards WHERE card_id = $1").bind(card_id.0),
                 )
                 .await?
             {
-                result.push(row.try_get("card_id").map_err(RepoError::from)?);
+                result.push(CardId(row.try_get("card_id").map_err(RepoError::from)?));
             }
         }
         Ok(result)

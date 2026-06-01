@@ -20,7 +20,6 @@ use RecipientPattern as AgentRecipientPattern;
 use RecipientPattern as EnvironmentRecipientPattern;
 use chrono::Utc;
 use test_r::test;
-use uuid::Uuid;
 
 fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PermissionPattern {
     PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {
@@ -55,7 +54,7 @@ fn card_with_bounds(
     upper_negative: Vec<PermissionPattern>,
 ) -> Card {
     Card {
-        card_id: Uuid::new_v4(),
+        card_id: CardId::new(),
         parent_ids: Vec::new(),
         lower_positive,
         lower_negative,
