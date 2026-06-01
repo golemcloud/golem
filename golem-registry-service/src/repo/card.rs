@@ -32,8 +32,18 @@ use uuid::Uuid;
 pub trait CardRepo: Send + Sync {
     async fn create(&self, card: CardRecord) -> Result<CardRecord, CardRepoError>;
 
+    async fn insert_token_root_card(
+        &self,
+        account_id: Uuid,
+        expected_epoch: i64,
+        card: CardRecord,
+    ) -> Result<Option<CardRecord>, CardRepoError>;
+
     // Delete a card including all descendants. Returns ids of all deleted cards.
-    async fn delete(&self, card_id: CardId) -> RepoResult<RequiresNotificationSignal<Vec<CardId>>>;
+    async fn delete(
+        &self,
+        card_id: CardId,
+    ) -> Result<RequiresNotificationSignal<Vec<CardId>>, CardRepoError>;
 
     async fn existing(&self, card_ids: Vec<CardId>) -> RepoResult<Vec<CardId>>;
 }
@@ -62,7 +72,24 @@ impl<Repo: CardRepo> CardRepo for LoggedCardRepo<Repo> {
         self.repo.create(card).instrument(span).await
     }
 
-    async fn delete(&self, card_id: CardId) -> RepoResult<RequiresNotificationSignal<Vec<CardId>>> {
+    async fn insert_token_root_card(
+        &self,
+        account_id: Uuid,
+        expected_epoch: i64,
+        card: CardRecord,
+    ) -> Result<Option<CardRecord>, CardRepoError> {
+        let span = Self::span_card_id(CardId(card.card_id));
+
+        self.repo
+            .insert_token_root_card(account_id, expected_epoch, card)
+            .instrument(span)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        card_id: CardId,
+    ) -> Result<RequiresNotificationSignal<Vec<CardId>>, CardRepoError> {
         self.repo
             .delete(card_id)
             .instrument(Self::span_card_id(card_id))
@@ -126,7 +153,7 @@ impl DbCardRepo<PostgresPool> {
     pub async fn delete_tree_in_tx(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         card_id: CardId,
-    ) -> RepoResult<Vec<CardId>> {
+    ) -> Result<Vec<CardId>, CardRepoError> {
         let rows = tx
             .fetch_all(
                 sqlx::query(indoc! { r#"
@@ -143,7 +170,8 @@ impl DbCardRepo<PostgresPool> {
                 "#})
                 .bind(card_id.0),
             )
-            .await?;
+            .await
+            .to_error_on_foreign_key_violation(CardRepoError::CardTreeChangedDuringDelete)?;
 
         let mut deleted = Vec::with_capacity(rows.len());
         for row in rows {
@@ -160,6 +188,42 @@ impl DbCardRepo<PostgresPool> {
         }
 
         Ok(deleted)
+    }
+}
+
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+impl DbCardRepo<PostgresPool> {
+    async fn create_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        record: CardRecord,
+    ) -> Result<CardRecord, CardRepoError> {
+        Self::lock_parent_cards_for_create(tx, record.data.value().parent_ids.as_slice()).await?;
+
+        let inserted: CardRecord = tx
+            .fetch_one_as(
+                sqlx::query_as(indoc! { r#"
+                    INSERT INTO cards
+                        (card_id, data, created_at, expires_at, system_card, managed_by)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING card_id, data, created_at, expires_at, system_card, managed_by
+                "#})
+                .bind(record.card_id)
+                .bind(record.data)
+                .bind(record.created_at)
+                .bind(record.expires_at)
+                .bind(record.system_card)
+                .bind(record.managed_by),
+            )
+            .await?;
+
+        Self::insert_parent_links(
+            tx,
+            inserted.card_id,
+            inserted.data.value().parent_ids.as_slice(),
+        )
+        .await?;
+
+        Ok(inserted)
     }
 }
 
@@ -202,44 +266,60 @@ impl CardRepo for DbCardRepo<PostgresPool> {
     async fn create(&self, record: CardRecord) -> Result<CardRecord, CardRepoError> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
-                Box::pin(async move {
-                    Self::lock_parent_cards_for_create(
-                        tx,
-                        record.data.value().parent_ids.as_slice(),
-                    )
-                    .await?;
-
-                    let inserted: CardRecord = tx
-                        .fetch_one_as(
-                            sqlx::query_as(indoc! { r#"
-                            INSERT INTO cards
-                                (card_id, data, created_at, expires_at, system_card, managed_by)
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                            RETURNING card_id, data, created_at, expires_at, system_card, managed_by
-                        "#})
-                            .bind(record.card_id)
-                            .bind(record.data)
-                            .bind(record.created_at)
-                            .bind(record.expires_at)
-                            .bind(record.system_card)
-                            .bind(record.managed_by),
-                        )
-                        .await?;
-
-                    Self::insert_parent_links(
-                        tx,
-                        inserted.card_id,
-                        inserted.data.value().parent_ids.as_slice(),
-                    )
-                    .await?;
-
-                    Ok::<_, CardRepoError>(inserted)
-                })
+                Box::pin(async move { Self::create_in_tx(tx, record).await })
             })
             .await
     }
 
-    async fn delete(&self, card_id: CardId) -> RepoResult<RequiresNotificationSignal<Vec<CardId>>> {
+    async fn insert_token_root_card(
+        &self,
+        account_id: Uuid,
+        expected_epoch: i64,
+        record: CardRecord,
+    ) -> Result<Option<CardRecord>, CardRepoError> {
+        let result = self
+            .db_pool
+            .with_tx_err(METRICS_SVC_NAME, "insert_token_root_card", |tx| {
+                Box::pin(async move {
+                    let inserted = Self::create_in_tx(tx, record).await?;
+
+                    let rows_affected = tx
+                        .execute(
+                            sqlx::query(indoc! { r#"
+                                UPDATE accounts
+                                SET token_root_card_id = $1
+                                WHERE account_id = $2
+                                  AND token_root_card_epoch = $3
+                                  AND token_root_card_id IS NULL
+                                  AND deleted_at IS NULL
+                            "#})
+                            .bind(inserted.card_id)
+                            .bind(account_id)
+                            .bind(expected_epoch),
+                        )
+                        .await?
+                        .rows_affected();
+
+                    if rows_affected == 1 {
+                        Ok::<_, CardRepoError>(inserted)
+                    } else {
+                        Err(CardRepoError::ConcurrentModification)
+                    }
+                })
+            })
+            .await;
+
+        match result {
+            Ok(card) => Ok(Some(card)),
+            Err(CardRepoError::ConcurrentModification) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn delete(
+        &self,
+        card_id: CardId,
+    ) -> Result<RequiresNotificationSignal<Vec<CardId>>, CardRepoError> {
         let deleted = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "hard_delete", |tx| {

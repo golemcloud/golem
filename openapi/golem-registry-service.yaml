@@ -8294,6 +8294,7 @@ components:
       - email
       - planId
       - roles
+      - tokenRootCardEpoch
       properties:
         id:
           type: string
@@ -8312,6 +8313,12 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountRole'
+        tokenRootCardId:
+          type: string
+          format: uuid
+        tokenRootCardEpoch:
+          type: integer
+          format: uint64
     AccountCountsReport:
       type: object
       title: AccountCountsReport

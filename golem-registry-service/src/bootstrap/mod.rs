@@ -128,7 +128,7 @@ struct Repos {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
     agent_secret_repo: Arc<dyn AgentSecretRepo>,
     application_repo: Arc<dyn ApplicationRepo>,
-    _card_repo: Arc<dyn CardRepo>,
+    card_repo: Arc<dyn CardRepo>,
     component_repo: Arc<dyn ComponentRepo>,
     registry_change_repo: Arc<dyn RegistryChangeRepo>,
     deployment_repo: Arc<dyn DeploymentRepo>,
@@ -219,8 +219,6 @@ impl Services {
                 .map_err(|e| e.into_anyhow())?;
         }
 
-        let auth_service = Arc::new(AuthService::new(repos.account_repo.clone()));
-
         let builtin_plugin_owner_account_id = config
             .initial_accounts
             .values()
@@ -255,6 +253,13 @@ impl Services {
         let permission_share_service = Arc::new(PermissionShareService::new(
             repos.permission_share_repo.clone(),
             account_service.clone(),
+        ));
+
+        let auth_service = Arc::new(AuthService::new(
+            repos.account_repo.clone(),
+            account_service.clone(),
+            repos.card_repo.clone(),
+            permission_share_service.clone(),
         ));
 
         let deployment_service = Arc::new(DeploymentService::new(
@@ -501,7 +506,7 @@ async fn make_repos(
                 account_usage_repo,
                 agent_secret_repo,
                 application_repo,
-                _card_repo: card_repo,
+                card_repo: card_repo.clone(),
                 component_repo,
                 registry_change_repo,
                 deployment_repo,
@@ -565,7 +570,7 @@ async fn make_repos(
                 account_usage_repo,
                 agent_secret_repo,
                 application_repo,
-                _card_repo: card_repo,
+                card_repo: card_repo.clone(),
                 component_repo,
                 registry_change_repo,
                 deployment_repo,
