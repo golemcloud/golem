@@ -21,31 +21,20 @@ use golem_common::model::card::owner::{
 };
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    AccountClass, AccountOauth2IdentityClass, AccountOauth2IdentityResourcePattern,
-    AccountPluginClass, AccountPluginResourcePattern, AccountResourcePattern, AccountTokenClass,
-    AccountTokenResourcePattern, AccountUsageClass, AccountUsageResourcePattern, AgentClass,
-    AgentResourcePattern, ApplicationClass, ApplicationResourcePattern, BlobClass,
-    BlobResourcePattern, CardClass, CardId, CardManagedBy, CardResourcePattern,
-    ClassPermissionPattern, ComponentClass, ComponentResourcePattern, ConfigClass,
-    ConfigResourcePattern, EnvClass, EnvResourcePattern, EnvironmentAgentSecretClass,
-    EnvironmentAgentSecretResourcePattern, EnvironmentBlobBucketClass,
-    EnvironmentBlobBucketResourcePattern, EnvironmentClass, EnvironmentDomainRegistrationClass,
-    EnvironmentDomainRegistrationResourcePattern, EnvironmentHttpApiDeploymentClass,
-    EnvironmentHttpApiDeploymentResourcePattern, EnvironmentInitialFilesClass,
-    EnvironmentInitialFilesResourcePattern, EnvironmentKvBucketClass,
-    EnvironmentKvBucketResourcePattern, EnvironmentMcpDeploymentClass,
-    EnvironmentMcpDeploymentResourcePattern, EnvironmentPluginGrantClass,
-    EnvironmentPluginGrantResourcePattern, EnvironmentResourceDefinitionClass,
+    AccountOauth2IdentityResourcePattern, AccountPluginResourcePattern, AccountResourcePattern,
+    AccountTokenResourcePattern, AccountUsageResourcePattern, AgentResourcePattern,
+    ApplicationResourcePattern, BlobResourcePattern, CardId, CardManagedBy, CardResourcePattern,
+    ClassPermissionPattern, ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
+    EnvironmentAgentSecretResourcePattern, EnvironmentBlobBucketResourcePattern,
+    EnvironmentDomainRegistrationResourcePattern, EnvironmentHttpApiDeploymentResourcePattern,
+    EnvironmentInitialFilesResourcePattern, EnvironmentKvBucketResourcePattern,
+    EnvironmentMcpDeploymentResourcePattern, EnvironmentPluginGrantResourcePattern,
     EnvironmentResourceDefinitionResourcePattern, EnvironmentResourcePattern,
-    EnvironmentRetryPolicyClass, EnvironmentRetryPolicyResourcePattern,
-    EnvironmentSecuritySchemeClass, EnvironmentSecuritySchemeResourcePattern,
-    EnvironmentShareClass, EnvironmentShareResourcePattern, FilesystemClass,
-    FilesystemResourcePattern, KvClass, KvResourcePattern, OplogClass, OplogResourcePattern,
-    PermissionPattern, PlanClass, PlanResourcePattern, RdbmsClass, RdbmsResourcePattern,
-    SecretClass, SecretResourcePattern, SystemClass, SystemResourcePattern, SystemVerb, ToolClass,
-    ToolResourcePattern,
+    EnvironmentRetryPolicyResourcePattern, EnvironmentSecuritySchemeResourcePattern,
+    EnvironmentShareResourcePattern, FilesystemResourcePattern, KvResourcePattern,
+    OplogResourcePattern, PermissionPattern, PlanResourcePattern, RdbmsResourcePattern,
+    SecretResourcePattern, SystemResourcePattern, SystemVerb, ToolResourcePattern,
 };
-use uuid::Uuid;
 
 pub(super) fn account_root_card_record(
     account_id: AccountId,
@@ -69,7 +58,7 @@ pub(super) fn account_root_card_record(
     }
 
     CardRecord::creation(
-        CardId(Uuid::now_v7()),
+        CardId::new(),
         Vec::new(),
         grants,
         Vec::new(),
@@ -81,104 +70,84 @@ pub(super) fn account_root_card_record(
     )
 }
 
-macro_rules! grant {
-    ($variant:ident, $class:ty, $owner:expr, $resource:expr, $recipient:expr) => {
-        PermissionPattern::$variant(ClassPermissionPattern::<$class> {
-            verb: None,
-            owner: $owner,
-            recipient: $recipient.clone(),
-            resource: $resource,
-        })
-    };
-}
-
 fn add_own_account_grants(
     grants: &mut Vec<PermissionPattern>,
     account: &str,
     recipient: &RecipientPattern,
 ) {
     grants.extend([
-        grant!(
-            Account,
-            AccountClass,
-            AccountOwnerPattern::Account {
+        PermissionPattern::Account(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Account {
                 account: account.to_string(),
             },
-            AccountResourcePattern,
-            recipient
-        ),
-        grant!(
-            AccountToken,
-            AccountTokenClass,
-            AccountOwnerPattern::Account {
+            recipient: recipient.clone(),
+            resource: AccountResourcePattern,
+        }),
+        PermissionPattern::AccountToken(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Account {
                 account: account.to_string(),
             },
-            AccountTokenResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            AccountUsage,
-            AccountUsageClass,
-            AccountOwnerPattern::Account {
+            recipient: recipient.clone(),
+            resource: AccountTokenResourcePattern::Any,
+        }),
+        PermissionPattern::AccountUsage(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Account {
                 account: account.to_string(),
             },
-            AccountUsageResourcePattern,
-            recipient
-        ),
-        grant!(
-            AccountPlugin,
-            AccountPluginClass,
-            AccountOwnerPattern::Account {
+            recipient: recipient.clone(),
+            resource: AccountUsageResourcePattern,
+        }),
+        PermissionPattern::AccountPlugin(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Account {
                 account: account.to_string(),
             },
-            AccountPluginResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            AccountOauth2Identity,
-            AccountOauth2IdentityClass,
-            AccountOwnerPattern::Account {
+            recipient: recipient.clone(),
+            resource: AccountPluginResourcePattern::Any,
+        }),
+        PermissionPattern::AccountOauth2Identity(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Account {
                 account: account.to_string(),
             },
-            AccountOauth2IdentityResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Application,
-            ApplicationClass,
-            AccountOwnerPattern::Account {
+            recipient: recipient.clone(),
+            resource: AccountOauth2IdentityResourcePattern::Any,
+        }),
+        PermissionPattern::Application(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Account {
                 account: account.to_string(),
             },
-            ApplicationResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Environment,
-            EnvironmentClass,
-            ApplicationOwnerPattern::AccountApplications {
+            recipient: recipient.clone(),
+            resource: ApplicationResourcePattern::Any,
+        }),
+        PermissionPattern::Environment(ClassPermissionPattern {
+            verb: None,
+            owner: ApplicationOwnerPattern::AccountApplications {
                 account: account.to_string(),
             },
-            EnvironmentResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Agent,
-            AgentClass,
-            AgentOwnerPattern::AccountAgents {
+            recipient: recipient.clone(),
+            resource: EnvironmentResourcePattern::Any,
+        }),
+        PermissionPattern::Agent(ClassPermissionPattern {
+            verb: None,
+            owner: AgentOwnerPattern::AccountAgents {
                 account: account.to_string(),
             },
-            AgentResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Card,
-            CardClass,
-            AccountOwnerPattern::Account {
+            recipient: recipient.clone(),
+            resource: AgentResourcePattern::Any,
+        }),
+        PermissionPattern::Card(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Account {
                 account: account.to_string(),
             },
-            CardResourcePattern::Any,
-            recipient
-        ),
+            recipient: recipient.clone(),
+            resource: CardResourcePattern::Any,
+        }),
     ]);
 
     add_account_environment_grants(
@@ -213,90 +182,78 @@ fn add_own_account_grants(
 
 fn add_admin_grants(grants: &mut Vec<PermissionPattern>, recipient: &RecipientPattern) {
     grants.extend([
-        grant!(
-            System,
-            SystemClass,
-            EmptyOwnerPattern,
-            SystemResourcePattern,
-            recipient
-        ),
-        grant!(
-            Plan,
-            PlanClass,
-            EmptyOwnerPattern,
-            PlanResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Network,
-            golem_common::model::card::NetworkClass,
-            EmptyOwnerPattern,
-            golem_common::model::card::NetworkResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Account,
-            AccountClass,
-            AccountOwnerPattern::Any,
-            AccountResourcePattern,
-            recipient
-        ),
-        grant!(
-            AccountToken,
-            AccountTokenClass,
-            AccountOwnerPattern::Any,
-            AccountTokenResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            AccountUsage,
-            AccountUsageClass,
-            AccountOwnerPattern::Any,
-            AccountUsageResourcePattern,
-            recipient
-        ),
-        grant!(
-            AccountPlugin,
-            AccountPluginClass,
-            AccountOwnerPattern::Any,
-            AccountPluginResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            AccountOauth2Identity,
-            AccountOauth2IdentityClass,
-            AccountOwnerPattern::Any,
-            AccountOauth2IdentityResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Application,
-            ApplicationClass,
-            AccountOwnerPattern::Any,
-            ApplicationResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Environment,
-            EnvironmentClass,
-            ApplicationOwnerPattern::AnyApplications,
-            EnvironmentResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Agent,
-            AgentClass,
-            AgentOwnerPattern::AnyAgents,
-            AgentResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Card,
-            CardClass,
-            AccountOwnerPattern::Any,
-            CardResourcePattern::Any,
-            recipient
-        ),
+        PermissionPattern::System(ClassPermissionPattern {
+            verb: None,
+            owner: EmptyOwnerPattern,
+            recipient: recipient.clone(),
+            resource: SystemResourcePattern,
+        }),
+        PermissionPattern::Plan(ClassPermissionPattern {
+            verb: None,
+            owner: EmptyOwnerPattern,
+            recipient: recipient.clone(),
+            resource: PlanResourcePattern::Any,
+        }),
+        PermissionPattern::Network(ClassPermissionPattern {
+            verb: None,
+            owner: EmptyOwnerPattern,
+            recipient: recipient.clone(),
+            resource: golem_common::model::card::NetworkResourcePattern::Any,
+        }),
+        PermissionPattern::Account(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Any,
+            recipient: recipient.clone(),
+            resource: AccountResourcePattern,
+        }),
+        PermissionPattern::AccountToken(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Any,
+            recipient: recipient.clone(),
+            resource: AccountTokenResourcePattern::Any,
+        }),
+        PermissionPattern::AccountUsage(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Any,
+            recipient: recipient.clone(),
+            resource: AccountUsageResourcePattern,
+        }),
+        PermissionPattern::AccountPlugin(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Any,
+            recipient: recipient.clone(),
+            resource: AccountPluginResourcePattern::Any,
+        }),
+        PermissionPattern::AccountOauth2Identity(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Any,
+            recipient: recipient.clone(),
+            resource: AccountOauth2IdentityResourcePattern::Any,
+        }),
+        PermissionPattern::Application(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Any,
+            recipient: recipient.clone(),
+            resource: ApplicationResourcePattern::Any,
+        }),
+        PermissionPattern::Environment(ClassPermissionPattern {
+            verb: None,
+            owner: ApplicationOwnerPattern::AnyApplications,
+            recipient: recipient.clone(),
+            resource: EnvironmentResourcePattern::Any,
+        }),
+        PermissionPattern::Agent(ClassPermissionPattern {
+            verb: None,
+            owner: AgentOwnerPattern::AnyAgents,
+            recipient: recipient.clone(),
+            resource: AgentResourcePattern::Any,
+        }),
+        PermissionPattern::Card(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Any,
+            recipient: recipient.clone(),
+            resource: CardResourcePattern::Any,
+        }),
     ]);
 
     add_account_environment_grants(grants, EnvironmentOwnerPattern::AnyEnvironments, recipient);
@@ -307,13 +264,13 @@ fn add_admin_grants(grants: &mut Vec<PermissionPattern>, recipient: &RecipientPa
 
 fn add_marketing_admin_grants(grants: &mut Vec<PermissionPattern>, recipient: &RecipientPattern) {
     grants.extend([
-        PermissionPattern::System(ClassPermissionPattern::<SystemClass> {
+        PermissionPattern::System(ClassPermissionPattern {
             verb: Some(SystemVerb::ViewAccountSummariesReport),
             owner: EmptyOwnerPattern,
             recipient: recipient.clone(),
             resource: SystemResourcePattern,
         }),
-        PermissionPattern::System(ClassPermissionPattern::<SystemClass> {
+        PermissionPattern::System(ClassPermissionPattern {
             verb: Some(SystemVerb::ViewAccountCountsReport),
             owner: EmptyOwnerPattern,
             recipient: recipient.clone(),
@@ -328,118 +285,102 @@ fn add_account_environment_grants(
     recipient: &RecipientPattern,
 ) {
     grants.extend([
-        grant!(
-            Component,
-            ComponentClass,
-            owner.clone(),
-            ComponentResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Blob,
-            BlobClass,
-            owner.clone(),
-            BlobResourcePattern::any(),
-            recipient
-        ),
-        grant!(
-            Kv,
-            KvClass,
-            owner.clone(),
-            KvResourcePattern::any(),
-            recipient
-        ),
-        grant!(
-            Rdbms,
-            RdbmsClass,
-            owner.clone(),
-            RdbmsResourcePattern::any(),
-            recipient
-        ),
-        grant!(
-            Secret,
-            SecretClass,
-            owner.clone(),
-            SecretResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentShare,
-            EnvironmentShareClass,
-            owner.clone(),
-            EnvironmentShareResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentPluginGrant,
-            EnvironmentPluginGrantClass,
-            owner.clone(),
-            EnvironmentPluginGrantResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentDomainRegistration,
-            EnvironmentDomainRegistrationClass,
-            owner.clone(),
-            EnvironmentDomainRegistrationResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentSecurityScheme,
-            EnvironmentSecuritySchemeClass,
-            owner.clone(),
-            EnvironmentSecuritySchemeResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentHttpApiDeployment,
-            EnvironmentHttpApiDeploymentClass,
-            owner.clone(),
-            EnvironmentHttpApiDeploymentResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentMcpDeployment,
-            EnvironmentMcpDeploymentClass,
-            owner.clone(),
-            EnvironmentMcpDeploymentResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentAgentSecret,
-            EnvironmentAgentSecretClass,
-            owner.clone(),
-            EnvironmentAgentSecretResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentResourceDefinition,
-            EnvironmentResourceDefinitionClass,
-            owner.clone(),
-            EnvironmentResourceDefinitionResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentRetryPolicy,
-            EnvironmentRetryPolicyClass,
-            owner.clone(),
-            EnvironmentRetryPolicyResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentKvBucket,
-            EnvironmentKvBucketClass,
-            owner.clone(),
-            EnvironmentKvBucketResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            EnvironmentBlobBucket,
-            EnvironmentBlobBucketClass,
+        PermissionPattern::Component(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: ComponentResourcePattern::Any,
+        }),
+        PermissionPattern::Blob(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: BlobResourcePattern::any(),
+        }),
+        PermissionPattern::Kv(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: KvResourcePattern::any(),
+        }),
+        PermissionPattern::Rdbms(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: RdbmsResourcePattern::any(),
+        }),
+        PermissionPattern::Secret(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: SecretResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentShare(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvironmentShareResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentPluginGrant(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvironmentPluginGrantResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentDomainRegistration(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvironmentDomainRegistrationResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentSecurityScheme(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvironmentSecuritySchemeResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentHttpApiDeployment(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvironmentHttpApiDeploymentResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentMcpDeployment(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvironmentMcpDeploymentResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentAgentSecret(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvironmentAgentSecretResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentResourceDefinition(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvironmentResourceDefinitionResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentRetryPolicy(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvironmentRetryPolicyResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentKvBucket(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvironmentKvBucketResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentBlobBucket(ClassPermissionPattern {
+            verb: None,
             owner,
-            EnvironmentBlobBucketResourcePattern::Any,
-            recipient
-        ),
+            recipient: recipient.clone(),
+            resource: EnvironmentBlobBucketResourcePattern::Any,
+        }),
     ]);
 }
 
@@ -449,34 +390,30 @@ fn add_account_agent_grants(
     recipient: &RecipientPattern,
 ) {
     grants.extend([
-        grant!(
-            Filesystem,
-            FilesystemClass,
-            owner.clone(),
-            FilesystemResourcePattern::any(),
-            recipient
-        ),
-        grant!(
-            Env,
-            EnvClass,
-            owner.clone(),
-            EnvResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Config,
-            ConfigClass,
-            owner.clone(),
-            ConfigResourcePattern::Any,
-            recipient
-        ),
-        grant!(
-            Oplog,
-            OplogClass,
+        PermissionPattern::Filesystem(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: FilesystemResourcePattern::any(),
+        }),
+        PermissionPattern::Env(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: EnvResourcePattern::Any,
+        }),
+        PermissionPattern::Config(ClassPermissionPattern {
+            verb: None,
+            owner: owner.clone(),
+            recipient: recipient.clone(),
+            resource: ConfigResourcePattern::Any,
+        }),
+        PermissionPattern::Oplog(ClassPermissionPattern {
+            verb: None,
             owner,
-            OplogResourcePattern::Any,
-            recipient
-        ),
+            recipient: recipient.clone(),
+            resource: OplogResourcePattern::Any,
+        }),
     ]);
 }
 
@@ -485,12 +422,13 @@ fn add_account_component_grants(
     owner: ComponentOwnerPattern,
     recipient: &RecipientPattern,
 ) {
-    grants.push(grant!(
-        EnvironmentInitialFiles,
-        EnvironmentInitialFilesClass,
-        owner,
-        EnvironmentInitialFilesResourcePattern::any(),
-        recipient
+    grants.push(PermissionPattern::EnvironmentInitialFiles(
+        ClassPermissionPattern {
+            verb: None,
+            owner,
+            recipient: recipient.clone(),
+            resource: EnvironmentInitialFilesResourcePattern::any(),
+        },
     ));
 }
 
@@ -499,11 +437,10 @@ fn add_account_tool_grants(
     owner: ToolOwnerPattern,
     recipient: &RecipientPattern,
 ) {
-    grants.push(grant!(
-        Tool,
-        ToolClass,
+    grants.push(PermissionPattern::Tool(ClassPermissionPattern {
+        verb: None,
         owner,
-        ToolResourcePattern::any(),
-        recipient
-    ));
+        recipient: recipient.clone(),
+        resource: ToolResourcePattern::any(),
+    }));
 }
