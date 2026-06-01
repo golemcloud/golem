@@ -79,9 +79,7 @@ impl test_r::core::HostedDep for Tracing {
 }
 
 #[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl))]
-pub async fn create_deps(
-    #[tagged_as("host")] _tracing: &Tracing,
-) -> EnvBasedTestDependencies {
+pub async fn create_deps(#[tagged_as("host")] _tracing: &Tracing) -> EnvBasedTestDependencies {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 3,
         ..EnvBasedTestDependenciesConfig::new()
