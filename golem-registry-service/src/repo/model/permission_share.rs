@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
+use crate::repo::model::card::CardRepoError;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::card::CardId;
@@ -30,6 +31,8 @@ pub enum PermissionShareRepoError {
     ShareViolatesUniqueness,
     #[error("Parent card {0} does not exist")]
     ParentCardNotFound(CardId),
+    #[error("Card tree changed during deletion")]
+    CardTreeChangedDuringDelete,
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error(transparent)]
@@ -37,6 +40,17 @@ pub enum PermissionShareRepoError {
 }
 
 error_forwarding!(PermissionShareRepoError, RepoError);
+
+impl From<CardRepoError> for PermissionShareRepoError {
+    fn from(value: CardRepoError) -> Self {
+        match value {
+            CardRepoError::ParentNotFound(card_id) => Self::ParentCardNotFound(card_id),
+            CardRepoError::CardTreeChangedDuringDelete => Self::CardTreeChangedDuringDelete,
+            CardRepoError::ConcurrentModification => Self::ConcurrentModification,
+            CardRepoError::InternalError(err) => Self::InternalError(err),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
 pub struct PermissionShareDataRecord {

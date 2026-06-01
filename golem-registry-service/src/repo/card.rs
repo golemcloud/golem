@@ -40,7 +40,10 @@ pub trait CardRepo: Send + Sync {
     ) -> Result<Option<CardRecord>, CardRepoError>;
 
     // Delete a card including all descendants. Returns ids of all deleted cards.
-    async fn delete(&self, card_id: CardId) -> RepoResult<RequiresNotificationSignal<Vec<CardId>>>;
+    async fn delete(
+        &self,
+        card_id: CardId,
+    ) -> Result<RequiresNotificationSignal<Vec<CardId>>, CardRepoError>;
 
     async fn existing(&self, card_ids: Vec<CardId>) -> RepoResult<Vec<CardId>>;
 }
@@ -83,7 +86,10 @@ impl<Repo: CardRepo> CardRepo for LoggedCardRepo<Repo> {
             .await
     }
 
-    async fn delete(&self, card_id: CardId) -> RepoResult<RequiresNotificationSignal<Vec<CardId>>> {
+    async fn delete(
+        &self,
+        card_id: CardId,
+    ) -> Result<RequiresNotificationSignal<Vec<CardId>>, CardRepoError> {
         self.repo
             .delete(card_id)
             .instrument(Self::span_card_id(card_id))
@@ -147,7 +153,7 @@ impl DbCardRepo<PostgresPool> {
     pub async fn delete_tree_in_tx(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         card_id: CardId,
-    ) -> RepoResult<Vec<CardId>> {
+    ) -> Result<Vec<CardId>, CardRepoError> {
         let rows = tx
             .fetch_all(
                 sqlx::query(indoc! { r#"
@@ -164,7 +170,8 @@ impl DbCardRepo<PostgresPool> {
                 "#})
                 .bind(card_id.0),
             )
-            .await?;
+            .await
+            .to_error_on_foreign_key_violation(CardRepoError::CardTreeChangedDuringDelete)?;
 
         let mut deleted = Vec::with_capacity(rows.len());
         for row in rows {
@@ -309,7 +316,10 @@ impl CardRepo for DbCardRepo<PostgresPool> {
         }
     }
 
-    async fn delete(&self, card_id: CardId) -> RepoResult<RequiresNotificationSignal<Vec<CardId>>> {
+    async fn delete(
+        &self,
+        card_id: CardId,
+    ) -> Result<RequiresNotificationSignal<Vec<CardId>>, CardRepoError> {
         let deleted = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "hard_delete", |tx| {

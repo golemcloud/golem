@@ -421,11 +421,6 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         &self,
         revision: PermissionShareRevisionRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
-        // Share delete removes the share card from the graph.  The FK cascade on
-        // card_parents clears the token root card (which parents the share card), and
-        // ON DELETE SET NULL clears accounts.token_root_card_id.  No epoch bump is
-        // needed: a concurrent rederivation that tries to insert a root card with the
-        // deleted share card as a parent will fail with a FK violation and retry.
         let result = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "delete", |tx| {

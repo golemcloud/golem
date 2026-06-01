@@ -32,6 +32,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
+const MAX_CARD_TREE_DELETE_ATTEMPTS: usize = 5;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PermissionShareError {
     #[error("There is already a permission share with this name")]
@@ -107,17 +109,31 @@ impl PermissionShareService {
             auth.actor_account_id(),
         );
 
-        match self
-            .permission_share_repo
-            .create(owner_account_id.0, data.target_account_id.0, revision, card)
-            .await
-        {
-            Ok(record) => Ok(record.try_into()?),
-            Err(PermissionShareRepoError::ShareViolatesUniqueness) => {
-                Err(PermissionShareError::PermissionShareAlreadyExists)
+        for attempt in 0..MAX_CARD_TREE_DELETE_ATTEMPTS {
+            match self
+                .permission_share_repo
+                .create(
+                    owner_account_id.0,
+                    data.target_account_id.0,
+                    revision.clone(),
+                    card.clone(),
+                )
+                .await
+            {
+                Ok(record) => return Ok(record.try_into()?),
+                Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
+                    if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
+                {
+                    continue;
+                }
+                Err(PermissionShareRepoError::ShareViolatesUniqueness) => {
+                    return Err(PermissionShareError::PermissionShareAlreadyExists);
+                }
+                Err(other) => return Err(other.into()),
             }
-            Err(other) => Err(other.into()),
         }
+
+        Err(PermissionShareError::ConcurrentModification)
     }
 
     pub async fn update(
@@ -149,23 +165,31 @@ impl PermissionShareService {
 
         let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
 
-        match self
-            .permission_share_repo
-            .update(
-                PermissionShareRevisionRecord::from_model(share, audit),
-                replacement_card,
-            )
-            .await
-        {
-            Ok(record) => Ok(record.try_into()?),
-            Err(PermissionShareRepoError::ShareViolatesUniqueness) => {
-                Err(PermissionShareError::PermissionShareAlreadyExists)
+        let revision = PermissionShareRevisionRecord::from_model(share, audit);
+
+        for attempt in 0..MAX_CARD_TREE_DELETE_ATTEMPTS {
+            match self
+                .permission_share_repo
+                .update(revision.clone(), replacement_card.clone())
+                .await
+            {
+                Ok(record) => return Ok(record.try_into()?),
+                Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
+                    if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
+                {
+                    continue;
+                }
+                Err(PermissionShareRepoError::ShareViolatesUniqueness) => {
+                    return Err(PermissionShareError::PermissionShareAlreadyExists);
+                }
+                Err(PermissionShareRepoError::ConcurrentModification) => {
+                    return Err(PermissionShareError::ConcurrentModification);
+                }
+                Err(other) => return Err(other.into()),
             }
-            Err(PermissionShareRepoError::ConcurrentModification) => {
-                Err(PermissionShareError::ConcurrentModification)
-            }
-            Err(other) => Err(other.into()),
         }
+
+        Err(PermissionShareError::ConcurrentModification)
     }
 
     pub async fn delete(
@@ -188,17 +212,24 @@ impl PermissionShareService {
 
         let audit = DeletableRevisionAuditFields::deletion(auth.actor_account_id().0);
 
-        match self
-            .permission_share_repo
-            .delete(PermissionShareRevisionRecord::from_model(share, audit))
-            .await
-        {
-            Ok(record) => Ok(record.try_into()?),
-            Err(PermissionShareRepoError::ConcurrentModification) => {
-                Err(PermissionShareError::ConcurrentModification)
+        let revision = PermissionShareRevisionRecord::from_model(share, audit);
+
+        for attempt in 0..MAX_CARD_TREE_DELETE_ATTEMPTS {
+            match self.permission_share_repo.delete(revision.clone()).await {
+                Ok(record) => return Ok(record.try_into()?),
+                Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
+                    if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
+                {
+                    continue;
+                }
+                Err(PermissionShareRepoError::ConcurrentModification) => {
+                    return Err(PermissionShareError::ConcurrentModification);
+                }
+                Err(other) => return Err(other.into()),
             }
-            Err(other) => Err(other.into()),
         }
+
+        Err(PermissionShareError::ConcurrentModification)
     }
 
     pub async fn get(

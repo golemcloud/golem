@@ -23,6 +23,8 @@ use uuid::Uuid;
 pub enum CardRepoError {
     #[error("Parent card {0} does not exist")]
     ParentNotFound(Uuid),
+    #[error("Card tree changed during deletion")]
+    CardTreeChangedDuringDelete,
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error(transparent)]
