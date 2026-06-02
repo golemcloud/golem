@@ -53,7 +53,66 @@ jobs:
       - name: Next.js build (+ pagefind index)
         run: bun run build
 
-  # Vercel deploy job (Phase 3) will be added here:
-  # - depends on `build`
-  # - runs only on push to main (production) and pull_request (preview)
-  # - uses VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID secrets
+  deploy:
+    name: Deploy to Vercel
+    needs: build
+    runs-on: ubuntu-latest
+    # Skip deploy for PRs opened from forks: GitHub Actions does not expose
+    # repo secrets to fork PRs, so `vercel pull` would fail. The `build` job
+    # above still verifies the docs compile on every PR (including forks).
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      IS_PROD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel environment (production)
+        if: env.IS_PROD == 'true'
+        run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+
+      - name: Pull Vercel environment (preview)
+        if: env.IS_PROD != 'true'
+        run: vercel pull --yes --environment=preview --token=$VERCEL_TOKEN
+
+      - name: Build (Vercel)
+        run: |
+          if [ "$IS_PROD" = "true" ]; then
+            vercel build --prod --token=$VERCEL_TOKEN
+          else
+            vercel build --token=$VERCEL_TOKEN
+          fi
+
+      - name: Deploy (Vercel)
+        id: deploy
+        run: |
+          if [ "$IS_PROD" = "true" ]; then
+            URL=$(vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN | tail -n 1)
+          else
+            URL=$(vercel deploy --prebuilt --token=$VERCEL_TOKEN | tail -n 1)
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Deployed: $URL"
+
+      - name: Comment preview URL on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: vercel-docs-preview
+          message: |
+            📖 **Docs preview**: ${{ steps.deploy.outputs.url }}
+
+            Built from commit `${{ github.event.pull_request.head.sha }}` by [docs.yaml](../actions/runs/${{ github.run_id }}).
