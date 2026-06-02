@@ -9,7 +9,16 @@ on:
       # e.g. `1.5.x`. The wildcard means a new `1.6.x` branch starts running
       # CI on push automatically when it is created.
       - "[0-9]+.[0-9]+.x"
+    # Skip the heavy Rust/Docker/etc. CI when only docs/ changes were pushed.
+    # Documentation has its own workflow in .github/workflows/docs.yaml.
+    # NOTE: this also applies to tag pushes — if a tag points at a commit that
+    # only touches docs/, this workflow won't run. Tag releases normally bump
+    # version files outside docs/, so this is rarely an issue in practice.
+    paths-ignore:
+      - "docs/**"
   pull_request:
+    paths-ignore:
+      - "docs/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

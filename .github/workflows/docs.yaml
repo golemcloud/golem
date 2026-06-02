@@ -1,0 +1,59 @@
+name: Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yaml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+defaults:
+  run:
+    working-directory: docs
+
+jobs:
+  build:
+    name: Build & check docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('docs/bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint / format / typecheck / link-check
+        run: bun run build:check
+
+      - name: Next.js build (+ pagefind index)
+        run: bun run build
+
+  # Vercel deploy job (Phase 3) will be added here:
+  # - depends on `build`
+  # - runs only on push to main (production) and pull_request (preview)
+  # - uses VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID secrets
