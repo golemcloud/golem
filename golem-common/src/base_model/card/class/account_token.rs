@@ -17,15 +17,15 @@ use super::{
     PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
 };
 use crate::base_model::card::parsing::CardParseError;
+use crate::model::auth::TokenId;
 use crate::model::card::owner::AccountOwnerPattern;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AccountTokenResourcePattern {
     Any,
-    Token(Uuid),
+    Token(TokenId),
 }
 
 impl AccountTokenResourcePattern {
@@ -33,7 +33,7 @@ impl AccountTokenResourcePattern {
         Self::Any
     }
 
-    pub fn token(value: Uuid) -> Self {
+    pub fn token(value: TokenId) -> Self {
         Self::Token(value)
     }
 }
@@ -43,7 +43,7 @@ impl ResourcePattern for AccountTokenResourcePattern {
         if resource == "*" {
             Ok(AccountTokenResourcePattern::Any)
         } else {
-            Uuid::parse_str(resource)
+            TokenId::try_from(resource)
                 .map(AccountTokenResourcePattern::Token)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: AccountTokenClass::NAME.to_string(),

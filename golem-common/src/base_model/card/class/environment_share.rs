@@ -18,14 +18,14 @@ use super::{
 };
 use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
+use crate::model::environment_share::EnvironmentShareId;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentShareResourcePattern {
     Any,
-    Share(Uuid),
+    Share(EnvironmentShareId),
 }
 
 impl EnvironmentShareResourcePattern {
@@ -39,7 +39,7 @@ impl ResourcePattern for EnvironmentShareResourcePattern {
         if resource == "*" {
             Ok(EnvironmentShareResourcePattern::Any)
         } else {
-            Uuid::parse_str(resource)
+            EnvironmentShareId::try_from(resource)
                 .map(EnvironmentShareResourcePattern::Share)
                 .map_err(|_| CardParseError::InvalidResource {
                     class: EnvironmentShareClass::NAME.to_string(),

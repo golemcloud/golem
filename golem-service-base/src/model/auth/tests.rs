@@ -14,9 +14,12 @@
 
 use super::*;
 use assert2::assert;
-use golem_common::model::card::owner::EmptyOwnerPattern;
+use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::recipient::RecipientPattern;
-use golem_common::model::card::{ClassPermissionPattern, SystemResourcePattern, SystemVerb};
+use golem_common::model::card::{
+    AccountResourcePattern, AccountTokenResourcePattern, AccountTokenVerb, AccountVerb,
+    ClassPermissionPattern, SystemResourcePattern, SystemVerb,
+};
 use test_r::test;
 
 fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) -> AuthCtx {
@@ -44,6 +47,31 @@ fn report_permission() -> PermissionPattern {
         owner: EmptyOwnerPattern,
         recipient: RecipientPattern::Any,
         resource: SystemResourcePattern,
+    })
+}
+
+fn account_token_permission(
+    account_id: AccountId,
+    recipient: RecipientPattern,
+) -> PermissionPattern {
+    PermissionPattern::AccountToken(ClassPermissionPattern {
+        verb: Some(AccountTokenVerb::Create),
+        owner: AccountOwnerPattern::Account {
+            account: account_id.to_string(),
+        },
+        recipient,
+        resource: AccountTokenResourcePattern::Any,
+    })
+}
+
+fn account_permission(account_id: AccountId, recipient: RecipientPattern) -> PermissionPattern {
+    PermissionPattern::Account(ClassPermissionPattern {
+        verb: Some(AccountVerb::Update),
+        owner: AccountOwnerPattern::Account {
+            account: account_id.to_string(),
+        },
+        recipient,
+        resource: AccountResourcePattern,
     })
 }
 
@@ -124,6 +152,115 @@ fn user_with_auth_card_can_authorize_permission() {
 fn user_without_auth_card_cannot_authorize_permission() {
     let permission = report_permission();
     let ctx = mk_user_ctx(&[], PlanId::new(), AccountId::new());
+
+    assert!(ctx.authorize_permission(&permission).is_err());
+}
+
+#[test]
+fn user_with_auth_card_can_authorize_account_token_permission() {
+    let account_id = AccountId::new();
+    let recipient = RecipientPattern::Account {
+        account: account_id.to_string(),
+    };
+    let permission = account_token_permission(account_id, recipient.clone());
+    let ctx = AuthCtx::User(UserAuthCtx {
+        account_id,
+        account_plan_id: PlanId::new(),
+        account_roles: BTreeSet::new(),
+        token_root_card_id: None,
+        account_holder: account_id.to_string(),
+        auth_card: Some(AuthCard {
+            card_id: CardId::new(),
+            lower_positive: vec![permission.clone()],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }),
+    });
+
+    assert!(ctx.authorize_permission(&permission).is_ok());
+}
+
+#[test]
+fn auth_card_account_token_grant_does_not_authorize_different_recipient() {
+    let account_id = AccountId::new();
+    let recipient = RecipientPattern::Account {
+        account: account_id.to_string(),
+    };
+    let permission = account_token_permission(account_id, recipient);
+    let ctx = AuthCtx::User(UserAuthCtx {
+        account_id,
+        account_plan_id: PlanId::new(),
+        account_roles: BTreeSet::new(),
+        token_root_card_id: None,
+        account_holder: account_id.to_string(),
+        auth_card: Some(AuthCard {
+            card_id: CardId::new(),
+            lower_positive: vec![permission],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }),
+    });
+    let requested = account_token_permission(
+        account_id,
+        RecipientPattern::Account {
+            account: AccountId::new().to_string(),
+        },
+    );
+
+    assert!(ctx.authorize_permission(&requested).is_err());
+}
+
+#[test]
+fn user_without_auth_card_cannot_authorize_account_token_permission() {
+    let account_id = AccountId::new();
+    let permission = account_token_permission(
+        account_id,
+        RecipientPattern::Account {
+            account: account_id.to_string(),
+        },
+    );
+    let ctx = mk_user_ctx(&[], PlanId::new(), account_id);
+
+    assert!(ctx.authorize_permission(&permission).is_err());
+}
+
+#[test]
+fn user_with_auth_card_can_authorize_account_permission() {
+    let account_id = AccountId::new();
+    let recipient = RecipientPattern::Account {
+        account: account_id.to_string(),
+    };
+    let permission = account_permission(account_id, recipient);
+    let ctx = AuthCtx::User(UserAuthCtx {
+        account_id,
+        account_plan_id: PlanId::new(),
+        account_roles: BTreeSet::new(),
+        token_root_card_id: None,
+        account_holder: account_id.to_string(),
+        auth_card: Some(AuthCard {
+            card_id: CardId::new(),
+            lower_positive: vec![permission.clone()],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }),
+    });
+
+    assert!(ctx.authorize_permission(&permission).is_ok());
+}
+
+#[test]
+fn user_without_auth_card_cannot_authorize_account_permission() {
+    let account_id = AccountId::new();
+    let permission = account_permission(
+        account_id,
+        RecipientPattern::Account {
+            account: account_id.to_string(),
+        },
+    );
+    let ctx = mk_user_ctx(&[], PlanId::new(), account_id);
 
     assert!(ctx.authorize_permission(&permission).is_err());
 }

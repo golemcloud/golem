@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::auth::TokenId;
 use crate::model::card::owner::{AgentOwnerPattern, EmptyOwnerPattern, OwnerPattern};
 use crate::model::card::recipient::RecipientPattern;
 use RecipientPattern as AccountRecipientPattern;
@@ -65,6 +66,10 @@ fn oplog_read(resource: OplogResourcePattern) -> PermissionPattern {
 
 fn fixed_uuid() -> Uuid {
     Uuid::from_u128(0x550e8400e29b41d4a716446655440000)
+}
+
+fn fixed_token_id() -> TokenId {
+    TokenId(fixed_uuid())
 }
 
 fn card(lower_positive: Vec<PermissionPattern>, upper_positive: Vec<PermissionPattern>) -> Card {
@@ -688,12 +693,12 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
         (
             "account_token_any_subsumes_token",
             AccountTokenResourcePattern::Any,
-            AccountTokenResourcePattern::Token(fixed_uuid()),
+            AccountTokenResourcePattern::Token(fixed_token_id()),
             true,
         ),
         (
             "account_token_token_does_not_subsume_any",
-            AccountTokenResourcePattern::Token(fixed_uuid()),
+            AccountTokenResourcePattern::Token(fixed_token_id()),
             AccountTokenResourcePattern::Any,
             false,
         ),

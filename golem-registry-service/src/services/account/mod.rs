@@ -27,9 +27,14 @@ use anyhow::anyhow;
 use golem_common::model::account::{
     Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
+use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::card::{
+    AccountResourcePattern, AccountVerb, ClassPermissionPattern, PermissionPattern,
+};
 use golem_common::model::plan::PlanId;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AccountAction, GlobalAction};
+use golem_service_base::model::auth::GlobalAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -136,9 +141,9 @@ impl AccountService {
         update: AccountUpdate,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let mut account: Account = self.get(account_id, auth).await?;
+        let mut account: Account = self.load(account_id).await?;
 
-        auth.authorize_account_action(account_id, AccountAction::UpdateAccount)?;
+        authorize_account_permission(auth, account_id, AccountVerb::Update)?;
 
         if update.current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -159,9 +164,9 @@ impl AccountService {
         update: AccountSetPlan,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let mut account: Account = self.get(account_id, auth).await?;
+        let mut account: Account = self.load(account_id).await?;
 
-        auth.authorize_account_action(account_id, AccountAction::SetPlan)?;
+        authorize_account_permission(auth, account_id, AccountVerb::SetPlan)?;
 
         if update.current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -171,7 +176,7 @@ impl AccountService {
 
         // check that plan exists
         self.plan_service
-            .get(&update.plan, auth)
+            .get(&update.plan, &AuthCtx::System)
             .await
             .map_err(|e| match e {
                 PlanError::PlanNotFound(plan_id) => AccountError::PlanByIdNotFound(plan_id),
@@ -189,9 +194,9 @@ impl AccountService {
         current_revision: AccountRevision,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let mut account: Account = self.get(account_id, auth).await?;
+        let mut account: Account = self.load(account_id).await?;
 
-        auth.authorize_account_action(account_id, AccountAction::DeleteAccount)?;
+        authorize_account_permission(auth, account_id, AccountVerb::Delete)?;
 
         if current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -223,17 +228,10 @@ impl AccountService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        auth.authorize_account_action(account_id, AccountAction::ViewAccount)
+        authorize_account_permission(auth, account_id, AccountVerb::View)
             .map_err(|_| AccountError::AccountNotFound(account_id))?;
 
-        let account = self
-            .account_repo
-            .get_by_id(account_id.0)
-            .await?
-            .ok_or(AccountError::AccountNotFound(account_id))?
-            .try_into()?;
-
-        Ok(account)
+        self.load(account_id).await
     }
 
     pub async fn get_by_email(
@@ -250,7 +248,7 @@ impl AccountService {
             ))?
             .try_into()?;
 
-        auth.authorize_account_action(account.id, AccountAction::ViewAccount)
+        authorize_account_permission(auth, account.id, AccountVerb::View)
             .map_err(|_| AccountError::AccountByEmailNotFound(account_email.to_string()))?;
 
         Ok(account)
@@ -304,6 +302,15 @@ impl AccountService {
         }
     }
 
+    async fn load(&self, account_id: AccountId) -> Result<Account, AccountError> {
+        self.account_repo
+            .get_by_id(account_id.0)
+            .await?
+            .ok_or(AccountError::AccountNotFound(account_id))?
+            .try_into()
+            .map_err(AccountError::from)
+    }
+
     async fn update_internal(
         &self,
         mut account: Account,
@@ -327,4 +334,39 @@ impl AccountService {
             Err(other) => Err(other)?,
         }
     }
+}
+
+fn authorize_account_permission(
+    auth: &AuthCtx,
+    account_id: AccountId,
+    verb: AccountVerb,
+) -> Result<(), AuthorizationError> {
+    if auth.is_system() {
+        return Ok(());
+    }
+
+    let recipient = auth.principal_recipient().ok_or_else(|| {
+        AuthorizationError::PermissionNotAllowed(Box::new(account_permission(
+            account_id,
+            verb,
+            RecipientPattern::Any,
+        )))
+    })?;
+
+    auth.authorize_permission(&account_permission(account_id, verb, recipient))
+}
+
+fn account_permission(
+    account_id: AccountId,
+    verb: AccountVerb,
+    recipient: RecipientPattern,
+) -> PermissionPattern {
+    PermissionPattern::Account(ClassPermissionPattern {
+        verb: Some(verb),
+        owner: AccountOwnerPattern::Account {
+            account: account_id.to_string(),
+        },
+        recipient,
+        resource: AccountResourcePattern,
+    })
 }
