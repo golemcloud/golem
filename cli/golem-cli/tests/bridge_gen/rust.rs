@@ -17,8 +17,8 @@ use crate::bridge_gen::fixtures::{
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::Utf8Path;
-use golem_cli::bridge_gen::BridgeGenerator;
 use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustTypeName};
+use golem_cli::bridge_gen::{BridgeGenerator, BridgeGeneratorConfig, DeriveRule};
 use golem_cli::model::GuestLanguage;
 use golem_common::model::Empty;
 use golem_common::model::agent::{
@@ -220,8 +220,13 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
 
-    let mut generator =
-        RustBridgeGenerator::new(ephemeral_config_agent(), target_dir, true).unwrap();
+    let mut generator = RustBridgeGenerator::new(
+        ephemeral_config_agent(),
+        target_dir,
+        true,
+        Default::default(),
+    )
+    .unwrap();
     generator
         .generate()
         .expect("Failed to generate Rust bridge");
@@ -234,6 +239,58 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
     assert!(lib_rs.contains("pub async fn get_phantom("));
     assert!(lib_rs.contains("pub async fn new_phantom_with_config("));
     assert!(lib_rs.contains("pub async fn get_phantom_with_config("));
+}
+
+#[test]
+fn bridge_rust_plain_type_only_features_compile_without_golem_client_stack() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    generate(
+        multi_agent_wrapper_2_types()[0].clone(),
+        target_dir,
+        BridgeGeneratorConfig::new(vec![DeriveRule {
+            pattern: ".*".to_string(),
+            derives: vec!["PartialEq".to_string()],
+        }])
+        .unwrap(),
+    );
+
+    cargo_check_with_features(target_dir, &["serde"]);
+
+    let lib_rs = std::fs::read_to_string(target_dir.join("src/lib.rs")).unwrap();
+    assert!(lib_rs.contains("#[derive(Debug, Clone, PartialEq)]"));
+}
+
+#[test]
+fn bridge_rust_golem_type_only_features_compile_for_multimodal_types() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    generate(
+        multi_agent_wrapper_2_types()[1].clone(),
+        target_dir,
+        Default::default(),
+    );
+
+    cargo_check_with_features(target_dir, &["serde", "golem-types"]);
+}
+
+#[test]
+fn bridge_rust_rejects_invalid_derive_rules() {
+    assert!(
+        BridgeGeneratorConfig::new(vec![DeriveRule {
+            pattern: "[".to_string(),
+            derives: vec!["PartialEq".to_string()],
+        }])
+        .is_err()
+    );
+
+    assert!(
+        BridgeGeneratorConfig::new(vec![DeriveRule {
+            pattern: ".*".to_string(),
+            derives: vec!["not a derive path".to_string()],
+        }])
+        .is_err()
+    );
 }
 
 fn ephemeral_config_agent() -> AgentType {
@@ -375,10 +432,7 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
         agent_type.type_name, agent_type.description, target_dir
     );
 
-    let mut generator = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
-    generator
-        .generate()
-        .expect("Failed to generate Rust bridge");
+    generate(agent_type, target_dir, Default::default());
 
     let cwd = std::env::current_dir().expect("Failed to get current directory");
     let shared_target_dir = cwd.join("../../target/shared_bridge_tests");
@@ -402,6 +456,31 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
         .status()
         .expect("failed to run `cargo build`");
     assert!(status.success(), "`cargo build` failed: {:?}", status);
+}
+
+fn generate(agent_type: AgentType, target_dir: &Utf8Path, config: BridgeGeneratorConfig) {
+    let mut generator = RustBridgeGenerator::new(agent_type, target_dir, true, config).unwrap();
+    generator
+        .generate()
+        .expect("Failed to generate Rust bridge");
+}
+
+fn cargo_check_with_features(target_dir: &Utf8Path, features: &[&str]) {
+    let cwd = std::env::current_dir().expect("Failed to get current directory");
+    let shared_target_dir = cwd.join("../../target/shared_bridge_tests");
+
+    let status = std::process::Command::new("cargo")
+        .arg("check")
+        .arg("--manifest-path")
+        .arg(target_dir.join("Cargo.toml").as_std_path())
+        .arg("--target-dir")
+        .arg(&shared_target_dir)
+        .arg("--no-default-features")
+        .arg("--features")
+        .arg(features.join(","))
+        .status()
+        .expect("failed to run `cargo check`");
+    assert!(status.success(), "`cargo check` failed: {:?}", status);
 }
 
 #[test]

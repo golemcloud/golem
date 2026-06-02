@@ -19,6 +19,7 @@ use std::fmt::Debug;
 /// `LC` specifies the allowed language codes for inline text. Defaults to `AnyLanguage`,
 /// which allows all languages.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UnstructuredText<LC: AllowedLanguages = AnyLanguage> {
     Url(String),
     Text {
@@ -181,6 +182,7 @@ pub trait AllowedLanguages: Debug + Clone {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AnyLanguage;
 
 impl AllowedLanguages for AnyLanguage {

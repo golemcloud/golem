@@ -89,9 +89,11 @@ host = [
 
 derive = ["dep:golem-wasm-derive"]
 
+serde = ["dep:serde"]
+
 guest = ["dep:wit-bindgen", "dep:wasip2"]
 
-client = ["derive", "dep:serde", "dep:serde_json", "dep:bigdecimal", "dep:bit-vec", "dep:url"]
+client = ["derive", "serde", "dep:serde_json", "dep:bigdecimal", "dep:bit-vec", "dep:url"]
 
 [[test]]
 name = "exports"

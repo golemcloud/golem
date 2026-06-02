@@ -20,9 +20,60 @@ pub mod typescript;
 use camino::Utf8Path;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use heck::ToKebabCase;
+use regex::Regex;
+use syn::Path;
+
+/// A rule that adds derive macros to generated types whose names match a regex pattern.
+///
+/// Multiple rules can match the same type; their derives are merged and deduplicated.
+///
+/// # Examples
+///
+/// Add `PartialEq` to all types:
+/// ```yaml
+/// { pattern: ".*", derives: ["PartialEq"] }
+/// ```
+///
+/// Add `Eq` and `Hash` only to `Uuid`:
+/// ```yaml
+/// { pattern: "^Uuid$", derives: ["Eq", "Hash"] }
+/// ```
+#[derive(Debug, Clone)]
+pub struct DeriveRule {
+    /// Regex pattern matched against the generated type name.
+    pub pattern: String,
+    /// Derive macros to add when the pattern matches (e.g., "PartialEq", "Eq", "Hash").
+    pub derives: Vec<String>,
+}
+
+/// Configuration options for bridge SDK code generation.
+#[derive(Debug, Clone, Default)]
+pub struct BridgeGeneratorConfig {
+    /// Rules for adding derive macros to generated types. Each rule pairs a regex
+    /// pattern (matched against type names) with a list of derives to add.
+    pub derive_rules: Vec<DeriveRule>,
+}
+
+impl BridgeGeneratorConfig {
+    pub fn new(derive_rules: Vec<DeriveRule>) -> anyhow::Result<Self> {
+        for rule in &derive_rules {
+            Regex::new(&rule.pattern)?;
+            for derive in &rule.derives {
+                syn::parse_str::<Path>(derive)?;
+            }
+        }
+
+        Ok(Self { derive_rules })
+    }
+}
 
 pub trait BridgeGenerator {
-    fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self>
+    fn new(
+        agent_type: AgentType,
+        target_path: &Utf8Path,
+        testing: bool,
+        config: BridgeGeneratorConfig,
+    ) -> anyhow::Result<Self>
     where
         Self: Sized;
     fn generate(&mut self) -> anyhow::Result<()>;

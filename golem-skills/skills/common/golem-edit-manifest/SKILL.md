@@ -395,7 +395,14 @@ bridge:
       - MyAgent                    # Agent type name
       - my-app:billing             # Component name (all agents in that component)
     outputDir: ./bridge-sdk/rust
+    additionalDerives:             # Optional, Rust bridge SDKs only
+      - pattern: ".*"              # Regex matched against generated Rust type names
+        derives: [PartialEq]
+      - pattern: "^.*Id$"
+        derives: [Eq, Hash]
 ```
+
+`additionalDerives` lets generated Rust bridge types derive extra traits. Patterns must be valid regular expressions, and each derive entry must be a syntactically valid Rust derive path such as `PartialEq`, `Eq`, or `Hash`; the derive macro must still be available to the generated crate at compile time. Invalid rules fail `golem build` during bridge validation, before up-to-date generated output is reused. Do not add `Debug`, `Clone`, `serde::Serialize`, or `serde::Deserialize` here; those are already generated, and repeating them can break compilation.
 
 ## Plugin Installations
 

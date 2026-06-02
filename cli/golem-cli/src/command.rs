@@ -687,6 +687,11 @@ pub enum GolemCliSubcommand {
         /// for manual inspection or for vendoring into another project.
         #[clap(long)]
         output_dir: Option<PathBuf>,
+        /// Derive rules for generated Rust types. Format: "REGEX=Derive1,Derive2".
+        /// Can be specified multiple times. Example: --derive-rule ".*=PartialEq"
+        /// --derive-rule "^Uuid$=Eq,Hash"
+        #[clap(long)]
+        derive_rule: Vec<String>,
     },
     /// Start REPL for a selected component. This is an interactive command; the global `--format` flag is ignored.
     #[command(after_help = crate::command_examples::REPL)]
