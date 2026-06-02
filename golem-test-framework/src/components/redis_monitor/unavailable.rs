@@ -12,11 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod spawned;
-pub mod unavailable;
+use super::RedisMonitor;
 
-pub trait RedisMonitor: Send + Sync {
-    fn assert_valid(&self);
+/// A `RedisMonitor` that is not directly reachable. Used in cloud mode, where
+/// Redis is an internal cluster component with no external exposure. `kill` is
+/// a no-op so that `kill_all()` completes; operational methods panic with a
+/// clear message.
+pub struct UnavailableRedisMonitor;
 
-    fn kill(&self);
+impl RedisMonitor for UnavailableRedisMonitor {
+    fn assert_valid(&self) {
+        panic!("redis_monitor() is not available in cloud mode");
+    }
+
+    fn kill(&self) {}
 }
