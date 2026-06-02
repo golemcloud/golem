@@ -83,6 +83,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         let lease_owner = Uuid::now_v7();
 
         let mut entries = self.entries.lock().unwrap();
+
         let mut candidates: Vec<(Uuid, i64)> = entries
             .iter()
             .filter(|(_, entry)| {

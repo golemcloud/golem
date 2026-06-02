@@ -535,6 +535,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match &*instance_guard {
             WorkerInstance::Unloaded { .. } => {
                 this.mark_as_loading();
+                crate::metrics::workers::inc_worker_waiting_for_memory();
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
                     this.memory_requirement().await?,
@@ -2134,10 +2135,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         );
 
         match previous_instance_state {
-            WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
+            WorkerInstance::Unloaded { .. } => {
                 if let Some(ref error) = fail_pending_invocations {
                     self.fail_pending_invocations(error.clone()).await;
                 }
+                **instance_guard = final_state.into_instance();
+                StopResult::Stopped
+            }
+            WorkerInstance::WaitingForPermit(_) => {
+                if let Some(ref error) = fail_pending_invocations {
+                    self.fail_pending_invocations(error.clone()).await;
+                }
+                crate::metrics::workers::dec_worker_waiting_for_memory();
                 **instance_guard = final_state.into_instance();
                 StopResult::Stopped
             }
@@ -2179,12 +2188,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
+                    crate::metrics::workers::dec_worker_memory_resident();
                     **instance_guard = final_state.into_instance();
                     StopResult::Stopped
                 } else {
                     // drop the running worker, this signals to the invocation loop to start exiting.
+                    // RunningWorker::drop releases the memory permit, so dec resident here.
                     let run_loop_handle = running.stop();
                     let notify = OneShotEvent::new();
+                    crate::metrics::workers::dec_worker_memory_resident();
                     **instance_guard = WorkerInstance::Stopping(StoppingWorker {
                         notify: notify.clone(),
                         final_state,
@@ -2762,6 +2774,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let Some(sp) = filesystem_storage_permit {
                     running.merge_extra_filesystem_storage_permits(sp);
                 }
+                crate::metrics::workers::dec_worker_waiting_for_memory();
+                crate::metrics::workers::inc_worker_memory_resident();
                 *instance_guard = WorkerInstance::Running(running);
             }
             _ => {
