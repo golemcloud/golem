@@ -81,22 +81,6 @@ macro_rules! define_same_variant_subsumes_match {
 
 card_permission_classes!(define_same_variant_subsumes_match);
 
-macro_rules! define_matches_recipient_match {
-    ($($variant:ident: $class:ty,)+) => {
-        macro_rules! matches_recipient_match {
-            ($self:expr, $holder:expr) => {
-                match $self {
-                    $(
-                        Self::$variant(pattern) => pattern.matches_holder($holder),
-                    )+
-                }
-            };
-        }
-    };
-}
-
-card_permission_classes!(define_matches_recipient_match);
-
 macro_rules! define_recipient_match {
     ($($variant:ident: $class:ty,)+) => {
         macro_rules! recipient_match {
@@ -120,10 +104,6 @@ impl PermissionPattern {
 
     pub fn subsumes(&self, other: &Self) -> bool {
         same_variant_subsumes_match!(self, other)
-    }
-
-    pub fn matches_recipient(&self, holder: &str) -> bool {
-        matches_recipient_match!(self, holder)
     }
 
     pub fn recipient(&self) -> &crate::model::card::recipient::RecipientPattern {

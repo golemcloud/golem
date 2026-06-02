@@ -90,13 +90,6 @@ impl RecipientPattern {
         }
     }
 
-    pub fn matches_holder(&self, holder: &str) -> bool {
-        let Ok(holder) = Self::parse_holder(holder) else {
-            return false;
-        };
-        self.subsumes(&holder)
-    }
-
     pub fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
@@ -137,14 +130,6 @@ impl RecipientPattern {
             }
             (Self::Agent { .. }, _) => false,
         }
-    }
-
-    fn parse_holder(value: &str) -> Result<Self, String> {
-        let segments = parse_holder_segments(value)?;
-        if segments.contains(&"*") {
-            return Err(value.to_string());
-        }
-        Self::parse(value)
     }
 
     fn account_part(&self) -> Option<&str> {
@@ -238,14 +223,6 @@ fn parse_anchored_segments(value: &str) -> Result<Vec<&str>, String> {
         Err(value.to_string())
     } else {
         Ok(segments)
-    }
-}
-
-fn parse_holder_segments(value: &str) -> Result<Vec<&str>, String> {
-    let segments = parse_anchored_segments(value)?;
-    match segments.len() {
-        1 | 3 | 5 => Ok(segments),
-        _ => Err(value.to_string()),
     }
 }
 

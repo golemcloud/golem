@@ -221,10 +221,6 @@ impl<C: PermissionClass> ClassPermissionPattern<C> {
             && (self.verb.is_none() || self.verb == other.verb)
             && self.resource.subsumes(&other.resource)
     }
-
-    pub fn matches_holder(&self, holder: &str) -> bool {
-        self.recipient.matches_holder(holder)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

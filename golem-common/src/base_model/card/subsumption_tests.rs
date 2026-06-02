@@ -176,18 +176,20 @@ fn recipient_patterns_subsume_only_matching_holder_subtrees() {
     let agent_type = AgentRecipientPattern::parse("acme/shop/prod/cart-svc/*").unwrap();
     let agent =
         AgentRecipientPattern::parse("acme/shop/prod/cart-svc/ShoppingCart(\"42\")").unwrap();
+    let other_agent =
+        AgentRecipientPattern::parse("other/shop/prod/cart-svc/ShoppingCart(\"42\")").unwrap();
 
-    assert!(account.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
-    assert!(account.matches_holder("acme/shop/prod"));
+    assert!(account.subsumes(&agent));
+    assert!(account.subsumes(&environment));
     assert!(account_environments.subsumes(&environment));
-    assert!(account_environments.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
-    assert!(environment.matches_holder("acme/shop/prod/cart-svc/ShoppingCart(\"42\")"));
+    assert!(account_environments.subsumes(&agent));
+    assert!(environment.subsumes(&agent));
     assert!(account_agents.subsumes(&agent));
     assert!(application_agents.subsumes(&agent));
-    assert!(!account_agents.matches_holder("acme/shop/prod"));
+    assert!(!account_agents.subsumes(&environment));
     assert!(agent_type.subsumes(&agent));
     assert!(!agent.subsumes(&agent_type));
-    assert!(!account.matches_holder("other/shop/prod/cart-svc/ShoppingCart(\"42\")"));
+    assert!(!account.subsumes(&other_agent));
 }
 
 #[test_gen]
@@ -302,32 +304,29 @@ fn generate_recipient_matching_tests(r: &mut DynamicTestRegistration) {
                 "recipient_matching_{}_{}",
                 test_name(recipient),
                 if expected {
-                    "matches_holder"
+                    "subsumes_holder"
                 } else {
-                    "does_not_match_holder"
+                    "does_not_subsume_holder"
                 }
             ),
             TestProperties::unit_test(),
             || {
                 let holder = "acme/shop/prod/cart-svc/ShoppingCart(\"42\")";
 
-                assert_eq!(recipient_matches_holder(recipient, holder), expected);
+                assert_eq!(recipient_subsumes_holder(recipient, holder), expected);
             }
         );
     }
 }
 
-fn recipient_matches_holder(recipient: &str, holder: &str) -> bool {
-    AgentRecipientPattern::parse(recipient)
-        .map(|recipient| recipient.matches_holder(holder))
-        .or_else(|_| {
-            EnvironmentRecipientPattern::parse(recipient)
-                .map(|recipient| recipient.matches_holder(holder))
-        })
-        .or_else(|_| {
-            AccountRecipientPattern::parse(recipient)
-                .map(|recipient| recipient.matches_holder(holder))
-        })
+fn recipient_subsumes_holder(recipient: &str, holder: &str) -> bool {
+    parse_recipient(recipient).subsumes(&parse_recipient(holder))
+}
+
+fn parse_recipient(value: &str) -> RecipientPattern {
+    AgentRecipientPattern::parse(value)
+        .or_else(|_| EnvironmentRecipientPattern::parse(value))
+        .or_else(|_| AccountRecipientPattern::parse(value))
         .unwrap()
 }
 

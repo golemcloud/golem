@@ -59,7 +59,7 @@ impl ReportsService {
         &self,
         auth: &AuthCtx,
     ) -> Result<Vec<AccountSummaryReport>, ReportsError> {
-        auth.authorize_permission(&view_account_summaries_report_permission())?;
+        authorize_report_permission(auth, SystemVerb::ViewAccountSummariesReport)?;
 
         let summaries = self
             .reports_repo
@@ -76,7 +76,7 @@ impl ReportsService {
         &self,
         auth: &AuthCtx,
     ) -> Result<AccountCountsReport, ReportsError> {
-        auth.authorize_permission(&view_account_counts_report_permission())?;
+        authorize_report_permission(auth, SystemVerb::ViewAccountCountsReport)?;
 
         let account_counts = self.reports_repo.get_account_counts().await?.into();
 
@@ -84,19 +84,26 @@ impl ReportsService {
     }
 }
 
-fn view_account_summaries_report_permission() -> PermissionPattern {
-    system_permission(SystemVerb::ViewAccountSummariesReport)
+fn authorize_report_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
+    if auth.is_system() {
+        return Ok(());
+    }
+
+    let recipient = auth.principal_recipient().ok_or_else(|| {
+        AuthorizationError::PermissionNotAllowed(Box::new(system_permission(
+            verb,
+            RecipientPattern::Any,
+        )))
+    })?;
+
+    auth.authorize_permission(&system_permission(verb, recipient))
 }
 
-fn view_account_counts_report_permission() -> PermissionPattern {
-    system_permission(SystemVerb::ViewAccountCountsReport)
-}
-
-fn system_permission(verb: SystemVerb) -> PermissionPattern {
+fn system_permission(verb: SystemVerb, recipient: RecipientPattern) -> PermissionPattern {
     PermissionPattern::System(ClassPermissionPattern {
         verb: Some(verb),
         owner: EmptyOwnerPattern,
-        recipient: RecipientPattern::Any,
+        recipient,
         resource: SystemResourcePattern,
     })
 }
