@@ -1,6 +1,7 @@
 import './config.js'
 import './http.js'
 import './quota_rpc.js'
+import './readonly.js'
 import './retry.js'
 import './checkout-v2.js'
 import './websocket.js'

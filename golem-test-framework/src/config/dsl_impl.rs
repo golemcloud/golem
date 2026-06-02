@@ -405,9 +405,22 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         agent_id: &ParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
+        principal: Option<golem_common::model::agent::Principal>,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
+        if principal.is_some() {
+            // The HTTP `AgentInvocationRequest` has no per-request `principal`
+            // field — principal is derived from the request's auth headers.
+            // Tests that need to override the principal (e.g. the per-principal
+            // read-only cache test from issue #3393 T6) must use the
+            // worker-executor gRPC DSL (`golem-worker-executor-test-utils`)
+            // instead of this HTTP-based config DSL.
+            anyhow::bail!(
+                "HTTP agent invocation DSL does not support overriding `principal`; \
+                 use the worker-executor gRPC test DSL for principal-aware invocation"
+            );
+        }
         let registry_client = self.registry_service_client().await;
         let app_name = self
             .name_cache
