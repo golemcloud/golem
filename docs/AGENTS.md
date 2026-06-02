@@ -2,16 +2,18 @@
 
 This is the source for **Golem's official documentation** at [learn.golem.cloud](https://learn.golem.cloud).
 
+It lives under `docs/` in the main `golemcloud/golem` repo. CI (`.github/workflows/docs.yaml`) builds it on docs-only changes and deploys to Vercel.
+
 ## Tech Stack
 
 - **Framework**: [Nextra](https://nextra.site/) v2 (docs theme) on top of Next.js 14
 - **Package manager**: [Bun](https://bun.sh/) (use `bun` for install/run, not `npm`/`yarn`)
 - **Styling**: Tailwind CSS, PostCSS
 - **Language**: TypeScript, MDX
-- **Linting/Formatting**: ESLint + Prettier (with Tailwind plugin), enforced via [Lefthook](https://github.com/evilmartians/lefthook) pre-commit hooks
+- **Linting/Formatting**: ESLint + Prettier (with Tailwind plugin); see *Pre-commit Checks* below
 - **Syntax highlighting**: Shiki, with custom grammars for `wit` and `rib` languages (see `wit-grammar.json`, `rib-grammar.json`)
 - **API docs**: Auto-generated from OpenAPI spec (`openapi/golem-service.yaml`) via `openapi/gen-openapi.ts`
-- **How-To Guides**: Auto-generated from the [Golem skill catalog](https://github.com/golemcloud/golem/tree/main/golem-skills/skills) via `skills/sync-skills.ts`
+- **How-To Guides**: Auto-generated from the in-tree skill catalog (`../golem-skills/skills`) via `skills/sync-skills.ts`
 
 ## Project Structure
 
@@ -39,8 +41,8 @@ theme.config.tsx # Nextra docs theme configuration
 - `bun run fix` — Lint + format together
 - `bun run check-links` — Validate links in MDX files
 - `bun run generate-prod` — Regenerate REST API docs from OpenAPI spec
-- `bun run update-skills` — Sync How-To Guides from the Golem skill catalog (fetches from GitHub)
-- `bun run update-skills-local -- --local <path>` — Sync How-To Guides from a local golem repo checkout
+- `bun run update-skills` — Sync How-To Guides from the Golem skill catalog on GitHub
+- `bun run update-skills-local -- --local ..` — Sync How-To Guides from the in-tree `../golem-skills/skills`
 
 ## Writing Documentation
 
@@ -66,27 +68,29 @@ theme.config.tsx # Nextra docs theme configuration
 
 REST API reference pages are auto-generated. Do not edit them manually.
 
-- To update from a **local copy** of the spec: copy the YAML from the golem repo (`../golem/openapi/golem-service.yaml`) into `openapi/golem-service.yaml`, then run `bun run generate-local`.
+- To update from a **local copy** of the spec: copy the YAML from the in-tree golem services (`../openapi/golem-service.yaml`) into `openapi/golem-service.yaml`, then run `bun run generate-local`.
 - `bun run generate-prod` and `bun run generate-dev` fetch the OpenAPI spec from the respective deployed environments — they do **not** use the local YAML file.
 
 The generated MDX files under `src/pages/rest-api/` will be updated and auto-formatted.
 
 ### How-To Guides
 
-How-To Guide pages are auto-generated from the [Golem skill catalog](https://github.com/golemcloud/golem/tree/main/golem-skills/skills). Do not edit files under `src/pages/how-to-guides/` manually.
+How-To Guide pages are auto-generated from the [Golem skill catalog](../golem-skills/skills). Do not edit files under `src/pages/how-to-guides/` manually.
 
 - `bun run update-skills` fetches the latest skills from GitHub.
-- `bun run update-skills-local -- --local <path>` reads from a local checkout of the golem repo.
+- `bun run update-skills-local -- --local ..` reads from the in-tree `../golem-skills/`.
 
 The sync script (`skills/sync-skills.ts`) strips AI-agent frontmatter, converts cross-references between skills into doc links, and generates MDX pages organized by category (General, Rust, TypeScript, Scala). Set `GITHUB_TOKEN` env var to avoid GitHub API rate limits when fetching remotely.
 
 ## Pre-commit Checks
 
-Lefthook runs the following on staged files before each commit:
+When this lived in its own repo, [Lefthook](https://github.com/evilmartians/lefthook) wired up automatic pre-commit hooks. In the monorepo we no longer auto-install them (Lefthook lives at the git root, which would conflict with the rest of the golem repo's hooks).
 
-1. ESLint (fix mode)
-2. Prettier (write mode)
-3. TypeScript type checking (`tsc`)
-4. Link validation (`check-links`)
+CI still enforces all of the same checks on every PR via `.github/workflows/docs.yaml` → `bun run build:check`, which runs:
 
-Ensure all four pass before committing. Run `bun run fix` to auto-fix lint and format issues.
+1. ESLint (`bun run lint:check`)
+2. Prettier (`bun run format:check`)
+3. TypeScript type checking (`bun run typecheck`)
+4. Link validation (`bun run check-links`)
+
+Run them locally with `bun run build:check`, or auto-fix lint/format issues with `bun run fix`.

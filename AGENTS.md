@@ -24,6 +24,8 @@ Always run `cargo make build` before starting work to ensure all dependencies ar
 
 **Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, `golem-scala-development` when working on the Scala SDK, and see `sdks/moonbit/AGENTS.md` when working on the MoonBit SDK.
 
+**Note:** The user-facing documentation site (deployed at [learn.golem.cloud](https://learn.golem.cloud)) lives under `docs/` and is a Next.js / Nextra project built with Bun — see `docs/AGENTS.md`. It is built and deployed by a dedicated workflow (`.github/workflows/docs.yaml`); the main `ci.yaml` skips runs on docs-only changes.
+
 ## Testing
 
 Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run.
@@ -108,6 +110,8 @@ All crate dependencies must have their versions specified in the root workspace 
 - `golem-rib/` - Rib language implementation
 - `cli/` - CLI tools (golem-cli, golem)
 - `sdks/` - Language-specific SDKs (Rust, TypeScript, Scala, MoonBit) - **not part of main build flow, see SDK-specific AGENTS.md**
+- `docs/` - User-facing documentation site at [learn.golem.cloud](https://learn.golem.cloud) (Next.js / Nextra / Bun) - **not part of main build flow, see `docs/AGENTS.md`**
 - `golem-skills/` - Skill definitions and skill testing harness
 - `integration-tests/` - Integration test suite
 - `test-components/` - Test WASM components
+- `website/` - Marketing site for golem.cloud (Astro, deployed to Netlify) - separate from `docs/`
