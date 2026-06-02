@@ -19,7 +19,7 @@ use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec,
-    ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionSpec, UrlRestrictions,
+    ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
     VariantCaseType,
 };
 use serde_json::{Map, Number, Value};
@@ -31,7 +31,8 @@ const MIME_TYPE_PATTERN: &str = "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$";
 /// `Ref(TypeId)` the document is `{ "$defs": {…}, "$ref": "#/$defs/<id>" }`;
 /// otherwise the root schema is emitted inline with `$defs` carrying every
 /// named definition from the graph plus any union per-branch synthesised
-/// schemas under `<root>__branch__<tag>`.
+/// schemas under content-hash-derived `union_branch_<hash>` keys (see
+/// [`branch_def_key`]).
 pub fn to_json_schema(graph: &SchemaGraph, ty: &SchemaType) -> Value {
     let mut root = render_type(graph, ty, true);
     let mut defs = render_defs(graph);
@@ -63,6 +64,11 @@ pub fn to_json_schema(graph: &SchemaGraph, ty: &SchemaType) -> Value {
 }
 
 /// Build a `$defs` object covering every named definition in the graph.
+///
+/// Per RFC 6901 §4, JSON Pointer escaping (`~0`/`~1`) applies to the
+/// *pointer string*, not to the resolved object member name. The map key
+/// is therefore the **raw** `TypeId.0` string; the escaped form is only
+/// used inside `$ref` pointers (see [`ref_pointer`]).
 pub(super) fn render_defs(graph: &SchemaGraph) -> Map<String, Value> {
     let mut defs = Map::new();
     for def in &graph.defs {
@@ -75,7 +81,7 @@ pub(super) fn render_defs(graph: &SchemaGraph) -> Map<String, Value> {
         {
             obj.entry("title").or_insert(Value::String(name.clone()));
         }
-        defs.insert(escape_pointer_token(&def.id.0), body);
+        defs.insert(def.id.0.clone(), body);
     }
     defs
 }
@@ -101,13 +107,22 @@ fn collect_union_branch_defs(
     emitted: &mut std::collections::HashSet<String>,
 ) {
     match ty {
-        SchemaType::Union { spec, .. } => {
+        SchemaType::Union { spec, metadata } => {
+            // Multimodal unions carry placeholder per-branch discriminators
+            // (the actual tag lives positionally in the outer envelope), so
+            // those rules must not be lifted into the branch schemas.
+            let multimodal = matches!(
+                metadata.role,
+                Some(crate::schema::metadata::Role::Multimodal)
+            );
             for branch in spec.branches.iter() {
-                let key = branch_def_key(&branch.tag);
+                let key = branch_def_key_for_mode(branch, multimodal);
                 if emitted.insert(key.clone()) {
                     let mut body = render_type(graph, &branch.body, false);
                     attach_metadata(&mut body, &branch.metadata);
-                    if let Some(obj) = body.as_object_mut() {
+                    if let Some(obj) = body.as_object_mut()
+                        && !multimodal
+                    {
                         // Constrain the branch schema further with the
                         // discriminator. For record-shaped rules this adds
                         // an extra constraint on the discriminator field;
@@ -162,8 +177,48 @@ fn collect_union_branch_defs(
     }
 }
 
-fn branch_def_key(tag: &str) -> String {
-    format!("union__branch__{}", escape_pointer_token(tag))
+/// Stable, collision-resistant `$defs` key for a union branch.
+///
+/// The key is derived from a content hash of the entire `UnionBranch`
+/// (tag + discriminator + body + metadata). This guarantees:
+///
+/// * Two unrelated unions that happen to share a tag produce distinct
+///   keys (the bodies/discriminators differ).
+/// * Two structurally identical branches dedupe to the same key — a
+///   correct optimisation: they would render to the same schema anyway.
+///
+/// The output is purely ASCII (`a-z0-9_`), so the key is safe to use both
+/// as a raw `$defs` member name (RFC 6901) and as an OpenAPI
+/// `components.schemas` name (which constrains its key alphabet).
+///
+/// Determinism: `serde_json::to_vec` orders fields by struct definition
+/// order; `UnionBranch` / `SchemaType` / `DiscriminatorRule` / current
+/// `MetadataEnvelope` contain no `HashMap` or other unordered container,
+/// so the serialized bytes — and therefore the hash — are stable across
+/// runs. If future `MetadataEnvelope` extensions introduce unordered
+/// fields, this helper should switch to a canonicalising hasher.
+fn branch_def_key(branch: &UnionBranch) -> String {
+    let serialized = serde_json::to_vec(branch).expect("UnionBranch serializes deterministically");
+    let hash = blake3::hash(&serialized);
+    let hex = hash.to_hex();
+    // 128 bits of hash output — accidental-collision probability is
+    // negligible for any practical in-document branch count.
+    format!("union_branch_{}", &hex.as_str()[..32])
+}
+
+/// Render-mode-aware variant of [`branch_def_key`].
+///
+/// A branch shared between a normal union and a multimodal union renders
+/// differently (the latter omits the discriminator constraint), so its
+/// `$defs` key must differ too — otherwise the second-emitted form would
+/// silently overwrite the first.
+fn branch_def_key_for_mode(branch: &UnionBranch, multimodal: bool) -> String {
+    let base = branch_def_key(branch);
+    if multimodal {
+        format!("{base}_multimodal")
+    } else {
+        base
+    }
 }
 
 fn apply_discriminator_constraint(obj: &mut Map<String, Value>, rule: &DiscriminatorRule) {
@@ -376,7 +431,7 @@ pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> V
         ]),
         SchemaType::Quantity { spec, .. } => Value::Object(quantity_schema(spec)),
 
-        SchemaType::Union { spec, .. } => Value::Object(union_schema(graph, spec)),
+        SchemaType::Union { spec, metadata } => Value::Object(union_schema(graph, spec, metadata)),
 
         SchemaType::Secret { spec, .. } => Value::Object(secret_schema(spec)),
         SchemaType::QuotaToken { spec, .. } => Value::Object(quota_token_schema(spec)),
@@ -399,7 +454,15 @@ pub(super) fn render_type(graph: &SchemaGraph, ty: &SchemaType, root: bool) -> V
 }
 
 fn ref_pointer(id: &TypeId, _root: bool) -> String {
-    format!("#/$defs/{}", escape_pointer_token(&id.0))
+    ref_to_def_key(&id.0)
+}
+
+/// Build the `$ref` pointer string for a raw `$defs` member key.
+///
+/// `key` is the raw (un-escaped) member name; this helper applies
+/// RFC 6901 JSON Pointer escaping when embedding it in the pointer path.
+pub(super) fn ref_to_def_key(key: &str) -> String {
+    format!("#/$defs/{}", escape_pointer_token(key))
 }
 
 fn integer_schema(min: i64, max: i64) -> Value {
@@ -526,6 +589,9 @@ fn text_schema(restrictions: &TextRestrictions) -> Map<String, Value> {
 
 fn binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
     // Canonical Binary JSON shape: `{ bytes: base64url-string, mime_type?: string }`.
+    // `min_bytes` / `max_bytes` count *raw* bytes; the JSON field is
+    // base64url-no-pad-encoded, so the on-wire string length is
+    // `base64url_no_pad_len(n) = 4*(n/3) + match n%3 { 0=>0, 1=>2, 2=>3 }`.
     let mut bytes_field = Map::new();
     bytes_field.insert("type".to_string(), Value::String("string".to_string()));
     bytes_field.insert(
@@ -533,10 +599,16 @@ fn binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
         Value::String("base64url".to_string()),
     );
     if let Some(min) = restrictions.min_bytes {
-        bytes_field.insert("minLength".to_string(), Value::Number(min.into()));
+        bytes_field.insert(
+            "minLength".to_string(),
+            Value::Number(base64url_no_pad_len(min).into()),
+        );
     }
     if let Some(max) = restrictions.max_bytes {
-        bytes_field.insert("maxLength".to_string(), Value::Number(max.into()));
+        bytes_field.insert(
+            "maxLength".to_string(),
+            Value::Number(base64url_no_pad_len(max).into()),
+        );
     }
     let mut mime_field = Map::new();
     mime_field.insert("type".to_string(), Value::String("string".to_string()));
@@ -742,17 +814,28 @@ fn quota_token_schema(_spec: &QuotaTokenSpec) -> Map<String, Value> {
     m
 }
 
-fn union_schema(graph: &SchemaGraph, spec: &UnionSpec) -> Map<String, Value> {
+fn union_schema(
+    graph: &SchemaGraph,
+    spec: &UnionSpec,
+    metadata: &MetadataEnvelope,
+) -> Map<String, Value> {
     // Each branch gets a per-branch reference into `$defs` (synthesised
     // by `add_union_branch_defs`), so the `oneOf` and any discriminator
-    // mapping resolves against schemas the renderer actually emits.
+    // mapping resolves against schemas the renderer actually emits. The
+    // branch key is a content hash so two unrelated unions sharing a tag
+    // do not collide; mode-aware suffixing also prevents collisions
+    // between a normal and a multimodal occurrence of the same branch.
+    let multimodal = matches!(
+        metadata.role,
+        Some(crate::schema::metadata::Role::Multimodal)
+    );
     let one_of: Vec<Value> = spec
         .branches
         .iter()
         .map(|b| {
             obj([(
                 "$ref",
-                Value::String(format!("#/$defs/{}", branch_def_key(&b.tag))),
+                Value::String(ref_to_def_key(&branch_def_key_for_mode(b, multimodal))),
             )])
         })
         .collect();
@@ -768,7 +851,7 @@ fn union_schema(graph: &SchemaGraph, spec: &UnionSpec) -> Map<String, Value> {
             if let Some(lit) = literal {
                 mapping.insert(
                     lit,
-                    Value::String(format!("#/$defs/{}", branch_def_key(&branch.tag))),
+                    Value::String(ref_to_def_key(&branch_def_key_for_mode(branch, multimodal))),
                 );
             }
         }
@@ -828,6 +911,20 @@ fn attach_metadata(target: &mut Value, metadata: &MetadataEnvelope) {
         obj.entry("x-golem-deprecation-note")
             .or_insert(Value::String(dep.clone()));
     }
+}
+
+/// Number of base64url-no-pad characters required to encode `n` raw bytes.
+/// Matches the alphabet used by [`crate::schema::canonical::binary`] which
+/// uses `base64::engine::general_purpose::URL_SAFE_NO_PAD`.
+fn base64url_no_pad_len(n: u32) -> u64 {
+    let n = n as u64;
+    4 * (n / 3)
+        + match n % 3 {
+            0 => 0,
+            1 => 2,
+            2 => 3,
+            _ => unreachable!(),
+        }
 }
 
 /// Escape a string for use as a single JSON-Pointer token: `~` becomes `~0`

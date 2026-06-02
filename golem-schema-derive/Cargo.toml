@@ -1,7 +1,7 @@
 [package]
 name = "golem-schema-derive"
 version = "0.0.0"
- edition = "2024"
+edition = "2024"
 
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
@@ -24,7 +24,7 @@ chrono = { workspace = true }
 golem-common = { workspace = true, default-features = false, features = ["client"] }
 proptest = { workspace = true }
 test-r = { workspace = true }
-trybuild = "1.0"
+trybuild = { workspace = true }
 
 [[test]]
 name = "derive_struct"

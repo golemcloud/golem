@@ -293,8 +293,12 @@ fn encode(
             encode_result(r, graph, spec, payload)
         }
 
-        (SchemaType::Union { spec, .. }, SchemaValue::Union(payload)) => {
-            encode_union(r, graph, spec, payload)
+        (SchemaType::Union { spec, metadata }, SchemaValue::Union(payload)) => {
+            let multimodal = matches!(
+                metadata.role,
+                Some(crate::schema::metadata::Role::Multimodal)
+            );
+            encode_union(r, graph, spec, payload, multimodal)
         }
 
         (SchemaType::Future { .. }, _) | (SchemaType::Stream { .. }, _) => Err(
@@ -360,6 +364,7 @@ fn encode_union(
     graph: &SchemaGraph,
     spec: &UnionSpec,
     payload: &UnionValuePayload,
+    multimodal: bool,
 ) -> Result<Value, RenderError> {
     let branch = find_branch(spec, &payload.tag)
         .ok_or_else(|| r.mismatch(format!("unknown union branch tag `{}`", payload.tag)))?;
@@ -370,7 +375,10 @@ fn encode_union(
     // Sanity check: the produced JSON should match the branch's
     // discriminator rule. Validation should have caught a tag/body
     // disagreement at construction time; this is the runtime safety net.
-    if !rule_matches(&branch.discriminator, &rendered) {
+    // Multimodal unions are positionally tagged in their outer envelope
+    // and carry placeholder discriminator rules per branch, so the rule
+    // check does not apply.
+    if !multimodal && !rule_matches(&branch.discriminator, &rendered) {
         return Err(RenderError::UnionTagMismatch {
             tag: payload.tag.clone(),
             reason: format!(
@@ -477,8 +485,21 @@ fn from_json_body(
             Ok(SchemaValue::U32(json_u64(json, path)? as u32))
         }
         SchemaType::U64 { .. } => Ok(SchemaValue::U64(json_u64(json, path)?)),
-        SchemaType::F32 { .. } => Ok(SchemaValue::F32(json_f64(json, path)? as f32)),
-        SchemaType::F64 { .. } => Ok(SchemaValue::F64(json_f64(json, path)?)),
+        SchemaType::F32 { .. } => {
+            let value = json_f64(json, path)?;
+            check_f32_in_range(value, path)?;
+            Ok(SchemaValue::F32(value as f32))
+        }
+        SchemaType::F64 { .. } => {
+            // `serde_json::Number` only stores finite floats, but assert
+            // it here as a defensive insurance so round-tripping never
+            // emits a non-finite number.
+            let value = json_f64(json, path)?;
+            if !value.is_finite() {
+                return Err(mismatch(path, "f64 must be finite".to_string()));
+            }
+            Ok(SchemaValue::F64(value))
+        }
         SchemaType::Char { .. } => match json.as_str() {
             Some(s) => {
                 let mut chars = s.chars();
@@ -744,7 +765,7 @@ fn from_json_body(
 
         SchemaType::Result { spec, .. } => decode_result(graph, spec, json, path, &mut visited),
 
-        SchemaType::Union { spec, .. } => decode_union(graph, spec, json, path),
+        SchemaType::Union { spec, metadata } => decode_union(graph, spec, metadata, json, path),
 
         SchemaType::Future { .. } | SchemaType::Stream { .. } => Err(RenderError::Unsupported(
             "future/stream values have no JSON representation",
@@ -813,9 +834,26 @@ fn decode_result(
 fn decode_union(
     graph: &SchemaGraph,
     spec: &UnionSpec,
+    metadata: &crate::schema::metadata::MetadataEnvelope,
     json: &Value,
     path: &mut PathStack,
 ) -> Result<SchemaValue, RenderError> {
+    // Multimodal unions are positionally tagged in their outer envelope
+    // (a `list<union<…>>` whose element index picks the branch). The bare
+    // union body cannot be decoded by this generic discriminator-based
+    // pipeline because every branch carries a placeholder discriminator
+    // rule. Picking a branch by body shape would silently mis-tag values
+    // whenever two branches accept the same JSON shape, so we refuse
+    // explicitly and let multimodal-aware callers decode through their
+    // own envelope.
+    if matches!(
+        metadata.role,
+        Some(crate::schema::metadata::Role::Multimodal)
+    ) {
+        return Err(RenderError::Unsupported(
+            "multimodal union JSON decoding requires an external multimodal envelope",
+        ));
+    }
     // First: find every branch whose discriminator rule matches the
     // incoming JSON value. Validation rules out multi-match at construction
     // time; a runtime safety net catches the case where the value is bad.
@@ -929,6 +967,19 @@ fn json_number_f64(value: f64, path: &PathStack) -> Result<Value, RenderError> {
     Number::from_f64(value)
         .map(Value::Number)
         .ok_or_else(|| RenderError::Json(format!("non-finite float at {}", path.render())))
+}
+
+/// Reject f64 inputs whose magnitude exceeds the f32 range, where `value as
+/// f32` would silently saturate to `±inf`. NaN is rejected because the JSON
+/// number type cannot represent it on round-trip.
+fn check_f32_in_range(value: f64, path: &mut PathStack) -> Result<(), RenderError> {
+    if !value.is_finite() {
+        return Err(mismatch(path, "f32 must be finite".to_string()));
+    }
+    if value.abs() > f32::MAX as f64 {
+        return Err(mismatch(path, "f32 out of range".to_string()));
+    }
+    Ok(())
 }
 
 fn check_int_range<T: TryFrom<i128>>(

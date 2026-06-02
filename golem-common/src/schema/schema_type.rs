@@ -598,6 +598,13 @@ pub enum PathKind {
 pub struct PathSpec {
     pub direction: PathDirection,
     pub kind: PathKind,
+    /// MIME types allowed for content referenced by this path.
+    ///
+    /// Not enforced by value validation because [`crate::schema::schema_value::SchemaValue::Path`]
+    /// carries only a path string. Enforce this only in protocol/adaptation
+    /// layers that have MIME metadata, such as HTTP `Content-Type` or a
+    /// content-typed envelope. The validator must not read the filesystem
+    /// or sniff content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_mime_types: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

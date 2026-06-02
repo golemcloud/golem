@@ -140,6 +140,14 @@ pub enum ValueError {
         path: ValuePath,
         type_id: TypeId,
     },
+    /// A chain of named references at one value position resolves back
+    /// to itself (e.g. `A = Ref<A>` or a mutual cycle `A → B → A`) before
+    /// reaching a structural shape, so no finite value can ever satisfy
+    /// it.
+    RecursiveRef {
+        path: ValuePath,
+        type_id: TypeId,
+    },
     UnionUnknownTag {
         path: ValuePath,
         tag: String,
@@ -200,6 +208,22 @@ pub enum ValueError {
         extension: String,
     },
     UrlEmpty {
+        path: ValuePath,
+    },
+    UrlInvalid {
+        path: ValuePath,
+        url: String,
+        reason: String,
+    },
+    UrlSchemeNotAllowed {
+        path: ValuePath,
+        scheme: String,
+    },
+    UrlHostNotAllowed {
+        path: ValuePath,
+        host: String,
+    },
+    UrlHostMissing {
         path: ValuePath,
     },
     QuantityUnitNotAllowed {
@@ -289,6 +313,10 @@ impl Display for ValueError {
                 f,
                 "dangling ref `{type_id}` at {path} (no such named definition)"
             ),
+            ValueError::RecursiveRef { path, type_id } => write!(
+                f,
+                "ref chain at {path} loops back to `{type_id}` without reaching a structural shape"
+            ),
             ValueError::UnionUnknownTag { path, tag } => write!(
                 f,
                 "union value at {path} carries tag `{tag}` that does not match any branch"
@@ -365,6 +393,22 @@ impl Display for ValueError {
                 "path value at {path} has extension `{extension}` not in the allow-list"
             ),
             ValueError::UrlEmpty { path } => write!(f, "url value at {path} is empty"),
+            ValueError::UrlInvalid { path, url, reason } => write!(
+                f,
+                "url value at {path} (`{url}`) is not a valid URL: {reason}"
+            ),
+            ValueError::UrlSchemeNotAllowed { path, scheme } => write!(
+                f,
+                "url value at {path} has scheme `{scheme}` not in the allow-list"
+            ),
+            ValueError::UrlHostNotAllowed { path, host } => write!(
+                f,
+                "url value at {path} has host `{host}` not in the allow-list"
+            ),
+            ValueError::UrlHostMissing { path } => write!(
+                f,
+                "url value at {path} has no host (allow-list requires one)"
+            ),
             ValueError::QuantityUnitNotAllowed { path, unit } => write!(
                 f,
                 "quantity value at {path} has unit `{unit}` which is not allowed"
@@ -398,8 +442,7 @@ pub fn validate_value(
 ) -> Result<(), Vec<ValueError>> {
     let mut errors = Vec::new();
     let mut path = ValuePath::new();
-    let mut visited_refs: HashSet<TypeId> = HashSet::new();
-    check(graph, ty, value, &mut path, &mut errors, &mut visited_refs);
+    check(graph, ty, value, &mut path, &mut errors);
     if errors.is_empty() {
         Ok(())
     } else {
@@ -499,34 +542,69 @@ fn shape_mismatch(
     });
 }
 
+/// Resolve a chain of [`SchemaType::Ref`]s at the *current* value node into
+/// a non-`Ref` schema. Cycle protection is local to this resolution loop
+/// so it only guards pure alias cycles like `A = Ref<A>` or
+/// `A = Ref<B>, B = Ref<A>` that can never reach a structural shape.
+/// Recursive types that go through a value-shrinking constructor (record,
+/// list, option, …) are fully validated at every level because each
+/// value-tree step gets a fresh resolution scope.
+///
+/// Returns `Some(ty)` with a non-`Ref` schema on success, or `None` after
+/// pushing a [`ValueError::DanglingRef`] or [`ValueError::RecursiveRef`]
+/// on failure.
+fn resolve_refs_at_value_node<'a>(
+    graph: &'a SchemaGraph,
+    mut ty: &'a SchemaType,
+    path: &ValuePath,
+    errors: &mut Vec<ValueError>,
+) -> Option<&'a SchemaType> {
+    let mut seen: HashSet<TypeId> = HashSet::new();
+    loop {
+        match ty {
+            SchemaType::Ref { id, .. } => {
+                if !seen.insert(id.clone()) {
+                    errors.push(ValueError::RecursiveRef {
+                        path: path.snapshot(),
+                        type_id: id.clone(),
+                    });
+                    return None;
+                }
+                match graph.lookup(id) {
+                    Some(def) => {
+                        ty = &def.body;
+                    }
+                    None => {
+                        errors.push(ValueError::DanglingRef {
+                            path: path.snapshot(),
+                            type_id: id.clone(),
+                        });
+                        return None;
+                    }
+                }
+            }
+            other => return Some(other),
+        }
+    }
+}
+
 fn check(
     graph: &SchemaGraph,
     ty: &SchemaType,
     value: &SchemaValue,
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
-    visited_refs: &mut HashSet<TypeId>,
 ) {
-    match (ty, value) {
-        (SchemaType::Ref { id, .. }, v) => {
-            // Coinductive cycle break: if we re-enter the same named def
-            // while walking a single value branch, stop. Recursive types
-            // backed by terminating values converge; cyclic types with no
-            // valid leaf cannot produce a finite value, so silently
-            // returning here avoids stack overflow.
-            if !visited_refs.insert(id.clone()) {
-                return;
-            }
-            match graph.lookup(id) {
-                Some(def) => check(graph, &def.body, v, path, errors, visited_refs),
-                None => errors.push(ValueError::DanglingRef {
-                    path: path.snapshot(),
-                    type_id: id.clone(),
-                }),
-            }
-            visited_refs.remove(id);
-        }
+    // Resolve any chain of named refs at this exact value position. The
+    // resolution scope is local to this call: as soon as we descend into
+    // a value-shrinking constructor (record field, list element, etc.)
+    // a fresh scope is established, so recursive types backed by finite
+    // values are validated at every level.
+    let Some(ty) = resolve_refs_at_value_node(graph, ty, path, errors) else {
+        return;
+    };
 
+    match (ty, value) {
         (SchemaType::Bool { .. }, SchemaValue::Bool(_)) => {}
         (SchemaType::S8 { .. }, SchemaValue::S8(_)) => {}
         (SchemaType::S16 { .. }, SchemaValue::S16(_)) => {}
@@ -576,7 +654,7 @@ fn check(
             }
             for (field, v) in fields.iter().zip(vs.iter()) {
                 path.push(ValuePathSegment::Field(field.name.clone()));
-                check(graph, &field.body, v, path, errors, visited_refs);
+                check(graph, &field.body, v, path, errors);
                 path.pop();
             }
         }
@@ -595,7 +673,7 @@ fn check(
             match (&case.payload, &vp.payload) {
                 (Some(case_ty), Some(payload)) => {
                     path.push(ValuePathSegment::VariantPayload);
-                    check(graph, case_ty, payload, path, errors, visited_refs);
+                    check(graph, case_ty, payload, path, errors);
                     path.pop();
                 }
                 (None, None) => {}
@@ -641,7 +719,7 @@ fn check(
             }
             for (i, (t, v)) in elements.iter().zip(vs.iter()).enumerate() {
                 path.push(ValuePathSegment::Index(i));
-                check(graph, t, v, path, errors, visited_refs);
+                check(graph, t, v, path, errors);
                 path.pop();
             }
         }
@@ -649,11 +727,7 @@ fn check(
         (SchemaType::List { element, .. }, SchemaValue::List { elements }) => {
             for (i, v) in elements.iter().enumerate() {
                 path.push(ValuePathSegment::Index(i));
-                // Each list element gets its own fresh visited set so that
-                // a recursive type encountered in one element does not
-                // collapse a sibling element's resolution.
-                let mut sibling_visited: HashSet<TypeId> = visited_refs.clone();
-                check(graph, element, v, path, errors, &mut sibling_visited);
+                check(graph, element, v, path, errors);
                 path.pop();
             }
         }
@@ -674,8 +748,7 @@ fn check(
             }
             for (i, v) in elements.iter().enumerate() {
                 path.push(ValuePathSegment::Index(i));
-                let mut sibling_visited: HashSet<TypeId> = visited_refs.clone();
-                check(graph, element, v, path, errors, &mut sibling_visited);
+                check(graph, element, v, path, errors);
                 path.pop();
             }
         }
@@ -688,12 +761,10 @@ fn check(
         ) => {
             for (i, (k, v)) in entries.iter().enumerate() {
                 path.push(ValuePathSegment::MapKey(i));
-                let mut key_visited: HashSet<TypeId> = visited_refs.clone();
-                check(graph, key, k, path, errors, &mut key_visited);
+                check(graph, key, k, path, errors);
                 path.pop();
                 path.push(ValuePathSegment::MapValue(i));
-                let mut val_visited: HashSet<TypeId> = visited_refs.clone();
-                check(graph, vty, v, path, errors, &mut val_visited);
+                check(graph, vty, v, path, errors);
                 path.pop();
             }
         }
@@ -701,7 +772,7 @@ fn check(
         (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: v }) => {
             if let Some(v) = v {
                 path.push(ValuePathSegment::OptionInner);
-                check(graph, inner, v, path, errors, visited_refs);
+                check(graph, inner, v, path, errors);
                 path.pop();
             }
         }
@@ -710,7 +781,7 @@ fn check(
             ResultValuePayload::Ok { value: v } => match (&spec.ok, v) {
                 (Some(t), Some(v)) => {
                     path.push(ValuePathSegment::ResultOk);
-                    check(graph, t, v, path, errors, visited_refs);
+                    check(graph, t, v, path, errors);
                     path.pop();
                 }
                 (None, None) => {}
@@ -728,7 +799,7 @@ fn check(
             ResultValuePayload::Err { value: v } => match (&spec.err, v) {
                 (Some(t), Some(v)) => {
                     path.push(ValuePathSegment::ResultErr);
-                    check(graph, t, v, path, errors, visited_refs);
+                    check(graph, t, v, path, errors);
                     path.pop();
                 }
                 (None, None) => {}
@@ -745,7 +816,7 @@ fn check(
             },
         },
 
-        (SchemaType::Union { spec, .. }, SchemaValue::Union(vp)) => {
+        (SchemaType::Union { spec, metadata }, SchemaValue::Union(vp)) => {
             let branch = spec.branches.iter().find(|b| b.tag == vp.tag);
             match branch {
                 None => errors.push(ValueError::UnionUnknownTag {
@@ -755,16 +826,17 @@ fn check(
                 Some(branch) => {
                     path.push(ValuePathSegment::UnionBody);
                     let mut sub_errors = Vec::new();
-                    check(
-                        graph,
-                        &branch.body,
-                        &vp.body,
-                        path,
-                        &mut sub_errors,
-                        visited_refs,
-                    );
+                    check(graph, &branch.body, &vp.body, path, &mut sub_errors);
                     errors.extend(sub_errors);
-                    if !discriminator_matches(graph, branch, &vp.body) {
+                    // Multimodal unions carry a positional/external tag in
+                    // the outer envelope, so per-branch discriminators are
+                    // placeholders and must not be enforced here. See the
+                    // adapter in `schema/adapters/data_schema.rs`.
+                    let skip_discriminator = matches!(
+                        metadata.role,
+                        Some(crate::schema::metadata::Role::Multimodal)
+                    );
+                    if !skip_discriminator && !discriminator_matches(graph, branch, &vp.body) {
                         errors.push(ValueError::UnionDiscriminatorMismatch {
                             path: path.snapshot(),
                             tag: vp.tag.clone(),
@@ -874,12 +946,16 @@ fn check_path(spec: &PathSpec, p: &str, path: &mut ValuePath, errors: &mut Vec<V
             extension: ext.to_string(),
         });
     }
-    // `allowed_mime_types` on Path is consulted at the canonical-encoding
-    // layer where MIME is known; the bare path value does not carry MIME.
+    // `allowed_mime_types` on `Path` is not enforceable by value validation
+    // because `SchemaValue::Path` carries only a path string. MIME
+    // restrictions must be enforced at protocol/adaptation layers that
+    // carry or derive MIME metadata (e.g. an HTTP `Content-Type` header,
+    // a multimodal envelope, a content-typed canonical-encoding layer).
+    // The validator must not read the filesystem or sniff content.
 }
 
 fn check_url(
-    _spec: &UrlRestrictions,
+    spec: &UrlRestrictions,
     url: &str,
     path: &mut ValuePath,
     errors: &mut Vec<ValueError>,
@@ -888,9 +964,44 @@ fn check_url(
         errors.push(ValueError::UrlEmpty {
             path: path.snapshot(),
         });
+        return;
     }
-    // Scheme / host validation is parser-level and deferred to the
-    // canonical encoding layer.
+    let parsed = match url::Url::parse(url) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            errors.push(ValueError::UrlInvalid {
+                path: path.snapshot(),
+                url: url.to_string(),
+                reason: err.to_string(),
+            });
+            return;
+        }
+    };
+    if let Some(allowed) = &spec.allowed_schemes
+        && !allowed
+            .iter()
+            .any(|scheme| scheme.eq_ignore_ascii_case(parsed.scheme()))
+    {
+        errors.push(ValueError::UrlSchemeNotAllowed {
+            path: path.snapshot(),
+            scheme: parsed.scheme().to_string(),
+        });
+    }
+    if let Some(allowed) = &spec.allowed_hosts {
+        match parsed.host_str() {
+            Some(host)
+                if allowed
+                    .iter()
+                    .any(|allowed_host| allowed_host.eq_ignore_ascii_case(host)) => {}
+            Some(host) => errors.push(ValueError::UrlHostNotAllowed {
+                path: path.snapshot(),
+                host: host.to_string(),
+            }),
+            None => errors.push(ValueError::UrlHostMissing {
+                path: path.snapshot(),
+            }),
+        }
+    }
 }
 
 fn check_quantity(

@@ -24,7 +24,7 @@ use crate::schema::schema_value::{
     SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
 use crate::schema::validation::subtyping::is_assignable;
-use crate::schema::validation::value::{ValueError, validate_value};
+use crate::schema::validation::value::{ValueError, ValuePathSegment, validate_value};
 use chrono::Utc;
 use proptest::prelude::*;
 use test_r::test;
@@ -523,22 +523,352 @@ fn union_discriminator_mismatch_is_reported() {
 }
 
 #[test]
-fn direct_ref_cycle_does_not_stack_overflow() {
+fn multimodal_union_skips_placeholder_discriminator_check() {
+    // Multimodal unions carry a positional tag in their outer envelope,
+    // so the per-branch discriminators are placeholders that must not
+    // be enforced by the value validator. A scalar `caption: string`
+    // body must validate successfully against a `string` branch even
+    // though its `FieldAbsent { field_name: "" }` discriminator would
+    // reject any non-object JSON shape.
+    let mut ty = SchemaType::union(UnionSpec {
+        branches: vec![
+            UnionBranch {
+                tag: "caption".to_string(),
+                body: SchemaType::string(),
+                discriminator: DiscriminatorRule::FieldAbsent {
+                    field_name: String::new(),
+                },
+                metadata: Default::default(),
+            },
+            UnionBranch {
+                tag: "image_url".to_string(),
+                body: SchemaType::string(),
+                discriminator: DiscriminatorRule::FieldAbsent {
+                    field_name: String::new(),
+                },
+                metadata: Default::default(),
+            },
+        ],
+    });
+    ty.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value = SchemaValue::Union(UnionValuePayload {
+        tag: "caption".to_string(),
+        body: Box::new(SchemaValue::String("hello world".to_string())),
+    });
+    validate_value(&graph, &ty, &value).expect("multimodal scalar body must validate");
+}
+
+#[test]
+fn direct_ref_cycle_returns_recursive_ref_error() {
     // `A` resolves to itself; a value reaching this type cannot have a
-    // finite leaf, so the validator must terminate via cycle detection
-    // rather than recurse forever. We feed an empty record under an Option
-    // wrapper so the cycle is reached through Some-payload traversal.
+    // finite leaf because the ref chain at one value position never
+    // reaches a structural shape. The validator must report
+    // `RecursiveRef`, not silently succeed and not stack-overflow.
     let graph = SchemaGraph {
         defs: vec![SchemaTypeDef {
             id: TypeId::new("A"),
             name: None,
             body: SchemaType::ref_to(TypeId::new("A")),
         }],
-        root: SchemaType::Option {
-            inner: Box::new(SchemaType::ref_to(TypeId::new("A"))),
-            metadata: Default::default(),
-        },
+        root: SchemaType::ref_to(TypeId::new("A")),
     };
-    let value = SchemaValue::Option { inner: None };
-    let _ = validate_value(&graph, &graph.root, &value);
+    let value = SchemaValue::Bool(true);
+    let errors = validate_value(&graph, &graph.root, &value).expect_err("should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::RecursiveRef { .. })),
+        "expected RecursiveRef, got {errors:?}"
+    );
+}
+
+#[test]
+fn mutual_pure_ref_cycle_returns_recursive_ref_error() {
+    // `A → B → A` ref chain at one value position never reaches a
+    // structural shape; the validator must report `RecursiveRef` rather
+    // than recurse forever.
+    let graph = SchemaGraph {
+        defs: vec![
+            SchemaTypeDef {
+                id: TypeId::new("A"),
+                name: None,
+                body: SchemaType::ref_to(TypeId::new("B")),
+            },
+            SchemaTypeDef {
+                id: TypeId::new("B"),
+                name: None,
+                body: SchemaType::ref_to(TypeId::new("A")),
+            },
+        ],
+        root: SchemaType::ref_to(TypeId::new("A")),
+    };
+    let value = SchemaValue::Bool(true);
+    let errors = validate_value(&graph, &graph.root, &value).expect_err("should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::RecursiveRef { .. })),
+        "expected RecursiveRef, got {errors:?}"
+    );
+}
+
+#[test]
+fn nested_recursive_value_validates_every_level() {
+    // `type Tree = { value: i32, children: list<Tree> }`. A two-level
+    // tree value with a wrong-typed leaf at the inner level must produce
+    // a `ShapeMismatch` for that inner leaf — the validator must NOT
+    // silently skip validation of the inner Tree just because the outer
+    // resolution already passed through `Ref<Tree>`.
+    let tree_id = TypeId::new("Tree");
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: tree_id.clone(),
+            name: Some("Tree".to_string()),
+            body: SchemaType::record(vec![
+                NamedFieldType {
+                    name: "value".to_string(),
+                    body: SchemaType::s32(),
+                    metadata: Default::default(),
+                },
+                NamedFieldType {
+                    name: "children".to_string(),
+                    body: SchemaType::list(SchemaType::ref_to(tree_id.clone())),
+                    metadata: Default::default(),
+                },
+            ]),
+        }],
+        root: SchemaType::ref_to(tree_id),
+    };
+
+    // A valid two-level tree passes.
+    let valid = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::S32(1),
+            SchemaValue::List {
+                elements: vec![SchemaValue::Record {
+                    fields: vec![SchemaValue::S32(2), SchemaValue::List { elements: vec![] }],
+                }],
+            },
+        ],
+    };
+    validate_value(&graph, &graph.root, &valid).expect("valid nested tree must validate");
+
+    // A two-level tree with a `bool` instead of `i32` for the inner
+    // `value` field must produce a `ShapeMismatch` for the inner leaf —
+    // proving the inner subtree IS validated (i.e. the cycle break does
+    // not silently skip it).
+    let wrong_inner_leaf = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::S32(1),
+            SchemaValue::List {
+                elements: vec![SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::Bool(true),
+                        SchemaValue::List { elements: vec![] },
+                    ],
+                }],
+            },
+        ],
+    };
+    let errors = validate_value(&graph, &graph.root, &wrong_inner_leaf)
+        .expect_err("inner wrong-typed leaf must fail");
+    // The exact failing path proves the inner `value` field was reached
+    // by the validator (i.e. ref-cycle protection did not silently skip
+    // the inner recursive subtree).
+    let expected_path = [
+        ValuePathSegment::Field("children".to_string()),
+        ValuePathSegment::Index(0),
+        ValuePathSegment::Field("value".to_string()),
+    ];
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ValueError::ShapeMismatch { path, .. }
+                if path.segments() == expected_path
+        )),
+        "expected ShapeMismatch at children[0].value, got {errors:?}"
+    );
+}
+
+// --- URL restrictions ---
+
+fn url_with_restrictions(restrictions: UrlRestrictions) -> SchemaType {
+    SchemaType::Url {
+        restrictions,
+        metadata: Default::default(),
+    }
+}
+
+fn url_value(s: &str) -> SchemaValue {
+    SchemaValue::Url { url: s.to_string() }
+}
+
+#[test]
+fn url_unrestricted_accepts_any_well_formed_url() {
+    let ty = url_with_restrictions(UrlRestrictions::default());
+    let graph = SchemaGraph::anonymous(ty.clone());
+    validate_value(&graph, &ty, &url_value("https://example.com/path")).expect("valid url");
+    validate_value(&graph, &ty, &url_value("file:///tmp/x")).expect("file url");
+}
+
+#[test]
+fn url_invalid_syntax_is_reported() {
+    let ty = url_with_restrictions(UrlRestrictions::default());
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let errors =
+        validate_value(&graph, &ty, &url_value("not a url")).expect_err("malformed url must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::UrlInvalid { .. })),
+        "expected UrlInvalid, got {errors:?}"
+    );
+}
+
+#[test]
+fn url_empty_is_reported() {
+    let ty = url_with_restrictions(UrlRestrictions::default());
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let errors = validate_value(&graph, &ty, &url_value("")).expect_err("empty url must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::UrlEmpty { .. })),
+        "expected UrlEmpty, got {errors:?}"
+    );
+}
+
+#[test]
+fn url_scheme_allow_list_accepts_listed() {
+    let ty = url_with_restrictions(UrlRestrictions {
+        allowed_schemes: Some(vec!["https".to_string(), "wss".to_string()]),
+        allowed_hosts: None,
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    validate_value(&graph, &ty, &url_value("https://example.com/")).expect("https allowed");
+    // Case-insensitive match.
+    validate_value(&graph, &ty, &url_value("WSS://example.com/")).expect("wss allowed (case-i)");
+}
+
+#[test]
+fn url_scheme_allow_list_rejects_unlisted() {
+    let ty = url_with_restrictions(UrlRestrictions {
+        allowed_schemes: Some(vec!["https".to_string()]),
+        allowed_hosts: None,
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let errors = validate_value(&graph, &ty, &url_value("http://example.com/"))
+        .expect_err("http not allowed");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::UrlSchemeNotAllowed { .. })),
+        "expected UrlSchemeNotAllowed, got {errors:?}"
+    );
+}
+
+#[test]
+fn url_host_allow_list_accepts_listed() {
+    let ty = url_with_restrictions(UrlRestrictions {
+        allowed_schemes: None,
+        allowed_hosts: Some(vec!["example.com".to_string()]),
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    validate_value(&graph, &ty, &url_value("https://example.com/path"))
+        .expect("listed host allowed");
+    // Case-insensitive match.
+    validate_value(&graph, &ty, &url_value("https://EXAMPLE.com/")).expect("case-i host");
+}
+
+#[test]
+fn url_host_allow_list_rejects_unlisted() {
+    let ty = url_with_restrictions(UrlRestrictions {
+        allowed_schemes: None,
+        allowed_hosts: Some(vec!["example.com".to_string()]),
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let errors = validate_value(&graph, &ty, &url_value("https://attacker.com/"))
+        .expect_err("attacker.com not allowed");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::UrlHostNotAllowed { .. })),
+        "expected UrlHostNotAllowed, got {errors:?}"
+    );
+}
+
+#[test]
+fn url_host_allow_list_rejects_missing_host() {
+    let ty = url_with_restrictions(UrlRestrictions {
+        allowed_schemes: None,
+        allowed_hosts: Some(vec!["example.com".to_string()]),
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    // `file:` URLs lack a host.
+    let errors = validate_value(&graph, &ty, &url_value("file:///tmp/x"))
+        .expect_err("missing host must fail when allow-list is set");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::UrlHostMissing { .. })),
+        "expected UrlHostMissing, got {errors:?}"
+    );
+}
+
+#[test]
+fn url_userinfo_confusion_does_not_bypass_host_allow_list() {
+    // `https://example.com@attacker.com/` parses with host=`attacker.com`
+    // (the `example.com` segment is userinfo). The validator must reject
+    // it when only `example.com` is allowed — i.e. not be fooled by
+    // userinfo into matching the allow-list.
+    let ty = url_with_restrictions(UrlRestrictions {
+        allowed_schemes: None,
+        allowed_hosts: Some(vec!["example.com".to_string()]),
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let errors = validate_value(&graph, &ty, &url_value("https://example.com@attacker.com/"))
+        .expect_err("userinfo must not bypass host allow-list");
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, ValueError::UrlHostNotAllowed { host, .. } if host == "attacker.com")
+        ),
+        "expected UrlHostNotAllowed for attacker.com, got {errors:?}"
+    );
+}
+
+#[test]
+fn url_subdomain_is_not_implicitly_allowed_by_parent_host() {
+    // Exact host match only — no wildcard/suffix semantics.
+    let ty = url_with_restrictions(UrlRestrictions {
+        allowed_schemes: None,
+        allowed_hosts: Some(vec!["example.com".to_string()]),
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let errors = validate_value(&graph, &ty, &url_value("https://api.example.com/"))
+        .expect_err("subdomain must NOT be implicitly allowed");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::UrlHostNotAllowed { .. })),
+        "expected UrlHostNotAllowed for subdomain, got {errors:?}"
+    );
+}
+
+#[test]
+fn dangling_ref_is_reported() {
+    // A root `Ref<Missing>` with no matching def in the graph must
+    // produce `DanglingRef` rather than silently succeed.
+    let graph = SchemaGraph {
+        defs: vec![],
+        root: SchemaType::ref_to(TypeId::new("Missing")),
+    };
+    let value = SchemaValue::Bool(true);
+    let errors = validate_value(&graph, &graph.root, &value).expect_err("should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValueError::DanglingRef { .. })),
+        "expected DanglingRef, got {errors:?}"
+    );
 }

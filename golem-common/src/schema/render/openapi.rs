@@ -16,9 +16,10 @@
 //!
 //! Re-emits the same per-node shape but reroutes JSON-Schema's `$defs`
 //! into OpenAPI's `components/schemas` (and rewrites the corresponding
-//! `$ref` pointers). Per-branch union schemas synthesised under
-//! `<root>__branch__<tag>` ship as additional component schemas so
-//! discriminator mappings resolve.
+//! `$ref` pointers). Per-branch union schemas (synthesised by
+//! [`super::json_schema::add_union_branch_defs`] under content-hash-derived
+//! keys) ship as additional component schemas so discriminator mappings
+//! resolve.
 
 use crate::schema::graph::SchemaGraph;
 use crate::schema::render::json_schema::{add_union_branch_defs, render_defs, render_type};
@@ -44,6 +45,18 @@ pub fn to_openapi_components(graph: &SchemaGraph, ty: &SchemaType) -> Value {
     let root = rewrite_refs(render_type(graph, ty, true));
     let mut defs = render_defs(graph);
     add_union_branch_defs(graph, ty, &mut defs);
+    // `$defs` map keys are raw per RFC 6901 §4: the JSON Pointer token in a
+    // `$ref` is the *escaped* form of the resolved object member name.
+    // We preserve raw keys when moving `$defs` → `components.schemas` so
+    // that an escaped `#/components/schemas/<token>` pointer resolves
+    // back to the raw key the same way it did under `$defs`.
+    //
+    // Note: this is JSON-Pointer-correct, but OpenAPI 3.1 additionally
+    // constrains component-name characters to `[A-Za-z0-9._-]`. TypeIds
+    // containing `/`, `~`, or other characters outside that set will
+    // produce technically-invalid component names. Adopting an
+    // OpenAPI-safe component-name registry is tracked as a follow-up;
+    // typical TypeIds never trigger this.
     let schemas: Map<String, Value> = defs
         .into_iter()
         .map(|(k, v)| (k, rewrite_refs(v)))
