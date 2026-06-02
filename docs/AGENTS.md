@@ -41,7 +41,6 @@ theme.config.tsx # Nextra docs theme configuration
 - `bun run fix` — Lint + format together
 - `bun run check-links` — Validate links in MDX files
 - `bun run generate-local` — Regenerate REST API docs from `../openapi/golem-service.yaml` (the in-tree spec)
-- `bun run generate-prod` / `bun run generate-dev` — Regenerate REST API docs from the deployed prod/dev environments (in-memory, no local write)
 - `bun run update-skills` — Sync How-To Guides from the Golem skill catalog on GitHub
 - `bun run update-skills-local` — Sync How-To Guides from the in-tree `../golem-skills/skills`
 
@@ -78,7 +77,6 @@ REST API reference pages are auto-generated from the in-tree OpenAPI spec. Do no
 
 - To regenerate from the in-tree spec: run `cargo make generate-docs-openapi` (or `bun run generate-local`). The MDX under `src/content/rest-api/` will be written and auto-formatted.
 - `cargo make generate-openapi` does both: regenerates `openapi/golem-service.yaml` from the running services and then regenerates the MDX from it.
-- `bun run generate-prod` / `bun run generate-dev` fetch the spec from the respective deployed environments (in-memory, no local YAML write) — useful for one-off comparisons.
 
 ### How-To Guides
 

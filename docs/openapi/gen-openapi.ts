@@ -7,7 +7,7 @@ import OpenAPISampler from "openapi-sampler"
 // The canonical OpenAPI spec lives in the golem repo root at
 // openapi/golem-service.yaml and is regenerated from the Rust services
 // by `cargo make generate-openapi`. This script reads from there directly
-// (one level up from docs/) in --local mode.
+// (one level up from docs/) and writes per-tag MDX into src/content/rest-api/.
 const CLOUD_SPEC_SRC = "../openapi/golem-service.yaml"
 const CLOUD_GEN_PATH = "./src/content/rest-api"
 
@@ -16,32 +16,9 @@ main().catch(e => {
   process.exit(1)
 })
 
-// Three modes:
-// --local : read the in-tree spec (../openapi/golem-service.yaml). Used by CI
-//           and `cargo make generate-openapi`.
-// --dev   : fetch from the deployed dev environment (in-memory only, no write).
-// --prod  : fetch from the deployed production environment (in-memory only, no write).
 async function main() {
-  const args = process.argv.slice(2)
-
-  if (args.length !== 1 || !["--prod", "--dev", "--local"].includes(args[0])) {
-    throw new Error("Invalid args: must be one of --prod --dev --local")
-  }
-
-  const [mode] = args
-
-  if (mode === "--local") {
-    console.log("Updating REST API docs from local OpenAPI spec at:", CLOUD_SPEC_SRC)
-    await writeOpenApiDocs(CLOUD_GEN_PATH, CLOUD_SPEC_SRC)
-  } else {
-    const specUrl =
-      mode === "--prod"
-        ? "https://release.api.golem.cloud/specs"
-        : "https://release.dev-api.golem.cloud/specs"
-
-    console.log("Updating REST API docs from OpenAPI spec at:", specUrl)
-    await writeOpenApiDocs(CLOUD_GEN_PATH, specUrl)
-  }
+  console.log("Updating REST API docs from local OpenAPI spec at:", CLOUD_SPEC_SRC)
+  await writeOpenApiDocs(CLOUD_GEN_PATH, CLOUD_SPEC_SRC)
 }
 
 async function writeOpenApiDocs(target: string, openapiSpec: string) {
