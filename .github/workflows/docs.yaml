@@ -77,6 +77,13 @@ jobs:
         with:
           node-version: 'lts/*'
 
+      # Vercel detects docs/bun.lockb and shells out to `bun install`
+      # during `vercel build`, so Bun must be on PATH in this job too.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Install Vercel CLI
         run: npm install --global vercel@latest
 
