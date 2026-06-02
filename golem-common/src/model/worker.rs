@@ -85,6 +85,7 @@ mod protobuf {
         SuccessfulUpdate, TypedAgentConfigEntry, UpdateRecord,
     };
     use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
+    use crate::base_model::AgentFingerprint;
     use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use crate::model::oplog::AgentResourceId;
     use crate::model::regions::OplogRegion;
@@ -151,6 +152,11 @@ mod protobuf {
                     .into_iter()
                     .map(OplogRegion::from)
                     .collect::<Vec<_>>(),
+                last_oplog_index: OplogIndex::from_u64(value.oplog_idx),
+                fingerprint: value
+                    .fingerprint
+                    .map(|uuid| AgentFingerprint(uuid.into()))
+                    .unwrap_or_default(),
             })
         }
     }
@@ -198,6 +204,8 @@ mod protobuf {
                     .into_iter()
                     .map(|region| region.into())
                     .collect(),
+                oplog_idx: u64::from(value.last_oplog_index),
+                fingerprint: Some(value.fingerprint.0.into()),
             }
         }
     }

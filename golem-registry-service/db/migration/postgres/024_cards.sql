@@ -21,7 +21,7 @@ CREATE TABLE card_parents
     CONSTRAINT card_parents_card_fk
         FOREIGN KEY (card_id) REFERENCES cards (card_id) ON DELETE CASCADE,
     CONSTRAINT card_parents_parent_fk
-        FOREIGN KEY (parent_id) REFERENCES cards (card_id) ON DELETE CASCADE
+        FOREIGN KEY (parent_id) REFERENCES cards (card_id)
 );
 
 CREATE INDEX card_parents_parent_id_idx

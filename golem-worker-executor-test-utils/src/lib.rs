@@ -554,6 +554,7 @@ impl TestWorkerExecutor {
             account_id: self.context.account_id,
             account_plan_id: self.context.account_plan_id,
             account_roles: self.context.account_roles.clone(),
+            token_root_card_id: None,
         })
     }
 
@@ -1294,7 +1295,7 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_success(full_function_name, consumed_fuel, output)

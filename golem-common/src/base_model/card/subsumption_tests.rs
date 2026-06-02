@@ -69,7 +69,7 @@ fn fixed_uuid() -> Uuid {
 
 fn card(lower_positive: Vec<PermissionPattern>, upper_positive: Vec<PermissionPattern>) -> Card {
     Card {
-        card_id: Uuid::new_v4(),
+        card_id: CardId::new(),
         parent_ids: Vec::new(),
         lower_positive,
         lower_negative: Vec::new(),

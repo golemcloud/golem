@@ -2354,6 +2354,7 @@ components:
       - activePlugins
       - skippedRegions
       - deletedRegions
+      - fingerprint
       properties:
         agentId:
           $ref: '#/components/schemas/AgentId'
@@ -2419,6 +2420,22 @@ components:
           description: Oplog regions permanently deleted from the workers using the revert functionality.
           items:
             $ref: '#/components/schemas/OplogRegion'
+        lastOplogIndex:
+          type: integer
+          format: uint64
+          description: |-
+            Latest known oplog index for this agent. Increases monotonically as
+            the agent executes and can be used as a revision marker for the
+            agent's persisted state.
+          default: 0
+        fingerprint:
+          type: string
+          format: uuid
+          description: |-
+            Per-instance fingerprint for this agent: a random UUID generated at
+            agent creation, globally unique across recreations of the same
+            `AgentId`. Distinguishes a freshly-created agent from a previous,
+            now-deleted instance that shared the same `AgentId`.
     AgentMethodInvocationParameters:
       type: object
       title: AgentMethodInvocationParameters

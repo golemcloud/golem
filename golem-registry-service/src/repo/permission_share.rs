@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
+use crate::repo::model::card::CardRecord;
 use crate::repo::model::permission_share::{
     PermissionShareExtRevisionRecord, PermissionShareRecord, PermissionShareRepoError,
     PermissionShareRevisionRecord,
@@ -20,11 +22,13 @@ use crate::repo::model::permission_share::{
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
+use golem_common::model::card::CardId;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
-use golem_service_base::repo::ResultExt;
+use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
+use sqlx::Row;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -35,11 +39,13 @@ pub trait PermissionShareRepo: Send + Sync {
         owner_account_id: Uuid,
         target_account_id: Uuid,
         revision: PermissionShareRevisionRecord,
+        card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError>;
 
     async fn update(
         &self,
         revision: PermissionShareRevisionRecord,
+        replacement_card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError>;
 
     async fn delete(
@@ -67,6 +73,11 @@ pub trait PermissionShareRepo: Send + Sync {
         &self,
         target_account_id: Uuid,
     ) -> Result<Vec<PermissionShareExtRevisionRecord>, PermissionShareRepoError>;
+
+    async fn active_cards_for_target(
+        &self,
+        target_account_id: Uuid,
+    ) -> Result<Vec<CardRecord>, PermissionShareRepoError>;
 }
 
 pub struct LoggedPermissionShareRepo<Repo: PermissionShareRepo> {
@@ -96,9 +107,10 @@ impl<Repo: PermissionShareRepo> PermissionShareRepo for LoggedPermissionShareRep
         owner_account_id: Uuid,
         target_account_id: Uuid,
         revision: PermissionShareRevisionRecord,
+        card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
         self.repo
-            .create(owner_account_id, target_account_id, revision)
+            .create(owner_account_id, target_account_id, revision, card)
             .instrument(Self::span_account_id(owner_account_id))
             .await
     }
@@ -106,9 +118,13 @@ impl<Repo: PermissionShareRepo> PermissionShareRepo for LoggedPermissionShareRep
     async fn update(
         &self,
         revision: PermissionShareRevisionRecord,
+        replacement_card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
         let span = Self::span_permission_share_id(revision.permission_share_id);
-        self.repo.update(revision).instrument(span).await
+        self.repo
+            .update(revision, replacement_card)
+            .instrument(span)
+            .await
     }
 
     async fn delete(
@@ -156,6 +172,16 @@ impl<Repo: PermissionShareRepo> PermissionShareRepo for LoggedPermissionShareRep
     ) -> Result<Vec<PermissionShareExtRevisionRecord>, PermissionShareRepoError> {
         self.repo
             .get_for_target(target_account_id)
+            .instrument(Self::span_account_id(target_account_id))
+            .await
+    }
+
+    async fn active_cards_for_target(
+        &self,
+        target_account_id: Uuid,
+    ) -> Result<Vec<CardRecord>, PermissionShareRepoError> {
+        self.repo
+            .active_cards_for_target(target_account_id)
             .instrument(Self::span_account_id(target_account_id))
             .await
     }
@@ -207,6 +233,132 @@ impl DbPermissionShareRepo<PostgresPool> {
         .await
         .to_error_on_unique_violation(PermissionShareRepoError::ConcurrentModification)
     }
+
+    async fn insert_card(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        card: CardRecord,
+    ) -> Result<CardRecord, PermissionShareRepoError> {
+        let inserted: CardRecord = tx
+            .fetch_one_as(
+                sqlx::query_as(indoc! { r#"
+                    INSERT INTO cards
+                        (card_id, data, created_at, expires_at, system_card, managed_by)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING card_id, data, created_at, expires_at, system_card, managed_by
+                "#})
+                .bind(card.card_id)
+                .bind(card.data)
+                .bind(card.created_at)
+                .bind(card.expires_at)
+                .bind(card.system_card)
+                .bind(card.managed_by),
+            )
+            .await?;
+
+        for parent_id in inserted.data.value().parent_ids.as_slice() {
+            tx.execute(
+                sqlx::query("INSERT INTO card_parents (card_id, parent_id) VALUES ($1, $2)")
+                    .bind(inserted.card_id)
+                    .bind(*parent_id),
+            )
+            .await
+            .to_error_on_foreign_key_violation(
+                PermissionShareRepoError::ParentCardNotFound(*parent_id),
+            )?;
+        }
+
+        Ok(inserted)
+    }
+
+    async fn invalidate_token_root_card_and_bump_epoch_in_tx(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+    ) -> Result<(), PermissionShareRepoError> {
+        let row = tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                UPDATE accounts
+                SET token_root_card_epoch = token_root_card_epoch + 1
+                WHERE account_id = $1
+                  AND deleted_at IS NULL
+                RETURNING token_root_card_id
+            "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        let token_root_card_id = row
+            .map(|row| row.try_get::<Option<Uuid>, _>("token_root_card_id"))
+            .transpose()
+            .map_err(RepoError::from)?;
+
+        if let Some(token_root_card_id) = token_root_card_id.flatten() {
+            DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, CardId(token_root_card_id)).await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl DbPermissionShareRepo<PostgresPool> {
+    async fn invalidate_token_root_card_without_epoch_bump_in_tx(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+    ) -> Result<(), PermissionShareRepoError> {
+        let row = tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT token_root_card_id
+                    FROM accounts
+                    WHERE account_id = $1
+                      AND deleted_at IS NULL
+                    FOR UPDATE
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        let token_root_card_id = row
+            .map(|row| row.try_get::<Option<Uuid>, _>("token_root_card_id"))
+            .transpose()
+            .map_err(RepoError::from)?;
+
+        if let Some(token_root_card_id) = token_root_card_id.flatten() {
+            DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, CardId(token_root_card_id)).await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl DbPermissionShareRepo<SqlitePool> {
+    async fn invalidate_token_root_card_without_epoch_bump_in_tx(
+        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+    ) -> Result<(), PermissionShareRepoError> {
+        let row = tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT token_root_card_id
+                    FROM accounts
+                    WHERE account_id = $1
+                      AND deleted_at IS NULL
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        let token_root_card_id = row
+            .map(|row| row.try_get::<Option<Uuid>, _>("token_root_card_id"))
+            .transpose()
+            .map_err(RepoError::from)?;
+
+        if let Some(token_root_card_id) = token_root_card_id.flatten() {
+            DbCardRepo::<SqlitePool>::delete_tree_in_tx(tx, CardId(token_root_card_id)).await?;
+        }
+
+        Ok(())
+    }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -217,38 +369,51 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         owner_account_id: Uuid,
         target_account_id: Uuid,
         revision: PermissionShareRevisionRecord,
+        card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
-        let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
-            async move {
-                let share: PermissionShareRecord = tx.fetch_one_as(
-                    sqlx::query_as(indoc! { r#"
-                        INSERT INTO permission_shares
-                            (permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
-                        VALUES ($1, $2, $3, $4, $5, $6, $6, NULL, $7, $8)
-                        RETURNING permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                    "#})
-                    .bind(revision.permission_share_id)
-                    .bind(owner_account_id)
-                    .bind(target_account_id)
-                    .bind(&revision.name)
-                    .bind(revision.card_id)
-                    .bind(&revision.audit.created_at)
-                    .bind(revision.audit.created_by)
-                    .bind(revision.revision_id),
-                )
-                .await
-                .to_error_on_unique_violation(PermissionShareRepoError::ShareViolatesUniqueness)?;
+        let result = self
+            .db_pool
+            .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
+                async move {
+                    let card = Self::insert_card(tx, card).await?;
 
-                let revision = Self::insert_revision(tx, revision).await?;
+                    let share: PermissionShareRecord = tx
+                        .fetch_one_as(
+                            sqlx::query_as(indoc! { r#"
+                                INSERT INTO permission_shares
+                                    (permission_share_id, owner_account_id, target_account_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                                VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7)
+                                RETURNING permission_share_id, owner_account_id, target_account_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            "#})
+                            .bind(revision.permission_share_id)
+                            .bind(owner_account_id)
+                            .bind(target_account_id)
+                            .bind(&revision.name)
+                            .bind(&revision.audit.created_at)
+                            .bind(revision.audit.created_by)
+                            .bind(revision.revision_id),
+                        )
+                        .await
+                        .to_error_on_unique_violation(
+                            PermissionShareRepoError::ShareViolatesUniqueness,
+                        )?;
 
-                Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
-                    owner_account_id: share.owner_account_id,
-                    target_account_id: share.target_account_id,
-                    current_card_id: share.current_card_id,
-                    revision,
-                })
-            }.boxed()
-        }).await?;
+                    let mut revision = revision;
+                    revision.card_id = Some(card.card_id);
+                    let revision = Self::insert_revision(tx, revision).await?;
+
+                    Self::invalidate_token_root_card_and_bump_epoch_in_tx(tx, target_account_id)
+                        .await?;
+
+                    Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
+                        owner_account_id: share.owner_account_id,
+                        target_account_id: share.target_account_id,
+                        revision,
+                    })
+                }
+                .boxed()
+            })
+            .await?;
 
         Ok(result)
     }
@@ -256,41 +421,60 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
     async fn update(
         &self,
         revision: PermissionShareRevisionRecord,
+        replacement_card: CardRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
-        let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
-            async move {
-                let previous_revision_id = revision.revision_id - 1;
-                let revision = Self::insert_revision(tx, revision).await?;
+        let result = self
+            .db_pool
+            .with_tx_err(METRICS_SVC_NAME, "update", |tx| {
+                async move {
+                    let old_card_id = revision.card_id;
+                    let replacement_card = Self::insert_card(tx, replacement_card).await?;
+                    let mut revision = revision;
+                    revision.card_id = Some(replacement_card.card_id);
+                    let revision = Self::insert_revision(tx, revision).await?;
 
-                let share: PermissionShareRecord = tx.fetch_optional_as(
-                    sqlx::query_as(indoc! { r#"
-                        UPDATE permission_shares
-                        SET name = $1, current_card_id = $2, updated_at = $3, modified_by = $4, current_revision_id = $5
-                        WHERE permission_share_id = $6
-                          AND current_revision_id = $7
-                          AND deleted_at IS NULL
-                        RETURNING permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                    "#})
-                    .bind(&revision.name)
-                    .bind(revision.card_id)
-                    .bind(&revision.audit.created_at)
-                    .bind(revision.audit.created_by)
-                    .bind(revision.revision_id)
-                    .bind(revision.permission_share_id)
-                    .bind(previous_revision_id),
-                )
-                .await
-                .to_error_on_unique_violation(PermissionShareRepoError::ShareViolatesUniqueness)?
-                .ok_or(PermissionShareRepoError::ConcurrentModification)?;
+                    let share: PermissionShareRecord = tx
+                        .fetch_optional_as(
+                            sqlx::query_as(indoc! { r#"
+                                UPDATE permission_shares
+                                SET name = $1, updated_at = $2, modified_by = $3, current_revision_id = $4
+                                WHERE permission_share_id = $5
+                                RETURNING permission_share_id, owner_account_id, target_account_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            "#})
+                            .bind(&revision.name)
+                            .bind(&revision.audit.created_at)
+                            .bind(revision.audit.created_by)
+                            .bind(revision.revision_id)
+                            .bind(revision.permission_share_id),
+                        )
+                        .await
+                        .to_error_on_unique_violation(
+                            PermissionShareRepoError::ShareViolatesUniqueness,
+                        )?
+                        .ok_or(PermissionShareRepoError::ConcurrentModification)?;
 
-                Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
-                    owner_account_id: share.owner_account_id,
-                    target_account_id: share.target_account_id,
-                    current_card_id: share.current_card_id,
-                    revision,
-                })
-            }.boxed()
-        }).await?;
+                    Self::invalidate_token_root_card_and_bump_epoch_in_tx(
+                        tx,
+                        share.target_account_id,
+                    )
+                    .await?;
+
+                    if let Some(old_card_id) =
+                        old_card_id.filter(|card_id| *card_id != replacement_card.card_id)
+                    {
+                        DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, CardId(old_card_id))
+                            .await?;
+                    }
+
+                    Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
+                        owner_account_id: share.owner_account_id,
+                        target_account_id: share.target_account_id,
+                        revision,
+                    })
+                }
+                .boxed()
+            })
+            .await?;
 
         Ok(result)
     }
@@ -299,37 +483,50 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         &self,
         revision: PermissionShareRevisionRecord,
     ) -> Result<PermissionShareExtRevisionRecord, PermissionShareRepoError> {
-        let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
-            async move {
-                let previous_revision_id = revision.revision_id - 1;
-                let revision = Self::insert_revision(tx, revision).await?;
+        let result = self
+            .db_pool
+                .with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
+                async move {
+                    let mut revision = Self::insert_revision(tx, revision).await?;
+                    let old_card_id = revision.card_id;
 
-                let share: PermissionShareRecord = tx.fetch_optional_as(
-                    sqlx::query_as(indoc! { r#"
-                        UPDATE permission_shares
-                        SET current_card_id = NULL, updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
-                        WHERE permission_share_id = $4
-                          AND current_revision_id = $5
-                          AND deleted_at IS NULL
-                        RETURNING permission_share_id, owner_account_id, target_account_id, name, current_card_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                    "#})
-                    .bind(&revision.audit.created_at)
-                    .bind(revision.audit.created_by)
-                    .bind(revision.revision_id)
-                    .bind(revision.permission_share_id)
-                    .bind(previous_revision_id),
-                )
-                .await?
-                .ok_or(PermissionShareRepoError::ConcurrentModification)?;
+                    let share: PermissionShareRecord = tx
+                        .fetch_optional_as(
+                            sqlx::query_as(indoc! { r#"
+                                UPDATE permission_shares
+                                SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
+                                WHERE permission_share_id = $4
+                                RETURNING permission_share_id, owner_account_id, target_account_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            "#})
+                            .bind(&revision.audit.created_at)
+                            .bind(revision.audit.created_by)
+                            .bind(revision.revision_id)
+                            .bind(revision.permission_share_id),
+                        )
+                        .await?
+                        .ok_or(PermissionShareRepoError::ConcurrentModification)?;
 
-                Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
-                    owner_account_id: share.owner_account_id,
-                    target_account_id: share.target_account_id,
-                    current_card_id: share.current_card_id,
-                    revision,
-                })
-            }.boxed()
-        }).await?;
+                    Self::invalidate_token_root_card_without_epoch_bump_in_tx(
+                        tx,
+                        share.target_account_id,
+                    )
+                    .await?;
+
+                    if let Some(old_card_id) = old_card_id {
+                        DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, CardId(old_card_id))
+                            .await?;
+                        revision.card_id = None;
+                    }
+
+                    Ok::<_, PermissionShareRepoError>(PermissionShareExtRevisionRecord {
+                        owner_account_id: share.owner_account_id,
+                        target_account_id: share.target_account_id,
+                        revision,
+                    })
+                }
+                .boxed()
+            })
+            .await?;
 
         Ok(result)
     }
@@ -341,7 +538,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT ps.owner_account_id, ps.target_account_id, ps.current_card_id,
+                    SELECT ps.owner_account_id, ps.target_account_id,
                            psr.permission_share_id, psr.revision_id, psr.name, psr.card_id, psr.data, psr.created_at, psr.created_by, psr.deleted
                     FROM permission_shares ps
                     JOIN permission_share_revisions psr
@@ -364,7 +561,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         self.with_ro("get_by_owner_and_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT ps.owner_account_id, ps.target_account_id, ps.current_card_id,
+                    SELECT ps.owner_account_id, ps.target_account_id,
                            psr.permission_share_id, psr.revision_id, psr.name, psr.card_id, psr.data, psr.created_at, psr.created_by, psr.deleted
                     FROM permission_shares ps
                     JOIN permission_share_revisions psr
@@ -388,7 +585,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         self.with_ro("get_for_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT ps.owner_account_id, ps.target_account_id, ps.current_card_id,
+                    SELECT ps.owner_account_id, ps.target_account_id,
                            psr.permission_share_id, psr.revision_id, psr.name, psr.card_id, psr.data, psr.created_at, psr.created_by, psr.deleted
                     FROM permission_shares ps
                     JOIN permission_share_revisions psr
@@ -411,7 +608,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
         self.with_ro("get_for_target")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT ps.owner_account_id, ps.target_account_id, ps.current_card_id,
+                    SELECT ps.owner_account_id, ps.target_account_id,
                            psr.permission_share_id, psr.revision_id, psr.name, psr.card_id, psr.data, psr.created_at, psr.created_by, psr.deleted
                     FROM permission_shares ps
                     JOIN permission_share_revisions psr
@@ -420,6 +617,29 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                     WHERE ps.target_account_id = $1
                       AND ps.deleted_at IS NULL
                     ORDER BY ps.name
+                "#})
+                .bind(target_account_id),
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn active_cards_for_target(
+        &self,
+        target_account_id: Uuid,
+    ) -> Result<Vec<CardRecord>, PermissionShareRepoError> {
+        self.with_ro("active_cards_for_target")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT c.card_id, c.data, c.created_at, c.expires_at, c.system_card, c.managed_by
+                    FROM permission_shares ps
+                    JOIN permission_share_revisions psr
+                        ON psr.permission_share_id = ps.permission_share_id
+                       AND psr.revision_id = ps.current_revision_id
+                    JOIN cards c ON c.card_id = psr.card_id
+                    WHERE ps.target_account_id = $1
+                      AND ps.deleted_at IS NULL
+                    ORDER BY ps.permission_share_id
                 "#})
                 .bind(target_account_id),
             )

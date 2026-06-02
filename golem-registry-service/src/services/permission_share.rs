@@ -14,18 +14,25 @@
 
 use super::account::{AccountError, AccountService};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
+use crate::repo::model::card::CardRecord;
 use crate::repo::model::permission_share::{
     PermissionShareRepoError, PermissionShareRevisionRecord,
 };
 use crate::repo::permission_share::PermissionShareRepo;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{Account, AccountId};
+use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::card::{Card, CardId, CardManagedBy, CardParseError, PermissionPattern};
 use golem_common::model::permission_share::{
-    PermissionShare, PermissionShareCreation, PermissionShareId, PermissionShareName,
-    PermissionShareRevision, PermissionShareUpdate,
+    PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareId,
+    PermissionShareName, PermissionShareRevision, PermissionShareUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, AuthCtx, AuthorizationError};
+use std::str::FromStr;
 use std::sync::Arc;
+use uuid::Uuid;
+
+const MAX_CARD_TREE_DELETE_ATTEMPTS: usize = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PermissionShareError {
@@ -37,6 +44,10 @@ pub enum PermissionShareError {
     PermissionShareByNameNotFound(PermissionShareName),
     #[error("Target account {0} not found")]
     TargetAccountNotFound(AccountId),
+    #[error("Invalid permission grant {grant}: {message}")]
+    InvalidGrant { grant: String, message: String },
+    #[error("Permission grant recipient must be '*' or target account '{target_account}'")]
+    InvalidRecipient { target_account: String },
     #[error("Concurrent update attempt")]
     ConcurrentModification,
     #[error(transparent)]
@@ -52,6 +63,8 @@ impl SafeDisplay for PermissionShareError {
             Self::PermissionShareNotFound(_) => self.to_string(),
             Self::PermissionShareByNameNotFound(_) => self.to_string(),
             Self::TargetAccountNotFound(_) => self.to_string(),
+            Self::InvalidGrant { .. } => self.to_string(),
+            Self::InvalidRecipient { .. } => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -85,9 +98,10 @@ impl PermissionShareService {
     ) -> Result<PermissionShare, PermissionShareError> {
         auth.authorize_account_action(owner_account_id, AccountAction::CreatePermissionShare)?;
 
-        self.ensure_account_exists(data.target_account_id).await?;
+        let target_account = self.get_account(data.target_account_id).await?;
 
         let id = PermissionShareId::new();
+        let card = self.permission_share_card(id, &data.data, target_account.email.as_str())?;
         let revision = PermissionShareRevisionRecord::creation(
             id,
             data.name,
@@ -95,17 +109,31 @@ impl PermissionShareService {
             auth.actor_account_id(),
         );
 
-        match self
-            .permission_share_repo
-            .create(owner_account_id.0, data.target_account_id.0, revision)
-            .await
-        {
-            Ok(record) => Ok(record.try_into()?),
-            Err(PermissionShareRepoError::ShareViolatesUniqueness) => {
-                Err(PermissionShareError::PermissionShareAlreadyExists)
+        for attempt in 0..MAX_CARD_TREE_DELETE_ATTEMPTS {
+            match self
+                .permission_share_repo
+                .create(
+                    owner_account_id.0,
+                    data.target_account_id.0,
+                    revision.clone(),
+                    card.clone(),
+                )
+                .await
+            {
+                Ok(record) => return Ok(record.try_into()?),
+                Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
+                    if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
+                {
+                    continue;
+                }
+                Err(PermissionShareRepoError::ShareViolatesUniqueness) => {
+                    return Err(PermissionShareError::PermissionShareAlreadyExists);
+                }
+                Err(other) => return Err(other.into()),
             }
-            Err(other) => Err(other.into()),
         }
+
+        Err(PermissionShareError::ConcurrentModification)
     }
 
     pub async fn update(
@@ -124,26 +152,44 @@ impl PermissionShareService {
             return Err(PermissionShareError::ConcurrentModification);
         }
 
+        let target_account = self.get_account(share.target_account_id).await?;
+        let replacement_card = self.permission_share_card(
+            permission_share_id,
+            &update.data,
+            target_account.email.as_str(),
+        )?;
+
         share.revision = share.revision.next()?;
         share.name = update.name;
         share.data = update.data;
 
         let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
 
-        match self
-            .permission_share_repo
-            .update(PermissionShareRevisionRecord::from_model(share, audit))
-            .await
-        {
-            Ok(record) => Ok(record.try_into()?),
-            Err(PermissionShareRepoError::ShareViolatesUniqueness) => {
-                Err(PermissionShareError::PermissionShareAlreadyExists)
+        let revision = PermissionShareRevisionRecord::from_model(share, audit);
+
+        for attempt in 0..MAX_CARD_TREE_DELETE_ATTEMPTS {
+            match self
+                .permission_share_repo
+                .update(revision.clone(), replacement_card.clone())
+                .await
+            {
+                Ok(record) => return Ok(record.try_into()?),
+                Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
+                    if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
+                {
+                    continue;
+                }
+                Err(PermissionShareRepoError::ShareViolatesUniqueness) => {
+                    return Err(PermissionShareError::PermissionShareAlreadyExists);
+                }
+                Err(PermissionShareRepoError::ConcurrentModification) => {
+                    return Err(PermissionShareError::ConcurrentModification);
+                }
+                Err(other) => return Err(other.into()),
             }
-            Err(PermissionShareRepoError::ConcurrentModification) => {
-                Err(PermissionShareError::ConcurrentModification)
-            }
-            Err(other) => Err(other.into()),
         }
+
+        Err(PermissionShareError::ConcurrentModification)
     }
 
     pub async fn delete(
@@ -166,17 +212,24 @@ impl PermissionShareService {
 
         let audit = DeletableRevisionAuditFields::deletion(auth.actor_account_id().0);
 
-        match self
-            .permission_share_repo
-            .delete(PermissionShareRevisionRecord::from_model(share, audit))
-            .await
-        {
-            Ok(record) => Ok(record.try_into()?),
-            Err(PermissionShareRepoError::ConcurrentModification) => {
-                Err(PermissionShareError::ConcurrentModification)
+        let revision = PermissionShareRevisionRecord::from_model(share, audit);
+
+        for attempt in 0..MAX_CARD_TREE_DELETE_ATTEMPTS {
+            match self.permission_share_repo.delete(revision.clone()).await {
+                Ok(record) => return Ok(record.try_into()?),
+                Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
+                    if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
+                {
+                    continue;
+                }
+                Err(PermissionShareRepoError::ConcurrentModification) => {
+                    return Err(PermissionShareError::ConcurrentModification);
+                }
+                Err(other) => return Err(other.into()),
             }
-            Err(other) => Err(other.into()),
         }
+
+        Err(PermissionShareError::ConcurrentModification)
     }
 
     pub async fn get(
@@ -246,20 +299,70 @@ impl PermissionShareService {
             .collect()
     }
 
-    async fn ensure_account_exists(
+    pub async fn active_share_cards_for_target(
         &self,
-        account_id: AccountId,
-    ) -> Result<(), PermissionShareError> {
+        target_account_id: AccountId,
+    ) -> Result<Vec<Card>, PermissionShareError> {
+        self.permission_share_repo
+            .active_cards_for_target(target_account_id.0)
+            .await?
+            .into_iter()
+            .map(|record| {
+                record
+                    .try_into()
+                    .map_err(PermissionShareRepoError::from)
+                    .map_err(Into::into)
+            })
+            .collect()
+    }
+
+    async fn get_account(&self, account_id: AccountId) -> Result<Account, PermissionShareError> {
         self.account_service
             .get(account_id, &AuthCtx::System)
             .await
-            .map(|_| ())
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
                     PermissionShareError::TargetAccountNotFound(account_id)
                 }
                 other => other.into(),
             })
+    }
+
+    fn permission_share_card(
+        &self,
+        permission_share_id: PermissionShareId,
+        data: &PermissionShareData,
+        target_account: &str,
+    ) -> Result<CardRecord, PermissionShareError> {
+        let parsed = self.parse_and_validate_data_for_target(data, target_account)?;
+        let card_id = Uuid::now_v7();
+
+        Ok(CardRecord::creation(
+            CardId(card_id),
+            Vec::new(),
+            parsed.lower_positive,
+            parsed.lower_negative,
+            parsed.upper_positive,
+            parsed.upper_negative,
+            None,
+            true,
+            Some(CardManagedBy::PermissionShare {
+                permission_share_id: permission_share_id.0,
+            }),
+        ))
+    }
+
+    fn parse_and_validate_data_for_target(
+        &self,
+        data: &PermissionShareData,
+        target_account: &str,
+    ) -> Result<ParsedPermissionShareData, PermissionShareError> {
+        Ok(ParsedPermissionShareData {
+            lower_positive: parse_and_validate_grants(&data.lower_positive, target_account)?,
+            lower_negative: parse_and_validate_grants(&data.lower_negative, target_account)?,
+            upper_positive: parse_and_validate_grants(&data.upper_positive, target_account)?,
+            upper_negative: parse_and_validate_grants(&data.upper_negative, target_account)?,
+        })
     }
 
     fn authorize_view(
@@ -276,5 +379,47 @@ impl PermissionShareService {
             })?;
 
         Ok(())
+    }
+}
+
+struct ParsedPermissionShareData {
+    lower_positive: Vec<PermissionPattern>,
+    lower_negative: Vec<PermissionPattern>,
+    upper_positive: Vec<PermissionPattern>,
+    upper_negative: Vec<PermissionPattern>,
+}
+
+fn parse_and_validate_grants(
+    grants: &[String],
+    target_account: &str,
+) -> Result<Vec<PermissionPattern>, PermissionShareError> {
+    grants
+        .iter()
+        .map(|grant| {
+            let permission =
+                PermissionPattern::from_str(grant).map_err(|err| invalid_grant(grant, err))?;
+            validate_recipient(permission.recipient(), target_account)?;
+            Ok(permission)
+        })
+        .collect()
+}
+
+fn validate_recipient(
+    recipient: &RecipientPattern,
+    target_account: &str,
+) -> Result<(), PermissionShareError> {
+    match recipient {
+        RecipientPattern::Any => Ok(()),
+        RecipientPattern::Account { account } if account == target_account => Ok(()),
+        _ => Err(PermissionShareError::InvalidRecipient {
+            target_account: target_account.to_string(),
+        }),
+    }
+}
+
+fn invalid_grant(grant: &str, err: CardParseError) -> PermissionShareError {
+    PermissionShareError::InvalidGrant {
+        grant: grant.to_string(),
+        message: err.to_string(),
     }
 }

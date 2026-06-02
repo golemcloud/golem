@@ -203,13 +203,13 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                 let account_record: AccountRecord = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! {r#"
-                            INSERT INTO accounts (account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id)
-                            VALUES ($1, $2, $3, $4, NULL, $5, $6)
-                            RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            INSERT INTO accounts (account_id, email, token_root_card_id, token_root_card_epoch, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                            VALUES ($1, $2, NULL, $3, $4, $4, NULL, $5, $6)
+                            RETURNING account_id, email, token_root_card_id, token_root_card_epoch, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(revision.account_id)
                             .bind(&revision.email)
-                            .bind(&revision.audit.created_at)
+                            .bind(0i64)
                             .bind(&revision.audit.created_at)
                             .bind(revision.audit.created_by)
                             .bind(revision.revision_id)
@@ -221,6 +221,8 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
 
                 Ok(AccountExtRevisionRecord {
                     entity_created_at: account_record.audit.created_at,
+                    token_root_card_id: account_record.token_root_card_id,
+                    token_root_card_epoch: account_record.token_root_card_epoch,
                     revision: revision_record
                 })
             }.boxed()
@@ -241,7 +243,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                             UPDATE accounts
                             SET updated_at = $1, modified_by = $2, current_revision_id = $3, email = $4
                             WHERE account_id = $5
-                            RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            RETURNING account_id, email, token_root_card_id, token_root_card_epoch, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(&revision.audit.created_at)
                             .bind(revision.audit.created_by)
@@ -254,6 +256,8 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
 
                 Ok(AccountExtRevisionRecord {
                     entity_created_at: account_record.audit.created_at,
+                    token_root_card_id: account_record.token_root_card_id,
+                    token_root_card_epoch: account_record.token_root_card_epoch,
                     revision: revision_record
                 })
             }.boxed()
@@ -276,7 +280,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                             UPDATE accounts
                             SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3, email = $4
                             WHERE account_id = $5
-                            RETURNING account_id, email, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            RETURNING account_id, email, token_root_card_id, token_root_card_epoch, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(&revision.audit.created_at)
                             .bind(revision.audit.created_by)
@@ -294,6 +298,8 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
 
                 Ok::<_, AccountRepoError>(AccountExtRevisionRecord {
                     entity_created_at: account_record.audit.created_at,
+                    token_root_card_id: account_record.token_root_card_id,
+                    token_root_card_epoch: account_record.token_root_card_epoch,
                     revision: revision_record,
                 })
             }.boxed()
@@ -310,7 +316,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
         let result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT a.created_at AS entity_created_at, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.roles, ar.created_at, ar.created_by, ar.deleted
+                    SELECT a.created_at AS entity_created_at, a.token_root_card_id, a.token_root_card_epoch, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.roles, ar.created_at, ar.created_by, ar.deleted
                     FROM accounts a
                     JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
                     WHERE
@@ -331,7 +337,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
         let result: Option<AccountExtRevisionRecord> = self.with_ro("get_by_email")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT a.created_at AS entity_created_at, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.roles, ar.created_at, ar.created_by, ar.deleted
+                    SELECT a.created_at AS entity_created_at, a.token_root_card_id, a.token_root_card_epoch, ar.account_id, ar.revision_id, ar.name, ar.email, ar.plan_id, ar.roles, ar.created_at, ar.created_by, ar.deleted
                     FROM accounts a
                     JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
                     WHERE
@@ -357,6 +363,8 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                         t.expires_at as token_expires_at,
                         t.impersonated_by,
                         a.created_at AS entity_created_at,
+                        a.token_root_card_id,
+                        a.token_root_card_epoch,
                         ar.account_id, ar.revision_id, ar.name, ar.email,
                         ar.plan_id, ar.roles, ar.created_at, ar.created_by, ar.deleted
                     FROM accounts a
