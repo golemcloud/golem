@@ -31,6 +31,7 @@ declare_revision!(CardRevision);
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum CardManagedBy {
     AccountRoot { account_id: AccountId },
+    TokenRoot { account_id: AccountId },
     EnvironmentDefault { environment_id: EnvironmentId },
     PermissionShare { permission_share_id: Uuid },
     Token { token_id: TokenId },

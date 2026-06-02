@@ -43,6 +43,7 @@ pub mod observability;
 pub mod oplog_metrics;
 pub mod rdbms;
 pub mod rdbms_service;
+pub mod readonly;
 pub mod resource_limits;
 pub mod retry_policies;
 pub mod revert;
@@ -75,6 +76,7 @@ tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
 tag_suite!(scalability, group3);
 tag_suite!(revert, group3);
+tag_suite!(readonly, group3);
 
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
@@ -164,6 +166,12 @@ test_component!(
     "agent_counters",
     "it_agent_counters_release",
     "it:agent-counters"
+);
+test_component!(
+    agent_sdk_rust,
+    "agent_sdk_rust",
+    "golem_it_agent_sdk_rust_release",
+    "golem-it:agent-sdk-rust"
 );
 test_component!(
     http_tests,

@@ -2556,6 +2556,26 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         "component_revision missing in AgentInvocationOutput during replay",
                     )
                 })?;
+
+                // Classify the just-completed invocation up front so we can
+                // bump the read-only cache epoch on successful mutating
+                // completion. For non-AgentMethod results
+                // (initialization, manual update, snapshot
+                // load/save, oplog processing) we always invalidate — these
+                // are all state-changing. For AgentMethod results we ask the
+                // worker whether the method is `read_only`.
+                let invalidates_read_only_cache = match &output.result {
+                    AgentInvocationResult::AgentMethod { .. } => self
+                        .public_state
+                        .worker()
+                        .agent_method_invalidates_read_only_cache(full_function_name),
+                    AgentInvocationResult::AgentInitialization
+                    | AgentInvocationResult::ManualUpdate
+                    | AgentInvocationResult::LoadSnapshot { .. }
+                    | AgentInvocationResult::SaveSnapshot { .. }
+                    | AgentInvocationResult::ProcessOplogEntries { .. } => true,
+                };
+
                 self.public_state
                     .worker()
                     .oplog()
@@ -2573,6 +2593,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::Always)
                     .await;
+
+                // Bump the read-only cache epoch after the
+                // `AgentInvocationFinished` entry is committed, but *before*
+                // we publish `InvocationCompleted` to waiters via
+                // `store_invocation_success`. Ordering matters: any client
+                // that observes the completion event must also see an
+                // invalidated cache, otherwise it could read a stale cached
+                // result for the now-mutated state.
+                if invalidates_read_only_cache {
+                    self.public_state.worker().bump_read_only_cache_epoch();
+                }
 
                 // Capture the agent's oplog index right after
                 // `AgentInvocationFinished` was committed, together with the
