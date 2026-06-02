@@ -409,7 +409,9 @@ pub async fn execute_external_command(
 
                 configure_external_command_env(&mut process, command_tokens[0].as_str(), ctx);
 
-                process.stream_and_run(&command_tokens[0]).await
+                process
+                    .stream_and_run(external_command_display_name(&command_tokens[0]))
+                    .await
             },
             || {
                 log_skipping_up_to_date(format!(
@@ -420,6 +422,14 @@ pub async fn execute_external_command(
             },
         )
         .await
+}
+
+fn external_command_display_name(command: &str) -> &str {
+    command
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(command)
 }
 
 pub async fn ensure_common_deps_for_tool(ctx: &BuildContext<'_>, tool: &str) -> anyhow::Result<()> {
