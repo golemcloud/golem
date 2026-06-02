@@ -18,7 +18,8 @@ use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     AccountResourcePattern, AccountTokenResourcePattern, AccountTokenVerb, AccountVerb,
-    ClassPermissionPattern, SystemResourcePattern, SystemVerb,
+    ClassPermissionPattern, ClassPermissionTarget, PermissionTarget, SystemResourcePattern,
+    SystemVerb,
 };
 use test_r::test;
 
@@ -41,19 +42,24 @@ fn make_env_roles(roles: &[EnvironmentRole]) -> BTreeSet<EnvironmentRole> {
     roles.iter().copied().collect()
 }
 
-fn report_permission() -> PermissionPattern {
+fn report_grant(recipient: RecipientPattern) -> PermissionPattern {
     PermissionPattern::System(ClassPermissionPattern {
         verb: Some(SystemVerb::ViewAccountSummariesReport),
         owner: EmptyOwnerPattern,
-        recipient: RecipientPattern::Any,
+        recipient,
         resource: SystemResourcePattern,
     })
 }
 
-fn account_token_permission(
-    account_id: AccountId,
-    recipient: RecipientPattern,
-) -> PermissionPattern {
+fn report_target() -> PermissionTarget {
+    PermissionTarget::System(ClassPermissionTarget {
+        verb: Some(SystemVerb::ViewAccountSummariesReport),
+        owner: EmptyOwnerPattern,
+        resource: SystemResourcePattern,
+    })
+}
+
+fn account_token_grant(account_id: AccountId, recipient: RecipientPattern) -> PermissionPattern {
     PermissionPattern::AccountToken(ClassPermissionPattern {
         verb: Some(AccountTokenVerb::Create),
         owner: AccountOwnerPattern::Account {
@@ -64,13 +70,33 @@ fn account_token_permission(
     })
 }
 
-fn account_permission(account_id: AccountId, recipient: RecipientPattern) -> PermissionPattern {
+fn account_token_target(account_id: AccountId) -> PermissionTarget {
+    PermissionTarget::AccountToken(ClassPermissionTarget {
+        verb: Some(AccountTokenVerb::Create),
+        owner: AccountOwnerPattern::Account {
+            account: account_id.to_string(),
+        },
+        resource: AccountTokenResourcePattern::Any,
+    })
+}
+
+fn account_grant(account_id: AccountId, recipient: RecipientPattern) -> PermissionPattern {
     PermissionPattern::Account(ClassPermissionPattern {
         verb: Some(AccountVerb::Update),
         owner: AccountOwnerPattern::Account {
             account: account_id.to_string(),
         },
         recipient,
+        resource: AccountResourcePattern,
+    })
+}
+
+fn account_target(account_id: AccountId) -> PermissionTarget {
+    PermissionTarget::Account(ClassPermissionTarget {
+        verb: Some(AccountVerb::Update),
+        owner: AccountOwnerPattern::Account {
+            account: account_id.to_string(),
+        },
         resource: AccountResourcePattern,
     })
 }
@@ -89,6 +115,30 @@ fn system_can_do_global_actions() {
     assert!(
         ctx.authorize_global_action(GlobalAction::GetReports)
             .is_ok()
+    );
+}
+
+#[test]
+fn system_authorization_bypasses_roles_and_auth_card() {
+    let ctx = AuthCtx::System;
+    assert!(!ctx.account_roles().contains(&AccountRole::Admin));
+
+    assert!(ctx.authorize_permission(&report_target()).is_ok());
+    assert!(
+        ctx.authorize_plan_action(&PlanId::new(), PlanAction::CreateOrUpdatePlan)
+            .is_ok()
+    );
+    assert!(
+        ctx.authorize_account_action(AccountId::new(), AccountAction::SetPlan)
+            .is_ok()
+    );
+    assert!(
+        ctx.authorize_environment_action(
+            AccountId::new(),
+            &make_env_roles(&[]),
+            EnvironmentAction::DeleteEnvironment,
+        )
+        .is_ok()
     );
 }
 
@@ -128,8 +178,11 @@ fn marketing_admin_can_get_reports() {
 
 #[test]
 fn user_with_auth_card_can_authorize_permission() {
-    let permission = report_permission();
     let account_id = AccountId::new();
+    let grant = report_grant(RecipientPattern::Account {
+        account: account_id.to_string(),
+    });
+    let target = report_target();
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
         account_plan_id: PlanId::new(),
@@ -138,19 +191,19 @@ fn user_with_auth_card_can_authorize_permission() {
         account_holder: account_id.to_string(),
         auth_card: Some(AuthCard {
             card_id: CardId::new(),
-            lower_positive: vec![permission.clone()],
+            lower_positive: vec![grant],
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
         }),
     });
 
-    assert!(ctx.authorize_permission(&permission).is_ok());
+    assert!(ctx.authorize_permission(&target).is_ok());
 }
 
 #[test]
 fn user_without_auth_card_cannot_authorize_permission() {
-    let permission = report_permission();
+    let permission = report_target();
     let ctx = mk_user_ctx(&[], PlanId::new(), AccountId::new());
 
     assert!(ctx.authorize_permission(&permission).is_err());
@@ -162,7 +215,8 @@ fn user_with_auth_card_can_authorize_account_token_permission() {
     let recipient = RecipientPattern::Account {
         account: account_id.to_string(),
     };
-    let permission = account_token_permission(account_id, recipient.clone());
+    let grant = account_token_grant(account_id, recipient);
+    let target = account_token_target(account_id);
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
         account_plan_id: PlanId::new(),
@@ -171,23 +225,27 @@ fn user_with_auth_card_can_authorize_account_token_permission() {
         account_holder: account_id.to_string(),
         auth_card: Some(AuthCard {
             card_id: CardId::new(),
-            lower_positive: vec![permission.clone()],
+            lower_positive: vec![grant],
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
         }),
     });
 
-    assert!(ctx.authorize_permission(&permission).is_ok());
+    assert!(ctx.authorize_permission(&target).is_ok());
 }
 
 #[test]
-fn auth_card_account_token_grant_does_not_authorize_different_recipient() {
+fn auth_card_account_token_grant_for_different_holder_does_not_authorize_target() {
     let account_id = AccountId::new();
-    let recipient = RecipientPattern::Account {
-        account: account_id.to_string(),
-    };
-    let permission = account_token_permission(account_id, recipient);
+    let other_account_id = AccountId::new();
+    let grant = account_token_grant(
+        account_id,
+        RecipientPattern::Account {
+            account: other_account_id.to_string(),
+        },
+    );
+    let target = account_token_target(account_id);
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
         account_plan_id: PlanId::new(),
@@ -196,18 +254,68 @@ fn auth_card_account_token_grant_does_not_authorize_different_recipient() {
         account_holder: account_id.to_string(),
         auth_card: Some(AuthCard {
             card_id: CardId::new(),
-            lower_positive: vec![permission],
+            lower_positive: vec![grant],
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
         }),
     });
-    let requested = account_token_permission(
+
+    assert!(ctx.authorize_permission(&target).is_err());
+}
+
+#[test]
+fn auth_card_account_token_target_ignores_recipient_after_holder_filtering() {
+    let account_id = AccountId::new();
+    let grant = account_token_grant(
         account_id,
         RecipientPattern::Account {
-            account: AccountId::new().to_string(),
+            account: account_id.to_string(),
         },
     );
+    let target = account_token_target(account_id);
+    let ctx = AuthCtx::User(UserAuthCtx {
+        account_id,
+        account_plan_id: PlanId::new(),
+        account_roles: BTreeSet::new(),
+        token_root_card_id: None,
+        account_holder: account_id.to_string(),
+        auth_card: Some(AuthCard {
+            card_id: CardId::new(),
+            lower_positive: vec![grant],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }),
+    });
+
+    assert!(ctx.authorize_permission(&target).is_ok());
+}
+
+#[test]
+fn auth_card_account_token_grant_does_not_authorize_different_owner_target() {
+    let account_id = AccountId::new();
+    let grant = account_token_grant(
+        account_id,
+        RecipientPattern::Account {
+            account: account_id.to_string(),
+        },
+    );
+    let ctx = AuthCtx::User(UserAuthCtx {
+        account_id,
+        account_plan_id: PlanId::new(),
+        account_roles: BTreeSet::new(),
+        token_root_card_id: None,
+        account_holder: account_id.to_string(),
+        auth_card: Some(AuthCard {
+            card_id: CardId::new(),
+            lower_positive: vec![grant],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }),
+    });
+    let requested = account_token_target(AccountId::new());
 
     assert!(ctx.authorize_permission(&requested).is_err());
 }
@@ -215,12 +323,7 @@ fn auth_card_account_token_grant_does_not_authorize_different_recipient() {
 #[test]
 fn user_without_auth_card_cannot_authorize_account_token_permission() {
     let account_id = AccountId::new();
-    let permission = account_token_permission(
-        account_id,
-        RecipientPattern::Account {
-            account: account_id.to_string(),
-        },
-    );
+    let permission = account_token_target(account_id);
     let ctx = mk_user_ctx(&[], PlanId::new(), account_id);
 
     assert!(ctx.authorize_permission(&permission).is_err());
@@ -232,7 +335,8 @@ fn user_with_auth_card_can_authorize_account_permission() {
     let recipient = RecipientPattern::Account {
         account: account_id.to_string(),
     };
-    let permission = account_permission(account_id, recipient);
+    let grant = account_grant(account_id, recipient);
+    let target = account_target(account_id);
     let ctx = AuthCtx::User(UserAuthCtx {
         account_id,
         account_plan_id: PlanId::new(),
@@ -241,25 +345,20 @@ fn user_with_auth_card_can_authorize_account_permission() {
         account_holder: account_id.to_string(),
         auth_card: Some(AuthCard {
             card_id: CardId::new(),
-            lower_positive: vec![permission.clone()],
+            lower_positive: vec![grant],
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
         }),
     });
 
-    assert!(ctx.authorize_permission(&permission).is_ok());
+    assert!(ctx.authorize_permission(&target).is_ok());
 }
 
 #[test]
 fn user_without_auth_card_cannot_authorize_account_permission() {
     let account_id = AccountId::new();
-    let permission = account_permission(
-        account_id,
-        RecipientPattern::Account {
-            account: account_id.to_string(),
-        },
-    );
+    let permission = account_target(account_id);
     let ctx = mk_user_ctx(&[], PlanId::new(), account_id);
 
     assert!(ctx.authorize_permission(&permission).is_err());

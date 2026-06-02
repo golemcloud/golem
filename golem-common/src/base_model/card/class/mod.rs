@@ -207,6 +207,14 @@ pub trait PermissionClass {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct ClassPermissionTarget<C: PermissionClass> {
+    pub verb: Option<C::Verb>,
+    pub owner: C::Owner,
+    pub resource: C::Resource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct ClassPermissionPattern<C: PermissionClass> {
     pub verb: Option<C::Verb>,
     pub owner: C::Owner,
@@ -218,6 +226,12 @@ impl<C: PermissionClass> ClassPermissionPattern<C> {
     pub fn subsumes(&self, other: &Self) -> bool {
         self.owner.subsumes(&other.owner)
             && self.recipient.subsumes(&other.recipient)
+            && (self.verb.is_none() || self.verb == other.verb)
+            && self.resource.subsumes(&other.resource)
+    }
+
+    pub fn subsumes_target(&self, other: &ClassPermissionTarget<C>) -> bool {
+        self.owner.subsumes(&other.owner)
             && (self.verb.is_none() || self.verb == other.verb)
             && self.resource.subsumes(&other.resource)
     }

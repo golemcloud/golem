@@ -14,9 +14,8 @@
 
 use crate::repo::report::ReportRepo;
 use golem_common::model::card::owner::EmptyOwnerPattern;
-use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    ClassPermissionPattern, PermissionPattern, SystemResourcePattern, SystemVerb,
+    ClassPermissionTarget, PermissionTarget, SystemResourcePattern, SystemVerb,
 };
 use golem_common::model::reports::{AccountCountsReport, AccountSummaryReport};
 use golem_common::{SafeDisplay, error_forwarding};
@@ -85,25 +84,13 @@ impl ReportsService {
 }
 
 fn authorize_report_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
-    if auth.is_system() {
-        return Ok(());
-    }
-
-    let recipient = auth.principal_recipient().ok_or_else(|| {
-        AuthorizationError::PermissionNotAllowed(Box::new(system_permission(
-            verb,
-            RecipientPattern::Any,
-        )))
-    })?;
-
-    auth.authorize_permission(&system_permission(verb, recipient))
+    auth.authorize_permission(&system_permission_target(verb))
 }
 
-fn system_permission(verb: SystemVerb, recipient: RecipientPattern) -> PermissionPattern {
-    PermissionPattern::System(ClassPermissionPattern {
+fn system_permission_target(verb: SystemVerb) -> PermissionTarget {
+    PermissionTarget::System(ClassPermissionTarget {
         verb: Some(verb),
         owner: EmptyOwnerPattern,
-        recipient,
         resource: SystemResourcePattern,
     })
 }

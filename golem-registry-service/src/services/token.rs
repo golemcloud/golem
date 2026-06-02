@@ -23,9 +23,8 @@ use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenId;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
 use golem_common::model::card::owner::AccountOwnerPattern;
-use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    AccountTokenResourcePattern, AccountTokenVerb, ClassPermissionPattern, PermissionPattern,
+    AccountTokenResourcePattern, AccountTokenVerb, ClassPermissionTarget, PermissionTarget,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError, GlobalAction};
@@ -316,36 +315,19 @@ fn authorize_account_token_permission(
     verb: AccountTokenVerb,
     resource: AccountTokenResourcePattern,
 ) -> Result<(), AuthorizationError> {
-    if auth.is_system() {
-        return Ok(());
-    }
-
-    let recipient = auth.principal_recipient().ok_or_else(|| {
-        AuthorizationError::PermissionNotAllowed(Box::new(account_token_permission(
-            account_id,
-            verb,
-            resource.clone(),
-            RecipientPattern::Any,
-        )))
-    })?;
-
-    auth.authorize_permission(&account_token_permission(
-        account_id, verb, resource, recipient,
-    ))
+    auth.authorize_permission(&account_token_permission_target(account_id, verb, resource))
 }
 
-fn account_token_permission(
+fn account_token_permission_target(
     account_id: AccountId,
     verb: AccountTokenVerb,
     resource: AccountTokenResourcePattern,
-    recipient: RecipientPattern,
-) -> PermissionPattern {
-    PermissionPattern::AccountToken(ClassPermissionPattern {
+) -> PermissionTarget {
+    PermissionTarget::AccountToken(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {
             account: account_id.to_string(),
         },
-        recipient,
         resource,
     })
 }

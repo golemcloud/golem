@@ -21,7 +21,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    Card, CardAlgebraError, CardId, EffectiveSurface, PermissionPattern,
+    Card, CardAlgebraError, CardId, EffectiveSurface, PermissionPattern, PermissionTarget,
 };
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
@@ -36,10 +36,7 @@ use std::sync::LazyLock;
 
 pub const COOKIE_KEY: &str = "GOLEM_SESSION";
 pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
-static SYSTEM_ACCOUNT_ROLES: LazyLock<BTreeSet<AccountRole>> =
-    LazyLock::new(|| BTreeSet::from_iter([AccountRole::Admin]));
-static IMPERSONATED_USER_ACCOUNT_ROLES: LazyLock<BTreeSet<AccountRole>> =
-    LazyLock::new(BTreeSet::new);
+static EMPTY_ACCOUNT_ROLES: LazyLock<BTreeSet<AccountRole>> = LazyLock::new(BTreeSet::new);
 
 #[derive(SecurityScheme)]
 #[oai(rename = "Token", ty = "bearer", checker = "bearer_checker")]
@@ -258,11 +255,11 @@ pub enum AuthorizationError {
     AccountActionNotAllowed(AccountAction),
     #[error("The environment action {0} is not allowed")]
     EnvironmentActionNotAllowed(EnvironmentAction),
-    #[error("The permission {0:?} is not allowed")]
-    PermissionNotAllowed(Box<PermissionPattern>),
-    #[error("Failed to evaluate permission {permission:?}: {error:?}")]
+    #[error("The permission target {0:?} is not allowed")]
+    PermissionNotAllowed(Box<PermissionTarget>),
+    #[error("Failed to evaluate permission target {target:?}: {error:?}")]
     PermissionEvaluationFailed {
-        permission: Box<PermissionPattern>,
+        target: Box<PermissionTarget>,
         error: CardAlgebraError,
     },
 }
@@ -440,9 +437,9 @@ impl AuthCtx {
 
     pub fn account_roles(&self) -> &BTreeSet<AccountRole> {
         match self {
-            Self::System => &SYSTEM_ACCOUNT_ROLES,
+            Self::System => &EMPTY_ACCOUNT_ROLES,
             Self::User(user) => &user.account_roles,
-            Self::Agent(_) => &IMPERSONATED_USER_ACCOUNT_ROLES,
+            Self::Agent(_) => &EMPTY_ACCOUNT_ROLES,
             Self::AdminImpersonation(ctx) => &ctx.target_account_roles,
         }
     }
@@ -470,6 +467,10 @@ impl AuthCtx {
     }
 
     pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
+        if self.is_system() {
+            return Ok(());
+        }
+
         let is_allowed = match action {
             GlobalAction::CreateAccount => self.has_any_account_role(&[AccountRole::Admin]),
             GlobalAction::GetDefaultPlan => self.has_any_account_role(&[AccountRole::Admin]),
@@ -488,38 +489,25 @@ impl AuthCtx {
 
     pub fn authorize_permission(
         &self,
-        permission: &PermissionPattern,
+        target: &PermissionTarget,
     ) -> Result<(), AuthorizationError> {
         match self {
             Self::System => Ok(()),
             Self::User(user) => {
-                let recipient = self.principal_recipient().ok_or_else(|| {
-                    AuthorizationError::PermissionNotAllowed(Box::new(permission.clone()))
-                })?;
-                authorize_auth_card_permission(user.auth_card.as_ref(), &recipient, permission)
+                let recipient = RecipientPattern::Account {
+                    account: user.account_holder.clone(),
+                };
+                authorize_auth_card_permission(user.auth_card.as_ref(), &recipient, target)
             }
             Self::AdminImpersonation(ctx) => {
-                let recipient = self.principal_recipient().ok_or_else(|| {
-                    AuthorizationError::PermissionNotAllowed(Box::new(permission.clone()))
-                })?;
-                authorize_auth_card_permission(ctx.auth_card.as_ref(), &recipient, permission)
+                let recipient = RecipientPattern::Account {
+                    account: ctx.target_account_holder.clone(),
+                };
+                authorize_auth_card_permission(ctx.auth_card.as_ref(), &recipient, target)
             }
             Self::Agent(_) => Err(AuthorizationError::PermissionNotAllowed(Box::new(
-                permission.clone(),
+                target.clone(),
             ))),
-        }
-    }
-
-    pub fn principal_recipient(&self) -> Option<RecipientPattern> {
-        match self {
-            Self::System => None,
-            Self::User(user) => Some(RecipientPattern::Account {
-                account: user.account_holder.clone(),
-            }),
-            Self::AdminImpersonation(ctx) => Some(RecipientPattern::Account {
-                account: ctx.target_account_holder.clone(),
-            }),
-            Self::Agent(_) => None,
         }
     }
 
@@ -528,6 +516,10 @@ impl AuthCtx {
         plan_id: &PlanId,
         action: PlanAction,
     ) -> Result<(), AuthorizationError> {
+        if self.is_system() {
+            return Ok(());
+        }
+
         match action {
             PlanAction::ViewPlan => {
                 // Users are allowed to see their own plan
@@ -560,6 +552,10 @@ impl AuthCtx {
         target_account_id: AccountId,
         action: AccountAction,
     ) -> Result<(), AuthorizationError> {
+        if self.is_system() {
+            return Ok(());
+        }
+
         let is_allowed = match action {
             AccountAction::SetPlan => self.has_any_account_role(&[AccountRole::Admin]),
             _ => {
@@ -581,7 +577,11 @@ impl AuthCtx {
         roles_from_shares: &BTreeSet<EnvironmentRole>,
         action: EnvironmentAction,
     ) -> Result<(), AuthorizationError> {
-        // Environment owners, admins and system users are allowed to do everything with their environments
+        if self.is_system() {
+            return Ok(());
+        }
+
+        // Environment owners and admins are allowed to do everything with their environments.
         if self.access_account_id() == account_owning_enviroment
             || self.has_any_account_role(&[AccountRole::Admin])
         {
@@ -859,11 +859,11 @@ fn has_any_role<T: Eq + Hash + Ord>(roles: &BTreeSet<T>, allowed: &[T]) -> bool 
 fn authorize_auth_card_permission(
     auth_card: Option<&AuthCard>,
     recipient: &RecipientPattern,
-    permission: &PermissionPattern,
+    target: &PermissionTarget,
 ) -> Result<(), AuthorizationError> {
     let Some(auth_card) = auth_card else {
         return Err(AuthorizationError::PermissionNotAllowed(Box::new(
-            permission.clone(),
+            target.clone(),
         )));
     };
 
@@ -875,20 +875,20 @@ fn authorize_auth_card_permission(
         recipient,
     )
     .map_err(|error| AuthorizationError::PermissionEvaluationFailed {
-        permission: Box::new(permission.clone()),
+        target: Box::new(target.clone()),
         error,
     })?;
 
-    if surface.authorize(permission).map_err(|error| {
+    if surface.authorize(target).map_err(|error| {
         AuthorizationError::PermissionEvaluationFailed {
-            permission: Box::new(permission.clone()),
+            target: Box::new(target.clone()),
             error,
         }
     })? {
         Ok(())
     } else {
         Err(AuthorizationError::PermissionNotAllowed(Box::new(
-            permission.clone(),
+            target.clone(),
         )))
     }
 }

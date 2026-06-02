@@ -34,6 +34,14 @@ fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> Perm
     })
 }
 
+fn fs_target(owner: &str, resource: FilesystemResourcePattern) -> PermissionTarget {
+    PermissionTarget::Filesystem(ClassPermissionTarget::<FilesystemClass> {
+        verb: Some(FilesystemVerb::Read),
+        owner: AgentOwnerPattern::parse(owner).unwrap(),
+        resource,
+    })
+}
+
 fn fs_path(segments: Vec<FilesystemPathSegmentPattern>) -> FilesystemResourcePattern {
     FilesystemResourcePattern::Path(FilesystemPathPattern { segments })
 }
@@ -930,14 +938,12 @@ fn negative_grants_override_positive_grants() {
         "acme/*/*/*/*",
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
-    let public = fs(
+    let public = fs_target(
         "acme/shop/prod/cart/agent",
-        "acme/*/*/*/*",
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
-    let secret = fs(
+    let secret = fs_target(
         "acme/shop/prod/cart/agent",
-        "acme/*/*/*/*",
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let surface = GrantSurface {

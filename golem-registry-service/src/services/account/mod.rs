@@ -28,9 +28,8 @@ use golem_common::model::account::{
     Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
 use golem_common::model::card::owner::AccountOwnerPattern;
-use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    AccountResourcePattern, AccountVerb, ClassPermissionPattern, PermissionPattern,
+    AccountResourcePattern, AccountVerb, ClassPermissionTarget, PermissionTarget,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -341,32 +340,15 @@ fn authorize_account_permission(
     account_id: AccountId,
     verb: AccountVerb,
 ) -> Result<(), AuthorizationError> {
-    if auth.is_system() {
-        return Ok(());
-    }
-
-    let recipient = auth.principal_recipient().ok_or_else(|| {
-        AuthorizationError::PermissionNotAllowed(Box::new(account_permission(
-            account_id,
-            verb,
-            RecipientPattern::Any,
-        )))
-    })?;
-
-    auth.authorize_permission(&account_permission(account_id, verb, recipient))
+    auth.authorize_permission(&account_permission_target(account_id, verb))
 }
 
-fn account_permission(
-    account_id: AccountId,
-    verb: AccountVerb,
-    recipient: RecipientPattern,
-) -> PermissionPattern {
-    PermissionPattern::Account(ClassPermissionPattern {
+fn account_permission_target(account_id: AccountId, verb: AccountVerb) -> PermissionTarget {
+    PermissionTarget::Account(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {
             account: account_id.to_string(),
         },
-        recipient,
         resource: AccountResourcePattern,
     })
 }
