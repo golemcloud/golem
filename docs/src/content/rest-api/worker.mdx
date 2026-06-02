@@ -52,10 +52,6 @@ precise|boolean|No|Precision in relation to worker status, if true, calculate th
         "property1": "string",
         "property2": "string"
       },
-      "wasiConfig": {
-        "property1": "string",
-        "property2": "string"
-      },
       "config": [
         {
           "path": [
@@ -116,7 +112,9 @@ precise|boolean|No|Precision in relation to worker status, if true, calculate th
           "start": 0,
           "end": 0
         }
-      ]
+      ],
+      "lastOplogIndex": 0,
+      "fingerprint": "0cb6dabd-f8f1-4f78-8cce-283e96dd3637"
     }
   ],
   "cursor": {
@@ -148,7 +146,6 @@ The parameters in the request are the following:
     "property1": "string",
     "property2": "string"
   },
-  "wasiConfig": {},
   "config": []
 }
 ```
@@ -201,10 +198,6 @@ Returns metadata about an existing worker:
   "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
   "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
   "env": {
-    "property1": "string",
-    "property2": "string"
-  },
-  "wasiConfig": {
     "property1": "string",
     "property2": "string"
   },
@@ -268,7 +261,9 @@ Returns metadata about an existing worker:
       "start": 0,
       "end": 0
     }
-  ]
+  ],
+  "lastOplogIndex": 0,
+  "fingerprint": "0cb6dabd-f8f1-4f78-8cce-283e96dd3637"
 }
 ```
 
@@ -400,10 +395,6 @@ Returns metadata about an existing component workers:
         "property1": "string",
         "property2": "string"
       },
-      "wasiConfig": {
-        "property1": "string",
-        "property2": "string"
-      },
       "config": [
         {
           "path": [
@@ -464,7 +455,9 @@ Returns metadata about an existing component workers:
           "start": 0,
           "end": 0
         }
-      ]
+      ],
+      "lastOplogIndex": 0,
+      "fingerprint": "0cb6dabd-f8f1-4f78-8cce-283e96dd3637"
     }
   ],
   "cursor": {
@@ -547,6 +540,7 @@ query|string|No|-
           "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
           "agentId": "string"
         },
+        "agentMode": "Durable",
         "componentRevision": 0,
         "env": {
           "property1": "string",
@@ -572,10 +566,6 @@ query|string|No|-
             }
           }
         ],
-        "configVars": {
-          "property1": "string",
-          "property2": "string"
-        },
         "localAgentConfig": [
           {
             "path": [
@@ -597,7 +587,8 @@ query|string|No|-
             }
           }
         ],
-        "originalPhantomId": "b4cbf8ea-df0a-4ef4-9b5d-93ad7b29cf4b"
+        "originalPhantomId": "b4cbf8ea-df0a-4ef4-9b5d-93ad7b29cf4b",
+        "instanceId": "64d2028c-ae87-4069-a624-66089d957ef9"
       }
     }
   ],
@@ -780,5 +771,7 @@ Status Code|Description|Body
 403||`{"code":"string","error":"string"}`
 404||`{"code":"string","error":"string"}`
 409||`{"code":"string","error":"string"}`
+413||`{"code":"string","error":"string"}`
+415||`{"code":"string","error":"string"}`
 422||`{"code":"string","error":"string"}`
 500||`{"code":"string","error":"string","workerError":{"cause":"string","stderr":"string"}}`

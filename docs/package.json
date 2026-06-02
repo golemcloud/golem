@@ -19,7 +19,7 @@
     "generate-dev": "concurrently -m 1 'bun run openapi/gen-openapi.ts --dev' 'bun run fix'",
     "generate-prod": "concurrently -m 1 'bun run openapi/gen-openapi.ts --prod' 'bun run fix'",
     "update-skills": "bun run skills/sync-skills.ts",
-    "update-skills-local": "bun run skills/sync-skills.ts --local",
+    "update-skills-local": "bun run skills/sync-skills.ts --local ..",
     "snippets:scan": "bun run snippets/manage-snippets.ts scan",
     "snippets:status": "bun run snippets/manage-snippets.ts status",
     "snippets:next": "bun run snippets/manage-snippets.ts next",

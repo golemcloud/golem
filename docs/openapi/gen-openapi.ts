@@ -4,14 +4,23 @@ import { writeFile } from "fs/promises"
 import { OpenAPIV3 } from "openapi-types"
 import OpenAPISampler from "openapi-sampler"
 
-const CLOUD_SPEC_SRC = "./openapi/golem-service.yaml"
+// The canonical OpenAPI spec lives in the golem repo root at
+// openapi/golem-service.yaml and is regenerated from the Rust services
+// by `cargo make generate-openapi`. This script reads from there directly
+// (one level up from docs/) in --local mode.
+const CLOUD_SPEC_SRC = "../openapi/golem-service.yaml"
 const CLOUD_GEN_PATH = "./src/content/rest-api"
 
-main().catch(e => console.error("Failed to update API Docs", e))
+main().catch(e => {
+  console.error("Failed to update API Docs", e)
+  process.exit(1)
+})
 
-// Two options are available:
-// --production - will generate the docs for the Production Golem API, and update the local yaml file.
-// --local - will generate the docs from local yaml files.
+// Three modes:
+// --local : read the in-tree spec (../openapi/golem-service.yaml). Used by CI
+//           and `cargo make generate-openapi`.
+// --dev   : fetch from the deployed dev environment (in-memory only, no write).
+// --prod  : fetch from the deployed production environment (in-memory only, no write).
 async function main() {
   const args = process.argv.slice(2)
 
@@ -22,23 +31,16 @@ async function main() {
   const [mode] = args
 
   if (mode === "--local") {
-    console.log("Updating REST API docs from local OpenAPI spec at:", [CLOUD_SPEC_SRC])
+    console.log("Updating REST API docs from local OpenAPI spec at:", CLOUD_SPEC_SRC)
     await writeOpenApiDocs(CLOUD_GEN_PATH, CLOUD_SPEC_SRC)
   } else {
-    let specUrl =
+    const specUrl =
       mode === "--prod"
         ? "https://release.api.golem.cloud/specs"
         : "https://release.dev-api.golem.cloud/specs"
 
     console.log("Updating REST API docs from OpenAPI spec at:", specUrl)
     await writeOpenApiDocs(CLOUD_GEN_PATH, specUrl)
-    const response = await fetch(specUrl)
-    if (!response.ok) {
-      throw new Error(`Error fetching data: ${response.status}`)
-    }
-
-    const textContent = await response.text()
-    await writeFile(CLOUD_SPEC_SRC, textContent)
   }
 }
 
@@ -204,15 +206,11 @@ function makeResponseType(api: OpenAPIV3.Document, operation: OpenAPIV3.Operatio
     const successResponse =
       operation.responses["200"] || operation.responses["204"] || operation.responses["101"]
 
-    if (!("content" in successResponse)) {
-      return {
-        content: undefined,
-      }
-    }
-
-    if (!successResponse) {
-      console.log({ operation })
-      throw new Error("No Success Response")
+    // No 200/204/101 declared (e.g. an OAuth callback that only responds with
+    // a 302 redirect, or an endpoint with no documented success body), and
+    // 204/200-with-no-content cases both fall through here.
+    if (!successResponse || !("content" in successResponse)) {
+      return { content: undefined }
     }
 
     return successResponse

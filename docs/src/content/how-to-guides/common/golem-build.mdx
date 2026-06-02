@@ -84,3 +84,8 @@ This removes `golem-temp/` and any other directories listed in the `clean` secti
 - **Missing `wasm32-wasip2` target** (Rust): run `rustup target add wasm32-wasip2`
 - **Missing npm packages** (TypeScript): `golem build` automatically runs `npm install` if `package.json` is present but `node_modules` is missing
 - **Type errors** (TypeScript): fix the errors in `.ts` source files; the `tsc` step runs with `--noEmit false --emitDeclarationOnly`
+
+For a deeper breakdown of build pipeline stages, dependency auto-fix behavior, and manifest tracing, load [`golem-troubleshoot-build`](/how-to-guides/common/golem-troubleshoot-build).
+
+### Related Guides
+- Load [`golem-troubleshoot-build`](/how-to-guides/common/golem-troubleshoot-build) when a build fails or when diagnosing manifest/configuration issues

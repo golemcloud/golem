@@ -26,7 +26,7 @@ The `agents` field accepts `"*"` (all agents), or a list of agent type names or 
 The recommended approach is to declare the bridge in `golem.yaml` (as shown above) and let `golem build` produce the SDK as part of the normal build:
 
 ```shell
-golem build
+golem build --yes
 ```
 
 This produces a Rust crate per agent type (e.g., `my-agent-client/`) in the configured output directory (or `golem-temp/bridge-sdk/rust/` by default). Re-running `golem build` after agent changes keeps the generated client in sync automatically.

@@ -21,6 +21,7 @@ Path|Method|Protected
       "revision": 0,
       "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
       "name": "string",
+      "diffModelVersion": 0,
       "compatibilityCheck": true,
       "versionCheck": true,
       "securityOverrides": true,
@@ -66,6 +67,7 @@ Path|Method|Protected
   "revision": 0,
   "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
   "name": "string",
+  "diffModelVersion": 0,
   "compatibilityCheck": true,
   "versionCheck": true,
   "securityOverrides": true,
@@ -101,6 +103,7 @@ Path|Method|Protected
   "revision": 0,
   "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
   "name": "string",
+  "diffModelVersion": 0,
   "compatibilityCheck": true,
   "versionCheck": true,
   "securityOverrides": true,
@@ -136,6 +139,7 @@ Path|Method|Protected
   "revision": 0,
   "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
   "name": "string",
+  "diffModelVersion": 0,
   "compatibilityCheck": true,
   "versionCheck": true,
   "securityOverrides": true,
@@ -197,6 +201,7 @@ Path|Method|Protected
   "revision": 0,
   "applicationId": "97ab27fa-30e2-43e3-92a3-160e80f4c0d5",
   "name": "string",
+  "diffModelVersion": 0,
   "compatibilityCheck": true,
   "versionCheck": true,
   "securityOverrides": true,
@@ -282,7 +287,8 @@ Path|Method|Protected
   "revision": 0,
   "version": "string",
   "deploymentHash": "string",
-  "currentRevision": 0
+  "currentRevision": 0,
+  "validationWarnings": []
 }
 ```
 
@@ -370,7 +376,8 @@ Path|Method|Protected
         "delayMs": 0
       }
     }
-  ]
+  ],
+  "replaceIncompatibleAgentSecrets": false
 }
 ```
 
@@ -382,7 +389,8 @@ Path|Method|Protected
   "revision": 0,
   "version": "string",
   "deploymentHash": "string",
-  "currentRevision": 0
+  "currentRevision": 0,
+  "validationWarnings": []
 }
 ```
 
@@ -559,7 +567,13 @@ Path|Method|Protected
                   ]
                 }
               }
-            ]
+            ],
+            "readOnly": {
+              "cachePolicy": {
+                "type": "UntilWrite"
+              },
+              "usesPrincipal": true
+            }
           }
         ],
         "dependencies": [
@@ -668,7 +682,13 @@ Path|Method|Protected
                       ]
                     }
                   }
-                ]
+                ],
+                "readOnly": {
+                  "cachePolicy": {
+                    "type": "UntilWrite"
+                  },
+                  "usesPrincipal": true
+                }
               }
             ]
           }
@@ -857,7 +877,13 @@ Path|Method|Protected
               ]
             }
           }
-        ]
+        ],
+        "readOnly": {
+          "cachePolicy": {
+            "type": "UntilWrite"
+          },
+          "usesPrincipal": true
+        }
       }
     ],
     "dependencies": [
@@ -972,7 +998,13 @@ Path|Method|Protected
                   ]
                 }
               }
-            ]
+            ],
+            "readOnly": {
+              "cachePolicy": {
+                "type": "UntilWrite"
+              },
+              "usesPrincipal": true
+            }
           }
         ]
       }

@@ -28,7 +28,9 @@ Path|Method|Protected
   "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
   "roles": [
     "admin"
-  ]
+  ],
+  "tokenRootCardId": "a8e18d8d-94ae-4ca6-9f9a-b3e564c451f4",
+  "tokenRootCardEpoch": 0
 }
 ```
 
@@ -54,7 +56,9 @@ Path|Method|Protected
   "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
   "roles": [
     "admin"
-  ]
+  ],
+  "tokenRootCardId": "a8e18d8d-94ae-4ca6-9f9a-b3e564c451f4",
+  "tokenRootCardEpoch": 0
 }
 ```
 
@@ -84,7 +88,9 @@ Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}`|PATCH|Yes
 
-Allows the user to change the account details such as name and email.
+Allows the user to change mutable account details such as name.
+
+The account email is immutable after account creation.
 
 Changing the planId is not allowed and the request will be rejected.
 The response is the updated account data.
@@ -95,8 +101,7 @@ The response is the updated account data.
 ```json copy
 {
   "currentRevision": 0,
-  "name": "string",
-  "email": "string"
+  "name": "string"
 }
 ```
 
@@ -111,7 +116,9 @@ The response is the updated account data.
   "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
   "roles": [
     "admin"
-  ]
+  ],
+  "tokenRootCardId": "a8e18d8d-94ae-4ca6-9f9a-b3e564c451f4",
+  "tokenRootCardEpoch": 0
 }
 ```
 
@@ -179,7 +186,9 @@ Path|Method|Protected
   "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
   "roles": [
     "admin"
-  ]
+  ],
+  "tokenRootCardId": "a8e18d8d-94ae-4ca6-9f9a-b3e564c451f4",
+  "tokenRootCardEpoch": 0
 }
 ```
 
@@ -213,7 +222,9 @@ Path|Method|Protected
   "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
   "roles": [
     "admin"
-  ]
+  ],
+  "tokenRootCardId": "a8e18d8d-94ae-4ca6-9f9a-b3e564c451f4",
+  "tokenRootCardEpoch": 0
 }
 ```
 
@@ -252,6 +263,38 @@ Path|Method|Protected
 Creates a new token with a given expiration date.
 The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
 
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "secret": "stringstringstri",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Create an impersonation token for a target account
+Path|Method|Protected
+---|---|---
+`/v1/admin/impersonate/{account_id}`|POST|Yes
+
+Creates a short-lived token that, when used for authentication, produces an
+`AdminImpersonation` auth context: access and visibility checks run as the
+target account, but audit writes (created_by fields) record the admin's account ID.
+
+Only users with the `Admin` account role may call this endpoint.
 
 
 
