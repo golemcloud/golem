@@ -40,9 +40,17 @@ theme.config.tsx # Nextra docs theme configuration
 - `bun run format` — Format with Prettier
 - `bun run fix` — Lint + format together
 - `bun run check-links` — Validate links in MDX files
-- `bun run generate-prod` — Regenerate REST API docs from OpenAPI spec
+- `bun run generate-local` — Regenerate REST API docs from `../openapi/golem-service.yaml` (the in-tree spec)
+- `bun run generate-prod` / `bun run generate-dev` — Regenerate REST API docs from the deployed prod/dev environments (in-memory, no local write)
 - `bun run update-skills` — Sync How-To Guides from the Golem skill catalog on GitHub
-- `bun run update-skills-local -- --local ..` — Sync How-To Guides from the in-tree `../golem-skills/skills`
+- `bun run update-skills-local` — Sync How-To Guides from the in-tree `../golem-skills/skills`
+
+For a typical monorepo workflow, prefer the `cargo make` wrappers (which set up Bun and pin to the in-tree sources):
+
+- `cargo make generate-openapi` — regenerates `openapi/golem-service.yaml` from the Rust services **and** the REST API MDX under `docs/src/content/rest-api/`.
+- `cargo make generate-docs-openapi` — regenerates only the REST API MDX (skips the service build).
+- `cargo make generate-docs-skills` — regenerates How-To Guides under `docs/src/content/how-to-guides/` from `golem-skills/skills/`.
+- `cargo make check-docs-openapi` / `cargo make check-docs-skills` — CI drift detection (run by `unit-tests-and-checks`).
 
 ## Writing Documentation
 
@@ -66,21 +74,21 @@ theme.config.tsx # Nextra docs theme configuration
 
 ### REST API docs
 
-REST API reference pages are auto-generated. Do not edit them manually.
+REST API reference pages are auto-generated from the in-tree OpenAPI spec. Do not edit them manually — CI checks for drift via `cargo make check-docs-openapi` and will fail any PR with stale generated MDX.
 
-- To update from a **local copy** of the spec: copy the YAML from the in-tree golem services (`../openapi/golem-service.yaml`) into `openapi/golem-service.yaml`, then run `bun run generate-local`.
-- `bun run generate-prod` and `bun run generate-dev` fetch the OpenAPI spec from the respective deployed environments — they do **not** use the local YAML file.
-
-The generated MDX files under `src/pages/rest-api/` will be updated and auto-formatted.
+- To regenerate from the in-tree spec: run `cargo make generate-docs-openapi` (or `bun run generate-local`). The MDX under `src/content/rest-api/` will be written and auto-formatted.
+- `cargo make generate-openapi` does both: regenerates `openapi/golem-service.yaml` from the running services and then regenerates the MDX from it.
+- `bun run generate-prod` / `bun run generate-dev` fetch the spec from the respective deployed environments (in-memory, no local YAML write) — useful for one-off comparisons.
 
 ### How-To Guides
 
-How-To Guide pages are auto-generated from the [Golem skill catalog](../golem-skills/skills). Do not edit files under `src/pages/how-to-guides/` manually.
+How-To Guide pages are auto-generated from the [Golem skill catalog](../golem-skills/skills). Do not edit files under `src/content/how-to-guides/` manually — CI checks for drift via `cargo make check-docs-skills` and will fail any PR with stale generated MDX.
 
-- `bun run update-skills` fetches the latest skills from GitHub.
-- `bun run update-skills-local -- --local ..` reads from the in-tree `../golem-skills/`.
+- `cargo make generate-docs-skills` regenerates from the in-tree `../golem-skills/skills/` (preferred in the monorepo).
+- `bun run update-skills-local` does the same without going through cargo make.
+- `bun run update-skills` fetches the latest skills from GitHub instead (useful when working outside the monorepo).
 
-The sync script (`skills/sync-skills.ts`) strips AI-agent frontmatter, converts cross-references between skills into doc links, and generates MDX pages organized by category (General, Rust, TypeScript, Scala). Set `GITHUB_TOKEN` env var to avoid GitHub API rate limits when fetching remotely.
+The sync script (`skills/sync-skills.ts`) strips AI-agent frontmatter, converts cross-references between skills into doc links, and generates MDX pages organized by category (General, Rust, TypeScript, Scala, MoonBit). Set `GITHUB_TOKEN` env var to avoid GitHub API rate limits when using `update-skills`.
 
 ## Pre-commit Checks
 

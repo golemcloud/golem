@@ -105,8 +105,24 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
-      - name: Check openapi is up to date
+      # Bun is needed by check-openapi (which depends on check-docs-openapi)
+      # and by check-docs-skills to regenerate docs from the in-tree
+      # sources and detect drift.
+      - name: Setup Bun (for docs drift checks)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Cache Bun install (docs/)
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('docs/bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+      - name: Check openapi is up to date (includes docs/src/content/rest-api/)
         run: cargo make --profile ci check-openapi
+      - name: Check how-to-guides docs are in sync with golem-skills/
+        run: cargo make --profile ci check-docs-skills
       - name: Check configs are up to date
         run: cargo make --profile ci check-configs
       - name: Unit tests
