@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod panic;
 pub mod provided;
 pub mod spawned;
+pub mod unavailable;
 
 use super::rdb::Rdb;
 use super::registry_service::RegistryService;

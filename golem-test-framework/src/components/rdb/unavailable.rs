@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::RedisMonitor;
+use super::{DbInfo, Rdb};
+use async_trait::async_trait;
 
-/// Panic-on-use stub for `RedisMonitor`. Used in cloud mode where no direct
-/// Redis access is available. Operational methods panic; `kill` is a no-op so
-/// that `BenchmarkTestDependencies::kill_all()` completes safely.
-pub struct PanicRedisMonitor;
+/// An `Rdb` that is not directly reachable (e.g. cloud mode, where the
+/// database sits behind the Gateway). Lifecycle teardown (`kill`) is a no-op so
+/// that `kill_all()` completes; operational methods panic with a clear message.
+pub struct UnavailableRdb;
 
-impl RedisMonitor for PanicRedisMonitor {
-    fn assert_valid(&self) {
-        panic!("redis_monitor() is not available in cloud mode");
+#[async_trait]
+impl Rdb for UnavailableRdb {
+    fn info(&self) -> DbInfo {
+        panic!("rdb() is not available in cloud mode");
     }
 
-    fn kill(&self) {
-        // no-op: cloud mode has no local Redis process to kill
-    }
+    async fn kill(&self) {}
 }

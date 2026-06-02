@@ -16,9 +16,9 @@ use crate::components::worker_executor::WorkerExecutor;
 use async_trait::async_trait;
 use std::sync::Arc;
 
-pub mod panic;
 pub mod provided;
 pub mod spawned;
+pub mod unavailable;
 
 #[async_trait]
 pub trait WorkerExecutorCluster: Send + Sync {

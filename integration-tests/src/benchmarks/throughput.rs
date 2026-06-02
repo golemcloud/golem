@@ -849,15 +849,24 @@ impl ThroughputBenchmark {
         .instrument(tracing::info_span!("measure_ts_agents"))
         .await;
 
-        // In cloud mode use the pre-built, cached client (warm connection pool).
-        // In local/provided mode build a fresh client with the explicit Host
-        // header pointing at the custom-request port on localhost.
+        // Resolve the base URL prefix and HTTP client for the code-first HTTP
+        // API benchmark paths. The request-builder closures append the route
+        // path (e.g. "/test-0-http/echo/...") to this prefix.
+        //
+        //   cloud mode:  base = "https://{env_id}.apps.dev.golem.cloud"
+        //                → reqwest connects directly to that host (TLS/SNI +
+        //                  Host set from the URL); the apps gateway routes it
+        //                  to worker-service. Uses the cached, pool-warm client.
+        //
+        //   local mode:  base = "http://localhost:{custom_request_port}"
+        //                → reqwest connects to localhost; an explicit Host
+        //                  header ("{env_id}.golem.cloud") tells the local
+        //                  worker-service which deployment to route to.
         let (http_base_url, client): (String, reqwest::Client) =
             if let Some(ref cached) = self.cloud_http_client {
                 let base = format!("https://{}", iteration.domain.0);
                 (base, cached.clone())
             } else {
-                // Local/provided mode: connect to localhost with Host header.
                 let port = self.deps.worker_service().custom_request_port();
                 let base = format!("http://localhost:{port}");
                 let mut headers = HeaderMap::new();

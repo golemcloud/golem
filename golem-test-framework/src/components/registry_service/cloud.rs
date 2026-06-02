@@ -31,12 +31,6 @@ use url::Url;
 /// (e.g. `https://release.dev-api.golem.cloud`). This struct holds that shared
 /// `api_url`; routing to the correct backend service is done by the Gateway
 /// based on URL path.
-///
-/// Only `admin_token` is required for cloud-mode benchmarks — all operations
-/// first create a fresh ephemeral user via the admin token and then operate
-/// exclusively through that user. `admin_account_id` and `admin_account_email`
-/// are unused in the benchmark flow (`admin()` is never called) and return
-/// stubs.
 pub struct CloudRegistryService {
     api_url: Url,
     admin_token: TokenSecret,
@@ -105,13 +99,10 @@ impl RegistryService for CloudRegistryService {
     }
 
     fn admin_account_id(&self) -> AccountId {
-        // Not used in cloud-mode benchmarks — benchmarks always create a fresh
-        // ephemeral user via admin_account_token() and never call admin().
         AccountId(uuid::Uuid::nil())
     }
 
     fn admin_account_email(&self) -> AccountEmail {
-        // Not used in cloud-mode benchmarks — see admin_account_id().
         AccountEmail::new(String::new())
     }
 

@@ -16,20 +16,18 @@ use super::ShardManager;
 use async_trait::async_trait;
 use golem_common::model::RoutingTable;
 
-/// Panic-on-use stub for `ShardManager`. Used in cloud mode when no
-/// shard-manager host/port are configured.
+/// A `ShardManager` that is not directly reachable. Used in cloud mode when no
+/// shard-manager port-forward is configured; pass `--shard-manager-grpc-host`
+/// and `--shard-manager-grpc-port` to use a real `ProvidedShardManager`
+/// instead.
 ///
-/// Pass `--shard-manager-grpc-host` and `--shard-manager-grpc-port` to
-/// the `cloud` subcommand to enable a real shard-manager connection.
-///
-/// Operational methods (`grpc_host`, `grpc_port`) panic with a clear message.
-/// Lifecycle methods (`kill`, `restart`) are no-ops. `get_routing_table()`
-/// returns an error (instead of panicking) so that the throughput benchmark
-/// can fall back to the unlabeled single-bucket mode.
-pub struct PanicShardManager;
+/// `kill`/`restart` are no-ops. `get_routing_table()` returns an error so that
+/// callers (e.g. the throughput benchmark) can fall back to the unlabeled
+/// single-bucket mode. The host/port accessors panic with a clear message.
+pub struct UnavailableShardManager;
 
 #[async_trait]
-impl ShardManager for PanicShardManager {
+impl ShardManager for UnavailableShardManager {
     fn grpc_host(&self) -> String {
         panic!(
             "shard_manager() requires --shard-manager-grpc-host and \
@@ -44,17 +42,10 @@ impl ShardManager for PanicShardManager {
         );
     }
 
-    async fn kill(&self) {
-        // no-op: cloud mode has no local shard-manager process to kill
-    }
+    async fn kill(&self) {}
 
-    async fn restart(&self, _number_of_shards_override: Option<usize>) {
-        // no-op: cloud mode has no local shard-manager process to restart
-    }
+    async fn restart(&self, _number_of_shards_override: Option<usize>) {}
 
-    /// Returns an `Err` so that callers such as the throughput benchmark can
-    /// detect the absence of a shard-manager and fall back gracefully, rather
-    /// than panicking.
     async fn get_routing_table(&self) -> crate::Result<RoutingTable> {
         Err(anyhow::anyhow!(
             "shard_manager is not configured in cloud mode; \

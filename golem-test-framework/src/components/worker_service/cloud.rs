@@ -63,15 +63,15 @@ impl WorkerService for CloudWorkerService {
     }
 
     fn custom_request_host(&self) -> String {
-        // Not used in cloud mode — HTTP API deployments are accessed via the
-        // apps base domain (*.apps.dev.golem.cloud), not this host.
-        self.api_url.host_str().unwrap_or("localhost").to_string()
+        // Code-first HTTP API deployments are reached via the apps base domain
+        // (*.apps.dev.golem.cloud), not through this host.
+        panic!("custom_request_host() is not available in cloud mode");
     }
 
     fn custom_request_port(&self) -> u16 {
-        // Not used in cloud mode — HTTP API deployments are accessed via the
-        // apps base domain. Returning 0 makes any accidental use obvious.
-        0
+        // Code-first HTTP API deployments are reached via the apps base domain
+        // (*.apps.dev.golem.cloud), not through this port.
+        panic!("custom_request_port() is not available in cloud mode");
     }
 
     fn mcp_port(&self) -> u16 {

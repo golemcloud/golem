@@ -15,14 +15,14 @@
 use super::ComponentCompilationService;
 use async_trait::async_trait;
 
-/// Panic-on-use stub for `ComponentCompilationService`. Used in cloud mode
-/// where component compilation is handled by the cloud platform. Operational
-/// methods panic; `kill` is a no-op so that
-/// `BenchmarkTestDependencies::kill_all()` completes safely.
-pub struct PanicComponentCompilationService;
+/// A `ComponentCompilationService` that is not directly reachable (e.g. cloud
+/// mode, where compilation is handled inside the cluster). `kill` is a no-op
+/// so that `kill_all()` completes; operational methods panic with a clear
+/// message.
+pub struct UnavailableComponentCompilationService;
 
 #[async_trait]
-impl ComponentCompilationService for PanicComponentCompilationService {
+impl ComponentCompilationService for UnavailableComponentCompilationService {
     fn grpc_host(&self) -> String {
         panic!("component_compilation_service() is not available in cloud mode");
     }
@@ -31,7 +31,5 @@ impl ComponentCompilationService for PanicComponentCompilationService {
         panic!("component_compilation_service() is not available in cloud mode");
     }
 
-    async fn kill(&self) {
-        // no-op: cloud mode has no local compilation service to kill
-    }
+    async fn kill(&self) {}
 }

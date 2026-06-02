@@ -17,28 +17,24 @@ use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use async_trait::async_trait;
 use std::sync::Arc;
 
-/// Panic-on-use stub for `WorkerExecutorCluster`. Used in cloud mode where
-/// direct executor process management is not available.
+/// A `WorkerExecutorCluster` whose individual executors are not directly
+/// reachable (e.g. cloud mode, where executors run inside the cluster).
 ///
-/// Operational methods panic. Lifecycle teardown methods (`kill_all`,
-/// `restart_all`) are no-ops so that `BenchmarkTestDependencies::kill_all()`
-/// completes safely. `is_running()` returns `true` so that
-/// `ensure_all_deps_running()` is also a no-op rather than a panic.
-pub struct PanicWorkerExecutorCluster;
+/// Lifecycle teardown methods (`kill_all`, `restart_all`) are no-ops so that
+/// `kill_all()` completes. `is_running()` returns `true` so that
+/// `ensure_all_deps_running()` is a no-op. Per-executor operations panic with a
+/// clear message.
+pub struct UnavailableWorkerExecutorCluster;
 
 #[async_trait]
-impl WorkerExecutorCluster for PanicWorkerExecutorCluster {
+impl WorkerExecutorCluster for UnavailableWorkerExecutorCluster {
     fn size(&self) -> usize {
         panic!("worker_executor_cluster() is not available in cloud mode");
     }
 
-    async fn kill_all(&self) {
-        // no-op: cloud mode has no local executor processes to kill
-    }
+    async fn kill_all(&self) {}
 
-    async fn restart_all(&self) {
-        // no-op: cloud mode has no local executor processes to restart
-    }
+    async fn restart_all(&self) {}
 
     async fn stop(&self, _index: usize) {
         panic!("worker_executor_cluster() is not available in cloud mode");
@@ -60,8 +56,6 @@ impl WorkerExecutorCluster for PanicWorkerExecutorCluster {
         panic!("worker_executor_cluster() is not available in cloud mode");
     }
 
-    /// Returns `true` so that `ensure_all_deps_running()` is a no-op in
-    /// cloud mode — the cloud cluster is presumed healthy by the operator.
     async fn is_running(&self) -> bool {
         true
     }

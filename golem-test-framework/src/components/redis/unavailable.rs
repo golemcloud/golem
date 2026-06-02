@@ -15,13 +15,13 @@
 use super::Redis;
 use async_trait::async_trait;
 
-/// Panic-on-use stub for `Redis`. Used in cloud mode where no direct Redis
-/// access is available. Operational methods panic; `kill` is a no-op so that
-/// `BenchmarkTestDependencies::kill_all()` completes safely.
-pub struct PanicRedis;
+/// A `Redis` that is not directly reachable (e.g. cloud mode, where Redis sits
+/// behind the Gateway). `kill` is a no-op so that `kill_all()` completes;
+/// operational methods panic with a clear message.
+pub struct UnavailableRedis;
 
 #[async_trait]
-impl Redis for PanicRedis {
+impl Redis for UnavailableRedis {
     fn assert_valid(&self) {
         panic!("redis() is not available in cloud mode");
     }
@@ -38,7 +38,5 @@ impl Redis for PanicRedis {
         panic!("redis() is not available in cloud mode");
     }
 
-    async fn kill(&self) {
-        // no-op: cloud mode has no local Redis process to kill
-    }
+    async fn kill(&self) {}
 }

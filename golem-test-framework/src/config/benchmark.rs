@@ -14,21 +14,21 @@
 
 use crate::benchmark::BenchmarkConfig;
 use crate::components::component_compilation_service::ComponentCompilationService;
-use crate::components::component_compilation_service::panic::PanicComponentCompilationService;
 use crate::components::component_compilation_service::provided::ProvidedComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
+use crate::components::component_compilation_service::unavailable::UnavailableComponentCompilationService;
 use crate::components::rdb::PostgresInfo;
 use crate::components::rdb::Rdb;
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
-use crate::components::rdb::panic::PanicRdb;
 use crate::components::rdb::provided_postgres::ProvidedPostgresRdb;
+use crate::components::rdb::unavailable::UnavailableRdb;
 use crate::components::redis::Redis;
-use crate::components::redis::panic::PanicRedis;
 use crate::components::redis::provided::ProvidedRedis;
 use crate::components::redis::spawned::SpawnedRedis;
+use crate::components::redis::unavailable::UnavailableRedis;
 use crate::components::redis_monitor::RedisMonitor;
-use crate::components::redis_monitor::panic::PanicRedisMonitor;
 use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
+use crate::components::redis_monitor::unavailable::UnavailableRedisMonitor;
 use crate::components::registry_service::RegistryService;
 use crate::components::registry_service::cloud::CloudRegistryService;
 use crate::components::registry_service::provided::ProvidedRegistryService;
@@ -36,13 +36,13 @@ use crate::components::registry_service::spawned::SpawnedRegistryService;
 use crate::components::service::Service;
 use crate::components::service::spawned::SpawnedService;
 use crate::components::shard_manager::ShardManager;
-use crate::components::shard_manager::panic::PanicShardManager;
 use crate::components::shard_manager::provided::ProvidedShardManager;
 use crate::components::shard_manager::spawned::SpawnedShardManager;
+use crate::components::shard_manager::unavailable::UnavailableShardManager;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
-use crate::components::worker_executor_cluster::panic::PanicWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::provided::ProvidedWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
+use crate::components::worker_executor_cluster::unavailable::UnavailableWorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 use crate::components::worker_service::cloud::CloudWorkerService;
 use crate::components::worker_service::provided::ProvidedWorkerService;
@@ -275,9 +275,8 @@ pub enum TestMode {
         /// For the `golem-dev` environment this is `apps.dev.golem.cloud`.
         #[arg(long)]
         apps_base_domain: String,
-        /// Bearer token for the admin account. This is the only credential
-        /// needed — all benchmark API calls first create a fresh user account
-        /// using this token, then operate exclusively through that account.
+        /// Bearer token for the admin account. Used to create a fresh user
+        /// account for each benchmark run, which then owns all benchmark state.
         #[arg(long)]
         admin_account_token: String,
         /// UUID of the builtin-plugin-owner account.
@@ -711,20 +710,20 @@ impl BenchmarkTestDependencies {
                         (Some(host), Some(port)) => {
                             Arc::new(ProvidedShardManager::new(host.clone(), 0, *port))
                         }
-                        _ => Arc::new(PanicShardManager),
+                        _ => Arc::new(UnavailableShardManager),
                     };
 
                 let worker_service: Arc<dyn WorkerService> =
                     Arc::new(CloudWorkerService::new(api_url.clone()));
 
                 Self {
-                    rdb: Arc::new(PanicRdb),
-                    redis: Arc::new(PanicRedis),
-                    redis_monitor: Arc::new(PanicRedisMonitor),
+                    rdb: Arc::new(UnavailableRdb),
+                    redis: Arc::new(UnavailableRedis),
+                    redis_monitor: Arc::new(UnavailableRedisMonitor),
                     shard_manager,
-                    component_compilation_service: Arc::new(PanicComponentCompilationService),
+                    component_compilation_service: Arc::new(UnavailableComponentCompilationService),
                     worker_service,
-                    worker_executor_cluster: Arc::new(PanicWorkerExecutorCluster),
+                    worker_executor_cluster: Arc::new(UnavailableWorkerExecutorCluster),
                     component_directory: Path::new(component_directory).to_path_buf(),
                     blob_storage,
                     initial_agent_files_service,
