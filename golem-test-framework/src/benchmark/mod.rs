@@ -301,6 +301,7 @@ impl<B: Benchmark> BenchmarkApi for B {
             description: B::description().to_string(),
             runs,
             results,
+            run_id: None,
         }
     }
 }
