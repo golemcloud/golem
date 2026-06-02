@@ -15,25 +15,26 @@
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
-use golem_wasm::analysis::AnalysedType;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_value::SchemaValue;
 
 /// Agent secret creation done as part of deployment with checked internal type consistency.
 pub struct DeploymentAgentSecretCreation {
     pub path: CanonicalAgentSecretPath,
-    pub secret_type: AnalysedType,
-    pub secret_value: Option<golem_wasm::Value>,
+    pub secret_type: SchemaGraph,
+    pub secret_value: Option<SchemaValue>,
 }
 
 pub struct DeploymentAgentSecretUpdate {
     pub agent_secret_id: AgentSecretId,
     pub current_revision: AgentSecretRevision,
-    pub new_secret_value: golem_wasm::Value,
+    pub new_secret_value: SchemaValue,
 }
 
 pub struct DeploymentAgentSecretReplacement {
     pub agent_secret_id: AgentSecretId,
     pub current_revision: AgentSecretRevision,
     pub path: CanonicalAgentSecretPath,
-    pub secret_type: AnalysedType,
-    pub secret_value: Option<golem_wasm::Value>,
+    pub secret_type: SchemaGraph,
+    pub secret_value: Option<SchemaValue>,
 }

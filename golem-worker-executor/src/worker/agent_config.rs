@@ -15,6 +15,7 @@
 use golem_common::model::agent::{AgentConfigSource, AgentType, LegacyParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
+use golem_common::schema::adapters::analysed_type::schema_graph_to_analysed_type;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
@@ -47,16 +48,23 @@ pub fn ensure_required_agent_secrets_are_configured(
 
         match agent_secrets.get(&canonical_agent_secret_path) {
             Some(agent_secret) => {
-                if agent_secret.secret_type != config_entry.value_type {
+                let secret_type_legacy = schema_graph_to_analysed_type(&agent_secret.secret_type)
+                    .map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Required agent secret {} has a type that is not representable as AnalysedType: {e}",
+                        config_entry.path.join(".")
+                    ))
+                })?;
+                if secret_type_legacy != config_entry.value_type {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has invalid type. found: {:?}, expected: {:?}",
                         config_entry.path.join("."),
-                        agent_secret.secret_type,
+                        secret_type_legacy,
                         config_entry.value_type
                     )));
                 }
                 if agent_secret.secret_value.is_none()
-                    && !matches!(agent_secret.secret_type, AnalysedType::Option(_))
+                    && !matches!(secret_type_legacy, AnalysedType::Option(_))
                 {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has no configured value",

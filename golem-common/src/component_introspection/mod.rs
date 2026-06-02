@@ -22,8 +22,7 @@
 //! without changing their data model.
 //!
 //! The module may later be promoted into its own crate; for now it lives under
-//! `golem-common` to avoid a new workspace member during Wave 1 of the
-//! value/type refactor.
+//! `golem-common` to avoid adding a new workspace member.
 
 pub mod metadata;
 pub mod wit_parser;

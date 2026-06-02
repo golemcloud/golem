@@ -35,6 +35,8 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemAgentWebhookUrl,
 };
+use golem_common::schema::adapters::analysed_type::schema_graph_to_analysed_type;
+use golem_common::schema::adapters::value::schema_value_to_value;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{NodeBuilder, WitType, WitValue, WitValueBuilderExtensions};
 
@@ -85,8 +87,36 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
             let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
 
-            let agent_secret_type = agent_secret.map(|sec| &sec.secret_type);
-            let agent_secret_value = agent_secret.and_then(|sec| sec.secret_value.as_ref());
+            // Project the secret's schema/value carrier back to the legacy
+            // `(AnalysedType, Value)` pair so the existing match logic and
+            // wit-bindgen builders below stay unchanged.
+            let agent_secret_legacy = agent_secret
+                .map(|sec| -> anyhow::Result<(AnalysedType, Option<golem_wasm::Value>)> {
+                    let ty = schema_graph_to_analysed_type(&sec.secret_type).map_err(|e| {
+                        anyhow!(
+                            "Agent secret for key {path_str} has a type not representable as AnalysedType: {e}"
+                        )
+                    })?;
+                    let value = sec
+                        .secret_value
+                        .as_ref()
+                        .map(|sv| {
+                            schema_value_to_value(&sec.secret_type, &sec.secret_type.root, sv)
+                                .map_err(|e| {
+                                    anyhow!(
+                                        "Agent secret value for key {path_str} is not representable as legacy Value: {e}"
+                                    )
+                                })
+                        })
+                        .transpose()?;
+                    Ok((ty, value))
+                })
+                .transpose()?;
+
+            let agent_secret_type = agent_secret_legacy.as_ref().map(|(ty, _)| ty);
+            let agent_secret_value = agent_secret_legacy
+                .as_ref()
+                .and_then(|(_, value)| value.as_ref());
 
             if *declared_type != expected_type {
                 return Err(anyhow!(
