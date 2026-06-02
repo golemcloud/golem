@@ -14,7 +14,7 @@
 
 use super::*;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ToolOwnerPattern {
     AnyTools,
@@ -160,7 +160,7 @@ impl ToolOwnerPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicToolOwnerPattern {
     Concrete(ToolOwnerPattern),

@@ -848,6 +848,7 @@ fn subsumption_requires_same_permission_class() {
 #[test]
 fn derivation_must_be_subsumed_by_parent_union() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let parent_grant = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
@@ -866,7 +867,7 @@ fn derivation_must_be_subsumed_by_parent_union() {
 
     let parent = card(vec![parent_grant], Vec::new());
     let parent_surface =
-        EffectiveSurface::from_cards(std::slice::from_ref(&parent), holder).unwrap();
+        EffectiveSurface::from_cards(std::slice::from_ref(&parent), &recipient).unwrap();
 
     assert!(
         parent_surface
@@ -882,6 +883,7 @@ fn derivation_must_be_subsumed_by_parent_union() {
 #[test]
 fn derivation_checks_upper_bounds_against_parent_upper_surface() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let parent_upper = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
@@ -899,7 +901,7 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
     );
     let parent = card(Vec::new(), vec![parent_upper]);
     let parent_surface =
-        EffectiveSurface::from_cards(std::slice::from_ref(&parent), holder).unwrap();
+        EffectiveSurface::from_cards(std::slice::from_ref(&parent), &recipient).unwrap();
 
     assert!(
         parent_surface

@@ -13,9 +13,13 @@
 // limitations under the License.
 
 use crate::repo::report::ReportRepo;
+use golem_common::model::card::owner::EmptyOwnerPattern;
+use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::card::{
+    ClassPermissionPattern, PermissionPattern, SystemResourcePattern, SystemVerb,
+};
 use golem_common::model::reports::{AccountCountsReport, AccountSummaryReport};
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::GlobalAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
@@ -55,7 +59,7 @@ impl ReportsService {
         &self,
         auth: &AuthCtx,
     ) -> Result<Vec<AccountSummaryReport>, ReportsError> {
-        auth.authorize_global_action(GlobalAction::GetReports)?;
+        auth.authorize_permission(&view_account_summaries_report_permission())?;
 
         let summaries = self
             .reports_repo
@@ -72,10 +76,27 @@ impl ReportsService {
         &self,
         auth: &AuthCtx,
     ) -> Result<AccountCountsReport, ReportsError> {
-        auth.authorize_global_action(GlobalAction::GetReports)?;
+        auth.authorize_permission(&view_account_counts_report_permission())?;
 
         let account_counts = self.reports_repo.get_account_counts().await?.into();
 
         Ok(account_counts)
     }
+}
+
+fn view_account_summaries_report_permission() -> PermissionPattern {
+    system_permission(SystemVerb::ViewAccountSummariesReport)
+}
+
+fn view_account_counts_report_permission() -> PermissionPattern {
+    system_permission(SystemVerb::ViewAccountCountsReport)
+}
+
+fn system_permission(verb: SystemVerb) -> PermissionPattern {
+    PermissionPattern::System(ClassPermissionPattern {
+        verb: Some(verb),
+        owner: EmptyOwnerPattern,
+        recipient: RecipientPattern::Any,
+        resource: SystemResourcePattern,
+    })
 }

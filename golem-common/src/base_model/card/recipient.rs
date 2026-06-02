@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum RecipientPattern {
     Any,
@@ -35,7 +35,7 @@ pub enum RecipientPattern {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicRecipientPattern {
     Concrete(RecipientPattern),
@@ -44,7 +44,7 @@ pub enum PolymorphicRecipientPattern {
     Agent(PolymorphicAgentRecipientPattern),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicEnvironmentRecipientPattern {
     AccountEnvironments,
@@ -52,7 +52,7 @@ pub enum PolymorphicEnvironmentRecipientPattern {
     Environment,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicAgentRecipientPattern {
     AccountAgents,

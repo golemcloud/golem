@@ -571,6 +571,8 @@ impl TestWorkerExecutor {
             account_plan_id: self.context.account_plan_id,
             account_roles: self.context.account_roles.clone(),
             token_root_card_id: None,
+            account_holder: self.context.account_id.to_string(),
+            auth_card: None,
         })
     }
 

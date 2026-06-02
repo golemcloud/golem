@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 macro_rules! define_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PermissionPattern {
             $($variant(ClassPermissionPattern<$class>),)+
@@ -28,7 +28,7 @@ macro_rules! define_permission_pattern {
 
 macro_rules! define_polymorphic_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PolymorphicPermissionPattern {
             $($variant(PolymorphicClassPermissionPattern<$class>),)+
@@ -38,7 +38,7 @@ macro_rules! define_polymorphic_permission_pattern {
 
 macro_rules! define_polymorphic_manifest_permission_pattern {
     ($($variant:ident: $class:ty,)+) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
         pub enum PolymorphicManifestPermissionPattern {
             $($variant(PolymorphicManifestClassPermissionPattern<$class>),)+

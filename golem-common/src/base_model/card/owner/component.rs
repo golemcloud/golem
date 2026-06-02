@@ -14,7 +14,7 @@
 
 use super::*;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ComponentOwnerPattern {
     AnyComponents,
@@ -114,7 +114,7 @@ impl ComponentOwnerPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicComponentOwnerPattern {
     Concrete(ComponentOwnerPattern),

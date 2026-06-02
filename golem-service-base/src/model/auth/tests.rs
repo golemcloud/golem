@@ -14,6 +14,9 @@
 
 use super::*;
 use assert2::assert;
+use golem_common::model::card::owner::EmptyOwnerPattern;
+use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::card::{ClassPermissionPattern, SystemResourcePattern, SystemVerb};
 use test_r::test;
 
 fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) -> AuthCtx {
@@ -22,6 +25,8 @@ fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) ->
         account_plan_id: plan_id,
         account_roles: roles.iter().cloned().collect(),
         token_root_card_id: None,
+        account_holder: account_id.to_string(),
+        auth_card: None,
     })
 }
 
@@ -31,6 +36,15 @@ fn mk_impersonated(id: AccountId) -> AuthCtx {
 
 fn make_env_roles(roles: &[EnvironmentRole]) -> BTreeSet<EnvironmentRole> {
     roles.iter().copied().collect()
+}
+
+fn report_permission() -> PermissionPattern {
+    PermissionPattern::System(ClassPermissionPattern {
+        verb: Some(SystemVerb::ViewAccountSummariesReport),
+        owner: EmptyOwnerPattern,
+        recipient: RecipientPattern::Any,
+        resource: SystemResourcePattern,
+    })
 }
 
 #[test]
@@ -82,6 +96,36 @@ fn marketing_admin_can_get_reports() {
         ctx.authorize_global_action(GlobalAction::CreateAccount)
             .is_err()
     );
+}
+
+#[test]
+fn user_with_auth_card_can_authorize_permission() {
+    let permission = report_permission();
+    let account_id = AccountId::new();
+    let ctx = AuthCtx::User(UserAuthCtx {
+        account_id,
+        account_plan_id: PlanId::new(),
+        account_roles: BTreeSet::new(),
+        token_root_card_id: None,
+        account_holder: account_id.to_string(),
+        auth_card: Some(AuthCard {
+            card_id: CardId::new(),
+            lower_positive: vec![permission.clone()],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }),
+    });
+
+    assert!(ctx.authorize_permission(&permission).is_ok());
+}
+
+#[test]
+fn user_without_auth_card_cannot_authorize_permission() {
+    let permission = report_permission();
+    let ctx = mk_user_ctx(&[], PlanId::new(), AccountId::new());
+
+    assert!(ctx.authorize_permission(&permission).is_err());
 }
 
 #[test]

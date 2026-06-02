@@ -20,14 +20,14 @@ use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentPluginGrantResourcePattern {
     Any,
     Name(EnvironmentPluginGrantName),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
 pub struct EnvironmentPluginGrantName(pub String);
@@ -66,7 +66,7 @@ impl ResourcePattern for EnvironmentPluginGrantResourcePattern {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentPluginGrantVerb {
     View,
@@ -84,7 +84,7 @@ impl VerbPattern for EnvironmentPluginGrantVerb {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct EnvironmentPluginGrantClass;
 

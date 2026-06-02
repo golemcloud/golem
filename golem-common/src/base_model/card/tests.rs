@@ -95,6 +95,7 @@ fn recipient_depths_are_validated() {
 #[test]
 fn effective_surface_requires_lower_and_all_upper_bounds() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let read_all = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
@@ -128,7 +129,7 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
 
     let lower = card(vec![read_all], Vec::new());
     let ceiling = card(Vec::new(), vec![read_public.clone()]);
-    let surface = EffectiveSurface::from_cards(&[lower, ceiling], holder).unwrap();
+    let surface = EffectiveSurface::from_cards(&[lower, ceiling], &recipient).unwrap();
 
     assert!(surface.authorize(&read_public).unwrap());
     assert!(!surface.authorize(&read_secret).unwrap());
@@ -137,6 +138,7 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
 #[test]
 fn upper_negative_without_positive_is_unrestricted_except_denials() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let read_tmp = fs(
         holder,
         holder,
@@ -156,9 +158,9 @@ fn upper_negative_without_positive_is_unrestricted_except_denials() {
         Vec::new(),
         vec![reveal_secret.clone()],
     );
-    let surface = EffectiveSurface::from_cards(&[lower, ceiling.clone()], holder).unwrap();
+    let surface = EffectiveSurface::from_cards(&[lower, ceiling.clone()], &recipient).unwrap();
     let ceiling_surface =
-        EffectiveSurface::from_cards(std::slice::from_ref(&ceiling), holder).unwrap();
+        EffectiveSurface::from_cards(std::slice::from_ref(&ceiling), &recipient).unwrap();
 
     assert!(surface.authorize(&read_tmp).unwrap());
     assert!(!surface.authorize(&reveal_secret).unwrap());
@@ -176,6 +178,7 @@ fn upper_negative_without_positive_is_unrestricted_except_denials() {
 #[test]
 fn lower_negative_is_scoped_to_its_card() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let read_all = fs(
         holder,
         holder,
@@ -205,7 +208,8 @@ fn lower_negative_is_scoped_to_its_card() {
     );
     let allow_in_another_card = card(vec![read_secret.clone()], Vec::new());
     let surface =
-        EffectiveSurface::from_cards(&[deny_in_one_card, allow_in_another_card], holder).unwrap();
+        EffectiveSurface::from_cards(&[deny_in_one_card, allow_in_another_card], &recipient)
+            .unwrap();
 
     assert!(surface.authorize(&read_secret).unwrap());
 }
@@ -213,6 +217,7 @@ fn lower_negative_is_scoped_to_its_card() {
 #[test]
 fn derivation_upper_bound_uses_parent_ceiling_intersection() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let read_all = fs(
         holder,
         holder,
@@ -242,7 +247,7 @@ fn derivation_upper_bound_uses_parent_ceiling_intersection() {
         vec![read_secret.clone()],
     );
     let parent_surface =
-        EffectiveSurface::from_cards(&[parent_allow, parent_deny], holder).unwrap();
+        EffectiveSurface::from_cards(&[parent_allow, parent_deny], &recipient).unwrap();
 
     assert!(matches!(
         parent_surface.validates_derivation(&[], std::slice::from_ref(&read_secret)),

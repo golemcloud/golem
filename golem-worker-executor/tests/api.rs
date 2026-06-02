@@ -3728,6 +3728,8 @@ async fn worker_created_by_reflects_component_owner_not_caller(
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
         token_root_card_id: None,
+        account_holder: caller_account_id.to_string(),
+        auth_card: None,
     })
     .into();
 
@@ -3817,6 +3819,8 @@ async fn worker_environment_reflects_component_not_caller(
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
         token_root_card_id: None,
+        account_holder: caller_account_id.to_string(),
+        auth_card: None,
     })
     .into();
 
@@ -3957,6 +3961,8 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
         token_root_card_id: None,
+        account_holder: caller_account_id.to_string(),
+        auth_card: None,
     })
     .into();
 

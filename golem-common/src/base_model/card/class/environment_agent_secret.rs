@@ -20,20 +20,20 @@ use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::EnvironmentOwnerPattern;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentAgentSecretResourcePattern {
     Any,
     Key(EnvironmentAgentSecretKeyPathPattern),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct EnvironmentAgentSecretKeyPathPattern {
     pub segments: Vec<EnvironmentAgentSecretKeySegmentPattern>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentAgentSecretKeySegmentPattern {
     Literal(String),
@@ -87,7 +87,7 @@ impl ResourcePattern for EnvironmentAgentSecretResourcePattern {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentAgentSecretVerb {
     View,
@@ -109,7 +109,7 @@ impl VerbPattern for EnvironmentAgentSecretVerb {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct EnvironmentAgentSecretClass;
 

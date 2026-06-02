@@ -14,7 +14,7 @@
 
 use super::*;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentOwnerLeafPattern {
     Agent(String),
@@ -44,7 +44,7 @@ impl AgentOwnerLeafPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentOwnerPattern {
     AnyAgents,
@@ -190,7 +190,7 @@ impl AgentOwnerPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicAgentOwnerPattern {
     Concrete(AgentOwnerPattern),
