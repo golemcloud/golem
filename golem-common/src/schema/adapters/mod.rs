@@ -38,6 +38,7 @@ pub mod analysed_type;
 pub mod data_schema;
 pub mod element_schema;
 pub mod error;
+pub mod untyped;
 pub mod value;
 
 pub use agent::{
@@ -55,6 +56,10 @@ pub use data_schema::{
 };
 pub use element_schema::{element_schema_to_schema_type, schema_type_to_element_schema};
 pub use error::{SchemaAdapterError, legacy_type_id};
+pub use untyped::{
+    typed_schema_value_to_untyped_data_value, untyped_data_value_to_typed_schema_input,
+    untyped_data_value_to_typed_schema_output,
+};
 pub use value::{
     schema_value_to_value, typed_schema_value_to_value_and_type,
     value_and_type_to_typed_schema_value, value_to_schema_value,

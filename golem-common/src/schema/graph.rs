@@ -42,6 +42,8 @@ use serde::{Deserialize, Serialize};
 /// not be passed to root-oriented walkers/renderers as if `root` were the
 /// payload root.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct SchemaGraph {
     /// Named type definitions in this graph. The defining set is exactly the
     /// types reachable from `root` (directly or transitively) that need to be
@@ -93,6 +95,8 @@ impl SchemaGraph {
 /// [`SchemaType`] body so there is one source of truth for docs / aliases /
 /// examples / deprecation / role per type.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct SchemaTypeDef {
     /// Stable identifier; unique within the enclosing graph.
     pub id: TypeId,
@@ -110,6 +114,8 @@ pub struct SchemaTypeDef {
 /// The pair is the only public form for typed values; there is no bare-value
 /// overload of any walker / renderer / encoder API.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct TypedSchemaValue {
     graph: SchemaGraph,
     value: SchemaValue,

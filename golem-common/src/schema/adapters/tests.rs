@@ -882,3 +882,179 @@ fn strip_value_and_type_names(vat: ValueAndType) -> ValueAndType {
         typ: strip_names(vat.typ),
     }
 }
+
+// --------------------------------------------------------------------------
+// UntypedDataValue ↔ TypedSchemaValue
+// --------------------------------------------------------------------------
+
+mod untyped_round_trip {
+    use super::*;
+    use crate::base_model::agent::{
+        BinaryReference, BinaryReferenceValue, BinarySource, BinaryType, TextReference,
+        TextReferenceValue, TextSource, TextType, UntypedDataValue, UntypedElementValue,
+        UntypedNamedElementValue,
+    };
+    use crate::schema::adapters::untyped::{
+        typed_schema_value_to_untyped_data_value, untyped_data_value_to_typed_schema_input,
+        untyped_data_value_to_typed_schema_output,
+    };
+    use golem_wasm::Value;
+    use test_r::test;
+
+    fn input_schema_two_fields() -> DataSchema {
+        DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "n".into(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: s32(),
+                    }),
+                },
+                NamedElementSchema {
+                    name: "note".into(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+                },
+            ],
+        })
+    }
+
+    fn input_value_two_fields() -> UntypedDataValue {
+        UntypedDataValue::Tuple(vec![
+            UntypedElementValue::ComponentModel(Value::S32(7)),
+            UntypedElementValue::UnstructuredText(TextReferenceValue {
+                value: TextReference::Inline(TextSource {
+                    data: "hi".into(),
+                    text_type: Some(TextType {
+                        language_code: "en".into(),
+                    }),
+                }),
+            }),
+        ])
+    }
+
+    #[test]
+    fn input_two_fields_round_trip() {
+        let value = input_value_two_fields();
+        let schema = input_schema_two_fields();
+        let typed = untyped_data_value_to_typed_schema_input(value.clone(), &schema).unwrap();
+        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn input_multimodal_data_schema_rejected() {
+        let err = untyped_data_value_to_typed_schema_input(
+            UntypedDataValue::Tuple(vec![]),
+            &DataSchema::Multimodal(NamedElementSchemas { elements: vec![] }),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
+    }
+
+    #[test]
+    fn input_multimodal_value_rejected() {
+        let err = untyped_data_value_to_typed_schema_input(
+            UntypedDataValue::Multimodal(vec![]),
+            &DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SchemaAdapterError::ValueShapeMismatch(_)));
+    }
+
+    #[test]
+    fn output_empty_round_trip() {
+        let value = UntypedDataValue::Tuple(vec![]);
+        let schema = DataSchema::Tuple(NamedElementSchemas { elements: vec![] });
+        let typed = untyped_data_value_to_typed_schema_output(value.clone(), &schema).unwrap();
+        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn output_single_component_model_round_trip() {
+        let value =
+            UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(Value::S32(42))]);
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "value".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: s32(),
+                }),
+            }],
+        });
+        let typed = untyped_data_value_to_typed_schema_output(value.clone(), &schema).unwrap();
+        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn output_multi_record_round_trip() {
+        let value = input_value_two_fields();
+        let schema = input_schema_two_fields();
+        let typed = untyped_data_value_to_typed_schema_output(value.clone(), &schema).unwrap();
+        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn output_multimodal_round_trip() {
+        let schema = DataSchema::Multimodal(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "summary".into(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+                },
+                NamedElementSchema {
+                    name: "image".into(),
+                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                        restrictions: None,
+                    }),
+                },
+            ],
+        });
+        let value = UntypedDataValue::Multimodal(vec![
+            UntypedNamedElementValue {
+                name: "summary".into(),
+                value: UntypedElementValue::UnstructuredText(TextReferenceValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "ok".into(),
+                        text_type: None,
+                    }),
+                }),
+            },
+            UntypedNamedElementValue {
+                name: "image".into(),
+                value: UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data: vec![1, 2, 3],
+                        binary_type: BinaryType {
+                            mime_type: "image/png".into(),
+                        },
+                    }),
+                }),
+            },
+        ]);
+        let typed = untyped_data_value_to_typed_schema_output(value.clone(), &schema).unwrap();
+        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
+    fn url_text_reference_is_lossy() {
+        let value = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredText(
+            TextReferenceValue {
+                value: TextReference::Url(crate::base_model::agent::Url {
+                    value: "https://example.com/notes.txt".into(),
+                }),
+            },
+        )]);
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "note".into(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            }],
+        });
+        let err = untyped_data_value_to_typed_schema_input(value, &schema).unwrap_err();
+        assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
+    }
+}
