@@ -18,7 +18,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 /// A `WorkerExecutorCluster` whose individual executors are not directly
-/// reachable (e.g. cloud mode, where executors run inside the cluster).
+/// reachable. Used in cloud mode, where executors are internal cluster
+/// components with no external exposure.
 ///
 /// Lifecycle teardown methods (`kill_all`, `restart_all`) are no-ops so that
 /// `kill_all()` completes. `is_running()` returns `true` so that

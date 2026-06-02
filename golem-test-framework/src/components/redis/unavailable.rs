@@ -15,9 +15,10 @@
 use super::Redis;
 use async_trait::async_trait;
 
-/// A `Redis` that is not directly reachable (e.g. cloud mode, where Redis sits
-/// behind the Gateway). `kill` is a no-op so that `kill_all()` completes;
-/// operational methods panic with a clear message.
+/// A `Redis` that is not directly reachable. Used in cloud mode, where Redis
+/// is an internal cluster component with no external exposure. `kill` is a
+/// no-op so that `kill_all()` completes; operational methods panic with a
+/// clear message.
 pub struct UnavailableRedis;
 
 #[async_trait]

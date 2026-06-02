@@ -14,8 +14,9 @@
 
 use super::RedisMonitor;
 
-/// A `RedisMonitor` that is not directly reachable (e.g. cloud mode). `kill`
-/// is a no-op so that `kill_all()` completes; operational methods panic with a
+/// A `RedisMonitor` that is not directly reachable. Used in cloud mode, where
+/// Redis is an internal cluster component with no external exposure. `kill` is
+/// a no-op so that `kill_all()` completes; operational methods panic with a
 /// clear message.
 pub struct UnavailableRedisMonitor;
 

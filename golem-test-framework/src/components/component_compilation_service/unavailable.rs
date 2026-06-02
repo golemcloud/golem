@@ -15,10 +15,10 @@
 use super::ComponentCompilationService;
 use async_trait::async_trait;
 
-/// A `ComponentCompilationService` that is not directly reachable (e.g. cloud
-/// mode, where compilation is handled inside the cluster). `kill` is a no-op
-/// so that `kill_all()` completes; operational methods panic with a clear
-/// message.
+/// A `ComponentCompilationService` that is not directly reachable. Used in
+/// cloud mode, where it is an internal cluster component with no external
+/// exposure. `kill` is a no-op so that `kill_all()` completes; operational
+/// methods panic with a clear message.
 pub struct UnavailableComponentCompilationService;
 
 #[async_trait]

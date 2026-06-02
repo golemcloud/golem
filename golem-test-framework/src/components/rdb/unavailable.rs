@@ -15,9 +15,10 @@
 use super::{DbInfo, Rdb};
 use async_trait::async_trait;
 
-/// An `Rdb` that is not directly reachable (e.g. cloud mode, where the
-/// database sits behind the Gateway). Lifecycle teardown (`kill`) is a no-op so
-/// that `kill_all()` completes; operational methods panic with a clear message.
+/// An `Rdb` that is not directly reachable. Used in cloud mode, where the
+/// database is an internal cluster component with no external exposure.
+/// Lifecycle teardown (`kill`) is a no-op so that `kill_all()` completes;
+/// operational methods panic with a clear message.
 pub struct UnavailableRdb;
 
 #[async_trait]
