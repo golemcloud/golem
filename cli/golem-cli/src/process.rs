@@ -19,6 +19,9 @@ use async_trait::async_trait;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use std::collections::HashMap;
+#[cfg(windows)]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{LazyLock, Mutex};
@@ -27,6 +30,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use which::which as wrapped_which;
+#[cfg(windows)]
+use which::which_in as wrapped_which_in;
 
 static PROGRAM_LOOKUP_CACHE: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -55,6 +60,117 @@ pub fn which(program: &str) -> anyhow::Result<PathBuf> {
         .insert(program.to_string(), resolved.clone());
 
     resolved.ok_or_else(|| anyhow!("Program '{}' not found on PATH", program))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedCommand {
+    pub program: PathBuf,
+    pub prefix_args: Vec<OsString>,
+}
+
+impl ResolvedCommand {
+    fn direct(program: PathBuf) -> Self {
+        Self {
+            program,
+            prefix_args: Vec::new(),
+        }
+    }
+}
+
+pub fn resolve_command_for_execution(
+    program: &str,
+    current_dir: Option<&Path>,
+) -> anyhow::Result<ResolvedCommand> {
+    let program_path = Path::new(program);
+
+    #[cfg(windows)]
+    {
+        let resolved = if is_explicit_program_path(program_path) {
+            resolve_explicit_program_path_on_windows(program_path, current_dir)?
+        } else {
+            which(program)?
+        };
+
+        return wrap_powershell_script_if_needed_on_windows(resolved);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = current_dir;
+        if is_explicit_program_path(program_path) {
+            Ok(ResolvedCommand::direct(program_path.to_path_buf()))
+        } else {
+            which(program).map(ResolvedCommand::direct)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn resolve_explicit_program_path_on_windows(
+    program_path: &Path,
+    current_dir: Option<&Path>,
+) -> anyhow::Result<PathBuf> {
+    let base_dir = match current_dir {
+        Some(current_dir) => current_dir.to_path_buf(),
+        None => std::env::current_dir().map_err(anyhow::Error::from)?,
+    };
+
+    let fallback_path = if program_path.is_absolute() {
+        program_path.to_path_buf()
+    } else {
+        crate::fs::normalize_path_lexically(&base_dir.join(program_path))
+    };
+
+    if let Ok(resolved) = wrapped_which_in(program_path, None::<&OsStr>, &base_dir) {
+        return Ok(resolved);
+    }
+
+    // MoonBit bin-deps install Windows launchers as .ps1 scripts without the
+    // .cmd/.bat variants that tools like npm provide. .ps1 is not part of the
+    // default PATHEXT, so add this fallback only for explicit paths while keeping
+    // bare command lookup tied to the user's PATHEXT configuration.
+    if program_path.extension().is_none() {
+        let ps1_candidate = append_extension(&fallback_path, ".ps1");
+        if ps1_candidate.exists() {
+            return Ok(ps1_candidate);
+        }
+    }
+
+    Ok(fallback_path)
+}
+
+#[cfg(windows)]
+fn append_extension(path: &Path, extension: &str) -> PathBuf {
+    let mut path = path.as_os_str().to_os_string();
+    path.push(extension);
+    PathBuf::from(path)
+}
+
+#[cfg(windows)]
+fn wrap_powershell_script_if_needed_on_windows(
+    program: PathBuf,
+) -> anyhow::Result<ResolvedCommand> {
+    if program
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ps1"))
+    {
+        // .ps1 files are PowerShell scripts, not Windows process images. Node/npm
+        // provide .cmd launchers that already work with Command::new; MoonBit only
+        // provides the .ps1 launcher, so run it through PowerShell explicitly.
+        Ok(ResolvedCommand {
+            program: which("powershell.exe")?,
+            prefix_args: vec![
+                OsString::from("-NoProfile"),
+                OsString::from("-ExecutionPolicy"),
+                OsString::from("Bypass"),
+                OsString::from("-File"),
+                program.into_os_string(),
+            ],
+        })
+    } else {
+        Ok(ResolvedCommand::direct(program))
+    }
 }
 
 pub fn normalized_program_name(program: &str) -> String {

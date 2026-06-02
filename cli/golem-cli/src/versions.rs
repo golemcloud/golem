@@ -34,6 +34,8 @@ pub mod build_tool {
     pub const NODE_MIN: &str = "24.11.0";
     pub const NPM_MIN: &str = "11.6.2";
     pub const MOON_MIN: &str = "0.1.20260409";
+    pub const JAVA_MIN: &str = "17.0.0";
+    pub const WASM_TOOLS_MIN: &str = "1.227.1";
 }
 
 // Keep this aligned with the TS component template
