@@ -1905,7 +1905,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match mode {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
-                let worker = self.get_or_create(&request).await?;
+                // Use the `pending` variant so we do NOT start the wasmtime instance
+                // up front. `Worker::invoke_and_await` checks the read-only cache first;
+                // on a cache hit (`ResultOrSubscription::Finished`) it returns without
+                // loading the agent. The Pending path starts the instance lazily so
+                // queued invocations still get processed.
+                let worker = self.get_or_create_pending(&request).await?;
                 let invocation_output = worker.invoke_and_await(invocation).await?;
                 Ok((Some(invocation_output), None))
             }

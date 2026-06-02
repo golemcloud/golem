@@ -12,25 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod algebra;
-mod class;
-mod owner;
-mod parsing;
-mod pattern;
-pub mod recipient;
-mod types;
+//! Agents used by the read-only method tests (issue #3393).
+//!
+//! - [`agent::ReadonlyAgent`] — durable agent exercising every variant of
+//!   `#[read_only]` plus the four side-effect categories that must trap, and
+//!   a `GET` HTTP mount over `get_count` used by the HTTP integration tests.
+//! - [`caller::ReadonlyCaller`] — durable agent that calls `ReadonlyAgent`
+//!   over RPC; exercises the queue-bypass behaviour and concurrent reads.
 
-#[cfg(test)]
-mod parsing_tests;
-
-#[cfg(test)]
-mod subsumption_tests;
-
-#[cfg(test)]
-mod tests;
-
-pub use algebra::*;
-pub use class::*;
-pub use parsing::*;
-pub use pattern::*;
-pub use types::*;
+pub mod agent;
+pub mod caller;

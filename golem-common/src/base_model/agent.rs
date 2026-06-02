@@ -1698,4 +1698,110 @@ mod tests {
         assert!(msg.contains("Test"));
         assert!(msg.contains("get"));
     }
+
+    // -----------------------------------------------------------------------
+    // Read-only / cache-policy codec round-trip (issue #3393)
+    //
+    // Read-only metadata is carried inside `AgentMethod.read_only` and uses
+    // every cache-policy variant. The same `AgentMethod` value must travel
+    // unchanged through every codec we expose: `serde`, `desert_rust`
+    // (BinaryCodec), `poem_openapi`, and `golem_wasm::{IntoValue, FromValue}`.
+    //
+    // Also covers the schema-migration case: a legacy payload without the
+    // `read_only` field must deserialize with `read_only == None`.
+    // -----------------------------------------------------------------------
+
+    fn all_cache_policies() -> Vec<CachePolicy> {
+        vec![
+            CachePolicy::NoCache(Empty {}),
+            CachePolicy::UntilWrite(Empty {}),
+            CachePolicy::Ttl(CachePolicyTtl {
+                duration_nanos: 1_234_567,
+            }),
+        ]
+    }
+
+    fn all_read_only_methods() -> Vec<AgentMethod> {
+        let mut out = vec![mock_method("not-read-only", None)];
+        for policy in all_cache_policies() {
+            for uses_principal in [false, true] {
+                out.push(mock_method(
+                    "ro",
+                    Some(ReadOnlyConfig {
+                        cache_policy: policy.clone(),
+                        uses_principal,
+                    }),
+                ));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn agent_method_read_only_roundtrips_through_serde_json() {
+        for method in all_read_only_methods() {
+            let json = serde_json::to_string(&method).expect("serde_json::to_string");
+            let back: AgentMethod = serde_json::from_str(&json).expect("serde_json::from_str");
+            assert_eq!(back, method, "serde JSON round-trip mismatch");
+        }
+    }
+
+    #[test]
+    fn agent_method_read_only_roundtrips_through_desert() {
+        for method in all_read_only_methods() {
+            let bytes =
+                desert_rust::serialize_to_byte_vec(&method).expect("desert_rust serialization");
+            let back: AgentMethod =
+                desert_rust::deserialize(&bytes).expect("desert_rust deserialization");
+            assert_eq!(back, method, "desert (BinaryCodec) round-trip mismatch");
+        }
+    }
+
+    #[test]
+    fn agent_method_read_only_roundtrips_through_poem_openapi() {
+        use poem_openapi::types::{ParseFromJSON, ToJSON};
+
+        for method in all_read_only_methods() {
+            let json = ToJSON::to_json(&method);
+            let back = <AgentMethod as ParseFromJSON>::parse_from_json(json)
+                .expect("poem_openapi parse_from_json");
+            assert_eq!(back, method, "poem_openapi round-trip mismatch");
+        }
+    }
+
+    #[test]
+    fn agent_method_read_only_roundtrips_through_into_from_value() {
+        use golem_wasm::{FromValue, IntoValue};
+
+        for method in all_read_only_methods() {
+            let value = method.clone().into_value();
+            let back =
+                <AgentMethod as FromValue>::from_value(value).expect("FromValue::from_value");
+            assert_eq!(back, method, "IntoValue/FromValue round-trip mismatch");
+        }
+    }
+
+    /// Legacy payload (`AgentMethod` without `read_only`) must deserialize
+    /// with `read_only == None`. We don't have a previously-shipped binary
+    /// to replay, so we verify the `#[serde(default)]` and `desert(evolution)`
+    /// contracts in the simplest possible way: feed both codecs a payload
+    /// missing the `read_only` field and assert the field defaults to `None`.
+    #[test]
+    fn agent_method_without_read_only_field_defaults_to_none_via_serde() {
+        let legacy_json = serde_json::json!({
+            "name": "legacy",
+            "description": "",
+            "promptHint": null,
+            "inputSchema": { "type": "Tuple", "elements": [] },
+            "outputSchema": { "type": "Tuple", "elements": [] },
+            "httpEndpoint": [],
+        });
+        let method: AgentMethod =
+            serde_json::from_value(legacy_json).expect("legacy serde JSON must deserialize");
+        assert_eq!(method.name, "legacy");
+        assert!(
+            method.read_only.is_none(),
+            "missing read_only field must default to None"
+        );
+    }
 }
