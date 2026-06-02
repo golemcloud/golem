@@ -1,0 +1,140 @@
+import {Callout, Tabs} from "nextra/components"
+
+# Observability
+
+Golem 1.5 includes built-in observability through the **OpenTelemetry** protocol. The built-in `golem-otlp-exporter` plugin exports agent traces, logs, and metrics to any OTLP-compatible collector.
+
+### Setting up the OTLP plugin
+
+Enable the OTLP exporter by adding it to your `golem.yaml`:
+
+```yaml
+components:
+  my-app:ts-main:
+    templates: ts
+    plugins:
+      - name: golem-otlp-exporter
+        version: 1.5.0
+        parameters:
+          endpoint: "http://localhost:4318"
+          signals: "traces,logs,metrics"
+```
+
+The following plugin configuration keys are available:
+
+| Key | Description |
+| --- | --- |
+| `endpoint` | OTLP base URL |
+| `signals` | Combination of `traces`, `logs`, `metrics` |
+| `headers` | Custom HTTP headers |
+| `service-name-mode` | Either `agent-id` or `agent-type` |
+
+### Custom spans
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        Create custom spans using the `golem:api/context` interface:
+
+        ```typescript
+        import { startSpan, currentContext } from 'golem:api/context@1.5.0';
+
+        const span = startSpan('my-operation');
+        span.setAttribute('env', { tag: 'string', val: 'production' });
+        // ... do work ...
+        span.finish();
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Create custom spans using the `golem::api::context` module:
+
+        ```rust
+        use golem_rust::bindings::golem::api::context;
+
+        let span = context::start_span("my-operation");
+        span.set_attribute("env", &context::AttributeValue::String("production".to_string()));
+        // ... do work ...
+        span.finish();
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Create custom spans using the `ContextApi`:
+
+        ```scala
+        import golem.host.ContextApi
+
+        val span = ContextApi.startSpan("my-operation")
+        span.setAttribute("env", ContextApi.AttributeValue.StringValue("production"))
+        // ... do work ...
+        span.finish()
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Use `@context.with_span` for scoped span management:
+
+        ```moonbit
+        @context.with_span(
+          "my-operation",
+          attributes=[("env", "production")],
+          fn(span) {
+            // ... do work ...
+            span.set_attribute("step", "processing")
+          },
+        )
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+### Trace context propagation
+
+Trace and span IDs are automatically propagated from inbound HTTP requests through code-first routes, and outgoing HTTP requests include standard **W3C trace headers** (`traceparent` / `tracestate`).
+
+### TypeScript `diagnostics_channel` integration
+
+For TypeScript agents, invocation context is wired to `node:diagnostics_channel`, enabling integration with Node.js tracing utilities:
+
+```typescript
+import { tracingChannel } from 'node:diagnostics_channel';
+
+const dc = tracingChannel('my-operation');
+const result = dc.traceSync(
+  () => { return 42; },
+  { method: 'GET', url: '/api/data' }
+);
+```
+
+### Logs
+
+When log exporting is enabled via the `signals` parameter, `stdout`/`stderr` output and dedicated log calls are forwarded to the OTLP collector. Standard logging APIs work out of the box — `console.log` in TypeScript, `println!` in Rust, and so on.
+
+### Metrics
+
+The following metrics are exported per agent:
+
+| Metric Name | Type | Description |
+| --- | --- | --- |
+| `golem_invocation_count` | Counter | Number of agent method invocations |
+| `golem_invocation_duration_ns` | Counter | Invocation duration in nanoseconds |
+| `golem_invocation_fuel_consumed` | Counter | Fuel consumed per invocation |
+| `golem_invocation_pending_count` | Counter | Pending invocations |
+| `golem_exit_count` | Counter | Process exit signals |
+| `golem_restart_count` | Counter | Fresh state creations |
+| `golem_resources_created` | Counter | Internal resources created |
+| `golem_resources_dropped` | Counter | Internal resources dropped |
+| `golem_resources_active` | Gauge | Active internal resources |
+| `golem_update_success_count` | Counter | Successful updates |
+| `golem_update_failure_count` | Counter | Failed updates |
+
+Each metric includes the following labels: `service.name`, `golem.agent.id`, `golem.component.id`, and `golem.component.version`.
+
+### Oplog processor plugins
+
+The OTLP exporter is a built-in **oplog processor plugin**. Custom oplog processor plugins can be written in Rust by implementing the `process-oplog-entries` interface. Golem guarantees **exactly-once delivery** of oplog entries to plugins.
+
+Plugins can be installed per-component and activated or deactivated per-agent via the CLI:
+
+```
+golem agent activate-plugin --plugin-name my-plugin --component-name my-component --agent-name my-agent
+golem agent deactivate-plugin --plugin-name my-plugin --component-name my-component --agent-name my-agent
+```
+
+For more details on plugin management, see the [How-To Guides](/how-to-guides).

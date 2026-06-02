@@ -1,0 +1,204 @@
+import { Callout } from "nextra/components"
+import { Cards } from "nextra/components"
+
+# Introduction
+
+Golem is a durable computing platform that makes it simple to build and deploy
+highly reliable distributed systems.
+
+In server-based programming, the fundamental unit of work is the _server_, which
+accepts incoming connections, and handles requests by generating responses.
+
+In Golem, which is a serverless computing platform, the fundamental unit of
+work is the _agent_. An agent is a _running instance_ of an agent type, defined in a component, with a
+unique identity, which allows addressing specific workers.
+
+Agents are similar to _lambdas_ or _functions_ in other serverless computing
+platforms, but they are far more powerful and expressive.
+
+<Callout type="info">
+  The relationship between an agent type and an agent is the same as the relationship between an
+  executable and a process: processes are running instances of executables. While the executable
+  contains mostly code, which awaits execution, a process contains both code, as well as dynamic
+  state, which captures work-in-progress.
+</Callout>
+
+# Agent Essentials
+
+The fundamental elements of every agent include:
+
+- **Identity**. Every agent has a unique identity, which allows addressing
+  specific agents.
+- **State**. Every agent has state, including memory, environment variables,
+  and file system.
+- **API**. Every agent has a public API, defined by its agent type.
+
+These core elements are discussed in the sections that follow.
+
+## Ephemeral vs Durable Agents
+
+Golem supports two types of agents, **ephemeral** and **durable**. Ephemeral agents are created on the fly for each invocation, and are not suitable for stateful applications. This makes them cheaper and more performant. Durable agents, on the other hand, preserve their state across invocations and provide much stronger guarantees.
+
+Whether an agent is ephemeral or durable depends on the **agent mode**, configurable for each agent type in code. Changing an agent's mode requires rebuilding and redeploying the component the agent is defined in.
+
+## Identity
+
+Every agent has a globally unique identity, which is formed from the
+following elements:
+
+- **Component ID**. Every component deployed on Golem has a globally
+  unique identity (UUID), which is assigned by Golem when a new component
+  is uploaded to Golem.
+- **Agent type**. The agent type name identifies the agent type of the ones
+  defined in the component. Each component may define multiple agent types.
+- **Agent parameters**. Each agent type defines a **constructor** and part of an agent's identity is the values passed to this constructor. Every set of constructor parameter values identifies exactly one instance of that agent type.
+
+The unique identity of agents allows them to be addressed individually,
+which unlocks many powerful patterns for building distributed systems.
+
+## Durable Agent State
+
+Agents are inherently stateful, in the same way that any running process
+is stateful. Agents have the following stateful elements:
+
+- **Memory**. An agent has in-memory state, such as global variables, stack,
+  and so on, which constantly changes over the life of the agent.
+- **Environment Variables**. An agent has environment variables, which it
+  inherits from component settings and any initial settings when the agent is
+  created, and which may change over time.
+- **File System**. An agent has a file system, which currently starts out
+  empty, but which may evolve over the life of the agent.
+- **Status**. The status of the agent, managed by Golem, is one of the
+  following: running, idle, suspended, interrupted, retrying, failed, or
+  exited.
+
+State also includes something called the _instruction pointer_, which is not
+accessible in most programming languages, but which tracks which location in the
+code the CPU is currently executing.
+
+## API
+
+Agents are running instances of agent types. Agent types define a public
+API, which every agent inherits.
+
+To perform work, such as handling a request, you _invoke_ an agent's public API.
+This process is referred to as _invocation_, and you can learn more in the
+section on [invocation](/invoke).
+
+# Durable Agent Guarantees
+
+Golem executes agents with strong guarantees. To understand these guarantees,
+you should read the section on [reliability](/concepts/reliability).
+
+However, in brief, Golem provides the following guarantees:
+
+- **Transactional Execution**. Agents are executed transactionally. Once a
+  agent is started, it will be executed to completion, even in the presence of
+  faults, restarts, or updates. It's perfectly acceptable to use agents for
+  high-value use cases, such as financial transaction processing; or for
+  implementing APIs that coordinate updates across multiple systems.
+- **Durable State**. All agent state, including in-memory state, is durable,
+  and can be treated as automatically persistent. This means that state
+  survives failures, restarts, and updates without the loss of any
+  information. Agents may treat their memory as a database, and use it to
+  persist state indefinitely and across any number of invocations.
+- **Reliable Internal Communication**. Agents can communicate with each other
+  using their public APIs, in a type-safe way. Agent-to-agent communication
+  is reliable, with exactly-once semantics, and can be used to build
+  sophisticated and stateful distributed systems.
+- **Resilient External Communication**. Agents can freely communicate with
+  external systems, such as databases, message queues, and APIs. External
+  communication is automatically resilient, with exactly-once semantics for
+  systems that support idempotency keys, and at-least-once semantics for
+  systems that do not.
+- **Indefinite Life**. Unless forcibly deleted or failed in a way that is
+  unrecoverable (e.g. corruption of memory in a C program), agents live
+  forever, without loss of state or progress. This allows agents to be used
+  for long-running tasks, such as background processing, or for implementing
+  APIs that require long-lived state.
+- **Secure Sandboxing**. Agents are executed in completely sandboxed
+  environments, with no possibility of agents interacting with each other
+  (except via their public APIs), and no possibility that one agent's failure
+  impacts another agent's health.
+
+Some of these guarantees are common across all serverless platforms, but others
+are unique to the durable computing environment that Golem provides.
+
+# Classic Serverless
+
+Although Golem brings the power of durable computing to serverless, it is still
+possible to use Golem as a classic serverless platform.
+
+This enables increased reliability and use of serverless for long-running tasks,
+financial transactions, and other use cases that are not well-suited to
+traditional serverless platforms.
+
+## Comparing Functions to Agents
+
+|               | Agent | Function | Explanation                                                                                                           |
+| :------------ | :----: | :------: | :-------------------------------------------------------------------------------------------------------------------- |
+| Low-Latency   |   ✅   |    ✅    | Functions in serverless environments are designed to execute quickly, making them suitable for low-latency use cases. |
+| Scalable      |   ✅   |    ✅    | Functions in serverless environments scale automatically, making them suitable for high-throughput use cases.         |
+| Stateful      |   ✅   |    ❌    | Agents are inherently stateful, which means they maintain state for their lifetime, and across repeated invocations. |
+| Long-Running  |   ✅   |    ❌    | Agents run indefinitely, without loss of state or progress, making them uniquely suitable for long-running tasks.    |
+| Transactional |   ✅   |    ❌    | Agents are executed with strong transactional guarantees, transparently surviving faults, restarts, and updates.     |
+| Persistent    |   ✅   |    ❌    | All agent state, including in-memory state, is persistent and survives failures, restarts, and updates without loss. |
+
+## Emulating Classic Serverless
+
+Golem's **ephemeral agents** are emulating the classic serverless behavior, with the difference that they can have multiple entry points (exported functions). To fully emulate the classic serverless approach, you only need to do two things:
+
+1. **One-Export Component**. While WASM components can have any number of
+   exports, when emulating classic serverless, you should only have one export
+   per component. This export represents the event or request handler that you
+   would typically have in a classic serverless function.
+2. **Define the component as ephemeral**. Choosing the ephemeral component type will make all its agents ephemeral (of every agent type defined in that component).
+3. **Request ID parameter**. Because agents are identified by their constructor parameters, it is required to have a constructor parameter that can be different for each request. This can be a string or UUID parameter.
+
+Golem still persists some information about each ephemeral agent that was created, which can be used for debugging purposes, but this state gets persisted in the background, not affecting the agent's performance.
+
+## Operations
+
+Agents support the following operations:
+
+- **Creation**. Agents benefit from automatic creation, which occurs when an
+  agent is invoked for the first time. Therefore, it is not necessary to
+  create agents explicitly.
+- **Interruption**. Agents can be interrupted at any time, which causes the
+  agent to stop executing. Interrupted agents can be resumed later.
+- **Deletion**. Agents can be deleted, which causes all state of the agent
+  to be permanently deleted. Deleted agents cannot be undeleted or resumed,
+  and if invoked again, they will be recreated from scratch.
+- **Updating**. Agents can be updated to a newer version of a component, which
+  is useful for long-lived agents that can benefit from bug fixes or new
+  features.
+- **Observation**. The persistent operation log of an agent can be queried and searched, which can be useful in debugging and auditing scenarios.
+
+Details about how to perform these operations can be found in the CLI guide,
+the REST API reference, and language-specific SDK documentation.
+
+### Agent Update
+
+When a new version of a **component** is created (by deploying a new version of the component, changing its type or installing plugins to it), the existing agents continue to run using the version they have been created with. Existing agents have to be explicitly updated to a new version if needed.
+
+Newly created agents are created using the latest version of the component. This also means that for **ephemeral agents** each invocation always runs using the latest version of the component.
+
+There are two ways to update an existing agents to a new version of a component, and the update operation (triggered through the REST API, CLI, Console or host interface) can choose from either of them. These are the following:
+
+- **Automatic update**. Golem tries to automatically update the agent to the new version, and may fail to do so.
+- **Manual update**. For manual update the component author must provide a pair of save/load functions that are used to migrate the state of the agent from the old version to the new version.
+
+#### Automatic update details
+
+Automatic update can be initiated any time, even while the agent is processing an invocation. The executor interrupts the agent, reloads it using the new component version and then replays the agent's oplog from the beginning of time. If the replay succeeds with the new codebase, the agent continues running from where it was interrupted, but now on the new component version. If the replay fails, the agent gets reverted to the original component version and continues running with that.
+
+How can the replay fail? Golem performs **divergence detection** during replay. The following situations are considered divergences:
+
+- **Invocation result divergence**. If the new component produces a different result value for a past invocation than the old one
+- **Side effect divergence**. If the new component would perform different side effects (such as HTTP requests, generating random numbers, accessing the current time, etc) than the ones that have been recorded.
+
+Because of these strict requirements, automatic update is only useful when the changed code is minor or it affects code paths that haven't run yet or did not exist at all before.
+
+#### Manual update details
+
+For manual update the old component version must implement `saveSnapshot` method, and the new component version must implement the `loadSnapshot` method. The update operation is enqueued the same way as invocations are enqueued, as it can only be performed when the agent is idle. As soon as all the previously enqueued and running invocations are finished, the executor calls the save snapshot function that returns an array of bytes representing the state of the agent. Then the agent gets restarted using the new component version, and the new component's load snapshot functions is called with the saved state. The load snapshot function may return with a failure in which case the agent's component version gets reverted to the original version and it continues running with that. Otherwise if the snapshot was successfully loaded the agent continues running with the new component version.

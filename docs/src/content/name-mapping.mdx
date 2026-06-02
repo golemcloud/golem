@@ -1,0 +1,74 @@
+# Agent type and method name mapping
+
+The agents defined by code are compiled to WebAssembly and there are some specific rules of how the agent methods can be referred to from outside the source code, such as from the CLI or the REST API.
+
+## Component name
+The _component name_ must always be in the form of `namespace:name`. This is enforced when the component is created.
+
+## Agent types
+The agent types have names idiomatic to the used programming language (for example `SampleAgent` in TypeScript). When referring to them in agent IDs, invocations, etc., the agent type name uses the same **PascalCase** as in the source code (for example `SampleAgent`).
+
+## Agent IDs
+Every agent is identified by a unique ID which consists of the **agent type** (in PascalCase, matching the source code) and its constructor arguments. The constructor arguments are specified using the source language's syntax.
+
+- For regular data types, the target language's native syntax is used (TypeScript syntax for TS agents, Rust syntax for Rust agents, etc.). See the [Type Mapping](/type-mapping) page for more details.
+- Unstructured text parameters are either inlined between `"`, or a remote URL (not in quotes). The inline string can be optionally prefixed with a language code in square brackets.
+- Unstructured binary parameters are either base64 encoded between `"` and prefixed with a mimetype in square brackets, or a remote URL (not in quotes)
+- Multimodal values are specified as a list of values, where each value is prefixed with the multimodal type name.
+
+See the following examples of valid agent IDs:
+
+### Singleton agent with no parameters
+```
+Agent1()
+```
+
+### Agent with one numeric parameter
+
+```
+MyAgent(12)
+```
+
+### Agent with multiple parameters
+
+```
+MyAgent(12, { x: 1, y: 2 })
+```
+
+### Agent with two unstructured text parameters
+
+```
+TextAgent(https://url1.com/,https://url2.com/) // tuple with two unstructured text params pointing to a remote URL
+TextAgent("hello, world!",[en]"\"hello,\" world!") // tuple with two unstructured inline text params, second having a language code prefix
+```
+
+### Agent with two unstructured binary parameters
+
+```
+BinaryAgent(https://url1.com/,https://url2.com/) // tuple with two unstructured binary params pointing to a remote URL
+BinaryAgent([application/json]"SGVsbG8gd29ybGQh",[image/png]"SGVsbG8gd29ybGQh") // tuple with two unstructured inline binary params with MIME type prefixes
+```
+
+### Agent with multimodal parameters
+
+```
+MultiAgent(z([application/json]"SGVsbG8gd29ybGQh"),x(101)) // multimodal with two values, one named `z` which is a binary and one named `x` which is a wit value
+```
+
+## Method names
+Agent method names use the **source language's native casing** — `camelCase` for TypeScript and Scala, `snake_case` for Rust and MoonBit.
+
+### Method calls from the CLI or the REST APIs
+When calling agent methods using `golem agent invoke`, simply use the method name as written in the source code. The CLI resolves the correct export automatically.
+
+For example, for a TypeScript agent with method `processOrder`, invoke it with:
+
+```shell
+golem agent invoke 'MyAgent("user-1")' processOrder '"order-123"'
+```
+
+For a Rust agent with method `process_order`:
+
+```shell
+golem agent invoke 'MyAgent("user-1")' process_order '"order-123"'
+```

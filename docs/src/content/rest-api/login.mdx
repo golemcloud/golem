@@ -1,0 +1,177 @@
+# Login API
+The login endpoints are implementing an OAuth2 flow.
+## Acquire token with OAuth2 authorization
+Path|Method|Protected
+---|---|---
+`/v1/login/oauth2`|POST|No
+
+Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
+
+In the response:
+- `id` is the identifier of the token itself
+- `accountId` is the account's identifier, can be used on the account API
+- `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+provider|#/components/schemas/OAuth2Provider|Yes|Currently only `github` is supported.
+access-token|string|Yes|OAuth2 access token
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "secret": "stringstringstri",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Start OAuth2 interactive flow
+Path|Method|Protected
+---|---|---
+`/v1/login/oauth2/device/start`|POST|No
+
+Starts an interactive authorization flow.
+The user must open the returned url and enter the userCode in a form before the expires deadline.
+Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "provider": "github"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "url": "string",
+  "userCode": "string",
+  "expires": "2019-08-24T14:15:22Z",
+  "encodedSession": "string"
+}
+```
+
+## Finish GitHub OAuth2 interactive flow
+Path|Method|Protected
+---|---|---
+`/v1/login/oauth2/device/complete`|POST|No
+
+Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
+Returns a JSON string containing the encodedSession from the start endpoint's response.
+
+
+
+**Example Request JSON**
+```json copy
+"string"
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "secret": "stringstringstri",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Initiate OAuth2 Web Flow
+Path|Method|Protected
+---|---|---
+`/v1/login/oauth2/web/authorize`|GET|No
+
+Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+provider|#/components/schemas/OAuth2Provider|Yes|Currently only `github` is supported.
+redirect|string|No|The redirect URL to redirect to after the user has authorized the application
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "url": "string",
+  "state": "0e231ca7-8c83-44ad-9df9-f0699a512c67"
+}
+```
+
+## OAuth2 Web Flow callback
+Path|Method|Protected
+---|---|---
+`/v1/login/oauth2/web/callback`|GET|No
+
+This endpoint handles the callback from the provider after the user has authorized the application.
+It exchanges the code for an access token and then uses that to log the user in.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+code|string|Yes|The authorization code returned by GitHub
+state|string|Yes|The state parameter for CSRF protection
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Poll for OAuth2 Web Flow token
+Path|Method|Protected
+---|---|---
+`/v1/login/oauth2/web/poll`|GET|No
+
+This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+A given state might only be exchanged for a token once. Any further attempts to exchange the state will fail.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+state|string|Yes|The state parameter for identifying the session
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "secret": "stringstringstri",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+## Login API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"code":"string","errors":["string"]}`
+401|Unauthorized request|`{"code":"string","error":"string"}`
+403|Forbidden Request|`{"code":"string","error":"string"}`
+404|Entity not found|`{"code":"string","error":"string"}`
+409||`{"code":"string","error":"string"}`
+422|Limits of the plan exceeded|`{"code":"string","error":"string"}`
+500|Internal server error|`{"code":"string","error":"string"}`

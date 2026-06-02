@@ -1,0 +1,940 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Type mapping
+
+The types used in the component's code are mapped to JSON when used in the invocation REST API. This page lists all the supported types and how they are mapped.
+
+<Callout type="info">
+The examples below show the JSON **value** part used by the REST invocation API.
+When calling the raw invoke endpoints, each argument and result is wrapped as a typed value object as described in the [Invoke via HTTP](/invoke/http) page.
+</Callout>
+
+## Language types to JSON
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        The following TypeScript types are supported:
+
+        | TypeScript type | JSON representation | Remarks
+        | --------------- | ------------------- | -------
+        | `string`        | `"hello world"`     | JSON string |
+        | `boolean`       | `true`, `false`     | JSON boolean |
+        | `number`        | `1234.0`            | JSON number |
+        | `bigint`        | `1234`              | JSON number |
+        | `Array<T>`      | `["one", "two", "three"]` | JSON array |
+        | Type literal `{ ... }` | `{ "a": "hello", "b": 1234 }` | JSON object |
+        | Interface with value fields | `{ "field1": "value", "field2": 42 }` | JSON object |
+        | `Map<K, V>`     | `[["key1", 100], ["key2", -2]]` | Array of key-value pairs, **not** a JSON object |
+        | `{ tag: "x", val: T1 } \| { tag: "y", val: T2 } \| ...` | `{ "x": "hello" }` | Single-key JSON object; the `val` is optional, if missing the value is `null` |
+        | `"x" \| "y" \| ...` | `"x"` | JSON string; TypeScript `enum`s are not supported, use string literal unions instead |
+        | Other union           | `{ "case1": "hello" }` | Anonymous unions use `case1`, `case2`, etc. Named union types use the type name as a prefix, for example `type UnionType = string \| number` becomes `UnionType1`, `UnionType2` |
+        | `[T1, T2, T3]`  | `["hello", 1234, true]` | Fixed-order JSON array |
+        | `T \| undefined` | `"value"` or `null` | `null` represents the missing value |
+        | `T \| null` | `"value"` or `null` | `null` represents the missing value |
+        | `field?: T`     | `42` or `null` | Optional fields use `null` for the missing case |
+        | `Uint8Array`  | `[104, 101, 108, 108, 111]` | JSON array of numbers |
+        | `Int8Array`   | `[-1, 0, 1]` | JSON array of numbers |
+        | `Uint16Array` | `[65535, 0, 1]` | JSON array of numbers |
+        | `Int16Array`  | `[-32768, 0, 32767]` | JSON array of numbers |
+        | `Uint32Array` | `[4294967295, 0, 1]` | JSON array of numbers |
+        | `Int32Array`  | `[-2147483648, 0, 2147483647]` | JSON array of numbers |
+        | `BigUint64Array` | `[18446744073709551615, 0, 1]` | JSON array of numbers |
+        | `BigInt64Array`  | `[-9223372036854775808, 0, 9223372036854775807]` | JSON array of numbers |
+        | `Float32Array` | `[3.4028235e+38, 0, -3.4028235e+38]` | JSON array of numbers |
+        | `Float64Array` | `[1.7976931348623157e+308, 0, -1.7976931348623157e+308]` | JSON array of numbers |
+    </Tabs.Tab>
+    <Tabs.Tab>
+            The following Rust types are supported:
+
+            | Rust type            | JSON representation | Remarks
+            | -------------------- | ------------------- | -------
+            | `String`             | `"hello world"`     | JSON string |
+            | `bool`               | `true`, `false`     | JSON boolean |
+            | `f64`                | `1234.0`            | JSON number |
+            | `f32`                | `3.14`              | JSON number |
+            | `i8`                 | `-128`, `0`, `127`  | JSON number |
+            | `u8`                 | `0`, `255`          | JSON number |
+            | `i16`                | `-32768`, `0`, `32767` | JSON number |
+            | `u16`                | `0`, `65535`        | JSON number |
+            | `i32`                | `-2147483648`, `0`, `2147483647` | JSON number |
+            | `u32`                | `0`, `4294967295`   | JSON number |
+            | `i64`                | `-9223372036854775808`, `0`, `9223372036854775807` | JSON number |
+            | `u64`                | `0`, `18446744073709551615` | JSON number |
+            | `Vec<T>`             | `[1, 2, 3]`         | JSON array |
+            | `Option<T>`          | `42` or `null`       | Value or `null` |
+            | `struct MyStruct { field1: T1, field2: T2 }` | `{ "field1": "value", "field2": 42 }` | JSON object |
+            | `enum MyEnum { X(T1), Y(T2), Z }` | `{ "x": "hello" }`, `{ "z": null }` | Single-key JSON object; no-payload cases use `null` |
+            | `()`                 | `null`               | Unit maps to JSON null |
+            | `(T1, T2, T3)`      | `[42, "hello", true]` | Fixed-order JSON array |
+            | `HashMap<K, V>`      | `[["key1", 100], ["key2", -2]]` | Array of key-value pairs, **not** a JSON object |
+
+        In addition to these, the `golem-rust` library implements `Schema` for several third-party libraries as well, behind feature flags.
+        Enable the required feature flag on your existing `golem-rust` dependency to use them (for example, add `"chrono"` to the `features` list):
+
+        | Feature flag | Rust type |
+        |--------------|-----------|
+        | `chrono` | `chrono::DateTime<chrono::Utc>` |
+        | `chrono` | `chrono::DateTime<chrono::FixedOffset>` |
+        | `chrono` | `chrono::DateTime<chrono::Local>` |
+        | `chrono` | `chrono::NaiveDate` |
+        | `chrono` | `chrono::NaiveTime` |
+        | `chrono` | `chrono::NaiveDateTime` |
+        | `chrono` | `chrono::FixedOffset` |
+        | `chrono` | `chrono::Month` |
+        | `chrono` | `chrono::Weekday` |
+        | `uuid` | `uuid::Uuid` |
+        | `serde_json_types` | `serde_json::Value` |
+        | `url` | `url::Url` |
+        | `bytes` | `bytes::Bytes` |
+        | `mac_address` | `mac_address::MacAddress` |
+        | `bigdecimal` | `bigdecimal::BigDecimal` |
+        | `rust_decimal` | `rust_decimal::Decimal` |
+        | `num_bigint` | `num_bigint::BigInt` |
+        | `bit_vec` | `bit_vec::BitVec` |
+        | `nonempty_collections` | `nonempty_collections::NEVec<T>` |
+        | `default` | `http::Uri` |
+        | `default` | `wasi::logging::logging::Level` |
+        | `default` | `wasi::io::error::Error` |
+
+        These additional types serialize using the same JSON rules described on this page, according to their `Schema` implementation.
+     </Tabs.Tab>
+    <Tabs.Tab>
+        The following Scala types are supported. Custom types used in agent methods need a `zio.blocks.schema.Schema` instance, for example via `derives Schema` in Scala 3.
+
+        | Scala type | JSON representation | Remarks
+        | ---------- | ------------------- | -------
+        | `String` | `"hello world"` | JSON string |
+        | `Boolean` | `true`, `false` | JSON boolean |
+        | `Double` | `1234.0` | JSON number |
+        | `Float` | `3.14` | JSON number |
+        | `Byte` | `-128`, `0`, `127` | JSON number |
+        | `Short` | `-32768`, `0`, `32767` | JSON number |
+        | `Int` | `-2147483648`, `0`, `2147483647` | JSON number |
+        | `Long` | `-9223372036854775808`, `0`, `9223372036854775807` | JSON number |
+        | `List[T]` | `[1, 2, 3]` | JSON array |
+        | `Option[T]` | `42` or `null` | Value or `null` |
+        | `case class MyStruct(field1: T1, field2: T2)` | `{ "field1": "value", "field2": 42 }` | JSON object |
+        | Pure enum or sealed trait with case objects | `"low"` | JSON string |
+        | Sealed trait or enum with payload cases | `{ "text": "hello" }`, `{ "empty": null }` | Single-key JSON object; no-payload cases use `null` |
+        | `Unit` | `null` | Unit maps to JSON null |
+        | `(T1, T2, T3)` | `["hello", 1234, true]` | Fixed-order JSON array |
+        | `Map[K, V]` | `[["key1", 100], ["key2", -2]]` | Array of key-value pairs, **not** a JSON object |
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The following MoonBit types are supported. Custom types used in agent methods need `#derive.golem_schema`.
+
+        | MoonBit type | JSON representation | Remarks
+        | ------------ | ------------------- | -------
+        | `String` | `"hello world"` | JSON string |
+        | `Bool` | `true`, `false` | JSON boolean |
+        | `Double` | `1234.0` | JSON number |
+        | `Float` | `3.14` | JSON number |
+        | `Int` | `-2147483648`, `0`, `2147483647` | JSON number |
+        | `UInt` | `0`, `4294967295` | JSON number |
+        | `Int64` | `-9223372036854775808`, `0`, `9223372036854775807` | JSON number |
+        | `UInt64` | `0`, `18446744073709551615` | JSON number |
+        | `Byte` | `0`, `255` | JSON number |
+        | `Bytes` | `[104, 101, 108, 108, 111]` | JSON array of numbers |
+        | `Array[T]` | `["one", "two", "three"]` | JSON array |
+        | `Array[(K, V)]` | `[["key1", 100], ["key2", -2]]` | Array of key-value pairs, **not** a JSON object |
+        | `T?` | `"value"` or `null` | Value or `null` |
+        | `#derive.golem_schema struct MyStruct { field1 : T1, field2 : T2 }` | `{ "field1": "value", "field2": 42 }` | JSON object |
+        | `#derive.golem_schema enum MyEnum { Low, High }` | `"high"` | All-unit enums are JSON strings |
+        | `#derive.golem_schema enum MyEnum { Coordinates(x~ : Double, y~ : Double), Empty }` | `{ "coordinates": { "x": 12.5, "y": 7.0 } }`, `{ "empty": null }` | Single-key JSON object; no-payload cases use `null` |
+        | `Unit` | `null` | Unit maps to JSON null |
+        | `(T1, T2, T3)` | `["hello", 1234, true]` | Fixed-order JSON array |
+    </Tabs.Tab>
+</Tabs>
+
+There are some special, Golem agent specific types that can be used in the agent constructor and methods as well:
+
+### Unstructured text
+Unstructured text is an arbitrary string, optionally annotated with a language code, that is either passed directly to/from the agent, or as an URL reference. The agent can optionally specify the set of supported language codes.
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+    ```typescript
+    import { UnstructuredText } from '@golemcloud/golem-ts-sdk';
+
+    async function exampleMethod(
+        unstructuredTextWithLanguageCode: UnstructuredText<["en"]>,
+    ): Promise<void> {
+        // ...
+    }
+    ```
+
+    The type parameter is optional; if missing, there will be no restrictions for the language of the text. It's possible
+    to list multiple language codes that are accepted by the agent.
+
+    The type itself represents either an inline string or a remote reference:
+
+    ```typescript
+    type LanguageCode = string;
+
+    export type UnstructuredText<LC extends LanguageCode[] = []> =
+      | {
+          tag: 'url';
+          val: string;
+        }
+      | {
+          tag: 'inline';
+          val: string;
+          languageCode?: LC[number];
+        };
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```rust
+    use golem_rust::agentic::UnstructuredText;
+    use golem_rust::AllowedLanguages;
+
+    fn example_method(
+        unstructured_text_with_language_code: UnstructuredText<MyLanguageCode>,
+    ) {
+        // ...
+    }
+
+    #[derive(Debug, Clone, AllowedLanguages)]
+    enum MyLanguageCode {
+        #[code("en")]
+        En,
+        #[code("es")]
+        Spanish,
+        #[code("de")]
+        German,
+    }
+    ```
+
+    The type parameter is optional; if missing, there will be no restrictions for the language of the text.
+    If we are specifying the allowed languages, we need to define an enum deriving the `AllowedLanguages` trait.
+    The above code defines three allowed language codes: "en", "es", and "de". With attribute `code` we can
+    customize the actual language code name, otherwise the enum variant name in lowercase is used.
+
+    ```rust
+    use std::fmt::Debug;
+
+    /// Represents a text value that can either be inline or a URL reference.
+    ///
+    /// `LC` specifies the allowed language codes for inline text. Defaults to `AnyLanguage`,
+    /// which allows all languages.
+    #[derive(Debug, Clone)]
+    pub enum UnstructuredText<LC: AllowedLanguages = AnyLanguage> {
+        Url(String),
+        Text {
+            text: String,
+            language_code: Option<LC>,
+        },
+    }
+
+    /// Trait for types representing allowed language codes.
+    ///
+    /// Implement this trait for enums representing supported languages. Provides
+    /// conversion between enum variants and their string language codes.
+    /// Use the `#[derive(AllowedLanguages)]` macro to automatically implement this trait.
+    pub trait AllowedLanguages: Debug + Clone {
+        fn all() -> &'static [&'static str];
+
+        fn from_language_code(code: &str) -> Option<Self>
+        where
+            Self: Sized;
+
+        fn to_language_code(&self) -> &'static str;
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct AnyLanguage;
+
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```scala
+    import golem.data.unstructured.{AllowedLanguages, TextSegment}
+    import golem.runtime.annotations.languageCode
+    import golem.runtime.macros.AllowedLanguagesDerivation
+
+    import scala.concurrent.Future
+
+    sealed trait MyLanguageCode
+    object MyLanguageCode {
+      @languageCode("en")
+      case object En extends MyLanguageCode
+
+      @languageCode("es")
+      case object Spanish extends MyLanguageCode
+
+      @languageCode("de")
+      case object German extends MyLanguageCode
+
+      given AllowedLanguages[MyLanguageCode] = AllowedLanguagesDerivation.derived
+    }
+
+    def exampleMethod(
+      unstructuredTextWithLanguageCode: TextSegment[MyLanguageCode]
+    ): Future[Unit] =
+      Future.successful(())
+    ```
+
+    In Scala, unstructured text is represented by `TextSegment[Lang]`. To allow any language, use
+    `TextSegment[AllowedLanguages.Any]`. If we want to restrict the accepted languages, we define a language ADT
+    and provide an `AllowedLanguages` instance for it.
+
+    The above code defines three allowed language codes: "en", "es", and "de". The `@languageCode` annotation
+    customizes the actual code name; without it, case names are lowercased and underscores are converted to hyphens.
+
+    ```scala
+    trait AllowedLanguages[A] {
+      def codes: Option[List[String]]
+    }
+
+    object AllowedLanguages {
+      sealed trait Any
+    }
+
+    final case class TextSegment[Lang](value: UnstructuredTextValue)
+
+    object TextSegment {
+      def inline[Lang](text: String, languageCode: Option[String] = None): TextSegment[Lang] =
+        TextSegment(UnstructuredTextValue.Inline(text, languageCode))
+
+      def url[Lang](value: String): TextSegment[Lang] =
+        TextSegment(UnstructuredTextValue.Url(value))
+    }
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```moonbit
+    ///|
+    #derive.agent
+    struct TextAgent {
+      name : String
+    }
+
+    ///|
+    fn TextAgent::new(name : String) -> TextAgent {
+      { name, }
+    }
+
+    ///|
+    #derive.text_languages("unstructured_text_with_language_code", "en")
+    pub fn TextAgent::example_method(
+      self : Self,
+      unstructured_text_with_language_code : @types.UnstructuredText,
+    ) -> Unit {
+      ignore(self)
+      ignore(unstructured_text_with_language_code)
+    }
+    ```
+
+    In MoonBit, unstructured text is represented by `@types.UnstructuredText`. Unlike the Rust and Scala SDKs,
+    allowed languages are not encoded in the type itself. Instead, use `#derive.text_languages("param", ...)`
+    on the agent method to restrict the accepted language codes for that parameter.
+
+    The type itself represents either an inline string or a remote reference:
+
+    ```moonbit
+    pub(all) enum UnstructuredText {
+      Url(String)
+      Inline(text~ : String, language_code~ : String?)
+    } derive(Show, Eq)
+
+    pub fn UnstructuredText::from_url(url : String) -> UnstructuredText {
+      Url(url)
+    }
+
+    pub fn UnstructuredText::from_inline(
+      text : String,
+      language_code? : String? = None,
+    ) -> UnstructuredText {
+      Inline(text~, language_code~)
+    }
+    ```
+    </Tabs.Tab>
+
+</Tabs>
+
+### Unstructured binary
+Unstructured binary data is similar to unstructured text, but it is annotated (and restricted by) MIME types.
+
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+    ```typescript
+    import {
+      UnstructuredBinary,
+    } from '@golemcloud/golem-ts-sdk';
+
+    async exampleMethod(
+      unstructuredBinaryWithMimeType: UnstructuredBinary<['application/json']>,
+    ): Promise<void> {
+        // ...
+    }
+    ```
+
+    The type parameter specifies the set of allowed MIME types for the binary data.
+    The type itself represents either an inline byte array or a remote reference:
+
+    ```typescript
+    type MimeType = string;
+
+    export type UnstructuredBinary<MT extends MimeType[] | MimeType = MimeType> =
+      | {
+          tag: 'url';
+          val: string;
+        }
+      | {
+          tag: 'inline';
+          val: Uint8Array;
+          mimeType: MT extends MimeType[] ? MT[number] : MimeType;
+        };
+    ```
+  </Tabs.Tab>
+      <Tabs.Tab>
+      ```rust
+      use golem_rust::agentic::UnstructuredBinary;
+      use golem_rust::AllowedMimeTypes;
+
+      fn example_method(
+        unstructured_binary_with_mime_type: UnstructuredBinary<MyMimeType>,
+      ) {
+          // ...
+      }
+
+
+     #[derive(Debug, Clone, AllowedMimeTypes)]
+     enum MyMimeType {
+         #[mime_type("application/json")]
+         ApplicationJson,
+         #[mime_type("image/png")]
+         ImagePng,
+     }
+      ```
+
+      The type parameter specifies the set of allowed MIME types for the binary data.
+      The type itself represents either an inline byte array or a remote reference:
+
+      ```rust
+
+     /// Represents a binary value that can either be inline or a URL reference.
+     ///
+     /// `MT` specifies the allowed MIME types for inline binary data.
+     #[derive(Debug, Clone)]
+     pub enum UnstructuredBinary<MT: AllowedMimeTypes> {
+         Url(String),
+         Inline { data: Vec<u8>, mime_type: MT },
+     }
+
+     /// Trait for types representing allowed MIME types.
+     ///
+     /// Implement this trait for enums representing supported MIME types. Provides
+     /// conversion between enum variants and their string MIME type values.
+     /// Use the `#[derive(AllowedMimeTypes)]` macro to automatically implement this trait.
+     pub trait AllowedMimeTypes: Debug + Clone {
+         fn all() -> &'static [&'static str];
+
+         fn from_string(mime_type: &str) -> Option<Self>
+         where
+             Self: Sized;
+
+         fn to_string(&self) -> String;
+     }
+      ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    ```scala
+    import golem.data.unstructured.{AllowedMimeTypes, BinarySegment}
+    import golem.runtime.annotations.mimeType
+    import golem.runtime.macros.AllowedMimeTypesDerivation
+
+    import scala.concurrent.Future
+
+    sealed trait MyMimeType
+    object MyMimeType {
+      @mimeType("application/json")
+      case object ApplicationJson extends MyMimeType
+
+      @mimeType("image/png")
+      case object ImagePng extends MyMimeType
+
+      given AllowedMimeTypes[MyMimeType] = AllowedMimeTypesDerivation.derived
+    }
+
+    def exampleMethod(
+      unstructuredBinaryWithMimeType: BinarySegment[MyMimeType]
+    ): Future[Unit] =
+      Future.successful(())
+    ```
+
+    In Scala, unstructured binary is represented by `BinarySegment[Mime]`. To allow any MIME type, use
+    `BinarySegment[AllowedMimeTypes.Any]`. If we want to restrict the accepted MIME types, we define a MIME ADT
+    and provide an `AllowedMimeTypes` instance for it.
+
+    The `@mimeType` annotation specifies the actual MIME type string for each allowed case.
+
+    ```scala
+    trait AllowedMimeTypes[A] {
+      def mimeTypes: Option[List[String]]
+    }
+
+    object AllowedMimeTypes {
+      sealed trait Any
+    }
+
+    final case class BinarySegment[Mime](value: UnstructuredBinaryValue)
+
+    object BinarySegment {
+      def inline[Mime](bytes: Array[Byte], mimeType: String): BinarySegment[Mime] =
+        BinarySegment(UnstructuredBinaryValue.Inline(bytes, mimeType))
+
+      def url[Mime](value: String): BinarySegment[Mime] =
+        BinarySegment(UnstructuredBinaryValue.Url(value))
+    }
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    ```moonbit
+    ///|
+    #derive.agent
+    struct BinaryAgent {
+      name : String
+    }
+
+    ///|
+    fn BinaryAgent::new(name : String) -> BinaryAgent {
+      { name, }
+    }
+
+    ///|
+    #derive.mime_types("unstructured_binary_with_mime_type", "application/json", "image/png")
+    pub fn BinaryAgent::example_method(
+      self : Self,
+      unstructured_binary_with_mime_type : @types.UnstructuredBinary,
+    ) -> Unit {
+      ignore(self)
+      ignore(unstructured_binary_with_mime_type)
+    }
+    ```
+
+    In MoonBit, unstructured binary is represented by `@types.UnstructuredBinary`. Unlike the Rust and Scala SDKs,
+    allowed MIME types are not encoded in the type itself. Instead, use `#derive.mime_types("param", ...)`
+    on the agent method to restrict the accepted MIME types for that parameter.
+
+    The type itself represents either an inline byte array or a remote reference:
+
+    ```moonbit
+    pub(all) enum UnstructuredBinary {
+      Url(String)
+      Inline(data~ : Bytes, mime_type~ : String)
+    } derive(Show, Eq)
+
+    pub fn UnstructuredBinary::from_url(url : String) -> UnstructuredBinary {
+      Url(url)
+    }
+
+    pub fn UnstructuredBinary::from_inline(
+      data : Bytes,
+      mime_type~ : String,
+    ) -> UnstructuredBinary {
+      Inline(data~, mime_type~)
+    }
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+
+### Multimodal values
+Agents can work with **multimodal values** as input or output.
+It allows passing an arbitrary number of values of different types in a single parameter or return value.
+When defining a parameter or return value as multimodal, we define the possible data types that can be used in that position, and the actual values will be an arbitrary number of values of these types, in any combination.
+
+There are three variants of multimodal values supported:
+
+* `Multimodal` type , allowing to pass an arbitrary number of values which is either an unstructured text or binary.
+* `MultimodalCustom<T>`, allowing to pass an arbitrary number of values which is either an unstructured text or binary or a user defined structured type `T`.
+* `MultimodalAdvanced<T>` , allowing to pass an arbitrary number of values of the user defined structured type `T`.
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+
+    ```typescript
+
+    type MyStructuredData = {
+      field1: string;
+      field2: number;
+    }
+
+    type TextBinaryOrCustom =
+      | { tag: 'text'; val: UnstructuredText }
+      | { tag: 'binary'; val: UnstructuredBinary }
+      | { tag: 'custom'; val: MyStructuredData }
+
+    async exampleMultimodalMethod(
+      input: Multimodal,
+    ): Promise<void> {
+      // ...
+    }
+
+    async exampleMultimodalCustomMethod(
+      input: MultimodalAdvanced<TextBinaryOrCustom>,
+    ): Promise<void> {
+      // ...
+    }
+
+    async exampleMultimodalAdvanced(
+      input: MultimodalAdvanced<TextOrImage>,
+    ): Promise<void> {
+      // ...
+    }
+
+    export type TextOrImage =
+      | { tag: 'text'; val: string }
+      | { tag: 'image'; val: Uint8Array }
+
+    ```
+
+    For code-first agent methods, spelling the custom case out as a tagged union keeps the schema generator able to resolve the custom payload type. It is equivalent to `MultimodalCustom<MyStructuredData>` shown below.
+
+    Here is the definition of all three variants of multimodal in typescript SDK:
+
+
+    ```typescript
+    export type MultimodalAdvanced<T> = T[];
+
+    export type Multimodal = MultimodalAdvanced<BasicModality>;
+
+    export type MultimodalCustom<T> = MultimodalAdvanced<CustomModality<T>>;
+
+    export type BasicModality =
+      | { tag: 'text'; val: UnstructuredText }
+      | { tag: 'binary'; val: UnstructuredBinary }
+
+    export type CustomModality<T> =
+      | { tag: 'text'; val: UnstructuredText }
+      | { tag: 'binary'; val: UnstructuredBinary }
+      | { tag: 'custom'; val: T }
+
+    ```
+
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+
+    ```rust
+
+    use golem_rust::agentic::{Multimodal, MultimodalAdvanced, MultimodalCustom};
+    use golem_rust::{MultimodalSchema, Schema};
+
+    fn example_multimodal_method(
+      input: Multimodal,
+    ) {
+      // ...
+    }
+
+    fn example_multimodal_custom_method(
+      input: MultimodalCustom<MyStructuredData>,
+    ) {
+      // ...
+    }
+
+    // MyStructuredData can be used as `T` in MultimodalCustom<T> as long as it implements `Schema`.
+    #[derive(Schema)]
+    struct MyStructuredData {
+      field1: String,
+      field2: u32,
+    }
+
+    // When it comes to MultimodalAdvanced with user-defined types, we can define an enum representing the possible types:
+    // This needs to have an instance of `MultimodalSchema` which can be derived using `#[derive(MultimodalSchema)]`
+    fn example_multimodal_advanced_method(
+      input: MultimodalAdvanced<TextOrImage>,
+    ) {
+      // ...
+    }
+
+    #[derive(MultimodalSchema)]
+    enum TextOrImage {
+      Text(String),
+      Image(Vec<u8>),
+    }
+    ```
+
+    Here is the definition of all three variants of multimodal in rust SDK:
+
+
+    ```rust
+
+    pub struct Multimodal {
+        value: MultimodalAdvanced<BasicModality>,
+    }
+
+    pub enum BasicModality {
+        Text(UnstructuredText),
+        Binary(UnstructuredBinary<String>),
+    }
+
+    pub struct MultimodalCustom<T: Schema> {
+        value: MultimodalAdvanced<CustomModality<T>>,
+    }
+
+    pub enum CustomModality<T: Schema> {
+        Basic(BasicModality),
+        Custom(T),
+    }
+
+
+    pub struct MultimodalAdvanced<T: MultimodalSchema> {
+        pub items: Vec<T>,
+    }
+    ```
+
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+
+    ```scala
+    import golem.data.multimodal.{Multimodal, MultimodalItems}
+    import golem.data.unstructured.{AllowedLanguages, AllowedMimeTypes, BinarySegment, TextSegment}
+    import zio.blocks.schema.Schema
+
+    import scala.concurrent.Future
+
+    def exampleMultimodalMethod(
+      input: MultimodalItems.Basic
+    ): Future[Unit] =
+      Future.successful(())
+
+    def exampleMultimodalCustomMethod(
+      input: MultimodalItems.WithCustom[MyStructuredData]
+    ): Future[Unit] =
+      Future.successful(())
+
+    final case class MyStructuredData(field1: String, field2: Int)
+    object MyStructuredData {
+      implicit val schema: Schema[MyStructuredData] = Schema.derived
+    }
+
+    def exampleMultimodalAdvancedMethod(
+      input: Multimodal[TextAndImage]
+    ): Future[Unit] =
+      Future.successful(())
+
+    final case class TextAndImage(
+      text: TextSegment[AllowedLanguages.Any],
+      image: BinarySegment[AllowedMimeTypes.Any]
+    )
+    object TextAndImage {
+      implicit val schema: Schema[TextAndImage] = Schema.derived
+    }
+    ```
+
+    In Scala, runtime-sized multimodal lists are modeled by `MultimodalItems`, while `Multimodal[A]` lifts a fixed structured payload into a multimodal schema.
+
+    Here are the relevant multimodal types in the Scala SDK:
+
+
+    ```scala
+    final case class Multimodal[A](value: A)
+
+    sealed trait Modality[+A]
+    object Modality {
+      sealed trait Basic extends Modality[Nothing]
+
+      final case class Text(value: UnstructuredTextValue) extends Basic
+      final case class Binary(value: UnstructuredBinaryValue) extends Basic
+      final case class Custom[A](value: A) extends Modality[A]
+    }
+
+    final case class MultimodalItems[+A](items: List[A])
+
+    object MultimodalItems {
+      type Basic = MultimodalItems[Modality.Basic]
+      type WithCustom[A] = MultimodalItems[Modality[A]]
+    }
+    ```
+
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+
+    ```moonbit
+    ///|
+    #derive.golem_schema
+    pub(all) struct MyStructuredData {
+      field1 : String
+      field2 : Int
+    }
+
+    ///|
+    #derive.multimodal
+    pub(all) enum TextOrImage {
+      Text(String)
+      Image(Bytes)
+    }
+
+    ///|
+    #derive.agent
+    struct MultimodalAgent {
+      name : String
+    }
+
+    ///|
+    fn MultimodalAgent::new(name : String) -> MultimodalAgent {
+      { name, }
+    }
+
+    ///|
+    pub fn MultimodalAgent::example_multimodal_method(
+      self : Self,
+      input : @types.Multimodal[@types.TextOrBinary],
+    ) -> Unit {
+      ignore(self)
+      ignore(input)
+    }
+
+    ///|
+    pub fn MultimodalAgent::example_multimodal_custom_method(
+      self : Self,
+      input : @types.Multimodal[@types.CustomModality[MyStructuredData]],
+    ) -> Unit {
+      ignore(self)
+      ignore(input)
+    }
+
+    ///|
+    pub fn MultimodalAgent::example_multimodal_advanced_method(
+      self : Self,
+      input : @types.Multimodal[TextOrImage],
+    ) -> Unit {
+      ignore(self)
+      ignore(input)
+    }
+    ```
+
+    In MoonBit, all three variants use the same `@types.Multimodal[T]` container.
+    `@types.TextOrBinary` is the built-in basic modality set, `@types.CustomModality[T]`
+    is the equivalent of `MultimodalCustom<T>`, and `#derive.multimodal` lets you define
+    a fully custom modality enum such as `TextOrImage`.
+
+    Here are the relevant multimodal types in the MoonBit SDK:
+
+
+    ```moonbit
+    pub(all) struct Multimodal[T] {
+      items : Array[T]
+    } derive(Show, Eq)
+
+    pub(all) enum TextOrBinary {
+      Text(UnstructuredText)
+      Binary(UnstructuredBinary)
+    } derive(Show, Eq)
+
+    pub(all) enum CustomModality[T] {
+      Text(UnstructuredText)
+      Binary(UnstructuredBinary)
+      Structured(T)
+    } derive(Show, Eq)
+    ```
+
+    </Tabs.Tab>
+
+</Tabs>
+
+## Composite types in JSON
+
+The REST API encodes structured values using the following JSON shapes:
+
+### Records
+
+Records are JSON objects with the same field names as defined in the source code:
+
+```json
+{ "a": "hello", "b": 1234 }
+```
+
+### Variants
+
+Variants (tagged unions with payloads) are encoded as a single-key JSON object, where the key is the case name. Cases without a payload use `null` as the value:
+
+```json
+{ "restricted": ["one", "two", "three"] }
+{ "none": null }
+{ "any": null }
+```
+
+### Enums
+
+Enums (variants where all cases have no payload) are encoded as a JSON string:
+
+```json
+"low"
+"medium"
+"high"
+```
+
+### Options
+
+Optional values are encoded as the inner value when present, or `null` when absent:
+
+```json
+"hello"
+null
+```
+
+### Results
+
+Result types are encoded as a JSON object with either an `ok` or an `err` field:
+
+```json
+{ "ok": "success value" }
+{ "err": "error message" }
+```
+
+If the success or error type is unit, use `null`:
+
+```json
+{ "ok": null }
+```
+
+### Tuples
+
+Tuples are encoded as fixed-order JSON arrays:
+
+```json
+[1234, "hello world", 103]
+```
+
+### Lists
+
+Lists are encoded as JSON arrays:
+
+```json
+["one", "two", "three"]
+```
+
+### Maps
+
+Maps are encoded as arrays of key-value pairs (not as JSON objects, to support non-string keys):
+
+```json
+[["key1", 100], ["key2", -2]]
+```
+
+### Flags
+
+Flags represent a set of selected values, encoded as a JSON array of strings:
+
+```json
+["get", "put"]
+```
+
+### Handles
+
+Handles identify **resources** and are returned by invoking resource constructors through the Golem invocation API. They are represented as opaque strings in JSON:
+
+```json
+"urn:worker:component-id/worker-name/resource-id"
+```
+
+Handles must not be constructed by hand — use the values returned from resource constructors.

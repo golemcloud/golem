@@ -1,0 +1,8 @@
+@tailwind components;
+@tailwind utilities;
+
+* {
+  /* Handle overly bold fonts in safari */
+  -webkit-font-smoothing: antialiased;
+  min-width: 0;
+}

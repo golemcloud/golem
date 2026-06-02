@@ -1,0 +1,38 @@
+# Calling Another Agent (TypeScript)
+
+## Overview
+
+The `@agent()` decorator auto-generates a static `get()` method on each agent class, enabling agent-to-agent communication via RPC. An awaited call blocks the calling agent until the target agent returns a result.
+
+## Getting a Client
+
+Use `<AgentClass>.get(...)` with the target agent's constructor parameters:
+
+```typescript
+const counter = CounterAgent.get("my-counter");
+```
+
+This does **not** create the agent — the agent is created implicitly on its first invocation. If it already exists, you get a handle to the existing instance.
+
+## Awaited Call
+
+Call a method and wait for the result:
+
+```typescript
+const result = await counter.increment();
+const count = await counter.getCount();
+```
+
+The calling agent **blocks** until the target agent processes the request and returns. This is the standard RPC pattern.
+
+## Phantom Agents
+
+To create multiple distinct instances with the same constructor parameters, use phantom agents. See the [`golem-multi-instance-agent-ts`](/how-to-guides/ts/golem-multi-instance-agent-ts) guide.
+
+## Cross-Component RPC
+
+When calling agents defined in a **different component**, the generated client type is available after running `golem build` — the build step generates bridge SDK code for inter-component dependencies declared in `golem.yaml`.
+
+## Avoiding Deadlocks
+
+**Never create RPC cycles** where A awaits B and B awaits A — this deadlocks both agents. Use `.trigger()` (fire-and-forget) to break cycles. See the [`golem-fire-and-forget-ts`](/how-to-guides/ts/golem-fire-and-forget-ts) guide.

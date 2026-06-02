@@ -1,0 +1,149 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Updating agents to newer versions of components
+
+As described in the general [Agents](/concepts/agents) page, each agent runs on a specific version of the component it is based on, but it is possible to **update** an agent to a different version of the same component.
+
+## Automatic update
+
+The **automatic update** mode works as it is described in the general [Agents](/concepts/agents) page.
+
+## Manual snapshot-based update
+
+<Callout>
+Snapshots can also be used for fast recovery during normal operation, not just for updates. See [Snapshotting](/develop/snapshotting) for details on snapshot-based recovery, default snapshotting implementations, and configuring periodic snapshots.
+</Callout>
+
+It is also possible to manually implement a pair of functions for saving and loading an agent's state into an arbitrary byte array. This is useful when making significant changes to the implementation of an agent, such that the automatic replay based update mechanism is no longer working. Future versions of Golem may also use the same snapshotting functions for optimizing recovery time of agents.
+
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        In TypeScript, all agents inherit the `BaseAgent` class. There are two methods in `BaseAgent` that can
+        be overridden to implement snapshot saving and loading for an agent.
+
+        The following example implements these methods for the simple counter example used [on the Quickstart page](/quickstart):
+        ```typescript
+            override async saveSnapshot(): Promise<Uint8Array> {
+                const snapshot = new Uint8Array(4);
+                const view = new DataView(snapshot.buffer);
+                view.setUint32(0, this.value);
+                return snapshot;
+            }
+
+            override async loadSnapshot(bytes: Uint8Array): Promise<void> {
+                let view = new DataView(bytes.buffer);
+                this.value = view.getUint32(0);
+            }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Rust, all agent traits (i.e., annotated with the `#[agent_definition]` macro) are generated with two extra methods along with the methods defined in the trait. These methods are `save_snapshot` and `load_snapshot`.
+        These methods can be overridden to implement snapshot saving and loading for an agent.
+
+        The following example implements these methods for the simple counter example used [on the Quickstart page](/quickstart):
+        ```rust
+        impl CounterAgent for CounterImpl {
+            // ...
+
+            async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+                let arr: [u8; 4] = bytes
+                    .try_into()
+                    .map_err(|_| "Expected a 4-byte long snapshot")?;
+                self.count = u32::from_be_bytes(arr);
+                Ok(())
+            }
+
+            async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+                Ok(self.count.to_be_bytes().to_vec())
+            }
+        }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Scala, custom snapshot saving and loading can be implemented on the agent implementation class by defining `saveSnapshot` and `loadSnapshot` methods.
+
+        The following example implements these methods for the simple counter example used [on the Quickstart page](/quickstart):
+        ```scala
+        @agentImplementation()
+        final class CounterAgentImpl(@unused private val name: String) extends CounterAgent {
+          private var count: Int = 0
+
+          def saveSnapshot(): Future[Array[Byte]] =
+            Future.successful {
+              Array(
+                ((count >>> 24) & 0xff).toByte,
+                ((count >>> 16) & 0xff).toByte,
+                ((count >>> 8) & 0xff).toByte,
+                (count & 0xff).toByte
+              )
+            }
+
+          def loadSnapshot(bytes: Array[Byte]): Future[Unit] =
+            Future.successful {
+              count = ((bytes(0) & 0xff) << 24) |
+                ((bytes(1) & 0xff) << 16) |
+                ((bytes(2) & 0xff) << 8) |
+                (bytes(3) & 0xff)
+            }
+
+          override def increment(): Future[Int] =
+            Future.successful {
+              count += 1
+              count
+            }
+        }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In MoonBit, custom snapshot saving and loading can be implemented by adding a `Snapshottable` implementation to the agent type.
+
+        The following example implements these methods for the simple counter example used [on the Quickstart page](/quickstart):
+        ```moonbit
+        pub impl @agents.Snapshottable for CounterAgent with save_snapshot(self) -> Bytes {
+          Bytes::from_array([
+            ((self.value >> 56) & 0xff).to_byte(),
+            ((self.value >> 48) & 0xff).to_byte(),
+            ((self.value >> 40) & 0xff).to_byte(),
+            ((self.value >> 32) & 0xff).to_byte(),
+            ((self.value >> 24) & 0xff).to_byte(),
+            ((self.value >> 16) & 0xff).to_byte(),
+            ((self.value >> 8) & 0xff).to_byte(),
+            (self.value & 0xff).to_byte(),
+          ])
+        }
+
+        pub impl @agents.Snapshottable for CounterAgent with load_snapshot(
+          self,
+          bytes,
+        ) -> Result[Unit, String] {
+          if bytes.length() != 8 {
+            return Err("Expected an 8-byte long snapshot")
+          }
+
+          self.value =
+            (bytes[0].to_int().to_uint64() << 56) |
+            (bytes[1].to_int().to_uint64() << 48) |
+            (bytes[2].to_int().to_uint64() << 40) |
+            (bytes[3].to_int().to_uint64() << 32) |
+            (bytes[4].to_int().to_uint64() << 24) |
+            (bytes[5].to_int().to_uint64() << 16) |
+            (bytes[6].to_int().to_uint64() << 8) |
+            bytes[7].to_int().to_uint64()
+          Ok(())
+        }
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+After making a change that requires a manual update, you need to build and deploy the updated component. Then, to update a specific agent, run the following command:
+
+```shell copy
+golem agent update <AGENT_ID> manual
+```
+
+Alternatively, you can update all agents when deploying the updated component:
+
+```shell copy
+golem deploy --update-agents manual
+```

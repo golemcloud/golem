@@ -1,0 +1,5 @@
+export default {
+  docker: "Docker",
+  kubernetes: "Kubernetes",
+  "golem-cloud": "Golem Cloud",
+}

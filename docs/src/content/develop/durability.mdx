@@ -1,0 +1,261 @@
+import { Tabs } from "nextra/components"
+
+# Control durability guarantees
+
+Golem provides a set of functions components can call to control details of the durable execution engine.
+
+### General concepts
+
+The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](/develop/retries)).
+
+All these features are regional - they can be changed for a section of the code within a single exported function.
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        In TypeScript, the SDK provides scoped helpers such as `withPersistenceLevel`, `withIdempotenceMode`, and
+        `withRetryPolicy`. They run a sync or async callback with the requested setting, then restore the previous
+        settings afterwards.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The `golem_rust` crate provides scoped helpers such as `with_persistence_level` and `with_idempotence_mode`,
+        with `_async` variants for async code. They execute a closure with the requested setting, then restore the
+        previous settings afterwards.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In Scala, `golem.Guards` provides scoped helpers such as `withPersistenceLevel`, `withIdempotenceMode`, and
+        `withRetryPolicy`. They execute a `Future`-returning block with the requested setting, then restore the
+        previous settings afterwards.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In MoonBit, the SDK provides scoped helpers such as `with_persistence_level`, `with_idempotence_mode`, and
+        `with_retry_policy`. They execute a callback with the requested setting, then restore the previous settings
+        afterwards.
+    </Tabs.Tab>
+</Tabs>
+
+### Persistence level
+
+The persistence level can be one of the following:
+
+| Level                    | Description                                                                                                                                                          |
+|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| PersistNothing           | Turns off persistence for a section. In case the agent is recovered or restarted, all the side-effecting functions will be reexecuted                               |
+| PersistRemoteSideEffects | Persists all the side-effects that are affecting the outside world. In case of recovery the side-effects won't be reexecuted and the persisted results will be used. |
+| Smart                    | The default setting; Let Golem decide what to persist to optimize performance                                                                                        |
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        To change the persistence level for a section of the code, use the `withPersistenceLevel` function:
+
+        ```typescript
+        import {withPersistenceLevel} from "@golemcloud/golem-ts-sdk"
+
+        const result: string = withPersistenceLevel({tag: "persist-nothing"}, () => {
+          // this closure runs in PersistNothing mode
+          return "hello"
+        })
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        To change the persistence level for a section of the code, use the `with_persistence_level` function:
+
+        ```rust
+        use golem_rust::{PersistenceLevel, with_persistence_level}
+
+        let result: &str = with_persistence_level(PersistenceLevel::PersistNothing, || {
+          // this block runs in PersistNothing mode
+          "hello"
+        });
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        To change the persistence level for a section of the code, use the `Guards.withPersistenceLevel` function:
+
+        ```scala
+        import golem.{Guards, HostApi}
+
+        import scala.concurrent.Future
+
+        val result: Future[String] =
+          Guards.withPersistenceLevel(HostApi.PersistenceLevel.PersistNothing) {
+            // this block runs in PersistNothing mode
+            Future.successful("hello")
+          }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, use the `with_persistence_level` function:
+
+        ```moonbit
+        let result : String = @api.with_persistence_level(
+          @api.PersistenceLevel::PersistNothing,
+          fn() {
+            // this callback runs in PersistNothing mode
+            "hello"
+          },
+        )
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+### Idempotence mode
+
+Golem assumes that HTTP requests are idempotent by default. This means that in case of a failure, if the system cannot determine whether the request successfully reached the target or not, it will be retried.
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        This behavior can be changed using the `withIdempotenceMode` function:
+
+        ```typescript
+        import {withIdempotenceMode} from "@golemcloud/golem-ts-sdk"
+
+        const result: string = withIdempotenceMode(false, () => {
+          // this closure runs with idempotence mode disabled
+          return "hello"
+        })
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        This behavior can be changed using the `with_idempotence_mode` function:
+
+        ```rust
+        use golem_rust::with_idempotence_mode;
+
+        let result: &str = with_idempotence_mode(false, || {
+          // this block runs with idempotence mode disabled
+          "hello"
+        });
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        This behavior can be changed using the `Guards.withIdempotenceMode` function:
+
+        ```scala
+        import golem.Guards
+
+        import scala.concurrent.Future
+
+        val result: Future[String] =
+          Guards.withIdempotenceMode(false) {
+            // this block runs with idempotence mode disabled
+            Future.successful("hello")
+          }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, use the `with_idempotence_mode` function:
+
+        ```moonbit
+        let result : String = @api.with_idempotence_mode(false, fn() {
+          // this callback runs with idempotence mode disabled
+          "hello"
+        })
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+With disabled idempotence mode, in case Golem cannot determine if the request was sent or not, it won't retry it, but the agent will fail.
+
+### Atomic regions
+
+By default, side effects are persisted and retried one by one. It is possible to group them together into atomic regions, in which case the execution is retried for some reason (the agent failed or interrupted within the region), all the side effects will be reexecuted.
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        The `golem-ts-sdk` library exports the `atomically` function for using atomic regions:
+
+        ```typescript
+        import {atomically} from "@golemcloud/golem-ts-sdk"
+
+        const result: [string, string] = atomically<[string, string]>(() => {
+          const firstResult: string = firstSideEffect()
+          const secondResult: string = secondSideEffect(firstResult)
+          return [firstResult, secondResult]
+        })
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The `golem_rust` crate exports the `atomically` function for using atomic regions:
+
+        ```rust
+        use golem_rust::atomically;
+
+        let result = atomically(|| {
+            let first_result = first_side_effect();
+            let second_result = second_side_effect(&first_result);
+            (first_result, second_result)
+        });
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The Scala SDK exposes `Guards.atomically` for using atomic regions:
+
+        ```scala
+        import golem.Guards
+
+        import scala.concurrent.Future
+
+        val result: Future[(String, String)] =
+          Guards.atomically {
+            val firstResult = firstSideEffect()
+            val secondResult = secondSideEffect(firstResult)
+            Future.successful((firstResult, secondResult))
+          }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, use the `with_atomic_operation` function:
+
+        ```moonbit
+        let result : (String, String) = @api.with_atomic_operation(fn() {
+          let first_result : String = first_side_effect()
+          let second_result : String = second_side_effect(first_result)
+          (first_result, second_result)
+        })
+        ```
+    </Tabs.Tab>
+
+</Tabs>
+
+### Commit oplog
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        Wait until the oplog is replicated to a specified number of replicas before continuing:
+
+        ```typescript
+        import { oplogCommit } from '@golemcloud/golem-ts-sdk';
+
+        // Ensure oplog is replicated to 3 replicas before proceeding
+        oplogCommit(3);
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Wait until the oplog is replicated to a specified number of replicas before continuing:
+
+        ```rust
+        use golem_rust::oplog_commit;
+
+        // Ensure oplog is replicated to 3 replicas before proceeding
+        oplog_commit(3);
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Wait until the oplog is replicated to a specified number of replicas before continuing:
+
+        ```scala
+        import golem.HostApi
+
+        // Ensure oplog is replicated to 3 replicas before proceeding
+        HostApi.oplogCommit(3)
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, wait until the oplog is replicated to a specified number of replicas before continuing:
+
+        ```moonbit
+        // Ensure oplog is replicated to 3 replicas before proceeding
+        @api.oplog_commit(3)
+        ```
+    </Tabs.Tab>
+</Tabs>

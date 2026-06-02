@@ -1,0 +1,46 @@
+# API Definitions
+
+Golem is a durable computing platform that makes it simple to build and deploy
+highly reliable distributed systems.
+
+As a serverless platform, Golem allows you to deploy components of your
+application, without having to write servers or implement protocols like HTTP,
+gRPC, or GraphQL.
+
+Without having to write any additional code, Golem provides you with the ability
+to trigger the creation of agents from your components based on HTTP API calls.
+
+Although useful for building tooling or quick prototypes, the generic APIs that
+Golem gives you to create and interact with your agents are usually not the
+polished, engineered APIs that you want to expose to other organizations,
+developers of mobile or web applications, or other backend teams.
+
+To allow you to stand up a custom API for your components, Golem supports
+**code-first routes** — HTTP endpoints defined directly in your agent code
+using language-native decorators and macros, with no separate configuration needed.
+
+## Code-First Routes
+
+In Golem, HTTP APIs are defined using **mount points** and **endpoint decorators** in your agent source code. This approach means your API definition lives alongside your implementation, with no separate YAML or OpenAPI files to maintain.
+
+### Mount Points
+
+Every agent that exposes HTTP endpoints defines a **mount point** — the base URL prefix under which all its endpoints are available. The mount path can contain placeholders that map to the agent's constructor parameters.
+
+### Endpoints
+
+Individual agent methods are exposed as HTTP endpoints using language-native decorators. Each endpoint specifies an HTTP method and a path suffix relative to the mount point.
+
+### Deployments
+
+To make the endpoints accessible, a deployment section in the application manifest (`golem.yaml`) maps agents to domains per environment.
+
+## Management
+
+API definitions are managed through the application manifest and deployed using the CLI:
+
+- **Define** mount points and endpoints in your agent source code.
+- **Configure** deployments in `golem.yaml`.
+- **Deploy** with `golem deploy`.
+
+See the [code-first routes guide](/invoke/making-custom-apis) for detailed examples in TypeScript, Rust, Scala, and MoonBit.

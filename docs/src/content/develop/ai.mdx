@@ -1,0 +1,288 @@
+import { Callout } from "nextra/components"
+
+# Using AI providers
+
+Golem comes with an [extensive set of libraries](https://github.com/golemcloud/golem-ai) for connecting to various AI and AI related third party providers. These libraries are available as **regular Rust crates** that can be added as dependencies to Rust-based Golem agents. They provide abstractions for various areas, and pluggable implementations for them. This way the actual third party provider can be switched any time without modifying the Golem agent's code.
+
+<Callout type="info">
+  The Golem AI libraries are currently available **only for Rust** projects. For **TypeScript** agents, we recommend using third-party libraries directly (e.g. the official SDKs for OpenAI, Anthropic, etc.). Scala and MoonBit are not covered by these libraries at this time.
+</Callout>
+
+<Callout type="info">
+  For Scala and MoonBit agents, LLM and AI provider APIs can be called directly using standard HTTP requests (fetch in Scala, WASI HTTP in MoonBit). See the [HTTP client](/develop/http) page for making outgoing requests.
+</Callout>
+
+The currently supported areas are:
+
+- Large Language Models (LLM)
+- Graph Databases
+- Search Engines
+- Web Search Engines
+- Speech to Text
+- Video Generation
+- Code Snippet Execution
+
+To use one of these libraries in a Rust agent, add the corresponding core crate and the desired provider crate(s) as dependencies. The `golem.yaml` files coming from the agent templates include commented-out entries for each possible choice of implementations, so just uncomment the desired ones and provide any necessary configuration (usually in the form of environment variables).
+
+The rest of the page shows detailed information about these libraries, the available implementations and their core Rust traits (without a full documentation of every type involved).
+
+## LLMs
+
+The list of supported LLM providers is the following:
+
+- [Amazon Bedrock](https://aws.amazon.com/bedrock/)
+- [Anthropic (Claude)](https://www.anthropic.com)
+- [xAI (Grok)](https://x.ai)
+- [Ollama](https://ollama.com)
+- [OpenAI](https://openai.com)
+- [OpenRouter](https://openrouter.ai)
+
+The core trait for LLMs (from the `golem-llm` crate):
+
+```rust
+pub trait Guest {
+    type ChatStream: GuestChatStream;
+
+    /// Make a single call to the LLM. To continue the conversation:
+    /// - append tool responses and new messages to the events and use send again
+    /// - or use the chat-session wrapper, which helps in maintaining the chat events
+    fn send(events: Vec<Event>, config: Config) -> Result<Response, Error>;
+
+    /// Makes a single call to the LLM and gets back a streaming API
+    /// to receive the response in chunks.
+    fn stream(events: Vec<Event>, config: Config) -> ChatStream;
+}
+
+pub trait GuestChatStream {
+    fn poll_next(&self) -> Option<Vec<Result<StreamEvent, Error>>>;
+    fn get_next(&self) -> Vec<Result<StreamEvent, Error>>;
+}
+```
+
+## Graph Databases
+
+The list of supported graph databases is the following:
+
+- [ArangoDb](https://arangodb.com)
+- [JanusGraph](https://janusgraph.org)
+- [Neo4j](https://neo4j.com)
+
+The core trait for graph databases (from the `golem-graph` crate):
+
+```rust
+/// Connection
+pub fn connect(config: ConnectionConfig) -> Result<Graph, GraphError>;
+
+/// The Transaction resource exposes all CRUD and traversal operations
+impl Transaction {
+    // === QUERY OPERATIONS ===
+    pub fn execute_query(&self, options: &ExecuteQueryOptions) -> Result<QueryExecutionResult, GraphError>;
+
+    // === TRAVERSAL OPERATIONS ===
+    pub fn find_shortest_path(&self, options: &FindShortestPathOptions) -> Result<Option<Path>, GraphError>;
+    pub fn find_all_paths(&self, options: &FindAllPathsOptions) -> Result<Vec<Path>, GraphError>;
+    pub fn get_neighborhood(&self, options: &GetNeighborhoodOptions) -> Result<Subgraph, GraphError>;
+    pub fn path_exists(&self, options: &PathExistsOptions) -> Result<bool, GraphError>;
+    pub fn get_vertices_at_distance(&self, options: &GetVerticesAtDistanceOptions) -> Result<Vec<Vertex>, GraphError>;
+    pub fn get_adjacent_vertices(&self, options: &GetAdjacentVerticesOptions) -> Result<Vec<Vertex>, GraphError>;
+    pub fn get_connected_edges(&self, options: &GetConnectedEdgesOptions) -> Result<Vec<Edge>, GraphError>;
+
+    // === VERTEX OPERATIONS ===
+    pub fn create_vertex(&self, options: &CreateVertexOptions) -> Result<Vertex, GraphError>;
+    pub fn create_vertices(&self, vertices: &[CreateVertexOptions]) -> Result<Vec<Vertex>, GraphError>;
+    pub fn get_vertex(&self, id: &ElementId) -> Result<Option<Vertex>, GraphError>;
+    pub fn update_vertex(&self, options: &UpdateVertexOptions) -> Result<Vertex, GraphError>;
+    pub fn delete_vertex(&self, id: &ElementId, delete_edges: bool) -> Result<(), GraphError>;
+    pub fn find_vertices(&self, options: &FindVerticesOptions) -> Result<Vec<Vertex>, GraphError>;
+
+    // === EDGE OPERATIONS ===
+    pub fn create_edge(&self, options: &CreateEdgeOptions) -> Result<Edge, GraphError>;
+    pub fn create_edges(&self, edges: &[CreateEdgeOptions]) -> Result<Vec<Edge>, GraphError>;
+    pub fn get_edge(&self, id: &ElementId) -> Result<Option<Edge>, GraphError>;
+    pub fn update_edge(&self, options: &UpdateEdgeOptions) -> Result<Edge, GraphError>;
+    pub fn delete_edge(&self, id: &ElementId) -> Result<(), GraphError>;
+    pub fn find_edges(&self, options: &FindEdgesOptions) -> Result<Vec<Edge>, GraphError>;
+
+    // === TRANSACTION CONTROL ===
+    pub fn commit(&self) -> Result<(), GraphError>;
+    pub fn rollback(&self) -> Result<(), GraphError>;
+    pub fn is_active(&self) -> bool;
+}
+```
+
+## Search Engines
+
+The list of supported search engines is the following:
+
+- [Algolia](https://www.algolia.com)
+- [Elasticsearch](https://www.elastic.co/elasticsearch/)
+- [MeiliSearch](https://www.meilisearch.com)
+- [OpenSearch](https://opensearch.org)
+- [Typesense](https://typesense.org)
+
+The core trait for search engines (from the `golem-search` crate):
+
+```rust
+pub trait Guest {
+    type SearchStream: GuestSearchStream;
+
+    // Index lifecycle
+    fn create_index(options: CreateIndexOptions) -> Result<(), SearchError>;
+    fn delete_index(name: IndexName) -> Result<(), SearchError>;
+    fn list_indexes() -> Result<Vec<IndexName>, SearchError>;
+
+    // Document operations
+    fn upsert(index: IndexName, doc: Doc) -> Result<(), SearchError>;
+    fn upsert_many(index: IndexName, docs: Vec<Doc>) -> Result<(), SearchError>;
+    fn delete(index: IndexName, id: DocumentId) -> Result<(), SearchError>;
+    fn delete_many(index: IndexName, ids: Vec<DocumentId>) -> Result<(), SearchError>;
+    fn get(index: IndexName, id: DocumentId) -> Result<Option<Doc>, SearchError>;
+
+    // Query
+    fn search(index: IndexName, query: SearchQuery) -> Result<SearchResults, SearchError>;
+    fn stream_search(index: IndexName, query: SearchQuery) -> Result<SearchStream, SearchError>;
+
+    // Schema inspection
+    fn get_schema(index: IndexName) -> Result<Schema, SearchError>;
+    fn update_schema(index: IndexName, schema: Schema) -> Result<(), SearchError>;
+}
+
+pub trait GuestSearchStream {
+    fn get_next(&self) -> Option<Vec<SearchHit>>;
+    fn blocking_get_next(&self) -> Vec<SearchHit>;
+}
+```
+
+## Web Search Engines
+
+The list of supported web search engines is the following:
+
+- [Brave](https://brave.com/search/api/)
+- [Google](https://www.google.com)
+- [Serper](https://serper.dev)
+- [Tavily](https://www.tavily.com)
+
+The core trait for web search engines (from the `golem-web-search` crate):
+
+```rust
+pub trait GuestWebSearch {
+    type SearchSession: GuestSearchSession;
+
+    /// Start a search session, returning a search context
+    fn start_search(params: SearchParams) -> Result<SearchSession, SearchError>;
+
+    /// One-shot search that returns results immediately (limited result count)
+    fn search_once(params: SearchParams)
+        -> Result<(Vec<SearchResult>, Option<SearchMetadata>), SearchError>;
+}
+
+pub trait GuestSearchSession {
+    /// Get the next page of results
+    fn next_page(&self) -> Result<Vec<SearchResult>, SearchError>;
+
+    /// Retrieve session metadata (after any query)
+    fn get_metadata(&self) -> Option<SearchMetadata>;
+}
+```
+
+## Speech to Text
+
+The list of supported speech to text providers is the following:
+
+- [AWS Transcribe](https://aws.amazon.com/transcribe/)
+- [Azure](https://azure.microsoft.com/en-us/)
+- [Deepgram](https://deepgram.com)
+- [Google](https://cloud.google.com/speech-to-text)
+- [OpenAI Whisper](https://openai.com/index/whisper/)
+
+The core trait for speech to text providers (from the `golem-stt` crate):
+
+```rust
+pub trait SttTranscriptionGuest {
+    fn transcribe(req: TranscriptionRequest) -> Result<TranscriptionResult, SttError>;
+
+    fn transcribe_many(
+        requests: Vec<TranscriptionRequest>,
+    ) -> Result<MultiTranscriptionResult, SttError>;
+}
+```
+
+## Video Generation
+
+The list of supported video generation providers is the following:
+
+- [Kling](https://klingai.com/global/)
+- [Runway](https://runwayml.com/)
+- [Stability](https://stability.ai)
+- [Veo](https://www.veo.co)
+
+The core traits for video generation providers (from the `golem-video` crate):
+
+```rust
+pub trait VideoGenerationGuest {
+    fn generate(input: MediaInput, config: GenerationConfig) -> Result<String, VideoError>;
+    fn poll(job_id: String) -> Result<VideoResult, VideoError>;
+    fn cancel(job_id: String) -> Result<String, VideoError>;
+}
+
+pub trait LipSyncGuest {
+    fn generate_lip_sync(video: LipSyncVideo, audio: AudioSource) -> Result<String, VideoError>;
+    fn list_voices(language: Option<String>) -> Result<Vec<VoiceInfo>, VideoError>;
+}
+
+pub trait AdvancedGuest {
+    fn extend_video(options: ExtendVideoOptions) -> Result<String, VideoError>;
+    fn upscale_video(input: BaseVideo) -> Result<String, VideoError>;
+    fn generate_video_effects(options: GenerateVideoEffectsOptions) -> Result<String, VideoError>;
+    fn multi_image_generation(options: MultImageGenerationOptions) -> Result<String, VideoError>;
+}
+```
+
+## Code Snippet Execution
+
+The list of supported languages is the following:
+
+- JavaScript
+- Python
+
+The core trait for code snippet execution (from the `golem-exec` crate):
+
+```rust
+/// Blocking, non-streaming execution
+/// - `lang` specifies the programming language and version.
+/// - `modules` are additional code files to include in the execution context.
+///   These can be imported in `snippet` in a language-specific way.
+/// - `snippet` is the top level code to execute.
+/// - `options` is controlling the script runner environment,
+///   see the RunOptions record for more details.
+/// The returned value captures the stdout and stderr of the executed snippet.
+pub fn run(
+    lang: &Language,
+    modules: &[File],
+    snippet: &str,
+    options: &RunOptions,
+) -> Result<ExecResult, Error>;
+
+impl Session {
+    /// Create a new session for executing code snippets in the specified language,
+    /// with a set of additional code files that can be imported in the executed snippets.
+    pub fn new(lang: &Language, modules: &[File]) -> Self;
+
+    /// Upload a data file to the session, which can be accessed in the
+    /// executed snippets through standard file system APIs.
+    pub fn upload(&self, file: &File) -> Result<(), Error>;
+
+    /// Execute a code snippet in the session in a blocking way
+    pub fn run(&self, snippet: &str, options: &RunOptions) -> Result<ExecResult, Error>;
+
+    /// Downloads a data file from the session.
+    pub fn download(&self, path: &str) -> Result<Vec<u8>, Error>;
+
+    /// Lists all the data files available in the session. These will include
+    /// the ones that were uploaded and also any other file created by the executed snippets.
+    pub fn list_files(&self, dir: &str) -> Result<Vec<String>, Error>;
+
+    /// Sets the current working directory within the session.
+    pub fn set_working_dir(&self, path: &str) -> Result<(), Error>;
+}
+```

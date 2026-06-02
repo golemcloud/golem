@@ -1,0 +1,112 @@
+# Agent API
+API working on agent instances
+## undefined
+Path|Method|Protected
+---|---|---
+`/v1/agents/invoke-agent`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "appName": "string",
+  "envName": "string",
+  "agentTypeName": "string",
+  "parameters": {
+    "type": "Tuple",
+    "elements": [
+      {
+        "type": "ComponentModel",
+        "value": null
+      }
+    ]
+  },
+  "phantomId": "924e957e-cd56-4af8-a7d0-d200011bddaa",
+  "methodName": "string",
+  "methodParameters": {
+    "type": "Tuple",
+    "elements": [
+      {
+        "type": "ComponentModel",
+        "value": null
+      }
+    ]
+  },
+  "mode": "await",
+  "scheduleAt": "2019-08-24T14:15:22Z",
+  "idempotencyKey": "string",
+  "deploymentRevision": 0,
+  "ownerAccountEmail": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "result": {
+    "type": "Tuple",
+    "elements": [
+      {
+        "type": "ComponentModel",
+        "value": null
+      }
+    ]
+  },
+  "componentRevision": 0
+}
+```
+
+## undefined
+Path|Method|Protected
+---|---|---
+`/v1/agents/create-agent`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "appName": "string",
+  "envName": "string",
+  "agentTypeName": "string",
+  "parameters": {
+    "type": "Tuple",
+    "elements": [
+      {
+        "type": "ComponentModel",
+        "value": null
+      }
+    ]
+  },
+  "phantomId": "924e957e-cd56-4af8-a7d0-d200011bddaa",
+  "config": []
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "agentId": {
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "agentId": "string"
+  },
+  "componentRevision": 0
+}
+```
+## Agent API Errors
+Status Code|Description|Body
+---|---|---
+400||`{"code":"string","errors":["string"]}`
+401||`{"code":"string","error":"string"}`
+403||`{"code":"string","error":"string"}`
+404||`{"code":"string","error":"string"}`
+409||`{"code":"string","error":"string"}`
+422||`{"code":"string","error":"string"}`
+500||`{"code":"string","error":"string","workerError":{"cause":"string","stderr":"string"}}`

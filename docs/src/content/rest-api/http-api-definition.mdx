@@ -1,0 +1,413 @@
+# Http Api Definition API
+
+## List http api definitions in the environment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/http-api-definitions`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "name": "string",
+      "hash": "string",
+      "version": "string",
+      "routes": [
+        {
+          "method": "get",
+          "path": "string",
+          "binding": {
+            "type": "Worker",
+            "componentName": "string",
+            "idempotencyKey": "string",
+            "invocationContext": "string",
+            "response": "string"
+          },
+          "security": "string"
+        }
+      ],
+      "createdAt": "2019-08-24T14:15:22Z",
+      "updatedAt": "2019-08-24T14:15:22Z"
+    }
+  ]
+}
+```
+
+## Create a new api-definition in the environment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/http-api-definitions`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "name": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "get",
+      "path": "string",
+      "binding": {
+        "type": "Worker",
+        "componentName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string"
+      },
+      "security": "string"
+    }
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "name": "string",
+  "hash": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "get",
+      "path": "string",
+      "binding": {
+        "type": "Worker",
+        "componentName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string"
+      },
+      "security": "string"
+    }
+  ],
+  "createdAt": "2019-08-24T14:15:22Z",
+  "updatedAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Get http api definition
+Path|Method|Protected
+---|---|---
+`/v1/http-api-definitions/{http_api_definition_id}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "name": "string",
+  "hash": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "get",
+      "path": "string",
+      "binding": {
+        "type": "Worker",
+        "componentName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string"
+      },
+      "security": "string"
+    }
+  ],
+  "createdAt": "2019-08-24T14:15:22Z",
+  "updatedAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Delete http api definition
+Path|Method|Protected
+---|---|---
+`/v1/http-api-definitions/{http_api_definition_id}`|DELETE|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+current_revision|integer|Yes|-
+
+
+
+
+
+## Update http api definition
+Path|Method|Protected
+---|---|---
+`/v1/http-api-definitions/{http_api_definition_id}`|PATCH|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "currentRevision": 0,
+  "version": "string",
+  "routes": [
+    {
+      "method": "get",
+      "path": "string",
+      "binding": {
+        "type": "Worker",
+        "componentName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string"
+      },
+      "security": "string"
+    }
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "name": "string",
+  "hash": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "get",
+      "path": "string",
+      "binding": {
+        "type": "Worker",
+        "componentName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string"
+      },
+      "security": "string"
+    }
+  ],
+  "createdAt": "2019-08-24T14:15:22Z",
+  "updatedAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Get a specific http api definition revision
+Path|Method|Protected
+---|---|---
+`/v1/http-api-definitions/{http_api_definition_id}/revisions/{revision}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "name": "string",
+  "hash": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "get",
+      "path": "string",
+      "binding": {
+        "type": "Worker",
+        "componentName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string"
+      },
+      "security": "string"
+    }
+  ],
+  "createdAt": "2019-08-24T14:15:22Z",
+  "updatedAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Get http api definition by name in the environment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/http-api-definitions/{http_api_definition_name}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "name": "string",
+  "hash": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "get",
+      "path": "string",
+      "binding": {
+        "type": "Worker",
+        "componentName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string"
+      },
+      "security": "string"
+    }
+  ],
+  "createdAt": "2019-08-24T14:15:22Z",
+  "updatedAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Get http api definition by name in the deployment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "name": "string",
+  "hash": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "get",
+      "path": "string",
+      "binding": {
+        "type": "Worker",
+        "componentName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string"
+      },
+      "security": "string"
+    }
+  ],
+  "createdAt": "2019-08-24T14:15:22Z",
+  "updatedAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Get openapi spec of http api definition in the deployment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}/openapi`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## List http api definitions in the deployment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "revision": 0,
+      "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+      "name": "string",
+      "hash": "string",
+      "version": "string",
+      "routes": [
+        {
+          "method": "get",
+          "path": "string",
+          "binding": {
+            "type": "Worker",
+            "componentName": "string",
+            "idempotencyKey": "string",
+            "invocationContext": "string",
+            "response": "string"
+          },
+          "security": "string"
+        }
+      ],
+      "createdAt": "2019-08-24T14:15:22Z",
+      "updatedAt": "2019-08-24T14:15:22Z"
+    }
+  ]
+}
+```
+## Http Api Definition API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"errors":["string"]}`
+401|Unauthorized request|`{"error":"string"}`
+403|Forbidden Request|`{"error":"string"}`
+404|Entity not found|`{"error":"string"}`
+409||`{"error":"string"}`
+422|Limits of the plan exceeded|`{"error":"string"}`
+500|Internal server error|`{"error":"string"}`

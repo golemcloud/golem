@@ -1,0 +1,173 @@
+import {Callout, Tabs} from "nextra/components"
+
+# Webhooks
+
+Golem **webhooks** are built on top of [Golem Promises](/develop/promises). They let an agent generate a temporary public URL that, when POSTed to by an external system, delivers the request body to the agent. The agent is durably suspended while waiting, consuming no resources.
+
+Webhooks are useful for:
+
+- Integrating with **webhook-driven APIs** such as payment gateways, CI/CD systems, GitHub, and Stripe
+- Receiving **async callbacks** from external services
+- Building **event-driven workflows** where agents react to external events
+
+<Callout type="info">
+  Webhooks use Golem Promises under the hood. See the [Promises](/develop/promises) page to learn more about the underlying mechanism.
+</Callout>
+
+### Prerequisites
+
+To use webhooks, your agent must:
+
+- Have an **HTTP mount** defined in its agent annotations
+- Be **deployed** via the `httpApi` section in `golem.yaml`
+
+### Creating a webhook
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        To create a webhook, call `createWebhook`. The returned object provides the public URL and can be awaited to receive the incoming payload:
+
+        ```typescript
+        import { createWebhook } from "@golemcloud/golem-ts-sdk"
+
+        type MyEvent = {
+          action: string
+          resourceId: string
+        }
+
+        async function waitForCallback(): Promise<MyEvent> {
+          const webhook = createWebhook()
+          const url: string = webhook.getUrl()
+          // Send `url` to the external system to POST to
+          const payload = await webhook
+          const result: MyEvent = payload.json()
+          return result
+        }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        To create a webhook, call `create_webhook`. The returned object provides the public URL and can be awaited to receive the incoming request:
+
+        ```rust
+        use golem_rust::create_webhook;
+        use serde::Deserialize;
+
+        #[derive(Deserialize)]
+        struct MyEvent {
+            action: String,
+            resource_id: String,
+        }
+
+        async fn wait_for_callback() -> MyEvent {
+            let webhook = create_webhook();
+            let url: String = webhook.url();
+            // Send `url` to the external system to POST to
+            let request = webhook.await;
+            let data: MyEvent = request.json().unwrap();
+            data
+        }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        To create a webhook, call `HostApi.createWebhook`. The returned object provides the public URL and can be awaited to receive the incoming payload:
+
+        ```scala
+        import golem.HostApi
+        import zio.blocks.schema.Schema
+
+        import scala.concurrent.Future
+
+        final case class MyEvent(action: String, resourceId: String) derives Schema
+
+        def waitForCallback(): Future[MyEvent] =
+          val webhook = HostApi.createWebhook()
+          val url: String = webhook.url
+          // Send `url` to the external system to POST to
+          webhook.await().map { payload =>
+            val event = payload.json[MyEvent]
+            event
+          }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Assuming the `golemcloud/golem_sdk/webhook` package is imported as `@webhook`, call `create` to create a webhook and `wait` to await the incoming payload:
+
+        ```moonbit
+        fn wait_for_callback() -> String {
+          let webhook = @webhook.create()
+          let url = webhook.url()
+          // Send `url` to the external system to POST to
+          let payload = webhook.wait()
+          let text = payload.text()
+          text
+        }
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+### Webhook URL structure
+
+When a webhook is created, Golem generates a URL with the following format:
+
+```
+https://<domain>/<prefix>/<suffix>/<id>
+```
+
+- **`<domain>`** — the domain of the HTTP API deployment
+- **`<prefix>`** — defaults to `/webhooks`, customizable via the `webhookUrl` field in the `httpApi` deployment configuration in `golem.yaml`
+- **`<suffix>`** — defaults to the agent type name in kebab-case (e.g., `my-webhook-agent`), customizable via `webhookSuffix` in agent annotations
+- **`<id>`** — a unique identifier for this particular webhook instance
+
+### Customizing the webhook URL
+
+You can customize the webhook URL suffix using the `webhookSuffix` annotation on your agent:
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        ```typescript
+        @agent({ mount: "/workflow/{id}", webhookSuffix: "/workflow-hooks" })
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        ```rust
+        #[agent_definition(mount = "/workflow/{id}", webhook_suffix = "/workflow-hooks")]
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        ```scala
+        @agentDefinition(mount = "/workflow/{id}", webhookSuffix = "/workflow-hooks")
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        ```moonbit
+        #derive.mount("/workflow/{id}")
+        #derive.mount_webhook("/workflow-hooks")
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+### Calling the webhook
+
+The webhook URL expects a **POST** request with an arbitrary body. When the external system sends the POST request, the awaiting agent resumes and receives the payload.
+
+The payload object provides helpers to access the data in different formats:
+
+- **Raw bytes** — the unprocessed request body
+- **String** — the request body decoded as a UTF-8 string
+- **JSON** — the request body parsed as JSON into a typed value
+
+### Configuring webhook URL in golem.yaml
+
+To configure the base URL for webhooks and deploy agents with webhook support, use the `httpApi` section in `golem.yaml`:
+
+```yaml
+httpApi:
+  deployments:
+    local:
+    - domain: my-app.localhost:9006
+      webhookUrl: http://my-app.localhost:9006
+      agents:
+        WebhookAgent: {}
+```
+
+The `webhookUrl` field sets the base URL that Golem uses when generating webhook URLs. This should match the publicly accessible address of your deployment so that external systems can reach the webhook endpoints.

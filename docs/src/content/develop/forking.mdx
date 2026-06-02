@@ -1,0 +1,497 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Forking Agents
+
+## Explanation
+
+Golem agents are single threaded. To achieve parallel execution, it is possible to spawn _child agents_ and communicate with them using RPC, as described on the [Agent to Agent communication page](/develop/rpc).
+
+A simpler way is to use the **fork API**. The fork API consists of a single host function, defined as the following:
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs.Tab>
+```typescript
+declare module 'golem:api/host@1.5.0' {
+  // ...
+
+  /**
+   * Details about the fork result
+   */
+  export type ForkDetails = {
+    forkedPhantomId: Uuid;
+  };
+
+  /**
+   * Indicates which agent the code is running on after `fork`.
+   * The parameter contains details about the fork result, such as the phantom-ID of the newly
+   * created agent.
+   */
+  export type ForkResult =
+    /** The original agent that called `fork` */
+    { tag: 'original'; val: ForkDetails } |
+    /** The new agent */
+    { tag: 'forked'; val: ForkDetails };
+
+  /**
+   * Forks the current agent at the current execution point.
+   * The new agent gets the same base agent ID but with a new unique phantom ID.
+   * The phantom ID of the forked agent is returned in `fork-result` on both sides.
+   * The newly created agent continues running from the same point,
+   * but the return value is going to be different in this agent and the forked agent.
+   */
+  export function fork(): ForkResult;
+}
+```
+</Tabs.Tab>
+
+<Tabs.Tab>
+`fork` and `ForkResult` can be imported from `golem_rust::fork` and `golem_rust::ForkResult` respectively
+
+```rust
+/// Details about the fork result
+pub struct ForkDetails {
+    pub forked_phantom_id: Uuid,
+}
+
+/// Indicates which agent the code is running on after `fork`.
+/// The parameter contains details about the fork result, such as the phantom-ID of the newly
+/// created agent.
+pub enum ForkResult {
+    Original(ForkDetails),
+    Forked(ForkDetails),
+}
+
+/// Forks the current agent at the current execution point.
+/// The new agent gets the same base agent ID but with a new unique phantom ID.
+/// The phantom ID of the forked agent is returned in `fork-result` on both sides.
+/// The newly created agent continues running from the same point, but the return value is going to be different
+/// in this agent and the forked agent.
+pub fn fork() -> ForkResult;
+```
+</Tabs.Tab>
+
+<Tabs.Tab>
+`fork` and `ForkResult` are available via `golem.HostApi`
+
+```scala
+import golem.{HostApi, Uuid}
+
+sealed trait ForkResult {
+  def forkedPhantomId: Uuid
+}
+
+object ForkResult {
+  final case class Original(forkedPhantomId: Uuid) extends ForkResult
+  final case class Forked(forkedPhantomId: Uuid)   extends ForkResult
+}
+
+def fork(): ForkResult = HostApi.fork()
+```
+</Tabs.Tab>
+
+<Tabs.Tab>
+Assuming the `golemcloud/golem_sdk/interface/golem/core/types` package is imported as `@rpcTypes`, the `fork` host function and the related types are available from `golemcloud/golem_sdk/interface/golem/api/host`:
+
+```moonbit
+/// Details about the fork result
+pub(all) struct ForkDetails {
+  forked_phantom_id : @rpcTypes.Uuid
+} derive(Show, Eq)
+
+/// Indicates which agent the code is running on after `fork`.
+/// The parameter contains details about the fork result, such as the phantom-ID of the newly
+/// created agent.
+pub(all) enum ForkResult {
+  Original(ForkDetails)
+  Forked(ForkDetails)
+} derive(Show, Eq)
+
+/// Forks the current agent at the current execution point.
+/// The new agent gets the same base agent ID but with a new unique phantom ID.
+/// The phantom ID of the forked agent is returned in `fork-result` on both sides.
+/// The newly created agent continues running from the same point,
+/// but the return value is going to be different in this agent and the forked agent.
+pub fn fork() -> ForkResult
+```
+</Tabs.Tab>
+</Tabs>
+
+## Usage
+
+Using this `fork` function from a component that was created from Golem's built-in templates is straightforward because access to the Golem specific host functions is already set up.
+
+The following code snippet demonstrates calling `fork` and continuing on two different parallel branches based on its result value:
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+  <Tabs.Tab>
+  ```typescript
+  import { BaseAgent, agent, fork, type ForkResult } from '@golemcloud/golem-ts-sdk';
+
+  @agent()
+  class ExampleAgent extends BaseAgent {
+    name: string;
+
+    constructor(name: string) {
+      super();
+      this.name = name;
+    }
+
+    run(): void {
+      const result: ForkResult = fork();
+
+      switch (result.tag) {
+        case 'original': {
+          // ...
+          break;
+        }
+        case 'forked': {
+          // ...
+          break;
+        }
+      }
+    }
+  }
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```rust
+use golem_rust::{agent_definition, agent_implementation, fork, ForkResult};
+
+#[agent_definition]
+pub trait ExampleAgent {
+    fn new(name: String) -> Self;
+    fn run(&self) -> Result<(), String>;
+}
+
+struct ExampleAgentImpl {
+    _name: String,
+}
+
+#[agent_implementation]
+impl ExampleAgent for ExampleAgentImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    fn run(&self) -> Result<(), String> {
+        match fork() {
+            ForkResult::Original(_) => {
+                // ...
+                Ok(())
+            }
+            ForkResult::Forked(_) => {
+                // ...
+                Ok(())
+            }
+        }
+    }
+}
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```scala
+import golem.HostApi
+import golem.HostApi.ForkResult
+import golem.runtime.annotations.{agentDefinition, agentImplementation}
+import golem.BaseAgent
+
+import scala.annotation.unused
+
+@agentDefinition()
+trait ExampleAgent extends BaseAgent {
+  class Id(val name: String)
+
+  def run(): Unit
+}
+
+@agentImplementation()
+final class ExampleAgentImpl(@unused private val name: String) extends ExampleAgent {
+  override def run(): Unit =
+    HostApi.fork() match {
+      case ForkResult.Original(_) =>
+        ()
+      case ForkResult.Forked(_) =>
+        ()
+    }
+}
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```moonbit
+#derive.agent
+struct ExampleAgent {
+  name : String
+}
+
+fn ExampleAgent::new(name : String) -> ExampleAgent {
+  { name, }
+}
+
+pub fn ExampleAgent::run(self : Self) -> Unit {
+  ignore(self.name)
+  match @api.fork() {
+    Original(_) => ()
+    Forked(_) => ()
+  }
+}
+  ```
+  </Tabs.Tab>
+</Tabs>
+
+## Join
+
+Once the agent has been forked, the two agent instances are running simultaneously and independently. [Golem promises](/develop/promises) provide a way to resynchronize the two agents.
+
+The high level idea is the following:
+
+- The original agent creates a Golem promise and stores the resulting `PromiseId` in a variable.
+- Then forks the new agent. Both the new and the old agents have the promise id.
+- When the new agent is done with the work it was forked for, it completes the promise and includes some arbitrary payload it wants to send back to the original agent.
+- The original agent, after doing some additional work in parallel to the forked one, can suspend its execution to wait for the promise to be completed. When the promise is completed, the original agent resumes execution and receives the payload sent by the forked agent.
+
+The following code snippet demonstrates this pattern:
+
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+  <Tabs.Tab>
+  ```typescript
+  import {
+    BaseAgent,
+    PromiseId,
+    agent,
+    awaitPromise,
+    completePromise,
+    createPromise,
+    fork,
+  } from '@golemcloud/golem-ts-sdk';
+
+  type RunResult = {
+    message: string;
+  };
+
+  @agent()
+  class ExampleAgent extends BaseAgent {
+    name: string;
+
+    constructor(name: string) {
+      super();
+      this.name = name;
+    }
+
+    async run(): Promise<void> {
+      const promiseId: PromiseId = createPromise();
+
+      switch (fork().tag) {
+        case 'original': {
+          const localResult: RunResult = {
+            message: `Hello from original agent with name: ${this.name}`,
+          };
+
+          const rawForkResult: Uint8Array = await awaitPromise(promiseId);
+          const forkResult: RunResult = JSON.parse(new TextDecoder().decode(rawForkResult));
+
+          console.log('local result :', localResult.message);
+          console.log('forked result:', forkResult.message);
+          break;
+        }
+        case 'forked': {
+          const result: RunResult = {
+            message: `Hello from forked agent with name: ${this.name}`,
+          };
+
+          const rawResult: Uint8Array = new TextEncoder().encode(JSON.stringify(result));
+          completePromise(promiseId, rawResult);
+
+          break;
+        }
+      }
+    }
+  }
+  ```
+
+  <Callout type="warning">
+  Note that **Golem promises** are NOT JavaScript Promises. The SDK wraps waiting for them in async helpers such as `awaitPromise` and `HostApi.awaitPromiseJson`, but the promise itself is still a Golem runtime resource identified by a `PromiseId`.
+  </Callout>
+
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```rust
+use golem_rust::{
+    ForkResult, agent_definition, agent_implementation, await_promise_json,
+    complete_promise_json, create_promise, fork,
+};
+use serde::{Deserialize, Serialize};
+
+struct ExampleAgentImpl {
+    id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RunResult {
+    message: String,
+}
+
+#[agent_definition]
+pub trait ExampleAgent {
+    fn new(id: String) -> Self;
+    async fn run(&self) -> Result<(), String>;
+}
+
+#[agent_implementation]
+impl ExampleAgent for ExampleAgentImpl {
+    fn new(id: String) -> Self {
+        ExampleAgentImpl { id }
+    }
+
+    async fn run(&self) -> Result<(), String> {
+        let promise_id = create_promise();
+
+        match fork() {
+            ForkResult::Original(_) => {
+                let local_result = RunResult {
+                    message: format!("Hello from original agent with id: {}", self.id),
+                };
+
+                let forked_result: RunResult = await_promise_json(&promise_id)
+                    .await
+                    .map_err(|err| err.to_string())?;
+
+                println!("local result : {}", local_result.message);
+                println!("forked result: {}", forked_result.message);
+
+                Ok(())
+            }
+            ForkResult::Forked(_) => {
+                let result = RunResult {
+                    message: format!("Hello from forked agent with id: {}", self.id),
+                };
+
+                println!("forked result : {}", result.message);
+
+                complete_promise_json(&promise_id, result).map_err(|err| err.to_string())?;
+
+                Ok(())
+            }
+        }
+    }
+}
+
+
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```scala
+import golem.HostApi
+import golem.HostApi.ForkResult
+import golem.runtime.annotations.{agentDefinition, agentImplementation}
+import golem.BaseAgent
+import zio.blocks.schema.Schema
+
+import scala.annotation.unused
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+
+@agentDefinition()
+trait ExampleAgent extends BaseAgent {
+  class Id(val name: String)
+
+  def run(): Future[Unit]
+}
+
+final case class RunResult(message: String) derives Schema
+
+@agentImplementation()
+final class ExampleAgentImpl(@unused private val name: String) extends ExampleAgent {
+  override def run(): Future[Unit] = {
+    val promiseId = HostApi.createPromise()
+
+    HostApi.fork() match {
+      case ForkResult.Original(_) =>
+        val localResult = RunResult(s"Hello from original agent with name: $name")
+
+        HostApi.awaitPromiseJson[RunResult](promiseId).map { forkedResult =>
+          println(s"local result : ${localResult.message}")
+          println(s"forked result: ${forkedResult.message}")
+          ()
+        }
+
+      case ForkResult.Forked(_) =>
+        val result = RunResult(s"Hello from forked agent with name: $name")
+
+        println(s"forked result : ${result.message}")
+
+        HostApi.completePromiseJson(promiseId, result)
+        Future.successful(())
+    }
+  }
+}
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ```moonbit
+#derive.agent
+struct ExampleAgent {
+  name : String
+}
+
+struct RunResult {
+  message : String
+} derive(ToJson, @json.FromJson)
+
+let logger : @logging.Logger = @logging.with_name("example-agent")
+
+fn ExampleAgent::new(name : String) -> ExampleAgent {
+  { name, }
+}
+
+fn string_to_bytes(value : String) -> Bytes {
+  Bytes::from_array(value.to_array().map(fn(char) { char.to_int().to_byte() }))
+}
+
+fn bytes_to_string(bytes : Bytes) -> String {
+  let chars : Array[Char] = []
+  for i in 0..<bytes.length() {
+    chars.push(Int::unsafe_to_char(bytes[i].to_int()))
+  }
+  String::from_array(chars)
+}
+
+pub fn ExampleAgent::run(self : Self) -> Unit {
+  let promise_id = @api.create_promise()
+
+  match @api.fork() {
+    Original(_) => {
+      let local_result = RunResult::{
+        message: "Hello from original agent with name: " + self.name,
+      }
+
+      let raw_fork_result = @api.await_promise(promise_id)
+      let json = @json.parse(bytes_to_string(raw_fork_result)) catch {
+        _ => panic()
+      }
+      let forked_result : RunResult = @json.from_json(json) catch {
+        _ => panic()
+      }
+
+      logger.info("local result : " + local_result.message)
+      logger.info("forked result: " + forked_result.message)
+    }
+    Forked(_) => {
+      let result = RunResult::{
+        message: "Hello from forked agent with name: " + self.name,
+      }
+
+      logger.info("forked result : " + result.message)
+
+      ignore(
+        @api.complete_promise(
+          promise_id,
+          string_to_bytes(result.to_json().stringify()),
+        ),
+      )
+    }
+  }
+}
+  ```
+  </Tabs.Tab>
+</Tabs>
