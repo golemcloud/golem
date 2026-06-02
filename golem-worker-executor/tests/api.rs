@@ -3727,9 +3727,11 @@ async fn worker_created_by_reflects_component_owner_not_caller(
         account_id: caller_account_id,
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
-        token_root_card_id: None,
-        account_holder: caller_account_id.to_string(),
-        auth_card: None,
+        effective_surface: golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        },
     })
     .into();
 
@@ -3818,9 +3820,11 @@ async fn worker_environment_reflects_component_not_caller(
         account_id: caller_account_id,
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
-        token_root_card_id: None,
-        account_holder: caller_account_id.to_string(),
-        auth_card: None,
+        effective_surface: golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        },
     })
     .into();
 
@@ -3960,9 +3964,11 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
         account_id: caller_account_id,
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
-        token_root_card_id: None,
-        account_holder: caller_account_id.to_string(),
-        auth_card: None,
+        effective_surface: golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        },
     })
     .into();
 
