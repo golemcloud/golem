@@ -14941,12 +14941,6 @@ components:
         accountRootCardId:
           type: string
           format: uuid
-        tokenRootCardId:
-          type: string
-          format: uuid
-        tokenRootCardEpoch:
-          type: integer
-          format: uint64
       required:
       - id
       - revision
@@ -14955,7 +14949,6 @@ components:
       - planId
       - roles
       - accountRootCardId
-      - tokenRootCardEpoch
     AccountCountsReport:
       title: AccountCountsReport
       type: object
