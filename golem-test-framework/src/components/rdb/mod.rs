@@ -113,7 +113,7 @@ impl DbInfo {
                 ),
                 (
                     "GOLEM__DB__CONFIG__FOREIGN_KEYS".to_string(),
-                    "false".to_string(),
+                    "true".to_string(),
                 ),
             ]
             .into(),

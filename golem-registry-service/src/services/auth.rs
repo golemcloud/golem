@@ -258,7 +258,11 @@ impl AuthService {
                 .account_service
                 .get(account_id, &AuthCtx::System)
                 .await
-                .map_err(|_| AuthError::CouldNotAuthenticate)?;
+                .map_err(|e| match e {
+                    // Account was deleted while we were looping
+                    AccountError::AccountNotFound(_) => AuthError::CouldNotAuthenticate,
+                    other => other.into(),
+                })?;
 
             if let Some(card_id) = account.token_root_card_id {
                 return Ok(card_id);

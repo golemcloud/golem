@@ -225,13 +225,19 @@ impl DbCardRepo<SqlitePool> {
             )
             .await?;
 
-        let mut deleted = Vec::with_capacity(rows.len());
+        let mut card_ids = Vec::with_capacity(rows.len());
         for row in rows {
             let card_id = row.try_get::<Uuid, _>("card_id").map_err(RepoError::from)?;
+            card_ids.push(card_id);
+        }
 
+        for card_id in &card_ids {
             tx.execute(sqlx::query("DELETE FROM card_parents WHERE card_id = $1").bind(card_id))
                 .await?;
+        }
 
+        let mut deleted = Vec::with_capacity(card_ids.len());
+        for card_id in &card_ids {
             if let Some(row) = tx
                 .fetch_optional(
                     sqlx::query("DELETE FROM cards WHERE card_id = $1 RETURNING card_id")
