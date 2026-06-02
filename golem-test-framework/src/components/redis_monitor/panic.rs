@@ -12,12 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod panic;
-pub mod provided;
-pub mod spawned;
+use super::RedisMonitor;
 
-pub trait RedisMonitor: Send + Sync {
-    fn assert_valid(&self);
+/// Panic-on-use stub for `RedisMonitor`. Used in cloud mode where no direct
+/// Redis access is available. Operational methods panic; `kill` is a no-op so
+/// that `BenchmarkTestDependencies::kill_all()` completes safely.
+pub struct PanicRedisMonitor;
 
-    fn kill(&self);
+impl RedisMonitor for PanicRedisMonitor {
+    fn assert_valid(&self) {
+        panic!("redis_monitor() is not available in cloud mode");
+    }
+
+    fn kill(&self) {
+        // no-op: cloud mode has no local Redis process to kill
+    }
 }

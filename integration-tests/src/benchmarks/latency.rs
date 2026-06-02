@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{delete_workers, invoke_and_await_agent};
+use crate::benchmarks::{cleanup_user_state, delete_workers, invoke_and_await_agent};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::model::AgentId;
 use golem_common::model::component::ComponentDto;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -200,6 +201,7 @@ pub struct IterationContext {
     component: ComponentDto,
     agent_ids: Vec<ParsedAgentId>,
     length: usize,
+    env_id: EnvironmentId,
 }
 
 pub struct LatencyBenchmark {
@@ -261,6 +263,7 @@ impl LatencyBenchmark {
             component,
             agent_ids,
             length: config.length,
+            env_id: env.id,
         }
     }
 
@@ -326,6 +329,7 @@ impl LatencyBenchmark {
             .iter()
             .filter_map(|agent_id| AgentId::from_agent_id(iteration.component.id, agent_id).ok())
             .collect();
-        delete_workers(&iteration.user, &agent_ids).await
+        delete_workers(&iteration.user, &agent_ids).await;
+        cleanup_user_state(&iteration.user, &iteration.env_id).await;
     }
 }

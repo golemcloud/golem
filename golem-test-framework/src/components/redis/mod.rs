@@ -17,6 +17,7 @@ use redis::RedisResult;
 use std::time::{Duration, Instant};
 use tracing::info;
 
+pub mod panic;
 pub mod provided;
 pub mod spawned;
 pub mod spawned_tls;

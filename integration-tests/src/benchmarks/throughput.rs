@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{delete_workers, invoke_and_await_agent, invoke_and_await_http};
+use crate::benchmarks::{
+    cleanup_user_state, delete_workers, invoke_and_await_agent, invoke_and_await_http,
+};
 use async_trait::async_trait;
 use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
@@ -21,6 +23,7 @@ use golem_common::base_model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
@@ -79,16 +82,14 @@ impl Benchmark for ThroughputEcho {
             "echo",
             "echo",
             Box::new(|_| data_value!("benchmark")),
-            Box::new(|port, idx, _length| {
-                let url = Url::parse(&format!(
-                    "http://localhost:{port}/test-{idx}-http/echo/test-message"
-                ))
-                .unwrap();
+            Box::new(|base_url, idx, _length| {
+                let url =
+                    Url::parse(&format!("{base_url}/test-{idx}-http/echo/test-message")).unwrap();
                 Request::new(Method::POST, url)
             }),
-            Box::new(|port, idx, _length| {
+            Box::new(|base_url, idx, _length| {
                 let url = Url::parse(&format!(
-                    "http://localhost:{port}/rust/test-{idx}-http/echo/test-message"
+                    "{base_url}/rust/test-{idx}-http/echo/test-message"
                 ))
                 .unwrap();
                 Request::new(Method::POST, url)
@@ -179,21 +180,16 @@ impl Benchmark for ThroughputLargeInput {
                 let bytes = vec![0u8; length];
                 data_value!(bytes)
             }),
-            Box::new(|port, idx, length| {
-                let url = Url::parse(&format!(
-                    "http://localhost:{port}/test-{idx}-http/large-input"
-                ))
-                .unwrap();
+            Box::new(|base_url, idx, length| {
+                let url = Url::parse(&format!("{base_url}/test-{idx}-http/large-input")).unwrap();
                 let json_body = json!({"input": vec![0u8; length]}).to_string();
                 let mut request = Request::new(Method::POST, url);
                 *request.body_mut() = Some(Body::wrap(json_body));
                 request
             }),
-            Box::new(|port, idx, length| {
-                let url = Url::parse(&format!(
-                    "http://localhost:{port}/rust/test-{idx}-http/large-input"
-                ))
-                .unwrap();
+            Box::new(|base_url, idx, length| {
+                let url =
+                    Url::parse(&format!("{base_url}/rust/test-{idx}-http/large-input")).unwrap();
                 let json_body = json!({"input": vec![0u8; length]}).to_string();
                 let mut request = Request::new(Method::POST, url);
                 *request.body_mut() = Some(Body::wrap(json_body));
@@ -282,21 +278,16 @@ impl Benchmark for ThroughputCpuIntensive {
             "cpu_intensive",
             "cpuIntensive",
             Box::new(|length| data_value!(length as f64)),
-            Box::new(|port, idx, length| {
-                let url = Url::parse(&format!(
-                    "http://localhost:{port}/test-{idx}-http/cpu-intensive"
-                ))
-                .unwrap();
+            Box::new(|base_url, idx, length| {
+                let url = Url::parse(&format!("{base_url}/test-{idx}-http/cpu-intensive")).unwrap();
                 let json_body = json!({"length": length}).to_string();
                 let mut request = Request::new(Method::POST, url);
                 *request.body_mut() = Some(Body::wrap(json_body));
                 request
             }),
-            Box::new(|port, idx, length| {
-                let url = Url::parse(&format!(
-                    "http://localhost:{port}/rust/test-{idx}-http/cpu-intensive"
-                ))
-                .unwrap();
+            Box::new(|base_url, idx, length| {
+                let url =
+                    Url::parse(&format!("{base_url}/rust/test-{idx}-http/cpu-intensive")).unwrap();
                 let json_body = json!({"length": length}).to_string();
                 let mut request = Request::new(Method::POST, url);
                 *request.body_mut() = Some(Body::wrap(json_body));
@@ -402,14 +393,20 @@ impl AgentInvocationTarget {
         }
     }
 
-    pub fn prefix(&self, prefix: &str, routing_table: &RoutingTable) -> String {
+    pub fn prefix(&self, prefix: &str, routing_table: &Option<RoutingTable>) -> String {
         match self {
             AgentInvocationTarget::Single { .. } => prefix.to_string(),
             AgentInvocationTarget::Pair { pair, .. } => {
-                if pair.at_same_worker_executor(routing_table) {
-                    format!("{prefix}local-")
+                if let Some(rt) = routing_table {
+                    if pair.at_same_worker_executor(rt) {
+                        format!("{prefix}local-")
+                    } else {
+                        format!("{prefix}remote-")
+                    }
                 } else {
-                    format!("{prefix}remote-")
+                    // Routing table not available (no shard-manager port-forward
+                    // configured); all RPC pairs go into a single unlabeled bucket.
+                    prefix.to_string()
                 }
             }
         }
@@ -426,19 +423,35 @@ pub struct IterationContext {
     rust_agent_ids_for_http: Vec<ParsedAgentId>,
     ts_agent_ids_for_http: Vec<ParsedAgentId>,
     length: usize,
-    routing_table: RoutingTable,
+    /// `None` when shard-manager host/port are not configured (cloud mode
+    /// without port-forward). When `None`, RPC pairs go into a single unlabeled
+    /// bucket instead of being split into local/remote.
+    routing_table: Option<RoutingTable>,
     ts_rpc_agent_id_pairs: Vec<AgentIdPair>,
     rust_rpc_agent_id_pairs: Vec<AgentIdPair>,
+    env_id: EnvironmentId,
 }
+
+/// Type for HTTP request builder closures used by the throughput benchmark.
+/// Receives `(base_url, agent_index, length)` where `base_url` is the full
+/// scheme+host+port prefix (e.g. `http://localhost:8084` in local mode or
+/// `https://myenv.apps.golem.dev` in cloud mode).
+type HttpRequestFn = Box<dyn for<'a> Fn(&'a str, usize, usize) -> Request + Send + Sync + 'static>;
 
 pub struct ThroughputBenchmark {
     rust_method_name: String,
     ts_method_name: String,
     agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
-    http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
-    rust_http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
+    http_request: HttpRequestFn,
+    rust_http_request: HttpRequestFn,
     deps: BenchmarkTestDependencies,
     call_count: usize,
+    /// Pre-built HTTP client for cloud-mode apps-domain calls
+    /// (`https://{env_id}.{apps_base_domain}`).  Cached here so the
+    /// connection pool is warm across benchmark iterations.
+    /// `None` in local/provided mode (client is built per-iteration from the
+    /// custom-request port with a Host header override).
+    cloud_http_client: Option<reqwest::Client>,
 }
 
 fn agent_ids_to_agent_ids(component_id: ComponentId, ids: &[ParsedAgentId]) -> Vec<AgentId> {
@@ -452,8 +465,8 @@ impl ThroughputBenchmark {
         rust_method_name: &str,
         ts_method_name: &str,
         agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
-        http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
-        rust_http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
+        http_request: HttpRequestFn,
+        rust_http_request: HttpRequestFn,
         mode: &TestMode,
         verbosity: Level,
         cluster_size: usize,
@@ -461,21 +474,40 @@ impl ThroughputBenchmark {
         call_count: usize,
         otlp: bool,
     ) -> Self {
+        let deps = BenchmarkTestDependencies::new(
+            mode,
+            verbosity,
+            cluster_size,
+            disable_compilation_cache,
+            otlp,
+        )
+        .await;
+
+        // Build the cloud HTTP client once so the connection pool stays alive
+        // across all benchmark iterations.  In cloud mode requests go to
+        // https://{env_id}.{apps_base_domain}, so we use standard TLS with
+        // ALPN negotiation — NOT http2_prior_knowledge() which is for h2c
+        // (cleartext HTTP/2) and would bypass the ALPN step that the NLB
+        // terminating TLS expects.
+        let cloud_http_client = deps.apps_base_domain().map(|_| {
+            reqwest::ClientBuilder::new()
+                .pool_max_idle_per_host(1024)
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .tcp_nodelay(true)
+                .timeout(std::time::Duration::from_secs(180))
+                .build()
+                .expect("Failed to build cloud HTTP client for throughput benchmark")
+        });
+
         Self {
             rust_method_name: rust_method_name.to_string(),
             ts_method_name: ts_method_name.to_string(),
             agent_params,
             http_request,
             rust_http_request,
-            deps: BenchmarkTestDependencies::new(
-                mode,
-                verbosity,
-                cluster_size,
-                disable_compilation_cache,
-                otlp,
-            )
-            .await,
+            deps,
             call_count,
+            cloud_http_client,
         }
     }
 
@@ -491,13 +523,23 @@ impl ThroughputBenchmark {
         let mut ts_rpc_agent_id_pairs = vec![];
         let mut rust_rpc_agent_id_pairs = vec![];
 
-        let routing_table = self
-            .deps
-            .shard_manager()
-            .get_routing_table()
-            .await
-            .expect("Failed to get routing table");
-        info!("Fetched routing table: {routing_table}");
+        // Fetch routing table when shard-manager is configured; fall back to
+        // None (unlabeled single-bucket RPC) when not configured (e.g. cloud
+        // mode without a port-forward to the shard-manager).
+        let routing_table: Option<RoutingTable> =
+            match self.deps.shard_manager().get_routing_table().await {
+                Ok(rt) => {
+                    info!("Fetched routing table: {rt}");
+                    Some(rt)
+                }
+                Err(err) => {
+                    info!(
+                        "Shard-manager not available, skipping routing table (RPC pairs \
+                         will be unlabeled): {err:#}"
+                    );
+                    None
+                }
+            };
 
         let user = self.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
@@ -542,7 +584,14 @@ impl ThroughputBenchmark {
 
         let client = user.registry_service_client().await;
 
-        let domain = Domain(format!("{}.golem.cloud", env.id));
+        // In cloud mode, use the configured apps_base_domain. Fall back to
+        // "golem.cloud" for local/provided modes.
+        let apps_base_domain = self
+            .deps
+            .apps_base_domain()
+            .unwrap_or("golem.cloud")
+            .to_string();
+        let domain = Domain(format!("{}.{}", env.id, apps_base_domain));
 
         async {
             client
@@ -605,6 +654,7 @@ impl ThroughputBenchmark {
             routing_table,
             ts_rpc_agent_id_pairs,
             rust_rpc_agent_id_pairs,
+            env_id: env.id,
         }
     }
 
@@ -713,7 +763,7 @@ impl ThroughputBenchmark {
     pub async fn run(&self, iteration: &IterationContext, recorder: BenchmarkRecorder) {
         async fn measure_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
-            routing_table: &RoutingTable,
+            routing_table: &Option<RoutingTable>,
             recorder: &BenchmarkRecorder,
             length: usize,
             call_count: usize,
@@ -799,31 +849,42 @@ impl ThroughputBenchmark {
         .instrument(tracing::info_span!("measure_ts_agents"))
         .await;
 
-        let port = self.deps.worker_service().custom_request_port();
-
-        let client = {
-            let mut headers = HeaderMap::new();
-            headers.insert("Host", HeaderValue::from_str(&iteration.domain.0).unwrap());
-            reqwest::Client::builder()
-                .default_headers(headers)
-                .build()
-                .expect("Failed to create HTTP client")
-        };
+        // In cloud mode use the pre-built, cached client (warm connection pool).
+        // In local/provided mode build a fresh client with the explicit Host
+        // header pointing at the custom-request port on localhost.
+        let (http_base_url, client): (String, reqwest::Client) =
+            if let Some(ref cached) = self.cloud_http_client {
+                let base = format!("https://{}", iteration.domain.0);
+                (base, cached.clone())
+            } else {
+                // Local/provided mode: connect to localhost with Host header.
+                let port = self.deps.worker_service().custom_request_port();
+                let base = format!("http://localhost:{port}");
+                let mut headers = HeaderMap::new();
+                headers.insert("Host", HeaderValue::from_str(&iteration.domain.0).unwrap());
+                let c = reqwest::Client::builder()
+                    .default_headers(headers)
+                    .build()
+                    .expect("Failed to create HTTP client");
+                (base, c)
+            };
 
         async {
             let client = client.clone();
+            let base = http_base_url.clone();
             let result_futures = iteration
                 .rust_agent_ids_for_http
                 .iter()
                 .enumerate()
                 .map(move |(idx, _agent_id)| {
                     let client = client.clone();
+                    let base = base.clone();
                     async move {
                         let mut results = vec![];
                         for _ in 0..self.call_count {
                             results.push(
                                 invoke_and_await_http(client.clone(), || {
-                                    (self.rust_http_request)(port, idx, iteration.length)
+                                    (self.rust_http_request)(&base, idx, iteration.length)
                                 })
                                 .await,
                             )
@@ -850,12 +911,13 @@ impl ThroughputBenchmark {
                 .enumerate()
                 .map(move |(idx, _agent_id)| {
                     let client = client.clone();
+                    let base = http_base_url.clone();
                     async move {
                         let mut results = vec![];
                         for _ in 0..self.call_count {
                             results.push(
                                 invoke_and_await_http(client.clone(), || {
-                                    (self.http_request)(port, idx, iteration.length)
+                                    (self.http_request)(&base, idx, iteration.length)
                                 })
                                 .await,
                             )
@@ -969,5 +1031,6 @@ impl ThroughputBenchmark {
             }
         }
         delete_workers(&iteration.user, &rust_rpc_workers).await;
+        cleanup_user_state(&iteration.user, &iteration.env_id).await;
     }
 }

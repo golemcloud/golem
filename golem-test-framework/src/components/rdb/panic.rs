@@ -12,12 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod panic;
-pub mod provided;
-pub mod spawned;
+use super::{DbInfo, Rdb};
+use async_trait::async_trait;
 
-pub trait RedisMonitor: Send + Sync {
-    fn assert_valid(&self);
+/// Panic-on-use stub for `Rdb`. Used in cloud mode where no direct database
+/// access is available. Operational methods panic; lifecycle teardown (`kill`)
+/// is a no-op so that `BenchmarkTestDependencies::kill_all()` completes safely.
+pub struct PanicRdb;
 
-    fn kill(&self);
+#[async_trait]
+impl Rdb for PanicRdb {
+    fn info(&self) -> DbInfo {
+        panic!("rdb() is not available in cloud mode");
+    }
+
+    async fn kill(&self) {
+        // no-op: cloud mode has no local database process to kill
+    }
 }

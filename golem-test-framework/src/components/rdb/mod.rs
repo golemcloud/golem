@@ -28,6 +28,7 @@ pub mod borrowed_sqlite;
 pub mod docker_ignite;
 pub mod docker_mysql;
 pub mod docker_postgres;
+pub mod panic;
 pub mod provided_postgres;
 pub mod sqlite;
 

@@ -19,6 +19,7 @@ use std::process::Child;
 use std::time::Duration;
 use tracing::Level;
 
+pub mod panic;
 pub mod provided;
 pub mod spawned;
 
