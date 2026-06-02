@@ -15,6 +15,7 @@ path = "src/lib.rs"
 # To use common shared agent definitions, place them in common_lib and uncomment the line below
 # common-lib = { path = "../../common-rust/common-lib" }
 
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 log = { version = "0.4.29", features = ["kv"] }
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 serde = { version = "1", features = ["derive"] }

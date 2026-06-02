@@ -450,6 +450,7 @@ impl TestDsl for TestWorkerExecutor {
         agent_id: &ParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         _deployment_revision: Option<DeploymentRevision>,
+        principal: Option<golem_common::model::agent::Principal>,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
@@ -473,7 +474,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 context: None,
-                principal: None,
+                principal: principal.map(Into::into),
             })
             .await;
 
