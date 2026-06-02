@@ -274,7 +274,14 @@ impl InteractiveHandler {
     ) -> anyhow::Result<bool> {
         let rendered_agent_name = match parsed_agent_id {
             Some(parsed) if source_language.is_known() => {
-                crate::agent_id_display::render_agent_id(parsed, source_language)
+                // Adapt LegacyParsedAgentId at the boundary into the schema-layer
+                // ParsedAgentId before calling the schema-typed renderer.
+                match golem_common::schema::adapters::legacy_parsed_agent_id_to_schema(parsed) {
+                    Ok(parsed_schema) => {
+                        crate::agent_id_display::render_agent_id(&parsed_schema, source_language)
+                    }
+                    Err(_) => agent_name.0.clone(),
+                }
             }
             _ => agent_name.0.clone(),
         };

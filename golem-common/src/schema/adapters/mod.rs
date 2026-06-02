@@ -43,11 +43,12 @@ pub mod value;
 
 pub use agent::{
     agent_constructor_to_schema, agent_dependency_to_schema, agent_method_to_schema,
-    agent_type_to_schema, schema_agent_constructor_to_legacy, schema_agent_dependency_to_legacy,
-    schema_agent_method_to_legacy, schema_agent_type_to_legacy,
+    agent_type_to_schema, legacy_data_value_to_typed_schema_value,
+    legacy_parsed_agent_id_to_schema, schema_agent_constructor_to_legacy,
+    schema_agent_dependency_to_legacy, schema_agent_method_to_legacy, schema_agent_type_to_legacy,
 };
 pub use analysed_type::{
-    analysed_type_to_schema_graph, analysed_type_to_schema_type_inline,
+    SchemaGraphBuilder, analysed_type_to_schema_graph, analysed_type_to_schema_type_inline,
     schema_graph_to_analysed_type, schema_type_to_analysed_type,
 };
 pub use data_schema::{

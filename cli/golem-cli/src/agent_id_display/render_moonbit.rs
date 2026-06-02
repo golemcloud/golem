@@ -12,250 +12,219 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::{
-    BinaryReference, BinarySource, ComponentModelElementValue, DataValue, ElementValue,
-    NamedElementValues, TextReference, TextSource, UnstructuredBinaryElementValue,
-    UnstructuredTextElementValue, text_utils::write_json_escaped,
-};
-use golem_wasm::Value;
-use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant};
+use super::{render_rich_constructor, render_rich_constructor2, resolve_named_ref};
+use golem_common::model::agent::text_utils::write_json_escaped;
+use golem_common::schema::canonical;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
+use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, UnionValuePayload};
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use std::fmt::Write;
 
-pub(super) fn render_value_and_type_moonbit(vat: &golem_wasm::ValueAndType) -> String {
+pub(super) fn render_value_moonbit(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    value: &SchemaValue,
+) -> String {
     let mut buf = String::new();
-    render_cm_value(&mut buf, &vat.value, &vat.typ);
+    render_cm_value(&mut buf, graph, ty, value);
     buf
 }
 
-pub fn render_data_value_moonbit(data_value: &DataValue) -> String {
-    let mut buf = String::new();
-    match data_value {
-        DataValue::Tuple(elems) => {
-            for (i, elem) in elems.elements.iter().enumerate() {
-                if i > 0 {
-                    buf.push_str(", ");
-                }
-                render_element_value(&mut buf, elem);
-            }
-        }
-        DataValue::Multimodal(NamedElementValues { elements }) => {
-            for (i, named) in elements.iter().enumerate() {
-                if i > 0 {
-                    buf.push_str(", ");
-                }
-                let _ = write!(buf, "{}: ", named.name.to_snake_case());
-                render_element_value(&mut buf, &named.value);
-            }
-        }
-    }
-    buf
+fn render_cm_value(buf: &mut String, graph: &SchemaGraph, ty: &SchemaType, value: &SchemaValue) {
+    let (resolved, def_name) = resolve_named_ref(graph, ty);
+    render_cm_value_inner(buf, graph, resolved, def_name.as_deref(), value);
 }
 
-fn render_element_value(buf: &mut String, elem: &ElementValue) {
-    match elem {
-        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
-            render_cm_value(buf, &value.value, &value.typ);
-        }
-        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
-            render_unstructured_text(buf, value);
-        }
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
-            render_unstructured_binary(buf, value);
-        }
-    }
-}
-
-fn render_unstructured_text(buf: &mut String, value: &TextReference) {
-    match value {
-        TextReference::Url(url) => {
-            buf.push_str("UnstructuredText::Url(\"");
-            write_json_escaped(buf, &url.value);
-            buf.push_str("\")");
-        }
-        TextReference::Inline(TextSource {
-            data,
-            text_type: None,
-        }) => {
-            buf.push_str("UnstructuredText::from_inline_any(\"");
-            write_json_escaped(buf, data);
-            buf.push_str("\")");
-        }
-        TextReference::Inline(TextSource {
-            data,
-            text_type: Some(tt),
-        }) => {
-            buf.push_str("UnstructuredText::from_inline(\"");
-            write_json_escaped(buf, data);
-            let _ = write!(buf, "\", Languages::{})", tt.language_code);
-        }
-    }
-}
-
-fn render_unstructured_binary(buf: &mut String, value: &BinaryReference) {
-    match value {
-        BinaryReference::Url(url) => {
-            buf.push_str("UnstructuredBinary::from_url(\"");
-            write_json_escaped(buf, &url.value);
-            buf.push_str("\")");
-        }
-        BinaryReference::Inline(BinarySource { data, binary_type }) => {
-            buf.push_str("UnstructuredBinary::from_inline(Bytes::from_array([");
-            for (i, b) in data.iter().enumerate() {
-                if i > 0 {
-                    buf.push_str(", ");
-                }
-                let _ = write!(buf, "{b}");
-            }
-            let _ = write!(buf, "]), MimeTypes::{})", binary_type.mime_type);
-        }
-    }
-}
-
-fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
-    match (value, typ) {
-        (Value::Bool(b), _) => {
+fn render_cm_value_inner(
+    buf: &mut String,
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    def_name: Option<&str>,
+    value: &SchemaValue,
+) {
+    match (ty, value) {
+        (SchemaType::Bool { .. }, SchemaValue::Bool(b)) => {
             let _ = write!(buf, "{b}");
         }
-        (Value::U8(v), _) => {
+        (SchemaType::U8 { .. }, SchemaValue::U8(v)) => {
             let _ = write!(buf, "{v}");
         }
-        (Value::U16(v), _) => {
+        (SchemaType::U16 { .. }, SchemaValue::U16(v)) => {
             let _ = write!(buf, "{v}");
         }
-        (Value::U32(v), _) => {
+        (SchemaType::U32 { .. }, SchemaValue::U32(v)) => {
             let _ = write!(buf, "{v}");
         }
-        (Value::U64(v), _) => {
+        (SchemaType::U64 { .. }, SchemaValue::U64(v)) => {
             let _ = write!(buf, "{v}");
         }
-        (Value::S8(v), _) => {
+        (SchemaType::S8 { .. }, SchemaValue::S8(v)) => {
             let _ = write!(buf, "{v}");
         }
-        (Value::S16(v), _) => {
+        (SchemaType::S16 { .. }, SchemaValue::S16(v)) => {
             let _ = write!(buf, "{v}");
         }
-        (Value::S32(v), _) => {
+        (SchemaType::S32 { .. }, SchemaValue::S32(v)) => {
             let _ = write!(buf, "{v}");
         }
-        (Value::S64(v), _) => {
+        (SchemaType::S64 { .. }, SchemaValue::S64(v)) => {
             let _ = write!(buf, "{v}");
         }
-        (Value::F32(v), _) => render_f64(buf, *v as f64),
-        (Value::F64(v), _) => render_f64(buf, *v),
-        (Value::Char(c), _) => render_char(buf, *c),
-        (Value::String(s), _) => {
+        (SchemaType::F32 { .. }, SchemaValue::F32(v)) => render_f64(buf, *v as f64),
+        (SchemaType::F64 { .. }, SchemaValue::F64(v)) => render_f64(buf, *v),
+        (SchemaType::Char { .. }, SchemaValue::Char(c)) => render_char(buf, *c),
+        (SchemaType::String { .. }, SchemaValue::String(s)) => {
             buf.push('"');
             write_json_escaped(buf, s);
             buf.push('"');
         }
-        (Value::List(items), AnalysedType::List(tl)) => {
+        (SchemaType::List { element, .. }, SchemaValue::List { elements }) => {
             buf.push('[');
-            for (i, item) in items.iter().enumerate() {
+            for (i, item) in elements.iter().enumerate() {
                 if i > 0 {
                     buf.push_str(", ");
                 }
-                render_cm_value(buf, item, &tl.inner);
+                render_cm_value(buf, graph, element, item);
             }
             buf.push(']');
         }
-        (Value::Tuple(items), AnalysedType::Tuple(tt)) => {
-            buf.push('(');
-            for (i, item) in items.iter().enumerate() {
+        (SchemaType::FixedList { element, .. }, SchemaValue::FixedList { elements }) => {
+            buf.push('[');
+            for (i, item) in elements.iter().enumerate() {
                 if i > 0 {
                     buf.push_str(", ");
                 }
-                render_cm_value(buf, item, &tt.items[i]);
+                render_cm_value(buf, graph, element, item);
+            }
+            buf.push(']');
+        }
+        (SchemaType::Tuple { elements, .. }, SchemaValue::Tuple { elements: vs }) => {
+            buf.push('(');
+            for (i, (t, v)) in elements.iter().zip(vs.iter()).enumerate() {
+                if i > 0 {
+                    buf.push_str(", ");
+                }
+                render_cm_value(buf, graph, t, v);
             }
             buf.push(')');
         }
-        (Value::Record(fields), AnalysedType::Record(tr)) => {
-            if let Some(name) = &tr.name {
+        (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: vs }) => {
+            if let Some(name) = def_name {
                 let _ = write!(buf, "{}::", name.to_upper_camel_case());
             }
             buf.push_str("{ ");
-            for (i, (val, field)) in fields.iter().zip(tr.fields.iter()).enumerate() {
+            for (i, (field, val)) in fields.iter().zip(vs.iter()).enumerate() {
                 if i > 0 {
                     buf.push_str(", ");
                 }
                 let _ = write!(buf, "{}: ", field.name.to_snake_case());
-                render_cm_value(buf, val, &field.typ);
+                render_cm_value(buf, graph, &field.body, val);
             }
             buf.push_str(" }");
         }
-        (
-            Value::Variant {
-                case_idx,
-                case_value,
-            },
-            AnalysedType::Variant(tv),
-        ) => {
-            let case = &tv.cases[*case_idx as usize];
+        (SchemaType::Variant { cases, .. }, SchemaValue::Variant(p)) => {
+            let case = &cases[p.case as usize];
             let case_name = case.name.to_upper_camel_case();
-            if let Some(name) = &tv.name {
+            if let Some(name) = def_name {
                 let _ = write!(buf, "{}::", name.to_upper_camel_case());
             }
-            match (case_value, &case.typ) {
+            match (&p.payload, &case.payload) {
                 (Some(v), Some(t)) => {
                     let _ = write!(buf, "{case_name}(");
-                    render_cm_value(buf, v, t);
+                    render_cm_value(buf, graph, t, v);
                     buf.push(')');
                 }
                 _ => buf.push_str(&case_name),
             }
         }
-        (Value::Enum(idx), AnalysedType::Enum(te)) => {
-            let case_name = te.cases[*idx as usize].to_upper_camel_case();
-            if let Some(name) = &te.name {
+        (SchemaType::Enum { cases, .. }, SchemaValue::Enum { case }) => {
+            let case_name = cases[*case as usize].to_upper_camel_case();
+            if let Some(name) = def_name {
                 let _ = write!(buf, "{}::{case_name}", name.to_upper_camel_case());
             } else {
                 buf.push_str(&case_name);
             }
         }
-        (Value::Option(inner), AnalysedType::Option(to)) => match inner {
-            Some(v) => {
+        (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: v }) => match v {
+            Some(payload) => {
                 buf.push_str("Some(");
-                render_cm_value(buf, v, &to.inner);
+                render_cm_value(buf, graph, inner, payload);
                 buf.push(')');
             }
             None => buf.push_str("None"),
         },
-        (Value::Result(result), AnalysedType::Result(tr)) => match result {
-            Ok(ok_val) => match ok_val {
-                Some(v) => {
-                    buf.push_str("Ok(");
-                    if let Some(ok_typ) = &tr.ok {
-                        render_cm_value(buf, v, ok_typ);
-                    }
-                    buf.push(')');
-                }
-                None => buf.push_str("Ok(())"),
-            },
-            Err(err_val) => match err_val {
-                Some(v) => {
-                    buf.push_str("Err(");
-                    if let Some(err_typ) = &tr.err {
-                        render_cm_value(buf, v, err_typ);
-                    }
-                    buf.push(')');
-                }
-                None => buf.push_str("Err(())"),
-            },
-        },
-        (Value::Flags(flags), AnalysedType::Flags(tf)) => {
-            if let Some(name) = &tf.name {
+        (SchemaType::Result { spec, .. }, SchemaValue::Result(p)) => {
+            render_result(buf, graph, spec, p);
+        }
+        (SchemaType::Flags { flags, .. }, SchemaValue::Flags { bits }) => {
+            if let Some(name) = def_name {
                 let _ = write!(buf, "{}::", name.to_upper_camel_case());
             }
             buf.push_str("{ ");
             let mut first = true;
-            for (set, flag_name) in flags.iter().zip(tf.names.iter()) {
+            for (set, name) in bits.iter().zip(flags.iter()) {
                 if *set {
                     if !first {
                         buf.push_str(", ");
                     }
-                    buf.push_str(&flag_name.to_snake_case());
+                    buf.push_str(&name.to_snake_case());
                     first = false;
                 }
+            }
+            buf.push_str(" }");
+        }
+        // Rich semantic types render as constructor calls `Name("body")`,
+        // matching MoonBit constructor-call syntax and round-tripping
+        // through the shared lexer's quoted-string handling.
+        (SchemaType::Text { .. }, SchemaValue::Text(p)) => {
+            render_rich_constructor2(buf, "Text", &p.text, p.language.as_deref());
+        }
+        (SchemaType::Binary { .. }, SchemaValue::Binary(p)) => {
+            let s = canonical::binary::to_text(p).unwrap_or_else(|_| "<binary>".to_string());
+            render_rich_constructor(buf, "Binary", &s);
+        }
+        (SchemaType::Path { .. }, SchemaValue::Path { path }) => {
+            let s = canonical::path::to_text(path).unwrap_or_else(|_| path.clone());
+            render_rich_constructor(buf, "Path", &s);
+        }
+        (SchemaType::Url { .. }, SchemaValue::Url { url }) => {
+            let s = canonical::url::to_text(url).unwrap_or_else(|_| url.clone());
+            render_rich_constructor(buf, "Url", &s);
+        }
+        (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
+            let s = canonical::datetime::to_text(value).unwrap_or_else(|_| value.to_string());
+            render_rich_constructor(buf, "Datetime", &s);
+        }
+        (SchemaType::Duration { .. }, SchemaValue::Duration(p)) => {
+            render_rich_constructor(buf, "Duration", &canonical::duration::to_text(p));
+        }
+        (SchemaType::Quantity { .. }, SchemaValue::Quantity(q)) => {
+            let s = canonical::quantity::to_text(q).unwrap_or_else(|_| "<quantity>".to_string());
+            render_rich_constructor(buf, "Quantity", &s);
+        }
+        (SchemaType::Secret { .. }, SchemaValue::Secret(_))
+        | (SchemaType::QuotaToken { .. }, SchemaValue::QuotaToken(_)) => {
+            buf.push_str("<redacted>");
+        }
+        (SchemaType::Union { spec, .. }, SchemaValue::Union(UnionValuePayload { tag, body })) => {
+            if let Some(branch) = spec.branches.iter().find(|b| &b.tag == tag) {
+                let _ = write!(buf, "{}(", tag);
+                render_cm_value(buf, graph, &branch.body, body);
+                buf.push(')');
+            } else {
+                buf.push_str("<unknown-union-branch>");
+            }
+        }
+        (SchemaType::Map { key, value, .. }, SchemaValue::Map { entries }) => {
+            buf.push_str("{ ");
+            for (i, (k, v)) in entries.iter().enumerate() {
+                if i > 0 {
+                    buf.push_str(", ");
+                }
+                render_cm_value(buf, graph, key, k);
+                buf.push_str(" => ");
+                render_cm_value(buf, graph, value, v);
             }
             buf.push_str(" }");
         }
@@ -263,65 +232,166 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
     }
 }
 
-pub fn render_type_moonbit(typ: &AnalysedType, prefer_name: bool) -> String {
-    match typ {
-        AnalysedType::Bool(_) => "Bool".to_string(),
-        AnalysedType::S8(_) | AnalysedType::S16(_) | AnalysedType::S32(_) => "Int".to_string(),
-        AnalysedType::S64(_) => "Int64".to_string(),
-        AnalysedType::U8(_) | AnalysedType::U16(_) | AnalysedType::U32(_) => "UInt".to_string(),
-        AnalysedType::U64(_) => "UInt64".to_string(),
-        AnalysedType::F32(_) => "Float".to_string(),
-        AnalysedType::F64(_) => "Double".to_string(),
-        AnalysedType::Chr(_) => "Char".to_string(),
-        AnalysedType::Str(_) => "String".to_string(),
-        AnalysedType::Option(to) => {
-            format!("{}?", render_type_moonbit(&to.inner, prefer_name))
-        }
-        AnalysedType::List(tl) => {
-            format!("Array[{}]", render_type_moonbit(&tl.inner, prefer_name))
-        }
-        AnalysedType::Result(tr) => {
-            let ok = tr
-                .ok
-                .as_ref()
-                .map(|t| render_type_moonbit(t, prefer_name))
-                .unwrap_or_else(|| "Unit".to_string());
-            let err = tr
-                .err
-                .as_ref()
-                .map(|t| render_type_moonbit(t, prefer_name))
-                .unwrap_or_else(|| "Unit".to_string());
-            format!("Result[{ok}, {err}]")
-        }
-        AnalysedType::Tuple(tt) => render_type_tuple_moonbit(tt, prefer_name),
-        AnalysedType::Record(tr) => render_type_record_moonbit(tr, prefer_name),
-        AnalysedType::Variant(tv) => render_type_variant_moonbit(tv, prefer_name),
-        AnalysedType::Enum(te) => render_type_enum_moonbit(te, prefer_name),
-        AnalysedType::Flags(tf) => render_type_flags_moonbit(tf, prefer_name),
-        AnalysedType::Handle(_) => {
-            panic!("Handle types are not supported in type rendering")
-        }
+fn render_result(
+    buf: &mut String,
+    graph: &SchemaGraph,
+    spec: &ResultSpec,
+    payload: &ResultValuePayload,
+) {
+    match payload {
+        ResultValuePayload::Ok { value } => match value {
+            Some(v) => {
+                buf.push_str("Ok(");
+                if let Some(ok_ty) = &spec.ok {
+                    render_cm_value(buf, graph, ok_ty, v);
+                }
+                buf.push(')');
+            }
+            None => buf.push_str("Ok(())"),
+        },
+        ResultValuePayload::Err { value } => match value {
+            Some(v) => {
+                buf.push_str("Err(");
+                if let Some(err_ty) = &spec.err {
+                    render_cm_value(buf, graph, err_ty, v);
+                }
+                buf.push(')');
+            }
+            None => buf.push_str("Err(())"),
+        },
     }
 }
 
-fn render_type_tuple_moonbit(tt: &TypeTuple, prefer_name: bool) -> String {
+pub fn render_type_moonbit(graph: &SchemaGraph, ty: &SchemaType, prefer_name: bool) -> String {
+    let (resolved, def_name) = resolve_named_ref(graph, ty);
+    render_type_moonbit_inner(graph, resolved, def_name.as_deref(), prefer_name)
+}
+
+fn render_type_moonbit_inner(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    def_name: Option<&str>,
+    prefer_name: bool,
+) -> String {
+    if prefer_name
+        && let Some(name) = def_name
+        && matches!(
+            ty,
+            SchemaType::Record { .. }
+                | SchemaType::Variant { .. }
+                | SchemaType::Enum { .. }
+                | SchemaType::Flags { .. }
+        )
+    {
+        return name.to_upper_camel_case();
+    }
+    match ty {
+        SchemaType::Bool { .. } => "Bool".to_string(),
+        SchemaType::S8 { .. } | SchemaType::S16 { .. } | SchemaType::S32 { .. } => {
+            "Int".to_string()
+        }
+        SchemaType::S64 { .. } => "Int64".to_string(),
+        SchemaType::U8 { .. } | SchemaType::U16 { .. } | SchemaType::U32 { .. } => {
+            "UInt".to_string()
+        }
+        SchemaType::U64 { .. } => "UInt64".to_string(),
+        SchemaType::F32 { .. } => "Float".to_string(),
+        SchemaType::F64 { .. } => "Double".to_string(),
+        SchemaType::Char { .. } => "Char".to_string(),
+        SchemaType::String { .. } => "String".to_string(),
+        SchemaType::Option { inner, .. } => {
+            format!("{}?", render_type_moonbit(graph, inner, prefer_name))
+        }
+        SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            format!(
+                "Array[{}]",
+                render_type_moonbit(graph, element, prefer_name)
+            )
+        }
+        SchemaType::Map { key, value, .. } => format!(
+            "Map[{}, {}]",
+            render_type_moonbit(graph, key, prefer_name),
+            render_type_moonbit(graph, value, prefer_name)
+        ),
+        SchemaType::Result { spec, .. } => {
+            let ok = spec
+                .ok
+                .as_deref()
+                .map(|t| render_type_moonbit(graph, t, prefer_name))
+                .unwrap_or_else(|| "Unit".to_string());
+            let err = spec
+                .err
+                .as_deref()
+                .map(|t| render_type_moonbit(graph, t, prefer_name))
+                .unwrap_or_else(|| "Unit".to_string());
+            format!("Result[{ok}, {err}]")
+        }
+        SchemaType::Tuple { elements, .. } => {
+            render_type_tuple_moonbit(graph, elements, prefer_name)
+        }
+        SchemaType::Record { fields, .. } => render_type_record_moonbit(graph, fields, prefer_name),
+        SchemaType::Variant { cases, .. } => render_type_variant_moonbit(graph, cases, prefer_name),
+        SchemaType::Enum { cases, .. } => render_type_enum_moonbit(cases),
+        SchemaType::Flags { flags, .. } => render_type_flags_moonbit(flags),
+        SchemaType::Text { .. } => "text".to_string(),
+        SchemaType::Binary { .. } => "binary".to_string(),
+        SchemaType::Path { .. } => "path".to_string(),
+        SchemaType::Url { .. } => "url".to_string(),
+        SchemaType::Datetime { .. } => "datetime".to_string(),
+        SchemaType::Duration { .. } => "duration".to_string(),
+        SchemaType::Quantity { .. } => "quantity".to_string(),
+        SchemaType::Secret { .. } => "secret".to_string(),
+        SchemaType::QuotaToken { .. } => "quota-token".to_string(),
+        SchemaType::Union { spec, .. } => {
+            let inner = spec
+                .branches
+                .iter()
+                .map(|b| {
+                    format!(
+                        "{}({})",
+                        b.tag,
+                        render_type_moonbit(graph, &b.body, prefer_name)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            format!("union {{ {inner} }}")
+        }
+        SchemaType::Future { inner, .. } => match inner {
+            None => "future".to_string(),
+            Some(t) => format!("future<{}>", render_type_moonbit(graph, t, prefer_name)),
+        },
+        SchemaType::Stream { inner, .. } => match inner {
+            None => "stream".to_string(),
+            Some(t) => format!("stream<{}>", render_type_moonbit(graph, t, prefer_name)),
+        },
+        SchemaType::Ref { id, .. } => id.0.clone(),
+    }
+}
+
+fn render_type_tuple_moonbit(
+    graph: &SchemaGraph,
+    elements: &[SchemaType],
+    prefer_name: bool,
+) -> String {
     let mut buf = String::from("(");
-    for (i, item) in tt.items.iter().enumerate() {
+    for (i, item) in elements.iter().enumerate() {
         if i > 0 {
             buf.push_str(", ");
         }
-        buf.push_str(&render_type_moonbit(item, prefer_name));
+        buf.push_str(&render_type_moonbit(graph, item, prefer_name));
     }
     buf.push(')');
     buf
 }
 
-fn render_type_record_moonbit(tr: &TypeRecord, prefer_name: bool) -> String {
-    if prefer_name && let Some(name) = &tr.name {
-        return name.to_upper_camel_case();
-    }
+fn render_type_record_moonbit(
+    graph: &SchemaGraph,
+    fields: &[NamedFieldType],
+    prefer_name: bool,
+) -> String {
     let mut buf = String::from("{ ");
-    for (i, field) in tr.fields.iter().enumerate() {
+    for (i, field) in fields.iter().enumerate() {
         if i > 0 {
             buf.push_str(", ");
         }
@@ -329,24 +399,25 @@ fn render_type_record_moonbit(tr: &TypeRecord, prefer_name: bool) -> String {
             buf,
             "{}: {}",
             field.name.to_snake_case(),
-            render_type_moonbit(&field.typ, prefer_name)
+            render_type_moonbit(graph, &field.body, prefer_name)
         );
     }
     buf.push_str(" }");
     buf
 }
 
-fn render_type_variant_moonbit(tv: &TypeVariant, prefer_name: bool) -> String {
-    if prefer_name && let Some(name) = &tv.name {
-        return name.to_upper_camel_case();
-    }
+fn render_type_variant_moonbit(
+    graph: &SchemaGraph,
+    cases: &[VariantCaseType],
+    prefer_name: bool,
+) -> String {
     let mut parts = Vec::new();
-    for case in &tv.cases {
+    for case in cases {
         let case_name = case.name.to_upper_camel_case();
-        if let Some(t) = &case.typ {
+        if let Some(t) = &case.payload {
             parts.push(format!(
                 "{case_name}({})",
-                render_type_moonbit(t, prefer_name)
+                render_type_moonbit(graph, t, prefer_name)
             ));
         } else {
             parts.push(case_name);
@@ -355,12 +426,9 @@ fn render_type_variant_moonbit(tv: &TypeVariant, prefer_name: bool) -> String {
     parts.join(" | ")
 }
 
-fn render_type_enum_moonbit(te: &TypeEnum, prefer_name: bool) -> String {
-    if prefer_name && let Some(name) = &te.name {
-        return name.to_upper_camel_case();
-    }
+fn render_type_enum_moonbit(cases: &[String]) -> String {
     let mut buf = String::from("enum { ");
-    for (i, case) in te.cases.iter().enumerate() {
+    for (i, case) in cases.iter().enumerate() {
         if i > 0 {
             buf.push_str(", ");
         }
@@ -370,12 +438,9 @@ fn render_type_enum_moonbit(te: &TypeEnum, prefer_name: bool) -> String {
     buf
 }
 
-fn render_type_flags_moonbit(tf: &TypeFlags, prefer_name: bool) -> String {
-    if prefer_name && let Some(name) = &tf.name {
-        return name.to_upper_camel_case();
-    }
+fn render_type_flags_moonbit(flags: &[String]) -> String {
     let mut buf = String::from("flags { ");
-    for (i, flag) in tf.names.iter().enumerate() {
+    for (i, flag) in flags.iter().enumerate() {
         if i > 0 {
             buf.push_str(", ");
         }

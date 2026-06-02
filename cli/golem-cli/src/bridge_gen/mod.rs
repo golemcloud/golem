@@ -12,6 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Bridge SDK generators for the Rust and TypeScript client targets.
+//!
+//! The internal walkers in [`rust`] and [`typescript`] operate on the
+//! schema layer ([`golem_common::schema::SchemaType`] /
+//! [`golem_common::schema::graph::SchemaGraph`]) — [`type_naming::TypeNaming`]
+//! keys generated names by [`SchemaType`](golem_common::schema::schema_type::SchemaType)
+//! structural identity, with named legacy composites carried as
+//! [`SchemaType::Ref`](golem_common::schema::schema_type::SchemaType::Ref)
+//! against a shared graph imported via
+//! [`analysed_type_to_schema_graph`](golem_common::schema::adapters::analysed_type::analysed_type_to_schema_graph).
+//!
+//! The public entry point ([`BridgeGenerator::new`]) still takes a legacy
+//! [`AgentType`] from the agent declaration; the generator converts each
+//! reachable [`AnalysedType`](golem_wasm::analysis::AnalysedType) into a
+//! [`SchemaType`](golem_common::schema::schema_type::SchemaType) at the call
+//! site of the walker. The string templates the generators emit continue to
+//! reference the legacy `golem_wasm::analysis::AnalysedType` /
+//! `golem_wasm::Value` surface plus the `IntoValue` / `FromValue` traits —
+//! that is the SDK contract this generator targets. When the walker needs to
+//! embed a legacy `AnalysedType` literal it projects the schema body back
+//! via [`schema_type_to_analysed_type`](golem_common::schema::adapters::analysed_type::schema_type_to_analysed_type)
+//! at the emission point.
+
 pub mod parameter_naming;
 pub mod rust;
 pub mod type_naming;

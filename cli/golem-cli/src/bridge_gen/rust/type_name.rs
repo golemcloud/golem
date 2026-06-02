@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::bridge_gen::type_naming::TypeName;
-use golem_wasm::analysis::AnalysedType;
+use golem_common::schema::schema_type::SchemaType;
 use heck::ToUpperCamelCase;
 use itertools::Itertools;
 use std::fmt::{Display, Formatter};
@@ -51,7 +51,7 @@ impl Display for RustTypeName {
 }
 
 impl TypeName for RustTypeName {
-    fn from_analysed_type(_typ: &AnalysedType) -> Option<Self> {
+    fn from_schema_type(_typ: &SchemaType) -> Option<Self> {
         // NOTE: custom remapping can be added here later
         None
     }
@@ -86,30 +86,47 @@ impl TypeName for RustTypeName {
             .into()
     }
 
-    fn requires_type_name(typ: &AnalysedType) -> bool {
+    fn requires_type_name(typ: &SchemaType) -> bool {
         match typ {
-            AnalysedType::Variant(_)
-            | AnalysedType::Enum(_)
-            | AnalysedType::Flags(_)
-            | AnalysedType::Record(_) => true,
-            AnalysedType::Result(_)
-            | AnalysedType::Option(_)
-            | AnalysedType::Tuple(_)
-            | AnalysedType::List(_)
-            | AnalysedType::Str(_)
-            | AnalysedType::Chr(_)
-            | AnalysedType::F64(_)
-            | AnalysedType::F32(_)
-            | AnalysedType::U64(_)
-            | AnalysedType::S64(_)
-            | AnalysedType::U32(_)
-            | AnalysedType::S32(_)
-            | AnalysedType::U16(_)
-            | AnalysedType::S16(_)
-            | AnalysedType::U8(_)
-            | AnalysedType::S8(_)
-            | AnalysedType::Bool(_)
-            | AnalysedType::Handle(_) => false,
+            // Refs always carry a generated name.
+            SchemaType::Ref { .. } => true,
+            // Inline composites that benefit from a generated alias /
+            // struct / enum.
+            SchemaType::Variant { .. }
+            | SchemaType::Enum { .. }
+            | SchemaType::Flags { .. }
+            | SchemaType::Record { .. } => true,
+            SchemaType::Result { .. }
+            | SchemaType::Option { .. }
+            | SchemaType::Tuple { .. }
+            | SchemaType::List { .. }
+            | SchemaType::Bool { .. }
+            | SchemaType::S8 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::S64 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::U64 { .. }
+            | SchemaType::F32 { .. }
+            | SchemaType::F64 { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::String { .. }
+            | SchemaType::FixedList { .. }
+            | SchemaType::Map { .. }
+            | SchemaType::Text { .. }
+            | SchemaType::Binary { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. }
+            | SchemaType::Duration { .. }
+            | SchemaType::Quantity { .. }
+            | SchemaType::Union { .. }
+            | SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { .. } => false,
         }
     }
 }

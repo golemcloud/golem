@@ -35,7 +35,7 @@ use crate::base_model::agent::{
     NamedElementSchemas, TextDescriptor, TextType,
 };
 use crate::schema::adapters::analysed_type::{
-    analysed_type_to_schema_graph, analysed_type_to_schema_type_inline,
+    SchemaGraphBuilder, analysed_type_to_schema_graph, analysed_type_to_schema_type_inline,
     schema_graph_to_analysed_type, schema_type_to_analysed_type,
 };
 use crate::schema::adapters::data_schema::{
@@ -86,17 +86,271 @@ fn legacy_type_id_bare_name() {
 }
 
 #[test]
-fn legacy_type_id_owner_without_name_is_error() {
-    let err = legacy_type_id(Some("a"), None).unwrap_err();
-    assert!(matches!(
-        err,
-        SchemaAdapterError::UnsupportedLegacyMetadata(_)
-    ));
+fn legacy_type_id_owner_without_name_is_anonymous() {
+    // An unanchored owner has nowhere to live in a dotted TypeId, so the
+    // adapter drops it and treats the type as anonymous inline. The
+    // TypeScript SDK emits this shape for built-in containers (`Result`,
+    // `Tuple`, ...) where `owner` is decorative provenance.
+    assert!(legacy_type_id(Some("a"), None).unwrap().is_none());
 }
 
 #[test]
 fn legacy_type_id_none() {
     assert!(legacy_type_id(None, None).unwrap().is_none());
+}
+
+#[test]
+fn analysed_type_to_schema_graph_disambiguates_same_name_distinct_bodies() {
+    // Two `AnalysedType::Variant` values share `name = "Bound"` but carry
+    // structurally different payloads. The Rust SDK emits this for every
+    // instantiation of `std::ops::Bound<T>` regardless of `T`. The adapter
+    // must keep both as distinct `SchemaTypeDef` entries instead of
+    // erroring.
+    use golem_wasm::analysis::{
+        AnalysedType, NameOptionTypePair, TypeS32, TypeS64, TypeTuple, TypeVariant,
+    };
+
+    fn bound_variant(inner: AnalysedType) -> AnalysedType {
+        AnalysedType::Variant(TypeVariant {
+            name: Some("Bound".to_string()),
+            owner: None,
+            cases: vec![
+                NameOptionTypePair {
+                    name: "Included".into(),
+                    typ: Some(inner.clone()),
+                },
+                NameOptionTypePair {
+                    name: "Excluded".into(),
+                    typ: Some(inner),
+                },
+                NameOptionTypePair {
+                    name: "Unbounded".into(),
+                    typ: None,
+                },
+            ],
+        })
+    }
+
+    let ty = AnalysedType::Tuple(TypeTuple {
+        name: None,
+        owner: None,
+        items: vec![
+            bound_variant(AnalysedType::S32(TypeS32)),
+            bound_variant(AnalysedType::S64(TypeS64)),
+        ],
+    });
+
+    let graph = analysed_type_to_schema_graph(&ty).expect("conversion must succeed");
+
+    assert_eq!(graph.defs.len(), 2, "expected two distinct defs: {graph:?}");
+    // The original `Bound` keeps the bare TypeId; the second registration
+    // gets a `__g_<hash>` suffix (URI-safe, JSON-Schema-`$defs`-key-safe).
+    assert!(
+        graph
+            .defs
+            .iter()
+            .any(|d| d.id == TypeId::new("Bound") && d.name.as_deref() == Some("Bound")),
+        "expected bare `Bound` def: {graph:?}",
+    );
+    assert!(
+        graph
+            .defs
+            .iter()
+            .any(|d| d.id.0.starts_with("Bound__g_") && d.name.as_deref() == Some("Bound")),
+        "expected disambiguated `Bound__g_…` def: {graph:?}",
+    );
+
+    // Same-named legacy types with structurally identical bodies should still
+    // dedup to a single def.
+    let dedup_ty = AnalysedType::Tuple(TypeTuple {
+        name: None,
+        owner: None,
+        items: vec![
+            bound_variant(AnalysedType::S32(TypeS32)),
+            bound_variant(AnalysedType::S32(TypeS32)),
+        ],
+    });
+    let dedup_graph =
+        analysed_type_to_schema_graph(&dedup_ty).expect("same-body dedup must succeed");
+    assert_eq!(dedup_graph.defs.len(), 1);
+
+    // The fingerprint is deterministic across runs: converting the same
+    // disambiguating type twice must produce identical TypeIds.
+    let second_graph = analysed_type_to_schema_graph(&ty).expect("repeat conversion");
+    let mut first_ids: Vec<_> = graph.defs.iter().map(|d| d.id.0.clone()).collect();
+    let mut second_ids: Vec<_> = second_graph.defs.iter().map(|d| d.id.0.clone()).collect();
+    first_ids.sort();
+    second_ids.sort();
+    assert_eq!(
+        first_ids, second_ids,
+        "disambiguation fingerprint must be deterministic"
+    );
+}
+
+#[test]
+fn analysed_type_to_schema_graph_disambiguates_owner_qualified_duplicates() {
+    // Owner-qualified collision: two `Bound`s carry the same `owner` and
+    // `name` but distinct bodies. Reverse conversion of the disambiguated
+    // graph must still recover the original owner (i.e. the `__g_<hash>`
+    // suffix must not leak into the legacy `(owner, name)` pair).
+    use golem_wasm::analysis::{
+        AnalysedType, NameOptionTypePair, TypeS32, TypeS64, TypeTuple, TypeVariant,
+    };
+
+    fn bound_variant(inner: AnalysedType) -> AnalysedType {
+        AnalysedType::Variant(TypeVariant {
+            name: Some("Bound".to_string()),
+            owner: Some("std::ops".to_string()),
+            cases: vec![
+                NameOptionTypePair {
+                    name: "Included".into(),
+                    typ: Some(inner.clone()),
+                },
+                NameOptionTypePair {
+                    name: "Excluded".into(),
+                    typ: Some(inner),
+                },
+                NameOptionTypePair {
+                    name: "Unbounded".into(),
+                    typ: None,
+                },
+            ],
+        })
+    }
+
+    let ty = AnalysedType::Tuple(TypeTuple {
+        name: None,
+        owner: None,
+        items: vec![
+            bound_variant(AnalysedType::S32(TypeS32)),
+            bound_variant(AnalysedType::S64(TypeS64)),
+        ],
+    });
+
+    let graph = analysed_type_to_schema_graph(&ty).expect("forward conversion");
+
+    // Both defs survive, both carry the same display `name`, and one keeps
+    // the bare base id while the other has the `__g_` marker.
+    assert_eq!(graph.defs.len(), 2);
+    assert!(
+        graph
+            .defs
+            .iter()
+            .all(|d| d.name.as_deref() == Some("Bound")),
+    );
+    assert!(
+        graph
+            .defs
+            .iter()
+            .any(|d| d.id == TypeId::new("std.ops.Bound"))
+    );
+    assert!(
+        graph
+            .defs
+            .iter()
+            .any(|d| d.id.0.starts_with("std.ops.Bound__g_")),
+    );
+
+    // Reverse conversion preserves owner/name on every reconstructed
+    // variant — the disambiguation suffix must not bleed through into the
+    // legacy metadata.
+    let reversed = schema_graph_to_analysed_type(&graph).expect("reverse conversion");
+    let golem_wasm::analysis::AnalysedType::Tuple(tuple) = reversed else {
+        panic!("expected tuple root after reverse: {reversed:?}");
+    };
+    for item in &tuple.items {
+        let golem_wasm::analysis::AnalysedType::Variant(v) = item else {
+            panic!("expected variant items in reverse: {tuple:?}");
+        };
+        assert_eq!(v.name.as_deref(), Some("Bound"));
+        assert_eq!(v.owner.as_deref(), Some("std.ops"));
+    }
+}
+
+#[test]
+fn schema_graph_builder_disambiguates_across_multiple_lower_calls() {
+    // Two same-name distinct legacy types appear in separate calls to
+    // `SchemaGraphBuilder::lower`. The builder's accumulated def table
+    // must drive disambiguation across calls — otherwise downstream code
+    // that imports each agent constructor / method root through its own
+    // call (e.g. CLI bridge generation) silently merges the second root's
+    // `Ref` into the first root's body.
+    use golem_wasm::analysis::{AnalysedType, NameOptionTypePair, TypeS32, TypeS64, TypeVariant};
+
+    fn bound_variant(inner: AnalysedType) -> AnalysedType {
+        AnalysedType::Variant(TypeVariant {
+            name: Some("Bound".to_string()),
+            owner: None,
+            cases: vec![
+                NameOptionTypePair {
+                    name: "Included".into(),
+                    typ: Some(inner.clone()),
+                },
+                NameOptionTypePair {
+                    name: "Excluded".into(),
+                    typ: Some(inner),
+                },
+                NameOptionTypePair {
+                    name: "Unbounded".into(),
+                    typ: None,
+                },
+            ],
+        })
+    }
+
+    let mut builder = SchemaGraphBuilder::new();
+    let root_s32 = builder
+        .lower(&bound_variant(AnalysedType::S32(TypeS32)))
+        .unwrap();
+    let root_s64 = builder
+        .lower(&bound_variant(AnalysedType::S64(TypeS64)))
+        .unwrap();
+
+    let SchemaType::Ref { id: id_s32, .. } = &root_s32 else {
+        panic!("expected ref root, got {root_s32:?}");
+    };
+    let SchemaType::Ref { id: id_s64, .. } = &root_s64 else {
+        panic!("expected ref root, got {root_s64:?}");
+    };
+    assert_ne!(
+        id_s32, id_s64,
+        "two distinct same-name bodies imported across calls must produce distinct TypeIds",
+    );
+
+    let snapshot = builder.snapshot_graph(SchemaType::bool());
+    assert_eq!(snapshot.defs.len(), 2);
+    // Each root resolves to its own body inside the shared graph.
+    let s32_def = snapshot.lookup(id_s32).expect("s32 def present");
+    let s64_def = snapshot.lookup(id_s64).expect("s64 def present");
+    assert_ne!(
+        s32_def.body, s64_def.body,
+        "shared graph must keep the two distinct bodies",
+    );
+}
+
+#[test]
+fn analysed_type_to_schema_graph_drops_owner_without_name() {
+    // The TS SDK emits `owner = "@golemcloud/golem-ts-sdk"` on built-in
+    // containers without setting `name`. The adapter must accept this by
+    // dropping the unanchored owner and producing an inline (anonymous)
+    // schema type.
+    use golem_wasm::analysis::{AnalysedType, TypeF64, TypeResult, TypeStr};
+
+    let ty = AnalysedType::Result(TypeResult {
+        name: None,
+        owner: Some("@golemcloud/golem-ts-sdk".to_string()),
+        ok: Some(Box::new(AnalysedType::Str(TypeStr))),
+        err: Some(Box::new(AnalysedType::F64(TypeF64))),
+    });
+
+    let graph = analysed_type_to_schema_graph(&ty).expect("conversion must succeed");
+
+    assert!(graph.defs.is_empty(), "expected no defs: {graph:?}");
+    assert!(
+        matches!(graph.root, SchemaType::Result { .. }),
+        "expected inline `Result` root: {:?}",
+        graph.root,
+    );
 }
 
 // --------------------------------------------------------------------------

@@ -378,7 +378,14 @@ fn render_parameter_type_for_language(
 ) -> String {
     match parameter_type {
         ElementSchema::ComponentModel(cm) => {
-            render_type_for_language(source_language, &cm.element_type, true)
+            // Adapt the legacy AnalysedType at the boundary.
+            match golem_common::schema::adapters::analysed_type_to_schema_graph(&cm.element_type) {
+                Ok(graph) => {
+                    let root = graph.root.clone();
+                    render_type_for_language(source_language, &graph, &root, true)
+                }
+                Err(_) => "<unknown>".to_string(),
+            }
         }
         ElementSchema::UnstructuredText(text_descriptor) => {
             let mut result = "text".to_string();

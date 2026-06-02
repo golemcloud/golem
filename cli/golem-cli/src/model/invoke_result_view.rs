@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agent_id_display::{SourceLanguage, render_value_and_type};
+use crate::agent_id_display::{SourceLanguage, render_typed_schema_value};
 use crate::log::log_error;
 use anyhow::{anyhow, bail};
 use golem_client::model::AgentInvocationResult;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{AgentType, DataSchema, DataValue, ElementValue};
+use golem_common::schema::adapters::value_and_type_to_typed_schema_value;
 use golem_wasm::analysis::{AnalysedType, TypeTuple};
 use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
@@ -69,7 +70,10 @@ impl InvokeResultView {
             0 => (None, None, None, None),
             1 => {
                 let result_json = result_values.into_iter().next().expect("checked length");
-                let rendered_result = render_value_and_type(&result_json, &source_language);
+                let rendered_result = match value_and_type_to_typed_schema_value(&result_json) {
+                    Ok(typed) => render_typed_schema_value(&typed, &source_language),
+                    Err(err) => format!("<rendering error: {err}>"),
+                };
                 (
                     Some(result_json),
                     None,
@@ -165,7 +169,9 @@ impl InvokeResultView {
             items: results.iter().map(|result| result.typ.clone()).collect(),
         });
         let value_and_type = ValueAndType::new(value, typ);
-
-        render_value_and_type(&value_and_type, source_language)
+        match value_and_type_to_typed_schema_value(&value_and_type) {
+            Ok(typed) => render_typed_schema_value(&typed, source_language),
+            Err(err) => format!("<rendering error: {err}>"),
+        }
     }
 }

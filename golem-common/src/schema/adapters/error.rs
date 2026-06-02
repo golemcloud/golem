@@ -32,9 +32,12 @@ pub enum SchemaAdapterError {
     /// `AnalysedType::Handle` cannot be represented in the new schema layer;
     /// resource handles are explicitly excluded.
     LegacyHandle,
-    /// Legacy metadata that the adapter cannot encode. Examples: a legacy
-    /// composite type with `owner = Some(_)` but `name = None` (no place
-    /// to anchor the dotted [`TypeId`]).
+    /// Legacy metadata that the adapter cannot encode. The forward graph
+    /// adapter currently does not emit this variant — owner-without-name
+    /// is accepted by [`legacy_type_id`] (the unanchored owner is dropped)
+    /// and same-name structural collisions are disambiguated rather than
+    /// rejected. Retained as a generic escape hatch for future legacy
+    /// shapes that are genuinely unrepresentable.
     UnsupportedLegacyMetadata(String),
     /// A new schema type case has no legacy counterpart and cannot be
     /// projected back into `AnalysedType` / legacy `Value`.
@@ -47,8 +50,11 @@ pub enum SchemaAdapterError {
     RecursiveRef(TypeId),
     /// `SchemaType::Ref` pointed at a `TypeId` not present in the graph.
     DanglingRef(TypeId),
-    /// A `TypeId` was registered twice with conflicting bodies. (Same body
-    /// is deduplicated silently; different bodies are an error.)
+    /// A `TypeId` was registered twice with conflicting bodies. Not emitted
+    /// by the forward graph adapter — distinct bodies are disambiguated
+    /// via a fingerprint suffix instead. Retained for downstream consumers
+    /// that may build schema graphs by other means and want to surface
+    /// real conflicts.
     DuplicateTypeIdConflict(TypeId),
 }
 
@@ -93,24 +99,24 @@ impl std::error::Error for SchemaAdapterError {}
 /// - `name = Some(n), owner = None` → `Ok(Some(TypeId(n)))`: bare name.
 /// - `name = Some(n), owner = Some(o)` → `Ok(Some(TypeId(o.n)))`: dotted
 ///   composite. `::` in either part is normalised to `.`.
-/// - `name = None, owner = Some(_)` →
-///   [`SchemaAdapterError::UnsupportedLegacyMetadata`]: owner cannot be
-///   preserved without a name.
+/// - `name = None, owner = Some(_)` → `Ok(None)`: an owner without a name
+///   has no anchor for a [`TypeId`]; the unanchored owner is dropped and
+///   the type is treated as anonymous inline. The TypeScript SDK emits this
+///   shape for built-in containers (e.g. `Result`, `Tuple`) where the
+///   owner is decorative provenance rather than a typed identity.
 pub fn legacy_type_id(
     owner: Option<&str>,
     name: Option<&str>,
 ) -> Result<Option<TypeId>, SchemaAdapterError> {
     match (owner, name) {
         (None, None) => Ok(None),
+        (Some(_), None) => Ok(None),
         (None, Some(name)) => Ok(Some(TypeId(normalise(name)))),
         (Some(owner), Some(name)) => Ok(Some(TypeId(format!(
             "{}.{}",
             normalise(owner),
             normalise(name)
         )))),
-        (Some(owner), None) => Err(SchemaAdapterError::UnsupportedLegacyMetadata(format!(
-            "owner `{owner}` provided without a name"
-        ))),
     }
 }
 
