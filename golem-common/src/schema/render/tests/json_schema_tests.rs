@@ -490,15 +490,20 @@ fn unions_sharing_branch_tag_do_not_collide_in_defs() {
     let schema = to_json_schema(&graph, &root);
     let defs = schema["$defs"].as_object().expect("$defs object");
     // Exactly two synthesised branch defs, one per union, even though
-    // both branches share the tag `"shared"`.
-    let branch_keys: Vec<&String> = defs
-        .keys()
-        .filter(|k| k.starts_with("union_branch_"))
-        .collect();
+    // both branches share the tag `"shared"`. The anonymous graph has
+    // no named defs, so every `$defs` entry is a synthesised branch.
+    let branch_keys: Vec<&String> = defs.keys().collect();
     assert_eq!(
         branch_keys.len(),
         2,
         "expected two distinct branch defs, got {branch_keys:?}"
+    );
+    // Branch names should preserve the tag (sanitised) and disambiguate
+    // by the parent record field, not fall back to opaque hashes.
+    let names: std::collections::HashSet<&str> = branch_keys.iter().map(|k| k.as_str()).collect();
+    assert!(
+        names.iter().all(|n| !n.contains("_hash")),
+        "branch names should not fall back to hash suffix: {names:?}"
     );
     // One def must carry `const = "A"`, the other `const = "B"`.
     let consts: std::collections::HashSet<&str> = branch_keys
@@ -540,10 +545,8 @@ fn unions_with_structurally_identical_branches_dedupe() {
     let graph = SchemaGraph::anonymous(root.clone());
     let schema = to_json_schema(&graph, &root);
     let defs = schema["$defs"].as_object().expect("$defs object");
-    let branch_keys: Vec<&String> = defs
-        .keys()
-        .filter(|k| k.starts_with("union_branch_"))
-        .collect();
+    // Anonymous graph: every `$defs` entry is a synthesised branch def.
+    let branch_keys: Vec<&String> = defs.keys().collect();
     assert_eq!(
         branch_keys.len(),
         1,
@@ -686,5 +689,84 @@ fn multimodal_branch_does_not_collide_with_normal_branch_in_defs() {
     assert!(
         multimodal_kind.get("const").is_none(),
         "multimodal branch def must NOT carry the discriminator `const`: {multimodal_def:?}"
+    );
+}
+
+#[test]
+fn union_branch_def_keys_preserve_tag() {
+    // A single, unambiguous tag must produce a `$defs` key derived from
+    // the tag (sanitised to UpperCamelCase), not an opaque content hash
+    // — generated OpenAPI clients depend on this for readable type names.
+    let ty = SchemaType::union(UnionSpec {
+        branches: vec![UnionBranch {
+            tag: "image_url".to_string(),
+            body: SchemaType::record(vec![NamedFieldType {
+                name: "kind".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            }]),
+            discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                field_name: "kind".to_string(),
+                literal: Some("image_url".to_string()),
+            }),
+            metadata: Default::default(),
+        }],
+    });
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let schema = to_json_schema(&graph, &ty);
+    let defs = schema["$defs"].as_object().expect("$defs object");
+    assert!(
+        defs.contains_key("ImageUrl"),
+        "expected `ImageUrl` key derived from tag `image_url`, got {:?}",
+        defs.keys().collect::<Vec<_>>()
+    );
+    let one_of_ref = schema["oneOf"][0]["$ref"]
+        .as_str()
+        .expect("oneOf entry is a $ref");
+    assert_eq!(one_of_ref, "#/$defs/ImageUrl");
+}
+
+#[test]
+fn colliding_branch_tags_disambiguate_by_parent_field() {
+    // Two unions inside the same root record both have a branch tagged
+    // `shared`. The renderer must lift the parent record-field name into
+    // the assigned name on both members (symmetric disambiguation).
+    let make_union = |literal: &str| {
+        SchemaType::union(UnionSpec {
+            branches: vec![UnionBranch {
+                tag: "shared".to_string(),
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "kind".to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
+                discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                    field_name: "kind".to_string(),
+                    literal: Some(literal.to_string()),
+                }),
+                metadata: Default::default(),
+            }],
+        })
+    };
+    let root = SchemaType::record(vec![
+        NamedFieldType {
+            name: "alpha".to_string(),
+            body: make_union("A"),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "beta".to_string(),
+            body: make_union("B"),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph::anonymous(root.clone());
+    let schema = to_json_schema(&graph, &root);
+    let defs = schema["$defs"].as_object().expect("$defs object");
+    let keys: std::collections::HashSet<&str> = defs.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["AlphaShared", "BetaShared"].into_iter().collect(),
+        "colliding tags must be disambiguated by the parent record field, got {keys:?}"
     );
 }

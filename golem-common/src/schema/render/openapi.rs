@@ -17,12 +17,14 @@
 //! Re-emits the same per-node shape but reroutes JSON-Schema's `$defs`
 //! into OpenAPI's `components/schemas` (and rewrites the corresponding
 //! `$ref` pointers). Per-branch union schemas (synthesised by
-//! [`super::json_schema::add_union_branch_defs`] under content-hash-derived
-//! keys) ship as additional component schemas so discriminator mappings
-//! resolve.
+//! [`super::json_schema::add_union_branch_defs`] under tag-derived keys
+//! resolved via [`super::json_schema::BranchNameTable`]) ship as
+//! additional component schemas so discriminator mappings resolve.
 
 use crate::schema::graph::SchemaGraph;
-use crate::schema::render::json_schema::{add_union_branch_defs, render_defs, render_type};
+use crate::schema::render::json_schema::{
+    add_union_branch_defs, build_branch_name_table, render_defs, render_type,
+};
 use crate::schema::schema_type::SchemaType;
 use serde_json::{Map, Value};
 
@@ -42,9 +44,10 @@ use serde_json::{Map, Value};
 /// OpenAPI does not accept the JSON Schema `$schema` keyword, so it is
 /// never emitted here.
 pub fn to_openapi_components(graph: &SchemaGraph, ty: &SchemaType) -> Value {
-    let root = rewrite_refs(render_type(graph, ty, true));
-    let mut defs = render_defs(graph);
-    add_union_branch_defs(graph, ty, &mut defs);
+    let table = build_branch_name_table(graph, ty);
+    let root = rewrite_refs(render_type(graph, ty, true, &table));
+    let mut defs = render_defs(graph, &table);
+    add_union_branch_defs(graph, ty, &mut defs, &table);
     // `$defs` map keys are raw per RFC 6901 §4: the JSON Pointer token in a
     // `$ref` is the *escaped* form of the resolved object member name.
     // We preserve raw keys when moving `$defs` → `components.schemas` so
