@@ -387,7 +387,7 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_as_principal(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         principal: golem_common::model::agent::Principal,
         method_name: &str,
         params: DataValue,

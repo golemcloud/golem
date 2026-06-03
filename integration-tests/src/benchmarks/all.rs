@@ -14,7 +14,7 @@
 
 use clap::Parser;
 use golem_client::api::RegistryServiceClient;
-use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::base_model::agent::LegacyParsedAgentId;
 use golem_common::model::AgentId;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
@@ -410,7 +410,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
         }
     };
 
-    let warmup_agent: ParsedAgentId = agent_id!(WARMUP_AGENT_TYPE, WARMUP_AGENT_INSTANCE);
+    let warmup_agent: LegacyParsedAgentId = agent_id!(WARMUP_AGENT_TYPE, WARMUP_AGENT_INSTANCE);
 
     // Bound the 50 invocations with a total wall-clock budget.
     let invoke_result = tokio::time::timeout(WARMUP_BUDGET, async {
