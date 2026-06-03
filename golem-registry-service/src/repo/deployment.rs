@@ -1281,7 +1281,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             SELECT
               r.environment_id, r.deployment_revision_id, target.current_deployment_revision_id,
               r.agent_type_name, r.canonical_agent_type_name,
-              r.component_id, r.component_revision_id,
+              r.component_id, c.name AS component_name, r.component_revision_id,
               r.webhook_prefix_authority_and_path, r.agent_type,
               target.owner_account_id,
               target.roles_bitmask AS environment_roles_from_shares
@@ -1289,6 +1289,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             JOIN deployment_registered_agent_types r
               ON r.environment_id = target.environment_id
              AND r.deployment_revision_id = target.deployment_revision_id
+            JOIN components c
+              ON c.component_id = r.component_id
             WHERE r.agent_type_name = $4
             LIMIT 1
         "#};

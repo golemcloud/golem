@@ -428,6 +428,7 @@ pub struct ResolvedAgentTypeRecord {
     pub agent_type_name: String,
     pub canonical_agent_type_name: String,
     pub component_id: Uuid,
+    pub component_name: String,
     pub component_revision_id: i64,
     pub webhook_prefix_authority_and_path: Option<String>,
     pub agent_type: Blob<AgentType>,

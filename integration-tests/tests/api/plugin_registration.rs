@@ -318,13 +318,22 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
                 target_account_id: user_2.account_id,
                 name: PermissionShareName("plugin-component-view".to_string()),
                 data: PermissionShareData {
-                    lower_positive: vec![format!(
-                        "component({}/{}/{}) @ {} : view : *",
-                        user_1.account_id,
-                        env.application_name.0,
-                        env.name.0,
-                        user_2.account_email.as_str(),
-                    )],
+                    lower_positive: vec![
+                        format!(
+                            "environment({}/{}) @ {} : view : {}",
+                            user_1.account_id,
+                            env.application_name.0,
+                            user_2.account_email.as_str(),
+                            env.name.0,
+                        ),
+                        format!(
+                            "component({}/{}/{}) @ {} : view : *",
+                            user_1.account_id,
+                            env.application_name.0,
+                            env.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                    ],
                     lower_negative: Vec::new(),
                     upper_positive: Vec::new(),
                     upper_negative: Vec::new(),

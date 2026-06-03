@@ -107,6 +107,20 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
                 user_1.account_email.as_str(),
                 "create",
             ),
+            environment_plugin_grant_grant(
+                user_2.account_id,
+                &shared_env.application_name.0,
+                &shared_env.name.0,
+                user_1.account_email.as_str(),
+                "view",
+            ),
+            environment_plugin_grant_grant(
+                user_2.account_id,
+                &shared_env.application_name.0,
+                &shared_env.name.0,
+                user_1.account_email.as_str(),
+                "delete",
+            ),
         ],
     )
     .await?;
