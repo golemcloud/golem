@@ -24,13 +24,19 @@ use crate::repo::plugin::PluginRepo;
 use crate::services::application::ApplicationError;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::card::owner::{AccountOwnerPattern, ApplicationOwnerPattern};
+use golem_common::model::card::{
+    ApplicationResourcePattern, ApplicationVerb, ClassPermissionTarget,
+    EnvironmentName as CardEnvironmentName, EnvironmentResourcePattern, EnvironmentVerb,
+    PermissionTarget,
+};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentRevision,
     EnvironmentUpdate, EnvironmentWithDetails,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
+use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
@@ -133,7 +139,13 @@ impl EnvironmentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_account_action(application.account_id, AccountAction::CreateEnvironment)?;
+        authorize_environment_permission(
+            auth,
+            application.account_id,
+            &application.name,
+            EnvironmentVerb::Create,
+            EnvironmentResourcePattern::Environment(CardEnvironmentName(data.name.0.clone())),
+        )?;
 
         self.account_usage_service
             .ensure_environment_within_limits(application.account_id)
@@ -365,9 +377,11 @@ impl EnvironmentService {
             }
             (Some(application_owner_id), true) => {
                 // application exists but has no environments -> only leak existence if account-level permissions are present
-                auth.authorize_account_action(
+                authorize_application_permission(
+                    auth,
                     application_owner_id,
-                    AccountAction::ListAllApplicationEnvironments,
+                    ApplicationVerb::ListAllEnvironments,
+                    ApplicationResourcePattern::Any,
                 )?;
 
                 Ok(authorized_environments)
@@ -411,4 +425,36 @@ impl EnvironmentService {
             .collect::<Vec<_>>()
             .pipe(Ok)
     }
+}
+
+fn authorize_environment_permission(
+    auth: &AuthCtx,
+    account_id: AccountId,
+    application_name: &ApplicationName,
+    verb: EnvironmentVerb,
+    resource: EnvironmentResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: ApplicationOwnerPattern::Application {
+            account: account_id.to_string(),
+            application: application_name.0.clone(),
+        },
+        resource,
+    }))
+}
+
+fn authorize_application_permission(
+    auth: &AuthCtx,
+    account_id: AccountId,
+    verb: ApplicationVerb,
+    resource: ApplicationResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Application(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: AccountOwnerPattern::Account {
+            account: account_id.to_string(),
+        },
+        resource,
+    }))
 }
