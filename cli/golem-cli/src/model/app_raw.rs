@@ -1430,7 +1430,9 @@ mod test {
 
     fn arb_cli_options_model() -> BoxedStrategy<CliOptions> {
         (
-            arb_opt(prop_oneof![Just(Format::Text), Just(Format::Json)].boxed()),
+            arb_opt(
+                prop_oneof![Just(Format::Text), Just(Format::Json), Just(Format::Toon)].boxed(),
+            ),
             any::<bool>(),
             any::<bool>(),
             any::<bool>(),

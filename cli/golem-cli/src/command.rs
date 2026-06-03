@@ -741,7 +741,7 @@ pub enum GolemCliSubcommand {
         /// definitions, API objects). The text format is intended for human
         /// review and is not stable.
         ///
-        /// In `--format json/yaml` the result document only carries
+        /// In `--format json/yaml/toon` the result document only carries
         /// `{"deployed": true}` indicating that planning succeeded; the
         /// detailed diff is not yet emitted as structured data.
         #[arg(long, conflicts_with_all = ["stage", "approve_staging_steps"])]
@@ -1295,7 +1295,7 @@ pub mod worker {
             /// Set idempotency key for the call. Use `-` for an auto-generated key.
             /// The effective key (whether explicit or auto-generated) is always echoed
             /// back: in `--format text` mode as a `Using ... idempotency key:` log
-            /// line on stderr, and in `--format json/yaml` mode as the
+            /// line on stderr, and in `--format json/yaml/toon` mode as the
             /// `idempotency_key` field of the result document on stdout.
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
@@ -1355,7 +1355,7 @@ pub mod worker {
             /// in the previous response.
             /// The cursor has the format 'layer/position' where both layer and position are numbers.
             ///
-            /// Returned cursors: in `--format json/yaml` the response includes a
+            /// Returned cursors: in `--format json/yaml/toon` the response includes a
             /// `cursors` map of the form `{ "<component-name>": "<layer>/<position>", ... }`
             /// (one entry per component that still has more results). Pass any of
             /// those values back as `--scan-cursor` to fetch the next page.
@@ -1379,7 +1379,7 @@ pub mod worker {
             ///
             /// Watch mode redraws into the alternate terminal screen, so it is
             /// intended for interactive use. It is not meaningful with
-            /// `--format json/yaml`: structured output is overwritten on every
+            /// `--format json/yaml/toon`: structured output is overwritten on every
             /// frame and the alternate-screen restore on exit will leave you with
             /// no captured payload.
             ///

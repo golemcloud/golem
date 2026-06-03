@@ -541,6 +541,7 @@ pub const PROFILE_DELETE: &str = "Examples:
 pub const PROFILE_CONFIG_SET_FORMAT: &str = "Examples:
   # Set the default output format for a profile
   golem-cli profile config my-staging set-format json
+  golem-cli profile config my-staging set-format toon
   golem-cli profile config my-staging set-format text";
 
 // Server commands ----------------------------------------------------------------------------------

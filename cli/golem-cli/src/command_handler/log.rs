@@ -21,6 +21,21 @@ use crate::model::text::fmt::{
 };
 use serde::Serialize;
 use std::sync::Arc;
+use toon_format::encode_default;
+
+pub const TOON_FRAME_START: &str = "@toon";
+pub const TOON_FRAME_END: &str = "@end";
+
+pub fn render_toon_document<S: Serialize>(value: &S) -> String {
+    format!(
+        "{TOON_FRAME_START}\n{}\n{TOON_FRAME_END}",
+        encode_default(value).unwrap()
+    )
+}
+
+pub fn print_toon_document<S: Serialize>(value: &S) {
+    println!("{}", render_toon_document(value));
+}
 
 pub struct LogHandler {
     ctx: Arc<Context>,
@@ -52,6 +67,9 @@ impl LogHandler {
                 } else {
                     println!("---\n{}", serde_yaml::to_string(value).unwrap());
                 }
+            }
+            Format::Toon => {
+                print_toon_document(value);
             }
             Format::Text => {
                 let formatted = if self.ctx.should_colorize() {
@@ -88,6 +106,9 @@ impl LogHandler {
                     println!("---\n{}", serde_yaml::to_string(view).unwrap());
                 }
             }
+            Format::Toon => {
+                print_toon_document(view);
+            }
             Format::Text => {
                 view.log();
             }
@@ -119,6 +140,7 @@ impl LogHandler {
                             format!("---\n{}", serde_yaml::to_string(view).unwrap())
                         }
                     }
+                    Format::Toon => render_toon_document(view),
                     Format::Text => unreachable!(),
                 };
                 truncate_rendered(rendered, max_lines)
@@ -132,5 +154,20 @@ impl LogHandler {
 
     pub fn decorated_indent_secondary(&self) -> DecoratedIndent {
         DecoratedIndent::new_secondary(self.ctx.format())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TOON_FRAME_END, TOON_FRAME_START, render_toon_document};
+    use serde_json::json;
+
+    #[test_r::test]
+    fn render_toon_document_wraps_payload_in_frame_markers() {
+        let rendered = render_toon_document(&json!({ "status": "ok" }));
+
+        assert!(rendered.starts_with(TOON_FRAME_START));
+        assert!(rendered.ends_with(TOON_FRAME_END));
+        assert!(rendered.contains("status: ok"));
     }
 }
