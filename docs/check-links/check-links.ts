@@ -139,8 +139,20 @@ const checkLink = async (params: {
       link = link.substring(0, anchorIdx)
     }
 
-    // Handle absolute links from `src/pages/docs/`
+    // Handle absolute links. Two cases:
+    //   1. Links that point at a public asset (e.g. /images/foo.png) — those
+    //      live under public/ and are not part of the MDX tree. We check the
+    //      file exists on disk.
+    //   2. Documentation links — those must be version-prefixed (e.g.
+    //      /v1.5/quickstart) and resolve to src/content/<version>/...mdx.
     if (link.startsWith("/")) {
+      const publicPath = path.join(process.cwd(), "public", link)
+      try {
+        await fs.access(publicPath)
+        return { link, status: "alive", filePath: publicPath }
+      } catch {
+        // fall through to doc resolution
+      }
       const docPath = path.join(process.cwd(), "src/content", link)
       const filePath = await MarkdownPath.resolve(docPath)
       return filePath !== null ? { link, status: "alive", filePath } : { link, status: "dead" }

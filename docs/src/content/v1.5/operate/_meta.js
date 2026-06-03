@@ -1,0 +1,6 @@
+export default {
+  persistence: "Persistence",
+  metrics: "Metrics",
+  logs: "Logs",
+  invocation_context: "Invocation Context",
+}

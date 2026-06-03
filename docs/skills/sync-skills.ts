@@ -2,7 +2,8 @@ import { writeFile, readFile, readdir, mkdir, rm } from "fs/promises"
 import { join } from "path"
 import { existsSync } from "fs"
 
-const OUTPUT_PATH = "./src/content/how-to-guides"
+const CONTENT_ROOT = "./src/content"
+const DEFAULT_TARGET_VERSION = "next"
 const GITHUB_API_BASE = "https://api.github.com/repos/golemcloud/golem/contents"
 const GITHUB_RAW_BASE = "https://raw.githubusercontent.com/golemcloud/golem/main"
 const SKILLS_REL_PATH = "golem-skills/skills"
@@ -37,6 +38,14 @@ async function main() {
     throw new Error("--local requires a path argument, e.g.: --local ../golem")
   }
 
+  const versionIndex = args.indexOf("--version")
+  const version = versionIndex !== -1 ? args[versionIndex + 1] : DEFAULT_TARGET_VERSION
+  if (!version) throw new Error("--version requires a value (e.g. --version next)")
+
+  const outputPath = join(CONTENT_ROOT, version, "how-to-guides")
+  const landingPagePath = join(CONTENT_ROOT, version, "how-to-guides.mdx")
+  console.log(`Syncing skills into docs version "${version}" (${outputPath})`)
+
   console.log(
     isLocal ? `Reading skills from local path: ${localPath}` : "Fetching skills from GitHub..."
   )
@@ -45,22 +54,22 @@ async function main() {
 
   console.log(`Found ${skills.length} skills across ${Object.keys(CATEGORIES).length} categories`)
 
-  const skillMap = buildSkillMap(skills)
+  const skillMap = buildSkillMap(skills, version)
 
   // Clean and recreate output directory
-  if (existsSync(OUTPUT_PATH)) {
-    await rm(OUTPUT_PATH, { recursive: true })
+  if (existsSync(outputPath)) {
+    await rm(outputPath, { recursive: true })
   }
-  await mkdir(OUTPUT_PATH, { recursive: true })
+  await mkdir(outputPath, { recursive: true })
 
   for (const category of Object.keys(CATEGORIES)) {
-    await mkdir(join(OUTPUT_PATH, category), { recursive: true })
+    await mkdir(join(outputPath, category), { recursive: true })
   }
 
   // Write skill pages
   for (const skill of skills) {
     const mdx = transformContent(skill, skillMap)
-    const filePath = join(OUTPUT_PATH, skill.category, `${skill.name}.mdx`)
+    const filePath = join(outputPath, skill.category, `${skill.name}.mdx`)
     await writeFile(filePath, mdx)
   }
 
@@ -76,7 +85,7 @@ async function main() {
     }
 
     await writeFile(
-      join(OUTPUT_PATH, category, "_meta.js"),
+      join(outputPath, category, "_meta.js"),
       "export default " + JSON.stringify(meta, null, 2) + ";\n"
     )
   }
@@ -87,13 +96,13 @@ async function main() {
     topMeta[category] = { title: categoryTitle }
   }
   await writeFile(
-    join(OUTPUT_PATH, "_meta.js"),
+    join(outputPath, "_meta.js"),
     "export default " + JSON.stringify(topMeta, null, 2) + ";\n"
   )
 
   // Write landing pages
-  await writeLandingPage(skills)
-  await writeCategoryLandingPages(skills)
+  await writeLandingPage(skills, landingPagePath)
+  await writeCategoryLandingPages(skills, outputPath)
 
   console.log("Finished syncing skills")
 }
@@ -198,10 +207,10 @@ function humanize(slug: string): string {
 
 // --- Content transformation ---
 
-function buildSkillMap(skills: Skill[]): Map<string, string> {
+function buildSkillMap(skills: Skill[], version: string): Map<string, string> {
   const map = new Map<string, string>()
   for (const skill of skills) {
-    map.set(skill.name, `/how-to-guides/${skill.category}/${skill.name}`)
+    map.set(skill.name, `/${version}/how-to-guides/${skill.category}/${skill.name}`)
   }
   return map
 }
@@ -245,7 +254,7 @@ function transformContent(skill: Skill, skillMap: Map<string, string>): string {
 
 // --- Output ---
 
-async function writeLandingPage(skills: Skill[]) {
+async function writeLandingPage(skills: Skill[], landingPagePath: string) {
   const categoryCounts = Object.entries(CATEGORIES).map(([cat, title]) => {
     const count = skills.filter(s => s.category === cat).length
     return { cat, title, count }
@@ -269,10 +278,10 @@ ${cards}
 </Cards>
 `
 
-  await writeFile("./src/content/how-to-guides.mdx", page)
+  await writeFile(landingPagePath, page)
 }
 
-async function writeCategoryLandingPages(skills: Skill[]) {
+async function writeCategoryLandingPages(skills: Skill[], outputPath: string) {
   for (const [category, categoryTitle] of Object.entries(CATEGORIES)) {
     const categorySkills = skills
       .filter(s => s.category === category)
@@ -300,6 +309,6 @@ ${cards}
 </Cards>
 `
 
-    await writeFile(join(OUTPUT_PATH, category + ".mdx"), page)
+    await writeFile(join(outputPath, category + ".mdx"), page)
   }
 }

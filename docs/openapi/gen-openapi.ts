@@ -7,18 +7,36 @@ import OpenAPISampler from "openapi-sampler"
 // The canonical OpenAPI spec lives in the golem repo root at
 // openapi/golem-service.yaml and is regenerated from the Rust services
 // by `cargo make generate-openapi`. This script reads from there directly
-// (one level up from docs/) and writes per-tag MDX into src/content/rest-api/.
+// (one level up from docs/) and writes per-tag MDX into
+// src/content/<version>/rest-api/. The in-tree OpenAPI spec is the source of
+// truth for the upcoming release, so by default we target the unreleased
+// `next` version; pass `--version <slug>` to write into another version's
+// directory (e.g., to backport a fix to an already-released version).
 const CLOUD_SPEC_SRC = "../openapi/golem-service.yaml"
-const CLOUD_GEN_PATH = "./src/content/rest-api"
+const CONTENT_ROOT = "./src/content"
+const DEFAULT_TARGET_VERSION = "next"
 
 main().catch(e => {
   console.error("Failed to update API Docs", e)
   process.exit(1)
 })
 
+function parseVersionArg(argv: string[]): string {
+  const i = argv.indexOf("--version")
+  if (i === -1) return DEFAULT_TARGET_VERSION
+  const v = argv[i + 1]
+  if (!v) throw new Error("--version requires a value (e.g. --version next)")
+  return v
+}
+
 async function main() {
-  console.log("Updating REST API docs from local OpenAPI spec at:", CLOUD_SPEC_SRC)
-  await writeOpenApiDocs(CLOUD_GEN_PATH, CLOUD_SPEC_SRC)
+  const version = parseVersionArg(process.argv.slice(2))
+  const target = `${CONTENT_ROOT}/${version}/rest-api`
+  console.log(
+    `Updating REST API docs (version=${version}) from local OpenAPI spec at: ${CLOUD_SPEC_SRC}`
+  )
+  console.log(`Output directory: ${target}`)
+  await writeOpenApiDocs(target, CLOUD_SPEC_SRC)
 }
 
 async function writeOpenApiDocs(target: string, openapiSpec: string) {

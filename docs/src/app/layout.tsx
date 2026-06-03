@@ -1,11 +1,8 @@
-import { Footer, Layout, Navbar } from "nextra-theme-docs"
 import { Head } from "nextra/components"
-import { getPageMap } from "nextra/page-map"
 import "nextra-theme-docs/style-prefixed.css"
 import "../styles/globals.css"
 import { Inter } from "next/font/google"
-import { GolemLogo } from "@/components/golem-logo"
-import { Footer as GolemFooter } from "@/components/footer"
+import { DevWarningFilter } from "@/components/dev-warning-filter"
 
 const font = Inter({
   subsets: ["latin"],
@@ -22,7 +19,6 @@ export const metadata = {
 }
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const pageMap = await getPageMap()
   return (
     <html lang="en" dir="ltr" suppressHydrationWarning>
       <Head
@@ -39,22 +35,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         />
       </Head>
       <body className={`${font.variable} font-sans`} style={{ fontFeatureSettings: '"ss03" 1' }}>
-        <Layout
-          navbar={
-            <Navbar
-              logo={<GolemLogo />}
-              projectLink="https://github.com/golemcloud/docs"
-              chatLink="https://discord.gg/UjXeH8uG4x"
-            />
-          }
-          footer={<GolemFooter />}
-          docsRepositoryBase="https://github.com/golemcloud/docs/blob/main"
-          sidebar={{ defaultMenuCollapseLevel: 1, toggleButton: true }}
-          pageMap={pageMap}
-          nextThemes={{ defaultTheme: "dark" }}
-        >
-          {children}
-        </Layout>
+        <DevWarningFilter />
+        {children}
       </body>
     </html>
   )
