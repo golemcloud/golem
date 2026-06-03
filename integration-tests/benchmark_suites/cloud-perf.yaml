@@ -1,0 +1,28 @@
+# Cloud-perf benchmark suite — runs the existing benchmark suite against a
+# deployed Golem environment via Gateway-API hostnames (TestMode::Cloud).
+#
+# Run with the benchmarks binary's `cloud` subcommand:
+#
+#   benchmarks suite integration-tests/benchmark_suites/cloud-perf.yaml \
+#     --save-to-json result.json \
+#     cloud \
+#       --api-url https://<your-golem-api-host> \
+#       --apps-base-domain <your-apps-base-domain> \
+#       --admin-account-token <token> \
+#       --builtin-plugin-owner-account-id <uuid> \
+#       --default-plan-id <uuid> \
+#       --component-directory <path-to-wasm-components>
+#
+# Initial milestone: latency-small only.  Add the remaining six benchmarks
+# once this runs end-to-end successfully.
+
+name: cloud-perf
+benchmarks:
+  # Measures cold and hot invocation latency through the Gateway using the
+  # small Rust agent (benchmark_agent_rust_release.wasm).  Three iterations
+  # capture real-network jitter and load-balancer warm-up variance.
+  - name: latency-small
+    iterations: 3
+    clusterSize: [2]
+    size: [5, 10]
+    length: [2]
