@@ -7,12 +7,12 @@ description: "Editing the Golem Application Manifest (golem.yaml). Use when modi
 
 The `golem.yaml` file in the project root is the **Golem Application Manifest**. It defines the entire application: components, agents, build steps, environments, HTTP/MCP deployments, and more.
 
-**Schema version**: The `manifestVersion` field at the top of the file identifies the schema version. Do not change it.
+**Manifest version**: The `manifestVersion` field at the top of the file identifies the application manifest document version. Do not change it.
 
 ## Top-Level Structure
 
 ```yaml
-manifestVersion: "1.5.0-dev.3"   # Schema version — do not change
+manifestVersion: "1.5.0"          # Manifest document version — do not change
 app: my-app                       # Application name
 
 includes:                          # (optional) Glob patterns for additional manifest fragments
@@ -327,10 +327,12 @@ auth:
 
 | Field | Description |
 |-------|-------------|
-| `format` | Default output: `text`, `json`, `yaml`, `pretty`, `pretty-json`, `pretty-yaml` |
+| `format` | Default output: `text`, `json`, `yaml`, `pretty`, `pretty-json`, `pretty-yaml`, `toon` |
 | `autoConfirm` | Auto-confirm prompts (`true`) |
 | `redeployAgents` | Redeploy agents by default (`true`) |
 | `reset` | Reset agents by default (`true`) |
+
+When `format: toon` is used, structured stdout is emitted as framed TOON documents. Parse exact `@toon` and `@end` marker lines, and treat the content between them as one TOON document. Stderr may still contain progress or diagnostics and should not be parsed as the structured payload.
 
 ### Deployment options
 
@@ -655,7 +657,7 @@ This table shows where each property can be defined:
 ## Edit Guardrails
 
 - **Do not invent fields**: most manifest objects use `additionalProperties: false` — only use fields documented above.
-- **Preserve `manifestVersion`**: never change the schema version.
+- **Preserve `manifestVersion`**: never change the manifest document version.
 - **Agent names use PascalCase**: matching the class/trait name in code (e.g., `MyAgent`, not `my-agent`).
 - **Component names use `namespace:name`** format (e.g., `my-app:billing`).
 - **Only one `default: true` preset** per preset map.
