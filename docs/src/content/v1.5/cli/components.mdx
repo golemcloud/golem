@@ -1,0 +1,123 @@
+import { Callout } from "nextra/components"
+
+# Golem CLI Components
+
+Golem components are WASM components deployed to Golem for execution.
+
+To create, list, build and deploy components you can use `golem component` command.
+
+## Creating a new component
+
+To create a new component in an existing application directory (previously created with `golem new`) use the `golem new` command with the `--component-name` option from within the application directory:
+
+```shell copy
+golem new --template <template-name> --component-name <component-name>
+```
+
+To see all the available component templates, just run the command without providing one.
+
+This command only modifies the source code of the application, does not create anything on the server.
+
+## Building a component
+
+To build a component, use the `build` command in the following way:
+
+```shell copy
+golem build <component-name>
+```
+
+To build the whole application, use the `build` command without specifying a component name:
+
+```shell copy
+golem build
+```
+
+Both commands accept a `--build-profile <BUILD_PROFILE>` argument. Some of the built-in templates define a separate `release` profile which creates a more optimized version of the components. Build profiles can be fully customized by editing the _application manifest files_.
+
+To deploy **all components** of an application, use:
+
+```shell copy
+golem deploy
+```
+
+## Component search
+
+### Using component name and the latest version
+
+If you want to get the latest version of the component using its name you can you can use the `component get` command.
+
+```shell copy
+golem component get example:component
+```
+
+### Using component name and specific version
+
+To get a specific version of a component, just pass the desired version number as well:
+
+```shell copy
+golem component get example:component 2
+```
+
+### Getting component list
+
+To get all component versions for specific component name you can use `component list` command with a given component name. Note if you are in a component's source directory, the command will automatically list that component's versions.
+
+```shell copy
+golem component list example:component
+```
+
+To get all component available you can use `component list` command this way:
+
+```shell copy
+golem component list
+```
+
+<Callout>
+  If you want to restrict component search to some specific project on Golem Cloud you can specify
+  project via `--project` or `--project-name` option. It works for all commands that accept
+  `--component-name` parameter.
+</Callout>
+
+## Updating component
+
+To update a component just run the `golem deploy` command again.
+
+If you want to trigger an update all agents to the new latest version right after creating this version you can use `--update-agents` option.
+
+It is possible to change the **component's type** (from durable to ephemeral, or from ephemeral to durable) when
+updating the component by changing the manifest file.
+
+## Updating agents
+
+If you want to update all agents you can use `component update-agents` command.
+
+This command gets all agents for the component that are not using the latest version and triggers an update for them one by one:
+
+```shell copy
+golem component update-agents example:component
+```
+
+The update request is enqueued and processed by the agents asynchronously, `golem` cannot await for the update to finish.
+
+<Callout type="warning">
+  Note that automatic agent update is not guaranteed to succeed, if the updated component differs
+  too much from the previous one.
+</Callout>
+
+<Callout>You can use URL or `--component-name` instead.</Callout>
+
+## Redeploying agents
+
+During the development of a Golem Component, it is often necessary to quickly rebuild the code, update the component and just restart all the test agents from scratch to test the changes.
+
+This is different from updating the agents as they will loose their state, but it can speed up the feedback loop during development.
+
+This workflow is supported by the `component redeploy-agents` command:
+
+```shell copy
+golem component redeploy-agents example:component
+```
+
+This command deletes all agents that are not using the latest version of component and re-creates them with the same name, parameters and environment variables.
+
+<Callout>You can use URL or `--component-name` instead.</Callout>

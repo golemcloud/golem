@@ -1,0 +1,89 @@
+import { Callout } from "nextra/components"
+
+# Golem REPL
+
+The Golem REPL provides an interactive environment for testing and working with agents during development. It allows you to create agent instances, invoke methods, see logs streamed live, and run CLI commands — all from a single session.
+
+## TypeScript REPL
+
+The TypeScript REPL is the most feature-complete. Start it with:
+
+```shell
+golem repl
+```
+
+The REPL auto-generates TypeScript classes for all agents in the application. You can create or get agents, invoke their methods, and see results directly:
+
+```shell
+>>> const c1 = await CounterAgent.get("c1")
+>>> await c1.increment()
+1
+>>> await c1.increment()
+2
+>>> await c1.getCount()
+2
+```
+
+It is possible to use the TypeScript REPL with agents written in any language — you can use TypeScript syntax to invoke Rust, Scala, or MoonBit agents.
+
+## Built-in commands
+
+The REPL provides built-in commands prefixed with `:` that correspond to CLI commands, so you can build, deploy, and manage agents without leaving the REPL:
+
+- `:build` — Build the application
+- `:deploy` — Deploy the application
+- `:logs <agent>` — Stream agent logs
+- `:status <agent>` — Check agent status
+
+Use tab-completion to discover all available commands.
+
+## Running scripts
+
+Scripts can be run non-interactively using the `--script-file` flag. This is useful for automated testing or repeatable workflows:
+
+```shell
+cat test.ts
+```
+
+```typescript
+const c2 = await CounterAgent.get("c2")
+await c2.increment()
+await c2.increment()
+```
+
+```shell
+golem repl --script-file test.ts --yes
+# Output: 2
+```
+
+## Rust REPL
+
+A Rust REPL is also available but is slower due to continuous recompilation. It is most useful for running Rust scripts:
+
+```shell
+cat test.rs
+```
+
+```rust
+let c3 = CounterAgent::get("c3").await.unwrap();
+c3.increment().await;
+c3.increment().await;
+```
+
+```shell
+golem repl --script-file test.rs --language rust --yes
+# Output: 2
+```
+
+## Language support
+
+| Language   | Interactive REPL          | Script mode |
+| ---------- | ------------------------- | ----------- |
+| TypeScript | ✅ Full support            | ✅           |
+| Rust       | ⚠️ Slow (recompilation)  | ✅           |
+| Scala      | ❌ Not available           | ❌           |
+| MoonBit    | ❌ Not available           | ❌           |
+
+<Callout type="info">
+The TypeScript REPL can work with agents written in any language — you can use TypeScript syntax to invoke Scala, Rust, or MoonBit agents.
+</Callout>

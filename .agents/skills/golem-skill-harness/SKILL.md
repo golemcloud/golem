@@ -38,6 +38,16 @@ cargo make build-release-full
 
 Without this step, `golem new` will still emit the old skill content, and the harness will test against stale skills.
 
+### Also regenerate the public How-To Guides
+
+Each `SKILL.md` is also republished as a How-To Guide on [learn.golem.cloud](https://learn.golem.cloud) under `docs/src/content/how-to-guides/`. After adding or editing a skill, regenerate those MDX pages:
+
+```shell
+cargo make generate-docs-skills
+```
+
+CI's `check-docs-skills` task will fail any PR that changes `golem-skills/skills/` without also updating the generated MDX.
+
 ## Prerequisites
 
 - **Node.js 20+** and npm
