@@ -723,7 +723,7 @@ mod tests {
         AgentConstructor, AgentMethod, AgentMode, AgentType, CorsOptions as AgentCorsOptions,
         HttpMountDetails, LiteralSegment, Snapshotting,
     };
-    use golem_common::model::application::ApplicationId;
+    use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::auth::EnvironmentRole;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::diff::Hash;
@@ -743,6 +743,7 @@ mod tests {
             id: environment_id,
             revision: EnvironmentRevision::INITIAL,
             application_id: ApplicationId(Uuid::new_v4()),
+            application_name: ApplicationName::try_from("test-app").unwrap(),
             name: EnvironmentName::try_from("prod").unwrap(),
             diff_model_version: 0,
             compatibility_check: false,
