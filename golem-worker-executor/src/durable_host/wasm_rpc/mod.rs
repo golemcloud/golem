@@ -54,9 +54,11 @@ use golem_common::model::{
 };
 use golem_common::schema::TypedSchemaValue;
 use golem_common::schema::adapters::{
-    typed_schema_value_to_untyped_data_value, untyped_data_value_to_typed_schema_input,
-    untyped_data_value_to_typed_schema_output,
+    typed_input_to_untyped_data_value, typed_schema_value_to_untyped_data_value,
+    untyped_data_value_to_typed_input, untyped_data_value_to_typed_schema_output,
 };
+use golem_common::schema::agent::InputSchema;
+use golem_common::schema::schema_value::SchemaValue;
 use golem_common::serialization::{deserialize, serialize};
 
 use golem_wasm::{
@@ -226,7 +228,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 Ok(parts) => parts,
                 Err(rpc_error) => return Ok(Err(rpc_error.into())),
             };
-        let input_untyped = typed_to_untyped_data_value(&input_typed)?;
+        let input_untyped = typed_rpc_input_to_untyped(&input_typed)?;
 
         let oplog_index = self.state.oplog.current_oplog_index().await;
         let idempotency_key = self.derive_idempotency_key(oplog_index);
@@ -418,7 +420,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 Ok(parts) => parts,
                 Err(rpc_error) => return Ok(Err(rpc_error.into())),
             };
-        let input_untyped = typed_to_untyped_data_value(&input_typed)?;
+        let input_untyped = typed_rpc_input_to_untyped(&input_typed)?;
 
         let oplog_index = self.state.oplog.current_oplog_index().await;
         let idempotency_key = self.derive_idempotency_key(oplog_index);
@@ -575,7 +577,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     return Ok(fut);
                 }
             };
-        let input_untyped = typed_to_untyped_data_value(&input_typed)?;
+        let input_untyped = typed_rpc_input_to_untyped(&input_typed)?;
 
         let agent_id = self.agent_id().clone();
         let created_by = self.created_by();
@@ -715,8 +717,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let remote_agent_type = payload.remote_agent_type.clone();
 
             let method = find_agent_method(&remote_agent_type, &method_name)?;
-            let input_typed = input_data_value_to_typed(input, &method.input_schema)?;
-            let input_untyped = typed_to_untyped_data_value(&input_typed)?;
+            let input_typed = input_data_value_to_typed_input(input, &method.input_schema)?;
+            let input_untyped = typed_rpc_input_to_untyped(&input_typed)?;
 
             (remote_agent_id, target_worker_fingerprint, input_untyped)
         };
@@ -1030,7 +1032,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 Ok(Some(Ok(typed))) => {
                     // Typed → untyped → bindings::DataValue at the
                     // guest-facing boundary.
-                    let untyped = typed_to_untyped_data_value(&typed)?;
+                    let untyped = typed_rpc_output_to_untyped(&typed)?;
                     let data_value: golem_common::model::agent::bindings::golem::agent::common::DataValue = untyped.into();
                     Ok(Some(Ok(data_value)))
                 }
@@ -1152,7 +1154,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 } => {
                     // Project the in-memory typed input back to the
                     // legacy form for the persisted invoke request.
-                    let input_untyped = typed_to_untyped_data_value(method_parameters)?;
+                    let input_untyped = typed_rpc_input_to_untyped(method_parameters)?;
                     (
                         true,
                         remote_agent_id.agent_id(),
@@ -1223,7 +1225,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 } => {
                     // The persisted cancelled state stores the request
                     // in legacy form; project the typed input back.
-                    let input_untyped = typed_to_untyped_data_value(method_parameters)?;
+                    let input_untyped = typed_rpc_input_to_untyped(method_parameters)?;
                     *state = FutureInvokeResultState::Cancelled {
                         request: HostRequestGolemRpcInvoke {
                             remote_agent_id: remote_agent_id.agent_id(),
@@ -1437,7 +1439,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     remote_agent_id: OwnedAgentId,
     idempotency_key: IdempotencyKey,
     method_name: String,
-    input: TypedSchemaValue,
+    input: TypedRpcInput,
     output_schema: DataSchema,
     created_by: AccountId,
     agent_id: AgentId,
@@ -1459,11 +1461,9 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         async move {
             // Convert typed → untyped only at the legacy `Rpc::*`
             // boundary.
-            let input_untyped =
-                typed_schema_value_to_untyped_data_value(&input).map_err(|err| {
-                    InternalRpcError::ProtocolError {
-                        details: format!("failed to convert typed RPC input to legacy form: {err}"),
-                    }
+            let input_untyped = typed_input_to_untyped_data_value(&input.schema, &input.values)
+                .map_err(|err| InternalRpcError::ProtocolError {
+                    details: format!("failed to convert typed RPC input to legacy form: {err}"),
                 })?;
             let result = rpc
                 .invoke_and_await(
@@ -1675,7 +1675,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         return Err(anyhow::anyhow!("unexpected state entry"));
     };
 
-    let input_untyped = typed_to_untyped_data_value(method_parameters)?;
+    let input_untyped = typed_rpc_input_to_untyped(method_parameters)?;
     let request = HostRequestGolemRpcInvoke {
         remote_agent_id: remote_agent_id.agent_id(),
         idempotency_key: idempotency_key.clone(),
@@ -1783,9 +1783,22 @@ fn find_agent_method<'a>(
         })
 }
 
+/// Typed in-process representation of an RPC call's input parameters.
+///
+/// Mirrors the design's `InputSchema = Parameters(Vec<NamedField>)` (§4.7
+/// of the value-type-refactor doc): an ordered list of named parameters
+/// plus a positionally aligned vector of [`SchemaValue`]s. This is the
+/// natural typed shape for inputs and avoids the single-root constraint of
+/// [`TypedSchemaValue`] (which only fits a single-rooted output value).
+#[derive(Clone)]
+struct TypedRpcInput {
+    schema: InputSchema,
+    values: Vec<SchemaValue>,
+}
+
 /// Resolve the per-method input/output schemas from the cached remote
 /// agent type and lift the guest-side [`bindings::DataValue`] into a
-/// [`TypedSchemaValue`] for the in-process typed flow.
+/// [`TypedRpcInput`] for the in-process typed flow.
 ///
 /// All failures are deterministic functions of (agent type, method
 /// name, guest input) — replay reproduces them — so they are returned
@@ -1798,7 +1811,7 @@ fn resolve_method_and_lift_input(
     agent_type: &AgentType,
     method_name: &str,
     input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-) -> Result<(TypedSchemaValue, DataSchema), InternalRpcError> {
+) -> Result<(TypedRpcInput, DataSchema), InternalRpcError> {
     let method = agent_type
         .methods
         .iter()
@@ -1812,35 +1825,44 @@ fn resolve_method_and_lift_input(
     let input_schema = method.input_schema.clone();
     let output_schema = method.output_schema.clone();
     let untyped: UntypedDataValue = input.into();
-    let typed =
-        untyped_data_value_to_typed_schema_input(untyped, &input_schema).map_err(|err| {
+    let (schema, values) =
+        untyped_data_value_to_typed_input(untyped, &input_schema).map_err(|err| {
             InternalRpcError::ProtocolError {
                 details: format!("Invalid RPC input for method '{method_name}': {err}"),
             }
         })?;
-    Ok((typed, output_schema))
+    Ok((TypedRpcInput { schema, values }, output_schema))
 }
 
 /// Convert a guest-side [`bindings::DataValue`] (already lowered to
-/// [`UntypedDataValue`]) into a schema-driven [`TypedSchemaValue`] using
-/// the method's input schema. Used on the schedule path where the
-/// failure is surfaced as a `wasmtime::Error` trap.
-fn input_data_value_to_typed(
+/// [`UntypedDataValue`]) into a schema-driven [`TypedRpcInput`] using the
+/// method's input schema. Used on the schedule path where the failure is
+/// surfaced as a `wasmtime::Error` trap.
+fn input_data_value_to_typed_input(
     input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     input_schema: &DataSchema,
-) -> anyhow::Result<TypedSchemaValue> {
+) -> anyhow::Result<TypedRpcInput> {
     let untyped: UntypedDataValue = input.into();
-    untyped_data_value_to_typed_schema_input(untyped, input_schema)
-        .map_err(|err| anyhow::anyhow!("Invalid RPC input: {err}"))
+    let (schema, values) = untyped_data_value_to_typed_input(untyped, input_schema)
+        .map_err(|err| anyhow::anyhow!("Invalid RPC input: {err}"))?;
+    Ok(TypedRpcInput { schema, values })
 }
 
-/// Project a [`TypedSchemaValue`] back into the legacy
+/// Project a [`TypedRpcInput`] back into the legacy [`UntypedDataValue`]
+/// for crossing the oplog / `Rpc::*` boundaries.
+fn typed_rpc_input_to_untyped(input: &TypedRpcInput) -> anyhow::Result<UntypedDataValue> {
+    typed_input_to_untyped_data_value(&input.schema, &input.values)
+        .map_err(|err| anyhow::anyhow!("Failed to convert typed RPC input to legacy form: {err}"))
+}
+
+/// Project a [`TypedSchemaValue`] (an RPC output) back into the legacy
 /// [`UntypedDataValue`] for crossing the oplog / `Rpc::*` boundaries.
 /// Failures here would mean the typed value's root shape does not match
-/// any of the canonical input/output layouts.
-fn typed_to_untyped_data_value(typed: &TypedSchemaValue) -> anyhow::Result<UntypedDataValue> {
+/// any of the canonical output layouts (empty tuple, multimodal list, or
+/// any other single-rooted value).
+fn typed_rpc_output_to_untyped(typed: &TypedSchemaValue) -> anyhow::Result<UntypedDataValue> {
     typed_schema_value_to_untyped_data_value(typed)
-        .map_err(|err| anyhow::anyhow!("Failed to convert typed RPC value to legacy form: {err}"))
+        .map_err(|err| anyhow::anyhow!("Failed to convert typed RPC output to legacy form: {err}"))
 }
 
 /// Convert an [`UntypedDataValue`] returned by the legacy `Rpc::*`
@@ -1923,7 +1945,7 @@ enum FutureInvokeResultState {
         self_created_by: AccountId,
         env: Vec<(String, String)>,
         method_name: String,
-        method_parameters: TypedSchemaValue,
+        method_parameters: TypedRpcInput,
         /// Needed when the deferred state is materialised into a live
         /// invocation (see [`handle_deferred_rpc_dispatch`]), so the
         /// spawned task can re-type the legacy `Rpc::*` reply.

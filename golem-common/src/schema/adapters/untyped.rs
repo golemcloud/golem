@@ -12,26 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `UntypedDataValue` ↔ `TypedSchemaValue` conversion.
+//! `UntypedDataValue` ↔ typed-value conversions.
 //!
 //! `UntypedDataValue` is the legacy untyped agent-method payload (a tuple
 //! or multimodal list of inline component-model values plus inline
-//! text / binary blobs). The new typed payload is [`TypedSchemaValue`],
-//! whose value tree is structurally driven by a [`SchemaType`] inside a
-//! self-contained [`SchemaGraph`].
+//! text / binary blobs). The new typed values are driven by the
+//! [`SchemaType`] / [`SchemaValue`] world:
 //!
-//! ## Forward (legacy → schema)
+//! - **Inputs** are natively a parameter list ([`InputSchema::Parameters`]
+//!   per §4.7 of the value-type-refactor design), paired by position with
+//!   a `Vec<SchemaValue>`. No single root is required, so no synthetic
+//!   wrapper is needed.
+//! - **Outputs** are a single value (or `Unit`), and travel as a
+//!   [`TypedSchemaValue`] (single root [`SchemaType`] inside a
+//!   self-contained [`SchemaGraph`]).
 //!
-//! Forward conversion bridges a legacy `(UntypedDataValue, DataSchema)`
-//! pair into a `TypedSchemaValue`. Two entry points reflect the two legacy
-//! directions:
+//! ## Forward (legacy → typed)
 //!
-//! - [`untyped_data_value_to_typed_schema_input`] treats the legacy
-//!   `DataSchema` as method input. Multimodal is rejected as in
-//!   [`super::data_schema::data_schema_to_input_schema`]. Inputs are
-//!   wrapped in a synthetic [`SchemaType::Record`] (one field per
-//!   parameter) so that the resulting `TypedSchemaValue` carries a single
-//!   well-formed root.
+//! - [`untyped_data_value_to_typed_input`] treats the legacy `DataSchema`
+//!   as method input. Multimodal is rejected as in
+//!   [`super::data_schema::data_schema_to_input_schema`]. The result is a
+//!   pair `(InputSchema::Parameters, Vec<SchemaValue>)` where the value
+//!   vector is positionally aligned with the parameter list.
 //! - [`untyped_data_value_to_typed_schema_output`] treats the legacy
 //!   `DataSchema` as method output, mirroring
 //!   [`super::data_schema::data_schema_to_output_schema`]:
@@ -39,11 +41,12 @@
 //!     model `OutputSchema::Unit` directly, so the canonical empty form
 //!     is used);
 //!   - single tuple element → the element's schema and value inline;
-//!   - multi-element tuple → [`SchemaType::Record`];
+//!   - multi-element tuple → error. Golem agent methods only ever return 0
+//!     or 1 element, so a multi-element output tuple is rejected;
 //!   - multimodal → `list<union<…>>` with the inner union flagged
 //!     [`Role::Multimodal`].
 //!
-//! For every element:
+//! For every position:
 //! - `UntypedElementValue::ComponentModel(value)` is paired with the
 //!   element's component-model `AnalysedType` and walked via
 //!   [`super::value::value_to_schema_value`].
@@ -54,18 +57,26 @@
 //! - `UntypedElementValue::UnstructuredBinary` lowers to
 //!   [`SchemaValue::Binary`]; same inline-only rule.
 //!
-//! ## Reverse (schema → legacy)
+//! ## Reverse (typed → legacy)
 //!
-//! [`typed_schema_value_to_untyped_data_value`] projects a
-//! [`TypedSchemaValue`] back into a legacy [`UntypedDataValue`] when the
-//! root shape matches one of the canonical input/output layouts:
+//! - [`typed_input_to_untyped_data_value`] projects an
+//!   `(InputSchema::Parameters, &[SchemaValue])` pair back into a legacy
+//!   `UntypedDataValue::Tuple(...)` with one element per parameter, in
+//!   declaration order.
+//! - [`typed_schema_value_to_untyped_data_value`] projects a
+//!   [`TypedSchemaValue`] (only ever an output-shaped value) back into a
+//!   legacy [`UntypedDataValue`]:
+//!   - `Tuple { elements: [] }` → `UntypedDataValue::Tuple(vec![])`.
+//!   - `List { element: Union with Role::Multimodal }` →
+//!     `UntypedDataValue::Multimodal(...)`.
+//!   - any other root (including real user-defined records that are
+//!     returned as a single-element method output) →
+//!     `UntypedDataValue::Tuple(vec![single])`.
 //!
-//! - `Tuple { elements: [] }` → `UntypedDataValue::Tuple(vec![])`.
-//! - `Record { fields }` → `UntypedDataValue::Tuple(...)` (one element
-//!   per field).
-//! - `List { element: Union with Role::Multimodal }` →
-//!   `UntypedDataValue::Multimodal(...)`.
-//! - any other root → `UntypedDataValue::Tuple(vec![single])`.
+//! Because inputs no longer travel as `TypedSchemaValue`, the reverse path
+//! never has to disambiguate a "synthetic input wrapper record" from a real
+//! user-defined record output — that ambiguity (and the marker role it
+//! used to require) is gone.
 //!
 //! For every position:
 //! - `SchemaValue::Text` projects to
@@ -88,24 +99,26 @@ use crate::schema::adapters::data_schema::{
 };
 use crate::schema::adapters::error::{SchemaAdapterError, resolve_ref};
 use crate::schema::adapters::value::{schema_value_to_value, value_to_schema_value};
-use crate::schema::agent::{InputSchema, NamedField, OutputSchema};
+use crate::schema::agent::{InputSchema, OutputSchema};
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::Role;
-use crate::schema::schema_type::{NamedFieldType, SchemaType, UnionBranch};
+use crate::schema::schema_type::{SchemaType, UnionBranch};
 use crate::schema::schema_value::{
     BinaryValuePayload, SchemaValue, TextValuePayload, UnionValuePayload,
 };
 
 // ===========================================================================
-// Forward: UntypedDataValue → TypedSchemaValue
+// Forward: UntypedDataValue → typed
 // ===========================================================================
 
 /// Convert a legacy `(UntypedDataValue, DataSchema)` pair representing
-/// method **inputs** into a [`TypedSchemaValue`].
+/// method **inputs** into the natural typed form of an input parameter
+/// list: a paired [`InputSchema::Parameters`] and a positionally aligned
+/// `Vec<SchemaValue>`.
 ///
-/// The resulting root [`SchemaType`] is a [`SchemaType::Record`] whose
-/// fields mirror the input parameters; the value tree is the matching
-/// [`SchemaValue::Record`].
+/// The shape mirrors `InputSchema = Parameters(Vec<NamedField>)` (§4.7 of
+/// the value-type-refactor design): inputs are a list of named parameters,
+/// not a single rooted value, so no synthetic wrapper is introduced.
 ///
 /// Fails if:
 /// - `schema` is [`DataSchema::Multimodal`] (multimodal is an output-only
@@ -116,10 +129,10 @@ use crate::schema::schema_value::{
 ///   counterpart, see [`SchemaAdapterError::LossySchemaType`]);
 /// - any element's component-model value does not match its declared
 ///   [`ElementSchema`].
-pub fn untyped_data_value_to_typed_schema_input(
+pub fn untyped_data_value_to_typed_input(
     value: UntypedDataValue,
     schema: &DataSchema,
-) -> Result<TypedSchemaValue, SchemaAdapterError> {
+) -> Result<(InputSchema, Vec<SchemaValue>), SchemaAdapterError> {
     let input_schema = data_schema_to_input_schema(schema)?;
     let DataSchema::Tuple(NamedElementSchemas {
         elements: schema_elements,
@@ -144,34 +157,14 @@ pub fn untyped_data_value_to_typed_schema_input(
         )));
     }
 
-    let InputSchema::Parameters(fields) = input_schema;
-    let mut record_fields = Vec::with_capacity(fields.len());
-    let mut record_values = Vec::with_capacity(fields.len());
-    for ((field, untyped), schema_element) in fields
+    let values = untyped_elements
         .into_iter()
-        .zip(untyped_elements)
         .zip(schema_elements.iter())
-    {
-        let NamedField {
-            name,
-            schema: field_schema,
-            metadata,
-            source: _,
-        } = field;
-        let value = untyped_element_to_schema_value(untyped, &schema_element.schema)?;
-        record_fields.push(NamedFieldType {
-            name,
-            body: field_schema,
-            metadata,
-        });
-        record_values.push(value);
-    }
-    Ok(TypedSchemaValue::new(
-        SchemaGraph::anonymous(SchemaType::record(record_fields)),
-        SchemaValue::Record {
-            fields: record_values,
-        },
-    ))
+        .map(|(untyped, schema_element)| {
+            untyped_element_to_schema_value(untyped, &schema_element.schema)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((input_schema, values))
 }
 
 /// Convert a legacy `(UntypedDataValue, DataSchema)` pair representing
@@ -181,11 +174,12 @@ pub fn untyped_data_value_to_typed_schema_input(
 /// [`super::data_schema::data_schema_to_output_schema`]:
 /// - empty tuple → empty [`SchemaType::Tuple`];
 /// - single tuple element → the element's schema and value inline;
-/// - multi-element tuple → [`SchemaType::Record`];
+/// - multi-element tuple → error. Golem agent methods only ever return 0 or
+///   1 element, so a multi-element output tuple is rejected;
 /// - multimodal → `list<union<…>>` with the inner union flagged
 ///   [`Role::Multimodal`].
 ///
-/// Failure modes mirror [`untyped_data_value_to_typed_schema_input`].
+/// Failure modes mirror [`untyped_data_value_to_typed_input`].
 pub fn untyped_data_value_to_typed_schema_output(
     value: UntypedDataValue,
     schema: &DataSchema,
@@ -232,22 +226,10 @@ pub fn untyped_data_value_to_typed_schema_output(
                         value,
                     ))
                 }
-                _ => {
-                    let OutputSchema::Single(root_type) = output_schema else {
-                        unreachable!("multi-element output must be OutputSchema::Single")
-                    };
-                    let values = untyped_elements
-                        .into_iter()
-                        .zip(schema_elements.iter())
-                        .map(|(untyped, schema_element)| {
-                            untyped_element_to_schema_value(untyped, &schema_element.schema)
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    Ok(TypedSchemaValue::new(
-                        SchemaGraph::anonymous(*root_type),
-                        SchemaValue::Record { fields: values },
-                    ))
-                }
+                // Multi-element output tuples are rejected by
+                // `data_schema_to_output_schema` above, so this branch is
+                // unreachable.
+                _ => unreachable!("multi-element output tuples are rejected at the schema layer"),
             }
         }
         (
@@ -359,21 +341,62 @@ fn untyped_element_to_schema_value(
 }
 
 // ===========================================================================
-// Reverse: TypedSchemaValue → UntypedDataValue
+// Reverse: typed → UntypedDataValue
 // ===========================================================================
 
-/// Project a [`TypedSchemaValue`] back into a legacy [`UntypedDataValue`].
+/// Project an input parameter list `(InputSchema::Parameters, &[SchemaValue])`
+/// back into a legacy [`UntypedDataValue::Tuple`].
+///
+/// The two halves must have the same length and are zipped positionally:
+/// the i-th `SchemaValue` is projected against the i-th parameter's
+/// declared [`crate::schema::schema_type::SchemaType`] (resolved through
+/// the optional schema graph carried by `schema`'s [`NamedField`]s — for
+/// the legacy bridge, each field body is inline and self-contained, so an
+/// anonymous graph is sufficient).
+///
+/// Per-element projection mirrors the forward direction: `SchemaValue::Text`
+/// → `UnstructuredText`, `SchemaValue::Binary` → `UnstructuredBinary`,
+/// everything else lowered via
+/// [`super::value::schema_value_to_value`] and wrapped in
+/// `ComponentModel`.
+pub fn typed_input_to_untyped_data_value(
+    schema: &InputSchema,
+    values: &[SchemaValue],
+) -> Result<UntypedDataValue, SchemaAdapterError> {
+    let InputSchema::Parameters(fields) = schema;
+    if fields.len() != values.len() {
+        return Err(SchemaAdapterError::ValueShapeMismatch(format!(
+            "input parameter arity mismatch: schema declares {} parameters, value has {}",
+            fields.len(),
+            values.len()
+        )));
+    }
+    // The legacy `UntypedDataValue::Tuple` carries one inline element per
+    // parameter; each parameter's `SchemaType` is self-contained, so an
+    // anonymous graph for `schema_value_to_untyped_element` is sufficient.
+    let graph = SchemaGraph::anonymous(SchemaType::tuple(Vec::new()));
+    let elements = fields
+        .iter()
+        .zip(values.iter())
+        .map(|(field, value)| schema_value_to_untyped_element(&graph, &field.schema, value))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(UntypedDataValue::Tuple(elements))
+}
+
+/// Project a [`TypedSchemaValue`] (always an **output**-shaped value, since
+/// inputs travel as `(InputSchema, Vec<SchemaValue>)` instead) back into a
+/// legacy [`UntypedDataValue`].
 ///
 /// The decision between [`UntypedDataValue::Tuple`] and
 /// [`UntypedDataValue::Multimodal`] is taken from the root [`SchemaType`]:
 ///
 /// - `Tuple { elements: [] }` → `Tuple(vec![])` (canonical empty output).
-/// - `Record { fields }` → `Tuple(...)` with one element per field, in
-///   declaration order.
 /// - `List { element: Union { metadata.role = Multimodal } }` →
 ///   `Multimodal(...)` with one [`UntypedNamedElementValue`] per list
 ///   element.
-/// - any other root → `Tuple(vec![single])` carrying the whole value.
+/// - any other root, including real user-defined records that are returned
+///   as a single-element method output, → `Tuple(vec![single])` carrying the
+///   whole value.
 ///
 /// Per-element projection mirrors the forward direction: `SchemaValue::Text`
 /// → `UnstructuredText`, `SchemaValue::Binary` → `UnstructuredBinary`,
@@ -390,26 +413,6 @@ pub fn typed_schema_value_to_untyped_data_value(
             if elements.is_empty() && values.is_empty() =>
         {
             Ok(UntypedDataValue::Tuple(Vec::new()))
-        }
-        (
-            SchemaType::Record { fields, .. },
-            SchemaValue::Record {
-                fields: field_values,
-            },
-        ) => {
-            if fields.len() != field_values.len() {
-                return Err(SchemaAdapterError::ValueShapeMismatch(format!(
-                    "record arity mismatch: schema has {} fields, value has {}",
-                    fields.len(),
-                    field_values.len()
-                )));
-            }
-            let elements = fields
-                .iter()
-                .zip(field_values.iter())
-                .map(|(field, value)| schema_value_to_untyped_element(graph, &field.body, value))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(UntypedDataValue::Tuple(elements))
         }
         (
             SchemaType::List { element, .. },

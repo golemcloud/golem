@@ -597,7 +597,45 @@ fn data_schema_tuple_output_single_round_trip() {
 }
 
 #[test]
-fn data_schema_tuple_output_multi_round_trip() {
+fn data_schema_tuple_output_single_record_round_trip() {
+    // A method returning a single value of type Record (a real record),
+    // which must NOT be confused with the synthetic multi-output wrapper.
+    // Reproduces PR #3605 failure where the reverse mapping flattens the
+    // record into multiple legacy `DataSchema::Tuple` elements.
+    let ds = DataSchema::Tuple(NamedElementSchemas {
+        elements: vec![NamedElementSchema {
+            name: "value".into(),
+            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                element_type: record(vec![field("x", s32()), field("y", str())]),
+            }),
+        }],
+    });
+    let output = data_schema_to_output_schema(&ds).unwrap();
+    // The single-element case must NOT mark the inner record as the
+    // synthetic wrapper.
+    if let OutputSchema::Single(boxed) = &output {
+        if let SchemaType::Record { metadata, .. } = boxed.as_ref() {
+            assert_eq!(
+                metadata.role, None,
+                "single-element output record must not be marked as a synthetic wrapper"
+            );
+        } else {
+            panic!("expected Single(Record(...)), got {output:?}");
+        }
+    } else {
+        panic!("expected OutputSchema::Single, got {output:?}");
+    }
+    let graph = SchemaGraph::anonymous(SchemaType::bool());
+    let back = output_schema_to_data_schema(&graph, &output).unwrap();
+    assert_eq!(ds, back);
+}
+
+#[test]
+fn data_schema_tuple_output_multi_rejected() {
+    // Golem agent methods only ever return 0 or 1 output element. The
+    // schema-layer adapter must reject multi-element output tuples rather
+    // than silently round-tripping them (the reverse cannot distinguish a
+    // synthetic multi-output wrapper from a real user-defined record).
     let ds = DataSchema::Tuple(NamedElementSchemas {
         elements: vec![
             NamedElementSchema {
@@ -612,10 +650,8 @@ fn data_schema_tuple_output_multi_round_trip() {
             },
         ],
     });
-    let output = data_schema_to_output_schema(&ds).unwrap();
-    let graph = SchemaGraph::anonymous(SchemaType::bool());
-    let back = output_schema_to_data_schema(&graph, &output).unwrap();
-    assert_eq!(ds, back);
+    let err = data_schema_to_output_schema(&ds).unwrap_err();
+    assert!(matches!(err, SchemaAdapterError::ValueShapeMismatch(_)));
 }
 
 #[test]
@@ -688,24 +724,15 @@ fn agent_type_round_trip() {
                     }),
                 }],
             }),
-            // Multi-element output preserves the field names through the
-            // round-trip (single-element forms collapse into an anonymous
-            // body and rehydrate with the fallback `value` name).
+            // Single-element output forms collapse into an anonymous body
+            // and rehydrate with the fallback `value` name; multi-element
+            // outputs are not supported (Golem agent methods only ever
+            // return 0 or 1 element).
             output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![
-                    NamedElementSchema {
-                        name: "report".into(),
-                        schema: ElementSchema::UnstructuredText(TextDescriptor {
-                            restrictions: None,
-                        }),
-                    },
-                    NamedElementSchema {
-                        name: "summary".into(),
-                        schema: ElementSchema::UnstructuredText(TextDescriptor {
-                            restrictions: None,
-                        }),
-                    },
-                ],
+                elements: vec![NamedElementSchema {
+                    name: "value".into(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+                }],
             }),
             http_endpoint: vec![],
             read_only: None,
@@ -1149,8 +1176,8 @@ mod untyped_round_trip {
         UntypedNamedElementValue,
     };
     use crate::schema::adapters::untyped::{
-        typed_schema_value_to_untyped_data_value, untyped_data_value_to_typed_schema_input,
-        untyped_data_value_to_typed_schema_output,
+        typed_input_to_untyped_data_value, typed_schema_value_to_untyped_data_value,
+        untyped_data_value_to_typed_input, untyped_data_value_to_typed_schema_output,
     };
     use golem_wasm::Value;
     use test_r::test;
@@ -1190,14 +1217,15 @@ mod untyped_round_trip {
     fn input_two_fields_round_trip() {
         let value = input_value_two_fields();
         let schema = input_schema_two_fields();
-        let typed = untyped_data_value_to_typed_schema_input(value.clone(), &schema).unwrap();
-        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        let (input_schema, values) =
+            untyped_data_value_to_typed_input(value.clone(), &schema).unwrap();
+        let back = typed_input_to_untyped_data_value(&input_schema, &values).unwrap();
         assert_eq!(value, back);
     }
 
     #[test]
     fn input_multimodal_data_schema_rejected() {
-        let err = untyped_data_value_to_typed_schema_input(
+        let err = untyped_data_value_to_typed_input(
             UntypedDataValue::Tuple(vec![]),
             &DataSchema::Multimodal(NamedElementSchemas { elements: vec![] }),
         )
@@ -1207,7 +1235,7 @@ mod untyped_round_trip {
 
     #[test]
     fn input_multimodal_value_rejected() {
-        let err = untyped_data_value_to_typed_schema_input(
+        let err = untyped_data_value_to_typed_input(
             UntypedDataValue::Multimodal(vec![]),
             &DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
         )
@@ -1242,12 +1270,15 @@ mod untyped_round_trip {
     }
 
     #[test]
-    fn output_multi_record_round_trip() {
+    fn output_multi_record_rejected() {
+        // Multi-element output tuples are not supported (Golem agent methods
+        // only ever return 0 or 1 output element); the adapter must reject
+        // them rather than silently flattening into / out of a synthetic
+        // wrapper record.
         let value = input_value_two_fields();
         let schema = input_schema_two_fields();
-        let typed = untyped_data_value_to_typed_schema_output(value.clone(), &schema).unwrap();
-        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
-        assert_eq!(value, back);
+        let err = untyped_data_value_to_typed_schema_output(value, &schema).unwrap_err();
+        assert!(matches!(err, SchemaAdapterError::ValueShapeMismatch(_)));
     }
 
     #[test]
@@ -1294,6 +1325,32 @@ mod untyped_round_trip {
     }
 
     #[test]
+    fn output_single_record_round_trip() {
+        // A method returning a single value of type Record (a real record,
+        // not a synthetic wrapper for multi-element output).
+        // Reproduces PR #3605 failure where the reverse mapping flattens the
+        // record into multiple tuple elements, breaking the SDK contract
+        // (`Tuple([single_record])`).
+        let inner_record_type = record(vec![field("u8v", u32()), field("s", str())]);
+        let inner_record_value =
+            Value::Record(vec![Value::U32(42), Value::String("sample".into())]);
+        let value = UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+            inner_record_value.clone(),
+        )]);
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "value".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: inner_record_type,
+                }),
+            }],
+        });
+        let typed = untyped_data_value_to_typed_schema_output(value.clone(), &schema).unwrap();
+        let back = typed_schema_value_to_untyped_data_value(&typed).unwrap();
+        assert_eq!(value, back);
+    }
+
+    #[test]
     fn url_text_reference_is_lossy() {
         let value = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredText(
             TextReferenceValue {
@@ -1308,7 +1365,7 @@ mod untyped_round_trip {
                 schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
             }],
         });
-        let err = untyped_data_value_to_typed_schema_input(value, &schema).unwrap_err();
+        let err = untyped_data_value_to_typed_input(value, &schema).unwrap_err();
         assert!(matches!(err, SchemaAdapterError::LossySchemaType(_)));
     }
 }
