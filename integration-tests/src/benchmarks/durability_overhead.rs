@@ -15,7 +15,7 @@
 use crate::benchmarks::{cleanup_user_state, delete_workers, invoke_and_await_agent};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::base_model::agent::LegacyParsedAgentId;
 use golem_common::model::AgentId;
 use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::environment::EnvironmentId;
@@ -39,14 +39,17 @@ pub struct DurabilityOverheadBenchmarkContext {
 pub struct DurabilityOverheadIterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
-    durable_persistent_agent_ids: Vec<ParsedAgentId>,
-    durable_nonpersistent_agent_ids: Vec<ParsedAgentId>,
-    ephemeral_agent_ids: Vec<ParsedAgentId>,
-    durable_persistent_commit_agent_ids: Vec<ParsedAgentId>,
+    durable_persistent_agent_ids: Vec<LegacyParsedAgentId>,
+    durable_nonpersistent_agent_ids: Vec<LegacyParsedAgentId>,
+    ephemeral_agent_ids: Vec<LegacyParsedAgentId>,
+    durable_persistent_commit_agent_ids: Vec<LegacyParsedAgentId>,
     env_id: EnvironmentId,
 }
 
-fn agent_ids_to_agent_ids(component_id: ComponentId, agent_ids: &[ParsedAgentId]) -> Vec<AgentId> {
+fn agent_ids_to_agent_ids(
+    component_id: ComponentId,
+    agent_ids: &[LegacyParsedAgentId],
+) -> Vec<AgentId> {
     agent_ids
         .iter()
         .filter_map(|agent_id| AgentId::from_agent_id(component_id, agent_id).ok())
@@ -160,7 +163,7 @@ impl Benchmark for DurabilityOverhead {
         async fn warmup_group(
             user: &TestUserContext<BenchmarkTestDependencies>,
             component: &ComponentDto,
-            ids: &[ParsedAgentId],
+            ids: &[LegacyParsedAgentId],
         ) {
             let result_futures = ids
                 .iter()

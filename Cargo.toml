@@ -15,6 +15,7 @@ members = [
     "golem-worker-executor-test-utils",
     "golem-worker-service",
     "integration-tests",
+    "golem-schema-derive",
     "golem-wasm",
     "golem-wasm-derive",
     "cli/golem",
@@ -38,6 +39,7 @@ golem-common = { version = "=0.0.0", path = "golem-common", default-features = f
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-registry-service = { path = "golem-registry-service" }
+golem-schema-derive = { version = "=0.0.0", path = "golem-schema-derive" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
@@ -274,6 +276,7 @@ tree-sitter-typescript = "0.23.2"
 tree-sitter-yaml = "0.7.2"
 tower = "0.5.2"
 try_match = "0.4.2"
+trybuild = "1.0"
 tryhard = "0.5.1"
 typed-path = "0.10.0"
 unicode-segmentation = "1.12.0"

@@ -29,7 +29,7 @@ use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::base_model::{AgentId, PromiseId};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::{DataValue, ParsedAgentId};
+use golem_common::model::agent::{DataValue, LegacyParsedAgentId};
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::{
@@ -255,7 +255,7 @@ pub trait TestDsl {
     async fn try_start_agent(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: LegacyParsedAgentId,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
         self.try_start_agent_with(
             component_id,
@@ -269,7 +269,7 @@ pub trait TestDsl {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: LegacyParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>>;
@@ -277,7 +277,7 @@ pub trait TestDsl {
     async fn start_agent(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: LegacyParsedAgentId,
     ) -> anyhow::Result<AgentId> {
         self.start_agent_with(
             component_id,
@@ -291,7 +291,7 @@ pub trait TestDsl {
     async fn start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: LegacyParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<AgentId> {
@@ -304,7 +304,7 @@ pub trait TestDsl {
     async fn invoke_agent(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<()> {
@@ -321,7 +321,7 @@ pub trait TestDsl {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
@@ -330,7 +330,7 @@ pub trait TestDsl {
     async fn invoke_and_await_agent(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
@@ -341,7 +341,7 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_at_deployment(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         deployment_revision: DeploymentRevision,
         method_name: &str,
         params: DataValue,
@@ -361,7 +361,7 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
@@ -387,7 +387,7 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_as_principal(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         principal: golem_common::model::agent::Principal,
         method_name: &str,
         params: DataValue,
@@ -407,7 +407,7 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
         principal: Option<golem_common::model::agent::Principal>,

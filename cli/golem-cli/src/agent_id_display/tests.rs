@@ -507,21 +507,22 @@ fn canonical_fallback_always_accepted() {
 
 #[test]
 fn render_agent_id_format() {
-    use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+    use golem_common::model::agent::{AgentTypeName, LegacyParsedAgentId};
     let data = cm_value(Value::U32(42), AnalysedType::U32(TypeU32));
-    let parsed = ParsedAgentId::new(AgentTypeName("my-agent".to_string()), data, None).unwrap();
+    let parsed =
+        LegacyParsedAgentId::new(AgentTypeName("my-agent".to_string()), data, None).unwrap();
     let result = render_agent_id(&parsed, &SourceLanguage::Rust);
     assert_eq!(result, "my-agent(42)");
 }
 
 #[test]
 fn render_agent_id_with_phantom() {
-    use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+    use golem_common::model::agent::{AgentTypeName, LegacyParsedAgentId};
     use uuid::Uuid;
     let data = cm_value(Value::U32(42), AnalysedType::U32(TypeU32));
     let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
     let parsed =
-        ParsedAgentId::new(AgentTypeName("my-agent".to_string()), data, Some(uuid)).unwrap();
+        LegacyParsedAgentId::new(AgentTypeName("my-agent".to_string()), data, Some(uuid)).unwrap();
     let result = render_agent_id(&parsed, &SourceLanguage::Rust);
     assert_eq!(result, "my-agent(42)[12345678-1234-1234-1234-123456789012]");
 }

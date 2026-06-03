@@ -18,7 +18,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, AgentTypeName, LegacyParsedAgentId};
 use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -893,12 +893,12 @@ fn parse_multipart_snapshot(snapshot: RawSnapshotData) -> PublicSnapshotData {
 async fn try_resolve_agent_id(
     component_service: Arc<dyn ComponentService>,
     agent_id: &AgentId,
-) -> Option<ParsedAgentId> {
+) -> Option<LegacyParsedAgentId> {
     if let Ok(component) = component_service
         .get_metadata(agent_id.component_id, None)
         .await
     {
-        ParsedAgentId::parse(&agent_id.agent_id, &component.metadata).ok()
+        LegacyParsedAgentId::parse(&agent_id.agent_id, &component.metadata).ok()
     } else {
         None
     }
@@ -932,7 +932,7 @@ fn resolve_agent_type_from_worker_name(
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
     worker_name: &str,
 ) -> Option<golem_common::model::agent::AgentType> {
-    ParsedAgentId::parse_agent_type_name(worker_name)
+    LegacyParsedAgentId::parse_agent_type_name(worker_name)
         .ok()
         .and_then(|type_name| metadata.find_agent_type_by_name(&type_name))
 }

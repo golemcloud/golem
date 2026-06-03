@@ -21,7 +21,7 @@ use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::LegacyParsedAgentId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::oplog::OplogCursor;
@@ -1133,9 +1133,9 @@ fn normalize_agent_name_with_latest_component(
 ) -> Result<AgentId> {
     if latest_component.metadata.is_agent()
         && let Ok((parsed_agent_id, agent_type)) =
-            ParsedAgentId::parse_and_resolve_type(agent_id, &latest_component.metadata)
+            LegacyParsedAgentId::parse_and_resolve_type(agent_id, &latest_component.metadata)
     {
-        let normalized_agent_id = ParsedAgentId::new_auto_phantom(
+        let normalized_agent_id = LegacyParsedAgentId::new_auto_phantom(
             parsed_agent_id.agent_type,
             parsed_agent_id.parameters,
             parsed_agent_id.phantom_id,

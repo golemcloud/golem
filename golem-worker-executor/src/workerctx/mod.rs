@@ -44,7 +44,7 @@ use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -121,7 +121,7 @@ pub trait WorkerCtx:
     async fn create(
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        agent_id: Option<LegacyParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -174,7 +174,7 @@ pub trait WorkerCtx:
     fn owned_agent_id(&self) -> &OwnedAgentId;
 
     /// Get the agent-id resolved from the worker name
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId>;
+    fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId>;
 
     fn agent_mode(&self) -> AgentMode;
 

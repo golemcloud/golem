@@ -61,7 +61,7 @@ use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
 use self::worker::TypedAgentConfigEntry;
 use crate::base_model::agent::AgentMode;
-use crate::base_model::agent::ParsedAgentId;
+use crate::base_model::agent::LegacyParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::account::AccountId;
@@ -121,7 +121,7 @@ impl AgentId {
 
     pub fn from_agent_id(
         component_id: ComponentId,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
     ) -> Result<AgentId, String> {
         let agent_id = agent_id.to_string();
         Self::validate_length(&agent_id)?;
@@ -136,7 +136,10 @@ impl AgentId {
         agent_id: S,
         resolver: impl AgentTypeResolver,
     ) -> Result<AgentId, String> {
-        Self::from_agent_id(component_id, &ParsedAgentId::parse(agent_id, resolver)?)
+        Self::from_agent_id(
+            component_id,
+            &LegacyParsedAgentId::parse(agent_id, resolver)?,
+        )
     }
 
     pub fn from_component_metadata_and_agent_id<S: AsRef<str>>(
@@ -176,7 +179,7 @@ impl AgentId {
     ) -> Result<AgentId, String> {
         let id = id.as_ref();
 
-        match ParsedAgentId::normalize_text(id) {
+        match LegacyParsedAgentId::normalize_text(id) {
             Ok(normalized) => {
                 if normalized.len() > Self::AGENT_ID_MAX_LENGTH {
                     return Err(format!(

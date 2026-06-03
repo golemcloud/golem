@@ -91,7 +91,7 @@ use futures::TryStreamExt;
 use futures::future::try_join_all;
 use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
@@ -283,7 +283,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        agent_id: Option<LegacyParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -587,7 +587,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.created_by
     }
 
-    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    pub fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
         self.state.agent_id.clone()
     }
 
@@ -4035,7 +4035,7 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<ParsedAgentId>,
+    agent_id: Option<LegacyParsedAgentId>,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -4163,7 +4163,7 @@ struct PrivateDurableWorkerState {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<ParsedAgentId>,
+        agent_id: Option<LegacyParsedAgentId>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,

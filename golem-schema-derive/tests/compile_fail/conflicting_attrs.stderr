@@ -1,0 +1,5 @@
+error: conflicting rich-scalar attributes on the same item (only one of text/binary/path/url/quantity/secret/quota_token allowed)
+  --> tests/compile_fail/conflicting_attrs.rs:19:5
+   |
+19 |     #[schema(text(min = 1), binary(min_bytes = 0))]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -90,6 +90,7 @@ cp wit/deps/io golem-wasm/wit/deps
 cp wit/deps/clocks golem-wasm/wit/deps
 cp wit/deps/golem-1.x golem-wasm/wit/deps
 cp wit/deps/golem-core golem-wasm/wit/deps
+cp wit/deps/golem-core-v2 golem-wasm/wit/deps
 """
 
 [tasks.wit-golem-common]
@@ -102,6 +103,7 @@ cp wit/deps/io golem-common/wit/deps
 cp wit/deps/clocks golem-common/wit/deps
 cp wit/deps/golem-1.x golem-common/wit/deps
 cp wit/deps/golem-core golem-common/wit/deps
+cp wit/deps/golem-core-v2 golem-common/wit/deps
 cp wit/deps/golem-agent golem-common/wit/deps
 """
 
@@ -123,6 +125,13 @@ glob_cp wit/deps/**/* sdks/ts/wit/deps
 glob_cp sdks/ts/wit/golem-ai/**/* sdks/ts/wit/deps
 glob_cp wit/deps/**/* sdks/scala/wit/deps
 glob_cp wit/deps/**/* sdks/moonbit/golem_sdk/wit/deps
+# The SDKs' agent-guest worlds reference golem:core@1.5.0 only.
+# Including golem:core@2.0.0 causes wit-bindgen to emit version-suffixed
+# module paths (e.g. golem::core1_5_0), which breaks downstream code generators.
+rm -r sdks/rust/golem-rust/wit/deps/golem-core-v2
+rm -r sdks/ts/wit/deps/golem-core-v2
+rm -r sdks/scala/wit/deps/golem-core-v2
+rm -r sdks/moonbit/golem_sdk/wit/deps/golem-core-v2
 """
 
 [tasks.wit-golem-cli]
@@ -135,6 +144,7 @@ cp wit/deps/clocks cli/golem-cli/wit/deps
 cp wit/deps/io cli/golem-cli/wit/deps
 cp wit/deps/golem-1.x cli/golem-cli/wit/deps
 cp wit/deps/golem-core cli/golem-cli/wit/deps
+cp wit/deps/golem-core-v2 cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
 cp wit/deps/logging cli/golem-cli/wit/deps
 """

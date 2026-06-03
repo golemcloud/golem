@@ -303,7 +303,7 @@ pub struct AgentTypes {
 // by normal production code paths. Lenient variants skip that check so oversized ids can
 // still be represented temporarily for tests and diagnostics, but they are not intended for
 // general runtime use because AgentId creation still validates the final identifier length.
-impl ParsedAgentId {
+impl LegacyParsedAgentId {
     pub fn new(
         agent_type: AgentTypeName,
         parameters: DataValue,
@@ -469,7 +469,7 @@ impl ParsedAgentId {
     }
 }
 
-impl Display for ParsedAgentId {
+impl Display for LegacyParsedAgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_string)
     }
