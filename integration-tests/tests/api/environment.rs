@@ -19,6 +19,9 @@ use golem_client::api::{
 };
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentUpdate};
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use pretty_assertions::{assert_eq, assert_matches};
@@ -314,9 +317,27 @@ async fn list_visible_environments_shows_owned_and_shared(
     let env_1b = owner.env(&app_1.id).await?;
     let (_, env_2a) = owner.app_and_env().await?;
 
-    // Share one environment with grantee
-    owner
-        .share_environment(&env_1b.id, &grantee.account_id, &[EnvironmentRole::Admin])
+    // Share one environment with grantee through the card-based permission-share path.
+    client_owner
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_id: grantee.account_id,
+                name: PermissionShareName("visible-environment-access".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![format!(
+                        "environment({}/{}) @ {} : view : {}",
+                        owner.account_id,
+                        app_1.name.0,
+                        grantee.account_email.as_str(),
+                        env_1b.name.0,
+                    )],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
         .await?;
 
     // Owner sees all environments
