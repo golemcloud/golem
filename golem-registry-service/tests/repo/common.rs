@@ -303,7 +303,6 @@ pub async fn test_environment_create(deps: &Deps) {
                 app.revision.application_id,
                 env_name,
                 user.revision.account_id,
-                false,
             )
             .await
             .unwrap()
@@ -338,7 +337,6 @@ pub async fn test_environment_create(deps: &Deps) {
             app.revision.application_id,
             env_name,
             user.revision.account_id,
-            false,
         )
         .await
         .unwrap();
@@ -350,7 +348,6 @@ pub async fn test_environment_create(deps: &Deps) {
         .get_by_id(
             env.revision.environment_id,
             user.revision.account_id,
-            false,
             false,
         )
         .await
@@ -440,7 +437,6 @@ pub async fn test_environment_update(deps: &Deps) {
             env_rev_0.application_id,
             &env_rev_0.revision.name,
             user.revision.account_id,
-            false,
         )
         .await
         .unwrap();
@@ -454,7 +450,6 @@ pub async fn test_environment_update(deps: &Deps) {
         .get_by_id(
             env_rev_1.environment_id,
             user.revision.account_id,
-            false,
             false,
         )
         .await
@@ -499,7 +494,6 @@ pub async fn test_environment_update(deps: &Deps) {
             env_rev_0.application_id,
             &env_rev_0.revision.name,
             user.revision.account_id,
-            false,
         )
         .await
         .unwrap();
@@ -513,7 +507,6 @@ pub async fn test_environment_update(deps: &Deps) {
         .get_by_id(
             env_rev_2.environment_id,
             user.revision.account_id,
-            false,
             false,
         )
         .await

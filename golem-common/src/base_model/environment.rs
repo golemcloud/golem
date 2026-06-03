@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::account::{AccountId, AccountSummary};
-use crate::base_model::application::{ApplicationId, ApplicationSummary};
+use crate::base_model::application::{ApplicationId, ApplicationName, ApplicationSummary};
 use crate::base_model::auth::EnvironmentRole;
 use crate::base_model::deployment::{
     CurrentDeploymentRevision, DeploymentRevision, DeploymentVersion,
@@ -91,6 +91,7 @@ declare_structs! {
         pub id: EnvironmentId,
         pub revision: EnvironmentRevision,
         pub application_id: ApplicationId,
+        pub application_name: ApplicationName,
         pub name: EnvironmentName,
         pub diff_model_version: u32,
         pub compatibility_check: bool,

@@ -36,7 +36,6 @@ use golem_common::model::environment::{
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
@@ -192,11 +191,7 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         let mut environment = self.get(environment_id, false, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateEnvironment,
-        )?;
+        authorize_environment_model(auth, &environment, EnvironmentVerb::Update)?;
 
         if update.current_revision != environment.revision {
             return Err(EnvironmentError::ConcurrentModification);
@@ -245,11 +240,7 @@ impl EnvironmentService {
     ) -> Result<(), EnvironmentError> {
         let mut environment = self.get(environment_id, false, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteEnvironment,
-        )?;
+        authorize_environment_model(auth, &environment, EnvironmentVerb::Delete)?;
 
         if current_revision != environment.revision {
             return Err(EnvironmentError::ConcurrentModification);
@@ -286,18 +277,13 @@ impl EnvironmentService {
                 environment_id.0,
                 auth.access_account_id().0,
                 include_deleted,
-                auth.should_override_storage_visibility_rules(),
             )
             .await?
             .ok_or(EnvironmentError::EnvironmentNotFound(environment_id))?
             .try_into()?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironment,
-        )
-        .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id))?;
+        authorize_environment_model(auth, &environment, EnvironmentVerb::View)
+            .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id))?;
 
         Ok(environment)
     }
@@ -310,22 +296,13 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         let result: Environment = self
             .environment_repo
-            .get_by_name(
-                application_id.0,
-                &name.0,
-                auth.access_account_id().0,
-                auth.should_override_storage_visibility_rules(),
-            )
+            .get_by_name(application_id.0, &name.0, auth.access_account_id().0)
             .await?
             .ok_or(EnvironmentError::EnvironmentByNameNotFound(name.clone()))?
             .try_into()?;
 
-        auth.authorize_environment_action(
-            result.owner_account_id,
-            &result.roles_from_active_shares,
-            EnvironmentAction::ViewEnvironment,
-        )
-        .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
+        authorize_environment_model(auth, &result, EnvironmentVerb::View)
+            .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
 
         Ok(result)
     }
@@ -340,15 +317,10 @@ impl EnvironmentService {
 
         for record in self
             .environment_repo
-            .list_by_app(
-                application_id.0,
-                auth.access_account_id().0,
-                auth.should_override_storage_visibility_rules(),
-            )
+            .list_by_app(application_id.0, auth.access_account_id().0)
             .await?
         {
             let owner_account_id = record.owner_account_id();
-            let environment_roles_from_shares = record.environment_roles_from_shares();
 
             let environment: Option<Environment> = record
                 .into_revision_record()
@@ -358,13 +330,7 @@ impl EnvironmentService {
             application_owner_id.get_or_insert(owner_account_id);
 
             if let Some(environment) = environment
-                && auth
-                    .authorize_environment_action(
-                        owner_account_id,
-                        &environment_roles_from_shares,
-                        EnvironmentAction::ViewEnvironment,
-                    )
-                    .is_ok()
+                && authorize_environment_model(auth, &environment, EnvironmentVerb::View).is_ok()
             {
                 authorized_environments.push(environment);
             }
@@ -413,15 +379,8 @@ impl EnvironmentService {
             .map(EnvironmentWithDetails::try_from)
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
-            // Should not be necessary due to the repo already filtering, but check auth here to be on the safe side
-            .filter(|e| {
-                auth.authorize_environment_action(
-                    e.account.id,
-                    &e.environment.roles_from_active_shares,
-                    EnvironmentAction::ViewEnvironment,
-                )
-                .is_ok()
-            })
+            // The repo fetches candidates; card authorization decides visibility.
+            .filter(|e| authorize_environment_details(auth, e, EnvironmentVerb::View).is_ok())
             .collect::<Vec<_>>()
             .pipe(Ok)
     }
@@ -442,6 +401,36 @@ fn authorize_environment_permission(
         },
         resource,
     }))
+}
+
+fn authorize_environment_model(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentVerb,
+) -> Result<(), AuthorizationError> {
+    authorize_environment_permission(
+        auth,
+        environment.owner_account_id,
+        &environment.application_name,
+        verb,
+        EnvironmentResourcePattern::Environment(CardEnvironmentName(environment.name.0.clone())),
+    )
+}
+
+fn authorize_environment_details(
+    auth: &AuthCtx,
+    environment: &EnvironmentWithDetails,
+    verb: EnvironmentVerb,
+) -> Result<(), AuthorizationError> {
+    authorize_environment_permission(
+        auth,
+        environment.account.id,
+        &environment.application.name,
+        verb,
+        EnvironmentResourcePattern::Environment(CardEnvironmentName(
+            environment.environment.name.0.clone(),
+        )),
+    )
 }
 
 fn authorize_application_permission(

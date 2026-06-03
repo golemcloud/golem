@@ -21,7 +21,7 @@ use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentUpdate};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
-use pretty_assertions::assert_eq;
+use pretty_assertions::{assert_eq, assert_matches};
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 
@@ -63,12 +63,12 @@ async fn create_and_get_environments(deps: &EnvBasedTestDependencies) -> anyhow:
         let result = client
             .get_application_environment(&app.id.0, &env_2.name.0)
             .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
             ))
-        ));
+        );
     }
 
     {
@@ -101,22 +101,22 @@ async fn other_users_cannot_get_applications(
         let result = client
             .get_application_environment(&app.id.0, &env.name.0)
             .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
             ))
-        ));
+        );
     }
 
     {
         let result = client.list_application_environments(&app.id.0).await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceListApplicationEnvironmentsError::Error404(_)
             ))
-        ));
+        );
     }
 
     Ok(())
@@ -142,24 +142,24 @@ async fn deleting_account_hides_environments(
 
     {
         let result = admin_client.list_application_environments(&app.id.0).await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceListApplicationEnvironmentsError::Error404(_)
             ))
-        ));
+        );
     }
 
     {
         let result = admin_client
             .get_application_environment(&app.id.0, &env.name.0)
             .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
             ))
-        ));
+        );
     }
     Ok(())
 }
@@ -181,24 +181,24 @@ async fn deleting_application_hides_environments(
 
     {
         let result = client.list_application_environments(&app.id.0).await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceListApplicationEnvironmentsError::Error404(_)
             ))
-        ));
+        );
     }
 
     {
         let result = client
             .get_application_environment(&app.id.0, &env.name.0)
             .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
             ))
-        ));
+        );
     }
     Ok(())
 }
@@ -227,12 +227,12 @@ async fn cannot_create_two_environments_with_same_name(
                 },
             )
             .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceCreateEnvironmentError::Error409(_)
             ))
-        ));
+        );
     }
 
     // try to rename environment to conflicting name
@@ -250,12 +250,12 @@ async fn cannot_create_two_environments_with_same_name(
             )
             .await;
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceUpdateEnvironmentError::Error409(_)
             ))
-        ));
+        );
     }
 
     // delete the environment, now creating a new one will succeed

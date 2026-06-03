@@ -436,14 +436,6 @@ impl AuthCtx {
         }
     }
 
-    /// Whether storage-level visibility rules (e.g. environment ownership and share checks)
-    /// should be bypassed. Only `System` (internal service calls) bypasses these rules.
-    /// Human accounts — including admins — are subject to normal ownership and share checks.
-    /// Admins who need to act on another account's resources must use an impersonation token.
-    pub fn should_override_storage_visibility_rules(&self) -> bool {
-        self.is_system()
-    }
-
     pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
         if self.is_system() {
             return Ok(());
