@@ -246,6 +246,8 @@ pub enum EnvironmentAction {
 pub enum AuthorizationError {
     #[error("The global action {0} is not allowed")]
     GlobalActionNotAllowed(GlobalAction),
+    #[error("The system-only action {0} is not allowed")]
+    SystemOnlyActionNotAllowed(String),
     #[error("The plan action {0} is not allowed")]
     PlanActionNotAllowed(PlanAction),
     #[error("The account action {0} is not allowed")]
@@ -364,6 +366,19 @@ impl AuthCtx {
 
     pub fn is_system(&self) -> bool {
         matches!(self, AuthCtx::System)
+    }
+
+    pub fn authorize_system_only(
+        &self,
+        action: impl Into<String>,
+    ) -> Result<(), AuthorizationError> {
+        if self.is_system() {
+            Ok(())
+        } else {
+            Err(AuthorizationError::SystemOnlyActionNotAllowed(
+                action.into(),
+            ))
+        }
     }
 
     /// The account ID recorded in audit fields (created_by).
