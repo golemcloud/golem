@@ -896,8 +896,9 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
         environment_options: &EnvironmentOptions,
     ) -> anyhow::Result<(Application, Environment)> {
         let client = self.registry_service_client().await;
-        let app_name = ApplicationName(format!("app-{}", Uuid::new_v4()));
-        let env_name = EnvironmentName(format!("env-{}", Uuid::new_v4()));
+        let prefix = self.deps.bench_name_prefix().unwrap_or_default();
+        let app_name = ApplicationName(format!("{prefix}app-{}", Uuid::new_v4()));
+        let env_name = EnvironmentName(format!("{prefix}env-{}", Uuid::new_v4()));
 
         let application = client
             .create_application(

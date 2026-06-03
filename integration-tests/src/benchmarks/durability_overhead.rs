@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{delete_workers, invoke_and_await_agent};
+use crate::benchmarks::{cleanup_user_state, delete_workers, invoke_and_await_agent};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
 use golem_common::base_model::agent::LegacyParsedAgentId;
 use golem_common::model::AgentId;
 use golem_common::model::component::{ComponentDto, ComponentId};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -42,6 +43,7 @@ pub struct DurabilityOverheadIterationContext {
     durable_nonpersistent_agent_ids: Vec<LegacyParsedAgentId>,
     ephemeral_agent_ids: Vec<LegacyParsedAgentId>,
     durable_persistent_commit_agent_ids: Vec<LegacyParsedAgentId>,
+    env_id: EnvironmentId,
 }
 
 fn agent_ids_to_agent_ids(
@@ -149,6 +151,7 @@ impl Benchmark for DurabilityOverhead {
             durable_nonpersistent_agent_ids,
             ephemeral_agent_ids,
             durable_persistent_commit_agent_ids,
+            env_id: env.id,
         }
     }
 
@@ -339,5 +342,6 @@ impl Benchmark for DurabilityOverhead {
             ),
         )
         .await;
+        cleanup_user_state(&context.user, &context.env_id).await;
     }
 }

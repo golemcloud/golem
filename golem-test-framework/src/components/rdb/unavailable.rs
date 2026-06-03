@@ -12,12 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod provided;
-pub mod spawned;
-pub mod unavailable;
+use super::{DbInfo, Rdb};
+use async_trait::async_trait;
 
-pub trait RedisMonitor: Send + Sync {
-    fn assert_valid(&self);
+/// An `Rdb` that is not directly reachable. Used in cloud mode, where the
+/// database is an internal cluster component with no external exposure.
+/// Lifecycle teardown (`kill`) is a no-op so that `kill_all()` completes;
+/// operational methods panic with a clear message.
+pub struct UnavailableRdb;
 
-    fn kill(&self);
+#[async_trait]
+impl Rdb for UnavailableRdb {
+    fn info(&self) -> DbInfo {
+        panic!("rdb() is not available in cloud mode");
+    }
+
+    async fn kill(&self) {}
 }

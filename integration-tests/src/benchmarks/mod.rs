@@ -29,15 +29,19 @@ use std::time::{Duration, SystemTime};
 use tracing::{Instrument, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+pub mod cleanup;
 pub mod cold_start_unknown;
 pub mod durability_overhead;
 pub mod latency;
 pub mod sleep;
 pub mod throughput;
 
-/// Injects the current tracing span's OpenTelemetry trace context (traceparent/tracestate)
-/// into a reqwest Request's headers so that downstream services can link their
-/// spans to the benchmark's trace.
+// Re-export cleanup helpers so callers can use the flat `benchmarks::*` path.
+pub use cleanup::{cleanup_account, cleanup_env_and_app, cleanup_user_state};
+
+/// Injects the current tracing span's OpenTelemetry trace context
+/// (traceparent/tracestate) into a reqwest Request's headers so that
+/// downstream services can link their spans to the benchmark's trace.
 fn inject_trace_context(request: &mut Request) {
     let current_span = tracing::Span::current();
     let otel_context = current_span.context();
