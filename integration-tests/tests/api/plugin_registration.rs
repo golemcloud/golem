@@ -15,8 +15,10 @@
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreatePluginError, RegistryServiceGetPluginByIdError,
 };
-use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
@@ -307,8 +309,28 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
         .component(&env.id, "oplog_processor_release")
         .store()
         .await?;
-    user_1
-        .share_environment(&env.id, &user_2.account_id, &[EnvironmentRole::Viewer])
+
+    let client = deps.registry_service().client(&user_1.token).await;
+    client
+        .create_permission_share(
+            &user_1.account_id.0,
+            &PermissionShareCreation {
+                target_account_id: user_2.account_id,
+                name: PermissionShareName("plugin-component-view".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![format!(
+                        "component({}/{}/{}) @ {} : view : *",
+                        user_1.account_id,
+                        env.application_name.0,
+                        env.name.0,
+                        user_2.account_email.as_str(),
+                    )],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
         .await?;
 
     let client = deps.registry_service().client(&user_2.token).await;

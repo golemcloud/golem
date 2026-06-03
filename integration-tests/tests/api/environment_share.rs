@@ -18,6 +18,9 @@ use golem_client::api::{
 use golem_common::model::IdempotencyKey;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment_share::{EnvironmentShareCreation, EnvironmentShareUpdate};
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -167,9 +170,45 @@ async fn invoke_agent_in_shared_environment(deps: &EnvBasedTestDependencies) -> 
         .get_environment(&component.environment_id.0)
         .await?;
 
-    // Owner shares the environment with grantee (Admin role — needed for worker creation/invocation)
-    owner
-        .share_environment(&env.id, &grantee.account_id, &[EnvironmentRole::Admin])
+    // Owner shares the environment with grantee through card-based permission shares.
+    owner_registry_client
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_id: grantee.account_id,
+                name: PermissionShareName("invoke-agent-in-shared-environment".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![
+                        format!(
+                            "component({}/{}/{}) @ {} : view : *",
+                            owner.account_id,
+                            env.application_name.0,
+                            env.name.0,
+                            grantee.account_email.as_str(),
+                        ),
+                        format!(
+                            "agent({}/{}/{}/{}/*) @ {} : view : *",
+                            owner.account_id,
+                            env.application_name.0,
+                            env.name.0,
+                            component.component_name.0,
+                            grantee.account_email.as_str(),
+                        ),
+                        format!(
+                            "agent({}/{}/{}/{}/*) @ {} : invoke : *",
+                            owner.account_id,
+                            env.application_name.0,
+                            env.name.0,
+                            component.component_name.0,
+                            grantee.account_email.as_str(),
+                        ),
+                    ],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
         .await?;
 
     // Grantee invokes the agent using owner's email

@@ -17,7 +17,6 @@ use golem_client::api::{
     RegistryServiceGetApplicationEnvironmentError, RegistryServiceListApplicationEnvironmentsError,
     RegistryServiceUpdateEnvironmentError,
 };
-use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentUpdate};
 use golem_common::model::permission_share::{
     PermissionShareCreation, PermissionShareData, PermissionShareName,
@@ -450,9 +449,27 @@ async fn deleted_account_hides_shared_environments_from_grantee(
     // Owner creates an application and an environment
     let (_, env) = owner.app_and_env().await?;
 
-    // Owner shares the environment with the grantee
-    owner
-        .share_environment(&env.id, &grantee.account_id, &[EnvironmentRole::Admin])
+    // Owner shares the environment with the grantee through a permission share.
+    owner_client
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_id: grantee.account_id,
+                name: PermissionShareName("deleted-account-shared-environment".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![format!(
+                        "environment({}/{}) @ {} : view : {}",
+                        owner.account_id,
+                        env.application_name.0,
+                        grantee.account_email.as_str(),
+                        env.name.0,
+                    )],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
         .await?;
 
     // Grantee can see the shared environment

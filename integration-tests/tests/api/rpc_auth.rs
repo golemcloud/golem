@@ -44,7 +44,10 @@
 //! case_idx 4 => RemoteInternalError { details: String }
 //! ```
 
-use golem_common::model::auth::EnvironmentRole;
+use golem_client::api::RegistryServiceClient;
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -108,12 +111,46 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
     let (_, caller_env) = caller.app_and_env().await?;
     let caller_component = store_rpc_component(&caller, &caller_env.id).await?;
 
-    // Grant caller Deployer access to owner's environment.
+    // Grant caller access to the owner's component and agents through permission shares.
     owner
-        .share_environment(
-            &owner_env.id,
-            &caller.account_id,
-            &[EnvironmentRole::Deployer],
+        .registry_service_client()
+        .await
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_id: caller.account_id,
+                name: PermissionShareName("rpc-auth-access".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![
+                        format!(
+                            "component({}/{}/{}) @ {} : view : *",
+                            owner.account_id,
+                            owner_env.application_name.0,
+                            owner_env.name.0,
+                            caller.account_email.as_str(),
+                        ),
+                        format!(
+                            "agent({}/{}/{}/{}/*) @ {} : view : *",
+                            owner.account_id,
+                            owner_env.application_name.0,
+                            owner_env.name.0,
+                            owner_component.component_name.0,
+                            caller.account_email.as_str(),
+                        ),
+                        format!(
+                            "agent({}/{}/{}/{}/*) @ {} : invoke : *",
+                            owner.account_id,
+                            owner_env.application_name.0,
+                            owner_env.name.0,
+                            owner_component.component_name.0,
+                            caller.account_email.as_str(),
+                        ),
+                    ],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
         )
         .await?;
 
