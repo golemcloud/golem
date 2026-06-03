@@ -1100,10 +1100,18 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
+                        c.name AS component_name,
                         r.component_revision_id,
+                        a.account_id AS owner_account_id,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
+                    JOIN components c
+                        ON c.component_id = r.component_id
+                    JOIN environments e
+                        ON e.environment_id = r.environment_id
+                    JOIN applications a
+                        ON a.application_id = e.application_id
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                         AND r.agent_type_name = $3
                 "#})
@@ -1128,10 +1136,18 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
+                        c.name AS component_name,
                         r.component_revision_id,
+                        a.account_id AS owner_account_id,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
+                    JOIN components c
+                        ON c.component_id = r.component_id
+                    JOIN environments e
+                        ON e.environment_id = r.environment_id
+                    JOIN applications a
+                        ON a.application_id = e.application_id
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                     ORDER BY r.agent_type_name
                 "#})
@@ -1155,7 +1171,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
+                        c.name AS component_name,
                         r.component_revision_id,
+                        a.account_id AS owner_account_id,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM current_deployments cd
@@ -1163,6 +1181,12 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
                     JOIN deployment_registered_agent_types r
                         ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
+                    JOIN components c
+                        ON c.component_id = r.component_id
+                    JOIN environments e
+                        ON e.environment_id = r.environment_id
+                    JOIN applications a
+                        ON a.application_id = e.application_id
                     WHERE cd.environment_id = $1 AND r.agent_type_name = $2
                 "#})
                 .bind(environment_id)
@@ -1184,7 +1208,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
+                        c.name AS component_name,
                         r.component_revision_id,
+                        a.account_id AS owner_account_id,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM current_deployments cd
@@ -1192,6 +1218,12 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
                     JOIN deployment_registered_agent_types r
                         ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
+                    JOIN components c
+                        ON c.component_id = r.component_id
+                    JOIN environments e
+                        ON e.environment_id = r.environment_id
+                    JOIN applications a
+                        ON a.application_id = e.application_id
                     WHERE cd.environment_id = $1
                     ORDER BY r.agent_type_name
                 "#})
@@ -1362,10 +1394,18 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
+                        c.name AS component_name,
                         r.component_revision_id,
+                        a.account_id AS owner_account_id,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
+                    JOIN components c
+                        ON c.component_id = r.component_id
+                    JOIN environments e
+                        ON e.environment_id = r.environment_id
+                    JOIN applications a
+                        ON a.application_id = e.application_id
                     WHERE r.environment_id = $1
                         AND r.deployment_revision_id = (
                             SELECT deployment_revision_id FROM deployment_registered_agent_types
@@ -1399,10 +1439,18 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_type_name,
                         r.canonical_agent_type_name,
                         r.component_id,
+                        c.name AS component_name,
                         r.component_revision_id,
+                        a.account_id AS owner_account_id,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
+                    JOIN components c
+                        ON c.component_id = r.component_id
+                    JOIN environments e
+                        ON e.environment_id = r.environment_id
+                    JOIN applications a
+                        ON a.application_id = e.application_id
                     WHERE r.environment_id = $1
                         AND r.deployment_revision_id = (
                             SELECT deployment_revision_id FROM deployment_registered_agent_types

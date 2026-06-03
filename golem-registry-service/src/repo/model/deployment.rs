@@ -374,7 +374,9 @@ pub struct DeploymentRegisteredAgentTypeRecord {
     pub canonical_agent_type_name: String,
 
     pub component_id: Uuid,
+    pub component_name: String,
     pub component_revision_id: i64,
+    pub owner_account_id: Uuid,
     pub webhook_prefix_authority_and_path: Option<String>,
     pub agent_type: Blob<AgentType>,
 }
@@ -395,10 +397,12 @@ impl DeploymentRegisteredAgentTypeRecord {
                 .to_string()
                 .to_kebab_case(),
             component_id: registered_agent_type.implemented_by.component_id.0,
+            component_name: registered_agent_type.implemented_by.component_name,
             component_revision_id: registered_agent_type
                 .implemented_by
                 .component_revision
                 .into(),
+            owner_account_id: registered_agent_type.implemented_by.account_id.0,
             webhook_prefix_authority_and_path: registered_agent_type
                 .webhook_prefix_authority_and_path,
             agent_type: Blob::new(registered_agent_type.agent_type),
@@ -414,8 +418,8 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentTyp
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: value.component_id.into(),
                 component_revision: value.component_revision_id.try_into()?,
-                component_name: None,
-                account_id: None,
+                component_name: value.component_name,
+                account_id: value.owner_account_id.into(),
             },
             webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         })
@@ -446,8 +450,8 @@ impl TryFrom<ResolvedAgentTypeRecord> for DeployedRegisteredAgentType {
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: value.component_id.into(),
                 component_revision: value.component_revision_id.try_into()?,
-                component_name: Some(value.component_name),
-                account_id: Some(value.owner_account_id.into()),
+                component_name: value.component_name,
+                account_id: value.owner_account_id.into(),
             },
             webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         })

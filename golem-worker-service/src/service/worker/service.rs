@@ -943,25 +943,8 @@ impl WorkerService {
             agent_type.mode,
         )?;
 
-        let component_name = registered_agent_type
-            .implemented_by
-            .component_name
-            .clone()
-            .ok_or_else(|| {
-                WorkerServiceError::Internal(format!(
-                    "Resolved agent type {} is missing component name",
-                    request.agent_type_name
-                ))
-            })?;
-        let component_owner_account_id = registered_agent_type
-            .implemented_by
-            .account_id
-            .ok_or_else(|| {
-                WorkerServiceError::Internal(format!(
-                    "Resolved agent type {} is missing component owner account id",
-                    request.agent_type_name
-                ))
-            })?;
+        let component_name = registered_agent_type.implemented_by.component_name.clone();
+        let component_owner_account_id = registered_agent_type.implemented_by.account_id;
 
         let method = agent_type
             .methods
@@ -1702,8 +1685,8 @@ mod tests {
                         implemented_by: RegisteredAgentTypeImplementer {
                             component_id,
                             component_revision,
-                            component_name: Some(component.component_name.0.clone()),
-                            account_id: Some(component.account_id),
+                            component_name: component.component_name.0.clone(),
+                            account_id: component.account_id,
                         },
                     },
                     environment_id,

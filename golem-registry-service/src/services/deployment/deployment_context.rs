@@ -616,8 +616,8 @@ pub fn extract_registered_agent_types(
             let implementer = RegisteredAgentTypeImplementer {
                 component_id: component.id,
                 component_revision: component.revision,
-                component_name: Some(component.component_name.0.clone()),
-                account_id: Some(component.account_id),
+                component_name: component.component_name.0.clone(),
+                account_id: component.account_id,
             };
 
             let webhook_domain_and_segments = ok_or_continue!(
@@ -635,8 +635,8 @@ pub fn extract_registered_agent_types(
                 implemented_by: RegisteredAgentTypeImplementer {
                     component_id: component.id,
                     component_revision: component.revision,
-                    component_name: Some(component.component_name.0.clone()),
-                    account_id: Some(component.account_id),
+                    component_name: component.component_name.0.clone(),
+                    account_id: component.account_id,
                 },
                 webhook_domain_and_segments,
             };

@@ -17530,9 +17530,16 @@ components:
         componentRevision:
           type: integer
           format: uint64
+        componentName:
+          type: string
+        accountId:
+          type: string
+          format: uuid
       required:
       - componentId
       - componentRevision
+      - componentName
+      - accountId
     ResourceCapacityLimit:
       title: ResourceCapacityLimit
       type: object

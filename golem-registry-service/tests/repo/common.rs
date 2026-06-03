@@ -1252,6 +1252,8 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         agent_type_name: agent_type_name.clone(),
         component_id,
         component_revision_id,
+        component_name,
+        owner_account_id,
         webhook_prefix_authority_and_path: None,
         agent_type: Blob::new(agent_type),
         canonical_agent_type_name: agent_type_name.to_kebab_case(),
