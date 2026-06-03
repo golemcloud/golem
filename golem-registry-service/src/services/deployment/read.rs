@@ -22,9 +22,12 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::ResolvedAgentType;
 use golem_common::model::application::ApplicationName;
-use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
+use golem_common::model::card::owner::{
+    AgentOwnerLeafPattern, AgentOwnerPattern, ApplicationOwnerPattern,
+};
 use golem_common::model::card::{
-    AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+    AgentResourcePattern, AgentVerb, ClassPermissionTarget, EnvironmentName as CardEnvironmentName,
+    EnvironmentResourcePattern, EnvironmentVerb, PermissionTarget,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{
@@ -65,6 +68,23 @@ impl SafeDisplay for DeploymentError {
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
+}
+
+fn authorize_environment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: ApplicationOwnerPattern::Application {
+            account: environment.owner_account_id.to_string(),
+            application: environment.application_name.0.clone(),
+        },
+        resource: EnvironmentResourcePattern::Environment(CardEnvironmentName(
+            environment.name.0.clone(),
+        )),
+    }))
 }
 
 error_forwarding!(
@@ -190,11 +210,7 @@ impl DeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeploymentPlan,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeploymentPlan)?;
 
         let summary: DeploymentPlan = self
             .deployment_repo
@@ -222,11 +238,7 @@ impl DeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeploymentPlan,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeploymentPlan)?;
 
         let summary: DeploymentSummary = self
             .deployment_repo

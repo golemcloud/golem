@@ -18,6 +18,11 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::mcp_deployment::McpDeploymentRepo;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::mcp_deployment::{McpDeploymentRepoError, McpDeploymentRevisionRecord};
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentMcpDeploymentResourcePattern, EnvironmentMcpDeploymentVerb,
+    PermissionTarget,
+};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{Environment, EnvironmentId};
@@ -360,11 +365,7 @@ impl McpDeploymentService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<McpDeployment>, McpDeploymentError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewMcpDeployment,
-        )?;
+        authorize_mcp_deployment_permission(auth, environment, EnvironmentMcpDeploymentVerb::View)?;
 
         let mcp_deployments: Vec<McpDeployment> = self
             .mcp_deployment_repo
@@ -520,4 +521,22 @@ impl McpDeploymentService {
 
         Ok(mcp_deployments)
     }
+}
+
+fn authorize_mcp_deployment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentMcpDeploymentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentMcpDeployment(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: EnvironmentMcpDeploymentResourcePattern::Any,
+        },
+    ))
 }

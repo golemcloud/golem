@@ -502,6 +502,27 @@ async fn oplog_processor_in_different_env_after_unregistering(
                 data: PermissionShareData {
                     lower_positive: vec![
                         format!(
+                            "environment({}/{}) @ {} : view : {}",
+                            user_1.account_id,
+                            env_1.application_name.0,
+                            user_2.account_email.as_str(),
+                            env_1.name.0,
+                        ),
+                        format!(
+                            "environment({}/{}) @ {} : view-deployment-plan : {}",
+                            user_1.account_id,
+                            env_1.application_name.0,
+                            user_2.account_email.as_str(),
+                            env_1.name.0,
+                        ),
+                        format!(
+                            "environment({}/{}) @ {} : deploy : {}",
+                            user_1.account_id,
+                            env_1.application_name.0,
+                            user_2.account_email.as_str(),
+                            env_1.name.0,
+                        ),
+                        format!(
                             "component({}/{}/{}) @ {} : create : *",
                             user_1.account_id,
                             env_1.application_name.0,
@@ -517,6 +538,20 @@ async fn oplog_processor_in_different_env_after_unregistering(
                         ),
                         format!(
                             "environment.plugin-grant({}/{}/{}) @ {} : create : *",
+                            user_1.account_id,
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment.plugin-grant({}/{}/{}) @ {} : view : *",
+                            user_1.account_id,
+                            env_1.application_name.0,
+                            env_1.name.0,
+                            user_2.account_email.as_str(),
+                        ),
+                        format!(
+                            "environment.plugin-grant({}/{}/{}) @ {} : delete : *",
                             user_1.account_id,
                             env_1.application_name.0,
                             env_1.name.0,
