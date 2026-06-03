@@ -73,6 +73,16 @@ impl InteractiveHandler {
         )
     }
 
+    // NOTE: static because happens during context construction, before Context exists.
+    pub fn confirm_manifest_upgrade_plan_apply(yes: bool) -> anyhow::Result<bool> {
+        confirm(
+            yes,
+            true,
+            "The above application manifest upgrade steps will now be applied. Do you want to continue?",
+            None,
+        )
+    }
+
     pub fn confirm_deploy_by_plan(
         &self,
         application_name: &ApplicationName,
