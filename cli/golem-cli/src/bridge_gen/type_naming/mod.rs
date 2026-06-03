@@ -32,6 +32,8 @@ mod builder;
 pub(crate) mod schema_type_ext;
 mod type_location;
 
+type TypeLocationsBySchema = Vec<(SchemaType, Vec<TypeLocation>)>;
+
 pub trait TypeName: Debug + Display + Clone + PartialEq + Eq + Hash {
     // This is intended to be used for custom or special mappings. If this method returns some
     // result for a type, then no further type naming will be attempted.
@@ -91,7 +93,7 @@ impl Display for TsTypeName {
 pub struct TypeNaming<TN: TypeName> {
     schema_builder: SchemaGraphBuilder,
     graph: SchemaGraph,
-    named_type_locations: IndexMap<TN, Vec<(SchemaType, Vec<TypeLocation>)>>,
+    named_type_locations: IndexMap<TN, TypeLocationsBySchema>,
     anonymous_type_locations: Vec<(SchemaType, Vec<TypeLocation>)>,
     type_names: HashSet<TN>,
     types: Vec<(SchemaType, TN)>,
@@ -479,7 +481,7 @@ impl<TN: TypeName> TypeNaming<TN> {
     }
 
     fn derive_type_names(&mut self) -> anyhow::Result<()> {
-        let named_groups: Vec<(TN, Vec<(SchemaType, Vec<TypeLocation>)>)> = self
+        let named_groups: Vec<(TN, TypeLocationsBySchema)> = self
             .named_type_locations
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
