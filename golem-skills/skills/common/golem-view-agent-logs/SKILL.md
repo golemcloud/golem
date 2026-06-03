@@ -26,6 +26,20 @@ golem agent invoke <AGENT_TYPE_NAME> <AGENT_NAME> <FUNCTION_NAME> [ARGUMENTS...]
 
 These flags can be appended to any `agent invoke` command. For the invocation syntax itself (agent ID, function name, arguments), refer to the language-specific invocation skills.
 
+### Structured TOON Output
+
+When `golem` or `golem-cli` is run with `--format toon`, structured stdout is emitted as a sequence of framed TOON documents:
+
+```text
+@toon
+<one TOON document>
+@end
+```
+
+Parse stdout by splitting on exact `@toon` and `@end` marker lines. The content between them is one TOON document. In non-text formats, stderr may contain progress or diagnostic text and should not be parsed as the structured payload.
+
+Stream events use a rich event shape with common fields such as `timestamp`, `kind`, `level`, `context`, and `message`. Agent-facing code should branch on `kind` rather than parsing the message text. Typical `kind` values include `log`, `stdout`, `stderr`, `stream-closed`, `stream-error`, `invocation-started`, `invocation-finished`, and `missed-messages`.
+
 ### Examples
 
 Disable streaming and only get the result:
@@ -74,5 +88,4 @@ Stream only agent logs without decorations:
 ```shell
 golem agent stream <AGENT_ID> --stream-no-timestamp --stream-no-log-level --logs-only
 ```
-
 
