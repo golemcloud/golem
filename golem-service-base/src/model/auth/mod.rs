@@ -19,7 +19,14 @@ use axum::http::header;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
-use golem_common::model::card::{CardAlgebraError, EffectiveSurface, PermissionTarget};
+use golem_common::model::card::owner::{
+    AgentOwnerPattern, ApplicationOwnerPattern, EnvironmentOwnerPattern,
+};
+use golem_common::model::card::{
+    AgentResourcePattern, AgentVerb, CardAlgebraError, ClassPermissionTarget,
+    ComponentResourcePattern, ComponentVerb, EffectiveSurface, EnvironmentResourcePattern,
+    EnvironmentVerb, GrantSurface, PermissionTarget,
+};
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
@@ -469,9 +476,10 @@ impl AuthCtx {
             Self::AdminImpersonation(ctx) => {
                 authorize_effective_surface_permission(&ctx.effective_surface, target)
             }
-            Self::Agent(_) => Err(AuthorizationError::PermissionNotAllowed(Box::new(
-                target.clone(),
-            ))),
+            Self::Agent(agent) => {
+                let effective_surface = temporary_agent_effective_surface(agent.account_id);
+                authorize_effective_surface_permission(&effective_surface, target)
+            }
         }
     }
 
@@ -835,6 +843,46 @@ fn authorize_effective_surface_permission(
         Err(AuthorizationError::PermissionNotAllowed(Box::new(
             target.clone(),
         )))
+    }
+}
+
+fn temporary_agent_effective_surface(account_id: AccountId) -> EffectiveSurface {
+    let account = account_id.to_string();
+
+    EffectiveSurface {
+        source_card_ids: Vec::new(),
+        lower: vec![GrantSurface {
+            positive: vec![
+                PermissionTarget::Environment(ClassPermissionTarget {
+                    owner: ApplicationOwnerPattern::AccountApplications {
+                        account: account.clone(),
+                    },
+                    verb: Some(EnvironmentVerb::View),
+                    resource: EnvironmentResourcePattern::Any,
+                }),
+                PermissionTarget::Component(ClassPermissionTarget {
+                    owner: EnvironmentOwnerPattern::AccountEnvironments {
+                        account: account.clone(),
+                    },
+                    verb: Some(ComponentVerb::View),
+                    resource: ComponentResourcePattern::Any,
+                }),
+                PermissionTarget::Agent(ClassPermissionTarget {
+                    owner: AgentOwnerPattern::AccountAgents {
+                        account: account.clone(),
+                    },
+                    verb: Some(AgentVerb::View),
+                    resource: AgentResourcePattern::Any,
+                }),
+                PermissionTarget::Agent(ClassPermissionTarget {
+                    owner: AgentOwnerPattern::AccountAgents { account },
+                    verb: Some(AgentVerb::Invoke),
+                    resource: AgentResourcePattern::Any,
+                }),
+            ],
+            negative: Vec::new(),
+        }],
+        upper: Vec::new(),
     }
 }
 
