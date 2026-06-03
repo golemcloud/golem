@@ -943,13 +943,25 @@ impl WorkerService {
             agent_type.mode,
         )?;
 
-        let component = self
-            .component_service
-            .get_revision(
-                component_id,
-                registered_agent_type.implemented_by.component_revision,
-            )
-            .await?;
+        let component_name = registered_agent_type
+            .implemented_by
+            .component_name
+            .clone()
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Resolved agent type {} is missing component name",
+                    request.agent_type_name
+                ))
+            })?;
+        let component_owner_account_id = registered_agent_type
+            .implemented_by
+            .account_id
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Resolved agent type {} is missing component owner account id",
+                    request.agent_type_name
+                ))
+            })?;
 
         let method = agent_type
             .methods
@@ -998,10 +1010,10 @@ impl WorkerService {
 
         auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
             owner: AgentOwnerPattern::Agent {
-                account: component.account_id.to_string(),
+                account: component_owner_account_id.to_string(),
                 application: request.app_name.0,
                 environment: request.env_name.0,
-                component: component.component_name.0.clone(),
+                component: component_name,
                 agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
             },
             verb: Some(AgentVerb::Invoke),
@@ -1020,7 +1032,7 @@ impl WorkerService {
                 request.idempotency_key,
                 None,
                 environment_id,
-                component.account_id,
+                component_owner_account_id,
                 auth,
                 principal,
             )
@@ -1690,6 +1702,8 @@ mod tests {
                         implemented_by: RegisteredAgentTypeImplementer {
                             component_id,
                             component_revision,
+                            component_name: Some(component.component_name.0.clone()),
+                            account_id: Some(component.account_id),
                         },
                     },
                     environment_id,

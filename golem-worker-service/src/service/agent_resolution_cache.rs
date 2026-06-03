@@ -316,6 +316,8 @@ mod tests {
                 implemented_by: RegisteredAgentTypeImplementer {
                     component_id: ComponentId(Uuid::nil()),
                     component_revision: ComponentRevision::INITIAL,
+                    component_name: None,
+                    account_id: None,
                 },
             },
             environment_id: env_id,

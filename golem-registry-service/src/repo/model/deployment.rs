@@ -414,6 +414,8 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentTyp
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: value.component_id.into(),
                 component_revision: value.component_revision_id.try_into()?,
+                component_name: None,
+                account_id: None,
             },
             webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         })
@@ -444,6 +446,8 @@ impl TryFrom<ResolvedAgentTypeRecord> for DeployedRegisteredAgentType {
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: value.component_id.into(),
                 component_revision: value.component_revision_id.try_into()?,
+                component_name: Some(value.component_name),
+                account_id: Some(value.owner_account_id.into()),
             },
             webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         })

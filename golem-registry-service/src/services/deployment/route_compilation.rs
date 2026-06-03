@@ -829,6 +829,8 @@ mod tests {
         let implementer = RegisteredAgentTypeImplementer {
             component_id: ComponentId(Uuid::new_v4()),
             component_revision: ComponentRevision::INITIAL,
+            component_name: None,
+            account_id: None,
         };
         let mut current_route_id = 0;
         let mut compiled_routes = Vec::new();
@@ -1110,6 +1112,8 @@ mod tests {
         let implementer = RegisteredAgentTypeImplementer {
             component_id: ComponentId(Uuid::new_v4()),
             component_revision: ComponentRevision::INITIAL,
+            component_name: None,
+            account_id: None,
         };
         let mut current_route_id = 0;
         let mut compiled_routes = Vec::new();

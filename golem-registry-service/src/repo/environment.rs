@@ -265,7 +265,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name, ap.application_id AS application_id, ap.name AS application_name,
+                        e.name, e.application_id, ap.name AS application_name,
                         r.environment_id, r.revision_id, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides,
@@ -330,7 +330,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name, ap.application_id AS application_id, ap.name AS application_name,
+                        e.name, e.application_id, ap.name AS application_name,
                         r.environment_id, r.revision_id, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides,
@@ -395,7 +395,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name, ap.application_id AS application_id, ap.name AS application_name,
+                        e.name, e.application_id, ap.name AS application_name,
                         r.environment_id, r.revision_id, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides,
@@ -603,7 +603,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
-                let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
+                let revision: EnvironmentRevisionRecord =
+                    Self::insert_revision(tx, revision).await?;
 
                 // TODO: atomic:
                 //       should use something like:
@@ -613,7 +614,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 //         )
                 //         SELECT -- with joins...
                 //       so we avoid selecting the same tables multiple times, same goes for logical DELETE
-
 
                 // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
                 let environment_record: EnvironmentExtRecord = tx.fetch_optional_as(
@@ -699,7 +699,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
-                    .bind(revision.environment_id)
+                    .bind(revision.environment_id),
                 )
                 .await
                 .to_error_on_unique_violation(EnvironmentRepoError::EnvironmentViolatesUniqueness)?
@@ -714,9 +714,12 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                     current_deployment_revision: environment_record.current_deployment_revision,
-                    current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
-                    current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
-                    current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
+                    current_deployment_deployment_revision: environment_record
+                        .current_deployment_deployment_revision,
+                    current_deployment_deployment_version: environment_record
+                        .current_deployment_deployment_version,
+                    current_deployment_deployment_hash: environment_record
+                        .current_deployment_deployment_hash,
                 })
             }
             .boxed()
@@ -731,7 +734,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     {
         self.with_tx_err("delete", |tx| {
             async move {
-                let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
+                let revision: EnvironmentRevisionRecord =
+                    Self::insert_revision(tx, revision).await?;
 
                 let environment_record: EnvironmentExtRecord = tx.fetch_optional_as(
                     sqlx::query_as(indoc! { r#"
@@ -818,7 +822,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
-                    .bind(revision.environment_id)
+                    .bind(revision.environment_id),
                 )
                 .await?
                 .ok_or(EnvironmentRepoError::ConcurrentModification)?;
@@ -844,11 +848,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     app_name,
                     revision.name.clone(),
                 );
-                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
-                    tx,
-                    &change_event,
-                )
-                .await?;
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                    .await?;
 
                 Ok(EnvironmentExtRevisionRecord {
                     application_id: environment_record.application_id,
@@ -859,9 +860,12 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                     current_deployment_revision: environment_record.current_deployment_revision,
-                    current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
-                    current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
-                    current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
+                    current_deployment_deployment_revision: environment_record
+                        .current_deployment_deployment_revision,
+                    current_deployment_deployment_version: environment_record
+                        .current_deployment_deployment_version,
+                    current_deployment_deployment_hash: environment_record
+                        .current_deployment_deployment_hash,
                 })
             }
             .boxed()

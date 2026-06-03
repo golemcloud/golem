@@ -18,6 +18,8 @@ impl From<CompiledMcp> for golem_api_grpc::proto::golem::mcp::CompiledMcp {
                         golem_api_grpc::proto::golem::registry::RegisteredAgentTypeImplementer {
                             component_id: Some(component_id.into()),
                             component_revision: component_revision.into(),
+                            component_name: None,
+                            account_id: None,
                         },
                     )
                 })

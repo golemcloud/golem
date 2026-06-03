@@ -825,6 +825,8 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: component.id,
                 component_revision: component.revision,
+                component_name: None,
+                account_id: None,
             },
             webhook_prefix_authority_and_path: None
         }]

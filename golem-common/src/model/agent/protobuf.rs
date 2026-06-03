@@ -962,6 +962,8 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::RegisteredAgentTypeImplemen
                 .ok_or_else(|| "Missing component_id field".to_string())?
                 .try_into()?,
             component_revision: value.component_revision.try_into()?,
+            component_name: value.component_name,
+            account_id: value.account_id.map(TryInto::try_into).transpose()?,
         })
     }
 }
@@ -973,6 +975,8 @@ impl From<RegisteredAgentTypeImplementer>
         Self {
             component_id: Some(value.component_id.into()),
             component_revision: value.component_revision.into(),
+            component_name: value.component_name,
+            account_id: value.account_id.map(Into::into),
         }
     }
 }
