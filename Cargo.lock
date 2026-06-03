@@ -3782,6 +3782,7 @@ dependencies = [
  "glob-match",
  "goldenfile",
  "golem-api-grpc",
+ "golem-schema-derive",
  "golem-wasm",
  "golem-wasm-derive",
  "heck",
@@ -3792,6 +3793,7 @@ dependencies = [
  "indoc",
  "iso8601-timestamp",
  "itertools 0.14.0",
+ "jsonschema",
  "lazy_static",
  "lenient_bool",
  "mac_address",
@@ -3835,11 +3837,13 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "wasm-metadata 0.248.0",
  "wasm-wave",
  "wasmparser 0.248.0",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
+ "wit-component 0.248.0",
  "wit-parser 0.248.0",
 ]
 
@@ -4003,6 +4007,22 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "golem-schema-derive"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "darling 0.20.11",
+ "golem-common",
+ "heck",
+ "proc-macro2",
+ "proptest",
+ "quote",
+ "syn 2.0.117",
+ "test-r",
+ "trybuild",
 ]
 
 [[package]]
@@ -4194,21 +4214,16 @@ dependencies = [
  "prost 0.14.3",
  "prost-build",
  "protox",
- "semver",
  "serde",
  "serde_json",
  "test-r",
  "url",
  "uuid",
  "wasip2",
- "wasm-metadata 0.248.0",
  "wasm-wave",
- "wasmparser 0.248.0",
  "wasmtime",
  "wasmtime-wasi",
  "wit-bindgen 0.57.1",
- "wit-component 0.248.0",
- "wit-parser 0.248.0",
 ]
 
 [[package]]
@@ -9664,6 +9679,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
+name = "target-triple"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "591ef38edfb78ca4771ee32cf494cb8771944bee237a9b91fc9c1424ac4b777b"
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10053,6 +10074,21 @@ dependencies = [
  "toml_parser",
  "toml_writer",
  "winnow 0.7.15",
+]
+
+[[package]]
+name = "toml"
+version = "1.1.0+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8195ca05e4eb728f4ba94f3e3291661320af739c4e43779cbdfae82ab239fcc"
+dependencies = [
+ "indexmap 2.14.0",
+ "serde_core",
+ "serde_spanned 1.1.0",
+ "toml_datetime 1.1.0+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 1.0.0",
 ]
 
 [[package]]
@@ -10582,6 +10618,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "trybuild"
+version = "1.0.116"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47c635f0191bd3a2941013e5062667100969f8c4e9cd787c14f977265d73616e"
+dependencies = [
+ "glob",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "target-triple",
+ "termcolor",
+ "toml 1.1.0+spec-1.1.0",
 ]
 
 [[package]]

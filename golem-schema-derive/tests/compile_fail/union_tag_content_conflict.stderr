@@ -1,0 +1,7 @@
+error: `#[schema(union)]` and `#[schema(tag = …, content = …)]` are mutually exclusive
+  --> tests/compile_fail/union_tag_content_conflict.rs:17:10
+   |
+17 | #[derive(IntoSchema)]
+   |          ^^^^^^^^^^
+   |
+   = note: this error originates in the derive macro `IntoSchema` (in Nightly builds, run with -Z macro-backtrace for more info)

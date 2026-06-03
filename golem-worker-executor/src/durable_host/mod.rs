@@ -91,7 +91,7 @@ use futures::TryStreamExt;
 use futures::future::try_join_all;
 use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
@@ -283,7 +283,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        agent_id: Option<LegacyParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -587,7 +587,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.created_by
     }
 
-    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    pub fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
         self.state.agent_id.clone()
     }
 
@@ -2556,6 +2556,26 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         "component_revision missing in AgentInvocationOutput during replay",
                     )
                 })?;
+
+                // Classify the just-completed invocation up front so we can
+                // bump the read-only cache epoch on successful mutating
+                // completion. For non-AgentMethod results
+                // (initialization, manual update, snapshot
+                // load/save, oplog processing) we always invalidate — these
+                // are all state-changing. For AgentMethod results we ask the
+                // worker whether the method is `read_only`.
+                let invalidates_read_only_cache = match &output.result {
+                    AgentInvocationResult::AgentMethod { .. } => self
+                        .public_state
+                        .worker()
+                        .agent_method_invalidates_read_only_cache(full_function_name),
+                    AgentInvocationResult::AgentInitialization
+                    | AgentInvocationResult::ManualUpdate
+                    | AgentInvocationResult::LoadSnapshot { .. }
+                    | AgentInvocationResult::SaveSnapshot { .. }
+                    | AgentInvocationResult::ProcessOplogEntries { .. } => true,
+                };
+
                 self.public_state
                     .worker()
                     .oplog()
@@ -2573,6 +2593,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::Always)
                     .await;
+
+                // Bump the read-only cache epoch after the
+                // `AgentInvocationFinished` entry is committed, but *before*
+                // we publish `InvocationCompleted` to waiters via
+                // `store_invocation_success`. Ordering matters: any client
+                // that observes the completion event must also see an
+                // invalidated cache, otherwise it could read a stale cached
+                // result for the now-mutated state.
+                if invalidates_read_only_cache {
+                    self.public_state.worker().bump_read_only_cache_epoch();
+                }
 
                 // Capture the agent's oplog index right after
                 // `AgentInvocationFinished` was committed, together with the
@@ -4004,7 +4035,7 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<ParsedAgentId>,
+    agent_id: Option<LegacyParsedAgentId>,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -4132,7 +4163,7 @@ struct PrivateDurableWorkerState {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<ParsedAgentId>,
+        agent_id: Option<LegacyParsedAgentId>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,

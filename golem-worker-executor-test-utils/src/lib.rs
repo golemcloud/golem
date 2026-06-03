@@ -31,7 +31,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, UntypedDataValue};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, UntypedDataValue};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::ComponentRevision;
@@ -360,6 +360,17 @@ impl test_r::core::HostedDep for WorkerExecutorTestDependencies {
     }
 
     fn from_descriptor(bytes: &[u8]) -> Self {
+        // `new()` installs the rustls CryptoProvider on the parent, but worker
+        // subprocesses created by test-r reconstruct the dep via
+        // `from_descriptor` and so never run `new()`. Without a process-level
+        // CryptoProvider, `HttpConnectionPool::new` (called from the executor
+        // bootstrap in every test) panics because the AWS SDK transitively
+        // enables both `aws-lc-rs` and `ring` rustls backends and rustls
+        // refuses to auto-pick one. Install ring here as well; the result is
+        // ignored if another `from_descriptor` call has already installed it
+        // in this worker process.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
         let descriptor: WorkerExecutorTestDependenciesDescriptor = serde_json::from_slice(bytes)
             .expect("deserializing WorkerExecutorTestDependenciesDescriptor must not fail");
 
@@ -538,6 +549,11 @@ pub struct TestWorkerExecutor {
     pub deps: WorkerExecutorTestDependencies,
     pub client: WorkerExecutorClient<OtelGrpcService<Channel>>,
     pub context: TestContext,
+    /// Same `AdditionalTestDeps` instance that the worker context received via
+    /// `Bootstrap::create_additional_deps`. Tests use it to evict a worker's
+    /// wasmtime instance while keeping the `Worker` shell (and its read-only
+    /// cache) alive, and to read per-agent instance load counts.
+    additional_test_deps: AdditionalTestDeps,
     leak_detector: std::sync::Weak<()>,
 }
 
@@ -577,6 +593,56 @@ impl TestWorkerExecutor {
                 HashSet::new(),
             )
             .await
+    }
+
+    /// Returns `true` iff the `Worker` shell for `owned_agent_id` is currently
+    /// registered in `ActiveWorkers` *and* has a loaded wasmtime instance.
+    /// Returns `false` when:
+    ///   - no `Worker` shell is currently in `ActiveWorkers` for this id, or
+    ///   - the shell is present but the wasmtime instance has been unloaded
+    ///     (e.g. after memory-pressure eviction).
+    ///
+    /// Used by the read-only cache eviction-survival test (#3393 T5).
+    pub async fn worker_is_loaded(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        match self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+        {
+            Some(worker) => worker.is_loaded().await,
+            None => false,
+        }
+    }
+
+    /// Returns the current eviction classification for the worker shell
+    /// registered in `ActiveWorkers`, or `None` if the worker is missing or
+    /// non-evictable. Used by tests to wait until the worker is `LoadedIdle`
+    /// before triggering memory-pressure eviction.
+    pub async fn worker_eviction_class(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<golem_worker_executor::worker::EvictionClass> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await?;
+        worker.eviction_class().await
+    }
+
+    /// Returns the per-worker memory requirement that the executor uses when
+    /// reserving from the worker memory semaphore. Lets tests sanity-check that
+    /// they have constrained the memory budget tightly enough to force
+    /// eviction.
+    pub async fn worker_memory_requirement(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<u64> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveWorkers"))?;
+        Ok(worker.memory_requirement().await?)
     }
 
     pub async fn get_running_workers_metadata(
@@ -1005,12 +1071,19 @@ async fn start_executor_with_config(
     let handle = Handle::current();
     let mut join_set = JoinSet::new();
 
+    // Allocate the AdditionalTestDeps here so that the same instance is shared
+    // between the bootstrap (via `create_additional_deps`) and the
+    // `TestWorkerExecutor` returned to the test (so tests can observe and
+    // mutate per-worker test-only state, e.g. eviction).
+    let additional_test_deps = AdditionalTestDeps::new();
+
     let details = run(
         config,
         prometheus,
         handle,
         deps.component_service_directory.clone(),
         overrides,
+        additional_test_deps.clone(),
         &mut join_set,
     )
     .await?;
@@ -1039,6 +1112,7 @@ async fn start_executor_with_config(
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
+                additional_test_deps,
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -1107,6 +1181,7 @@ async fn run(
     runtime: Handle,
     component_service_directory: PathBuf,
     overrides: TestExecutorOverrides,
+    additional_test_deps: AdditionalTestDeps,
     join_set: &mut JoinSet<Result<(), Error>>,
 ) -> Result<RunDetails, Error> {
     info!("Golem Worker Executor starting up...");
@@ -1115,6 +1190,7 @@ async fn run(
         &TestServerBootstrap {
             component_service_directory,
             overrides,
+            additional_test_deps,
         },
         golem_config,
         prometheus_registry,
@@ -1369,6 +1445,10 @@ impl UpdateManagement for TestWorkerCtx {
 struct TestServerBootstrap {
     component_service_directory: PathBuf,
     overrides: TestExecutorOverrides,
+    /// The `AdditionalTestDeps` instance that the worker context will receive
+    /// from `create_additional_deps`. Shared with `TestWorkerExecutor` so tests
+    /// can observe (and mutate) per-worker test-only state.
+    additional_test_deps: AdditionalTestDeps,
 }
 
 #[async_trait]
@@ -1380,7 +1460,7 @@ impl WorkerCtx for TestWorkerCtx {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        agent_id: Option<LegacyParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -1389,7 +1469,7 @@ impl WorkerCtx for TestWorkerCtx {
         rdbms_service: Arc<dyn rdbms::RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
-        _active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
+        active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<TestWorkerCtx>>,
@@ -1413,6 +1493,11 @@ impl WorkerCtx for TestWorkerCtx {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
+        // Capture the executor's ActiveWorkers handle the first time we see
+        // it, so test helpers (e.g. `worker_is_loaded`) can observe worker
+        // shells under memory-pressure eviction (#3393 T5).
+        extra_deps.set_active_workers(active_workers.clone());
+
         let oplog = Arc::new(TestOplog::new(
             owned_agent_id.clone(),
             oplog.clone(),
@@ -1489,7 +1574,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
     }
 
@@ -1796,7 +1881,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         &self,
         _registry_service: Arc<dyn RegistryService>,
     ) -> AdditionalTestDeps {
-        AdditionalTestDeps::new()
+        self.additional_test_deps.clone()
     }
 
     fn create_direct_invocation_auth_service(
@@ -2063,6 +2148,14 @@ async fn run_production_context_bootstrap(
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
+                // Production-context bootstrap path uses the real `NoAdditionalDeps`
+                // worker context, not `TestWorkerCtx`, so the worker-inspection
+                // helpers do not apply here. We hand the executor a fresh, empty
+                // `AdditionalTestDeps` purely to satisfy the field; calling
+                // `worker_is_loaded` / `worker_eviction_class` / `worker_memory_requirement`
+                // on this path will report "no worker" because no `ActiveWorkers`
+                // handle was ever captured.
+                additional_test_deps: AdditionalTestDeps::new(),
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -2686,6 +2779,12 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
 pub struct AdditionalTestDeps {
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
+    /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
+    /// read-only test helpers (`worker_is_loaded`,
+    /// `worker_eviction_class`, `worker_memory_requirement`) to observe
+    /// live `Worker` state for the memory-pressure-driven eviction test
+    /// (issue #3393 T5).
+    active_workers: Arc<std::sync::OnceLock<Arc<ActiveWorkers<TestWorkerCtx>>>>,
 }
 
 impl Default for AdditionalTestDeps {
@@ -2701,7 +2800,25 @@ impl AdditionalTestDeps {
         Self {
             oplog_failures,
             rdbms_tx_failures,
+            active_workers: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Stores the executor's `ActiveWorkers` registry on first call. Subsequent
+    /// calls are no-ops because they all carry the same `Arc`.
+    pub(crate) fn set_active_workers(&self, workers: Arc<ActiveWorkers<TestWorkerCtx>>) {
+        let _ = self.active_workers.set(workers);
+    }
+
+    /// Look up a `Worker` shell currently registered in `ActiveWorkers`.
+    /// Returns `None` if the executor has not loaded any worker yet (handle
+    /// not captured), or if no `Worker` for `owned_agent_id` is currently
+    /// resident.
+    pub(crate) async fn try_get_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<Arc<Worker<TestWorkerCtx>>> {
+        self.active_workers.get()?.try_get(owned_agent_id).await
     }
 
     pub async fn get_oplog_failures_count(&self, agent_id: AgentId, entry: String) -> usize {

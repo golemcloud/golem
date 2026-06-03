@@ -14,6 +14,7 @@
 
 pub mod provided;
 pub mod spawned;
+pub mod unavailable;
 
 pub trait RedisMonitor: Send + Sync {
     fn assert_valid(&self);

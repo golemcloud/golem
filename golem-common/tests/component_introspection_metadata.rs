@@ -1,5 +1,5 @@
-use golem_wasm::analysis::wit_parser::WitAnalysisContext;
-use golem_wasm::metadata::{Producers, ProducersField, VersionedName};
+use golem_common::component_introspection::metadata::{Producers, ProducersField, VersionedName};
+use golem_common::component_introspection::wit_parser::WitAnalysisContext;
 use pretty_assertions::assert_eq;
 use test_r::test;
 

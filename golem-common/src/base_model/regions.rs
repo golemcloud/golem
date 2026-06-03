@@ -284,8 +284,8 @@ pub mod protobuf {
 mod tests {
     use test_r::test;
 
-    use crate::model::oplog::OplogIndex;
-    use crate::model::regions::{DeletedRegionsBuilder, OplogRegion};
+    use crate::base_model::OplogIndex;
+    use crate::base_model::regions::{DeletedRegionsBuilder, OplogRegion};
 
     fn oplog_region(start: u64, end: u64) -> OplogRegion {
         OplogRegion {

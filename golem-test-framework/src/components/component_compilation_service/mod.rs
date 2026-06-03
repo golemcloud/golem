@@ -21,6 +21,7 @@ use tracing::Level;
 
 pub mod provided;
 pub mod spawned;
+pub mod unavailable;
 
 #[async_trait]
 pub trait ComponentCompilationService: Send + Sync {

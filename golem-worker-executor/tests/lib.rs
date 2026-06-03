@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::component_introspection::wit_parser::{
+    AnalysedTypeResolve, SharedAnalysedTypeResolve,
+};
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
-use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use golem_worker_executor_test_utils::{
     LastUniqueId, LastUniqueIdOwner, PrecompiledComponent, WorkerExecutorTestDependencies,
     test_component,
@@ -41,6 +43,7 @@ pub mod observability;
 pub mod oplog_metrics;
 pub mod rdbms;
 pub mod rdbms_service;
+pub mod readonly;
 pub mod resource_limits;
 pub mod retry_policies;
 pub mod revert;
@@ -73,6 +76,7 @@ tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
 tag_suite!(scalability, group3);
 tag_suite!(revert, group3);
+tag_suite!(readonly, group3);
 
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
@@ -162,6 +166,12 @@ test_component!(
     "agent_counters",
     "it_agent_counters_release",
     "it:agent-counters"
+);
+test_component!(
+    agent_sdk_rust,
+    "agent_sdk_rust",
+    "golem_it_agent_sdk_rust_release",
+    "golem-it:agent-sdk-rust"
 );
 test_component!(
     http_tests,

@@ -1,4 +1,4 @@
-use golem_wasm::analysis::wit_parser::WitAnalysisContext;
+use golem_common::component_introspection::wit_parser::WitAnalysisContext;
 use test_r::test;
 
 test_r::enable!();

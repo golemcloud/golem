@@ -126,22 +126,57 @@ const TYPESCRIPT_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] = &[
     },
 ];
 
-const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[ToolRequirement {
-    key: "moon",
-    name: "moon",
-    check: ToolRequirementCheck::CommandVersion {
-        command: "moon",
-        args: &["version"],
+const SCALA_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
+    ToolRequirement {
+        key: "java",
+        name: "Java",
+        check: ToolRequirementCheck::CommandVersion {
+            command: "java",
+            args: &["-version"],
+        },
+        version_range: Some(VersionRange::at_least(versions::build_tool::JAVA_MIN)),
+        install_hint: "Install Java 17 or newer: https://adoptium.net/",
     },
-    version_range: Some(VersionRange::at_least(versions::build_tool::MOON_MIN)),
-    install_hint: "Install MoonBit toolchain: https://docs.moonbitlang.com",
-}];
+    ToolRequirement {
+        key: "sbt",
+        name: "sbt",
+        check: ToolRequirementCheck::CommandVersion {
+            command: "sbt",
+            args: &["--script-version"],
+        },
+        version_range: None,
+        install_hint: "Install sbt: https://www.scala-sbt.org/download/",
+    },
+];
+
+const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
+    ToolRequirement {
+        key: "moon",
+        name: "moon",
+        check: ToolRequirementCheck::CommandVersion {
+            command: "moon",
+            args: &["version"],
+        },
+        version_range: Some(VersionRange::at_least(versions::build_tool::MOON_MIN)),
+        install_hint: "Install MoonBit toolchain: https://docs.moonbitlang.com",
+    },
+    ToolRequirement {
+        key: "wasm-tools",
+        name: "wasm-tools",
+        check: ToolRequirementCheck::CommandVersion {
+            command: "wasm-tools",
+            args: &["--version"],
+        },
+        version_range: Some(VersionRange::at_least(versions::build_tool::WASM_TOOLS_MIN)),
+        install_hint: "Install wasm-tools: https://github.com/bytecodealliance/wasm-tools",
+    },
+];
 
 pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [ToolRequirement] {
     match language {
         GuestLanguage::Rust => RUST_TOOL_REQUIREMENTS,
         GuestLanguage::TypeScript => TYPESCRIPT_TOOL_REQUIREMENTS,
-        GuestLanguage::Scala => &[],
+        GuestLanguage::Scala => SCALA_TOOL_REQUIREMENTS,
         GuestLanguage::MoonBit => MOONBIT_TOOL_REQUIREMENTS,
     }
 }

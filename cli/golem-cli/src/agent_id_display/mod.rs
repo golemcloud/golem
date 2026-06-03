@@ -31,7 +31,7 @@ mod render_ts;
 mod tests;
 
 use golem_common::model::agent::structural_format::parse_structural;
-use golem_common::model::agent::{DataSchema, DataValue, ParsedAgentId};
+use golem_common::model::agent::{DataSchema, DataValue, LegacyParsedAgentId};
 use golem_wasm::ValueAndType;
 
 pub use parse_common::ParseError;
@@ -136,7 +136,7 @@ pub fn render_value_and_type(vat: &ValueAndType, source_language: &SourceLanguag
 /// Renders a full agent ID string in the form `TypeName(params)[phantom]`.
 ///
 /// The parameters are rendered using [`render_data_value`] with the given source language.
-pub fn render_agent_id(parsed: &ParsedAgentId, source_language: &SourceLanguage) -> String {
+pub fn render_agent_id(parsed: &LegacyParsedAgentId, source_language: &SourceLanguage) -> String {
     let rendered = render_data_value(&parsed.parameters, source_language);
     let mut result = format!("{}({rendered})", parsed.agent_type);
     if let Some(uuid) = &parsed.phantom_id {

@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{delete_workers, invoke_and_await_agent};
+use crate::benchmarks::{
+    cleanup_account, cleanup_env_and_app, delete_workers, invoke_and_await_agent,
+};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::base_model::agent::LegacyParsedAgentId;
 use golem_common::model::AgentId;
 use golem_common::model::component::ComponentDto;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -195,7 +198,9 @@ impl Benchmark for ColdStartUnknownMedium {
 
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
-    agents: Vec<(ComponentDto, ParsedAgentId)>,
+    agents: Vec<(ComponentDto, LegacyParsedAgentId)>,
+    /// One env_id per size (cold_start creates one env per component).
+    env_ids: Vec<EnvironmentId>,
 }
 
 pub struct ColdStartUnknownBenchmark {
@@ -235,11 +240,13 @@ impl ColdStartUnknownBenchmark {
     pub async fn setup_iteration(&self, config: &RunConfig) -> IterationContext {
         let user = self.deps.user().await.unwrap();
         let mut agents = vec![];
+        let mut env_ids = vec![];
 
         for _ in 0..config.size {
             // Agent types names are unique within one environment,
             // so make sure each component get its own env
             let (_, env) = user.app_and_env().await.unwrap();
+            env_ids.push(env.id);
 
             let component = user
                 .component(&env.id, &self.component_name)
@@ -252,7 +259,11 @@ impl ColdStartUnknownBenchmark {
             agents.push((component, agent_id));
         }
 
-        IterationContext { user, agents }
+        IterationContext {
+            user,
+            agents,
+            env_ids,
+        }
     }
 
     pub async fn warmup(&self, config: &RunConfig) {
@@ -298,6 +309,14 @@ impl ColdStartUnknownBenchmark {
             .iter()
             .filter_map(|(component, agent_id)| AgentId::from_agent_id(component.id, agent_id).ok())
             .collect();
-        delete_workers(&iteration.user, &agent_ids).await
+        delete_workers(&iteration.user, &agent_ids).await;
+        // Clean up each env/app individually, then delete the account once.
+        // This avoids the account being deleted on the first env cleanup and
+        // causing subsequent cleanup calls to fail (since the user token would
+        // be invalid after account deletion).
+        for env_id in &iteration.env_ids {
+            cleanup_env_and_app(&iteration.user, env_id).await;
+        }
+        cleanup_account(&iteration.user).await;
     }
 }

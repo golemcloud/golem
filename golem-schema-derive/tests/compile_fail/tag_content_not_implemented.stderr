@@ -1,0 +1,5 @@
+error: #[schema(tag/content)] are parsed but not yet implemented — use the default WIT-style variant emission, or wait for follow-up support
+  --> tests/compile_fail/tag_content_not_implemented.rs:18:1
+   |
+18 | #[schema(tag = "kind", content = "data")]
+   | ^

@@ -20,10 +20,10 @@ use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::invocation_context::{SpanId, TraceId};
+use crate::base_model::invocation_context::SpanId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
-use crate::model::worker::{TypedAgentConfigEntry, UntypedAgentConfigEntry};
+use crate::model::worker::TypedAgentConfigEntry;
 use crate::oplog_entry;
 use golem_wasm::ValueAndType;
 pub use public_types::*;
@@ -35,11 +35,13 @@ use uuid::Uuid;
 #[cfg(feature = "full")]
 mod raw_imports {
     pub use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+    pub use crate::base_model::invocation_context::TraceId;
     pub use crate::model::invocation_context::AttributeValue;
     pub use crate::model::oplog::payload;
     pub use crate::model::oplog::raw_types::AttributeMap;
     pub use crate::model::oplog::raw_types::*;
     pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
+    pub use crate::model::worker::UntypedAgentConfigEntry;
     pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
     pub use golem_wasm::wasmtime::ResourceTypeId;
 
