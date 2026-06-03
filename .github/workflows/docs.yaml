@@ -105,11 +105,16 @@ jobs:
 
       - name: Deploy (Vercel)
         id: deploy
+        # `set -o pipefail` so a non-zero exit from `vercel deploy` is not
+        # masked by the success of `tail` in the pipeline.
+        # `--archive=tgz` is required because the built site has >15000 files,
+        # which exceeds Vercel's default upload limit.
         run: |
+          set -o pipefail
           if [ "$IS_PROD" = "true" ]; then
-            URL=$(vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN | tail -n 1)
+            URL=$(vercel deploy --prebuilt --prod --archive=tgz --token=$VERCEL_TOKEN | tail -n 1)
           else
-            URL=$(vercel deploy --prebuilt --token=$VERCEL_TOKEN | tail -n 1)
+            URL=$(vercel deploy --prebuilt --archive=tgz --token=$VERCEL_TOKEN | tail -n 1)
           fi
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "Deployed: $URL"
