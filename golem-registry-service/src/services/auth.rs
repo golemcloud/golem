@@ -21,11 +21,32 @@ use crate::services::permission_share::{PermissionShareError, PermissionShareSer
 use chrono::Utc;
 use golem_common::model::account::{Account, AccountId};
 use golem_common::model::auth::{TokenId, TokenSecret};
+use golem_common::model::card::owner::{ApplicationOwnerPattern, EnvironmentOwnerPattern};
 use golem_common::model::card::recipient::RecipientPattern;
-use golem_common::model::card::{Card, EffectiveSurface};
+use golem_common::model::card::{
+    Card, ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
+    ComponentVerb, DomainNamePattern, EffectiveSurface, EnvironmentAgentSecretKeyPathPattern,
+    EnvironmentAgentSecretResourcePattern, EnvironmentAgentSecretVerb,
+    EnvironmentDomainRegistrationResourcePattern, EnvironmentDomainRegistrationVerb,
+    EnvironmentHttpApiDeploymentResourcePattern, EnvironmentHttpApiDeploymentVerb,
+    EnvironmentMcpDeploymentName, EnvironmentMcpDeploymentResourcePattern,
+    EnvironmentMcpDeploymentVerb, EnvironmentName as CardEnvironmentName,
+    EnvironmentResourceDefinitionName, EnvironmentResourceDefinitionResourcePattern,
+    EnvironmentResourceDefinitionVerb, EnvironmentResourcePattern, EnvironmentRetryPolicyName,
+    EnvironmentRetryPolicyResourcePattern, EnvironmentRetryPolicyVerb,
+    EnvironmentSecuritySchemeName, EnvironmentSecuritySchemeResourcePattern,
+    EnvironmentSecuritySchemeVerb, EnvironmentShareResourcePattern, EnvironmentShareVerb,
+    EnvironmentVerb, PermissionTarget,
+};
+use golem_common::model::component::ComponentName;
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::Environment;
+use golem_common::model::environment_share::EnvironmentShareId;
+use golem_common::model::quota::ResourceName;
+use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{
-    AdminImpersonationAuthCtx, AuthCtx, GlobalAction, UserAuthCtx,
+    AdminImpersonationAuthCtx, AuthCtx, AuthorizationError, GlobalAction, UserAuthCtx,
 };
 use golem_service_base::repo::RepoError;
 use std::collections::BTreeSet;
@@ -38,6 +59,218 @@ pub enum AuthError {
     CouldNotAuthenticate,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+pub fn authorize_environment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: ApplicationOwnerPattern::Application {
+            account: environment.owner_account_id.to_string(),
+            application: environment.application_name.0.clone(),
+        },
+        resource: EnvironmentResourcePattern::Environment(CardEnvironmentName(
+            environment.name.0.clone(),
+        )),
+    }))
+}
+
+pub fn authorize_component_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    component_name: &ComponentName,
+    verb: ComponentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Component(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: environment_owner(environment),
+        resource: ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
+    }))
+}
+
+pub fn authorize_environment_share_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    environment_share_id: Option<EnvironmentShareId>,
+    verb: EnvironmentShareVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentShare(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: environment_owner(environment),
+        resource: environment_share_id
+            .map(EnvironmentShareResourcePattern::Share)
+            .unwrap_or(EnvironmentShareResourcePattern::Any),
+    }))
+}
+
+pub fn authorize_domain_registration_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    domain: Option<&Domain>,
+    verb: EnvironmentDomainRegistrationVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentDomainRegistration(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: environment_owner(environment),
+            resource: domain
+                .map(|domain| {
+                    EnvironmentDomainRegistrationResourcePattern::Domain(domain_name_pattern(
+                        domain,
+                    ))
+                })
+                .unwrap_or(EnvironmentDomainRegistrationResourcePattern::Any),
+        },
+    ))
+}
+
+pub fn authorize_security_scheme_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    name: Option<&SecuritySchemeName>,
+    verb: EnvironmentSecuritySchemeVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentSecurityScheme(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: environment_owner(environment),
+            resource: name
+                .map(|name| {
+                    EnvironmentSecuritySchemeResourcePattern::Name(EnvironmentSecuritySchemeName(
+                        name.0.clone(),
+                    ))
+                })
+                .unwrap_or(EnvironmentSecuritySchemeResourcePattern::Any),
+        },
+    ))
+}
+
+pub fn authorize_http_api_deployment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    domain: Option<&Domain>,
+    verb: EnvironmentHttpApiDeploymentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentHttpApiDeployment(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: environment_owner(environment),
+            resource: domain
+                .map(
+                    |domain| EnvironmentHttpApiDeploymentResourcePattern::DomainPath {
+                        domain: domain.0.clone(),
+                        path_glob: "/**".to_string(),
+                    },
+                )
+                .unwrap_or(EnvironmentHttpApiDeploymentResourcePattern::Any),
+        },
+    ))
+}
+
+pub fn authorize_mcp_deployment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    domain: Option<&Domain>,
+    verb: EnvironmentMcpDeploymentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentMcpDeployment(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: environment_owner(environment),
+            resource: domain
+                .map(|domain| {
+                    EnvironmentMcpDeploymentResourcePattern::Name(EnvironmentMcpDeploymentName(
+                        domain.0.clone(),
+                    ))
+                })
+                .unwrap_or(EnvironmentMcpDeploymentResourcePattern::Any),
+        },
+    ))
+}
+
+pub fn authorize_agent_secret_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    key: Option<&[String]>,
+    verb: EnvironmentAgentSecretVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentAgentSecret(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: environment_owner(environment),
+            resource: key
+                .map(|key| {
+                    EnvironmentAgentSecretResourcePattern::Key(
+                        EnvironmentAgentSecretKeyPathPattern::parse(&key.join("."))
+                            .expect("agent secret keys are valid card resources"),
+                    )
+                })
+                .unwrap_or(EnvironmentAgentSecretResourcePattern::Any),
+        },
+    ))
+}
+
+pub fn authorize_resource_definition_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    name: Option<&ResourceName>,
+    verb: EnvironmentResourceDefinitionVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentResourceDefinition(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: environment_owner(environment),
+            resource: name
+                .map(|name| {
+                    EnvironmentResourceDefinitionResourcePattern::Name(
+                        EnvironmentResourceDefinitionName(name.0.clone()),
+                    )
+                })
+                .unwrap_or(EnvironmentResourceDefinitionResourcePattern::Any),
+        },
+    ))
+}
+
+pub fn authorize_retry_policy_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    name: Option<&str>,
+    verb: EnvironmentRetryPolicyVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentRetryPolicy(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: environment_owner(environment),
+            resource: name
+                .map(|name| {
+                    EnvironmentRetryPolicyResourcePattern::Name(EnvironmentRetryPolicyName(
+                        name.to_string(),
+                    ))
+                })
+                .unwrap_or(EnvironmentRetryPolicyResourcePattern::Any),
+        },
+    ))
+}
+
+fn environment_owner(environment: &Environment) -> EnvironmentOwnerPattern {
+    EnvironmentOwnerPattern::Environment {
+        account: environment.owner_account_id.to_string(),
+        application: environment.application_name.0.clone(),
+        environment: environment.name.0.clone(),
+    }
+}
+
+fn domain_name_pattern(domain: &Domain) -> DomainNamePattern {
+    DomainNamePattern {
+        labels: domain
+            .0
+            .split('.')
+            .map(|label| golem_common::model::card::DomainLabel(label.to_string()))
+            .collect(),
+    }
 }
 
 impl SafeDisplay for AuthError {

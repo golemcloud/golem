@@ -462,7 +462,7 @@ mod tests {
     use golem_service_base::clients::registry::{RegistryInvalidationHandler, ResourceUsageUpdate};
     use golem_service_base::custom_api::CompiledRoutes;
     use golem_service_base::mcp::CompiledMcp;
-    use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
+    use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
     use golem_service_base::model::environment::EnvironmentState;
     use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
@@ -497,15 +497,6 @@ mod tests {
             &self,
             _token: &TokenSecret,
         ) -> Result<AuthCtx, RegistryServiceError> {
-            unimplemented!()
-        }
-
-        async fn get_auth_details_for_environment(
-            &self,
-            _environment_id: EnvironmentId,
-            _include_deleted: bool,
-            _auth_ctx: &AuthCtx,
-        ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
             unimplemented!()
         }
 
@@ -687,6 +678,8 @@ mod tests {
             hash: golem_common::model::diff::Hash::new(blake3::hash(b"component-hash")),
             application_id: ApplicationId::new(),
             account_id: golem_common::model::account::AccountId::new(),
+            application_name: ApplicationName::try_from("test-app".to_string()).unwrap(),
+            environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_size: 1,
             metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
             created_at: chrono::Utc::now(),

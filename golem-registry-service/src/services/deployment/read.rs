@@ -16,18 +16,16 @@ use super::mirror::{DeployedAgentTypeMirror, ResolvedAgentTypeMirror, schema_mir
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
+use crate::services::auth::authorize_environment_permission;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::ResolvedAgentType;
 use golem_common::model::application::ApplicationName;
-use golem_common::model::card::owner::{
-    AgentOwnerLeafPattern, AgentOwnerPattern, ApplicationOwnerPattern,
-};
+use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
-    AgentResourcePattern, AgentVerb, ClassPermissionTarget, EnvironmentName as CardEnvironmentName,
-    EnvironmentResourcePattern, EnvironmentVerb, PermissionTarget,
+    AgentResourcePattern, AgentVerb, ClassPermissionTarget, EnvironmentVerb, PermissionTarget,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{
@@ -39,7 +37,6 @@ use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
 };
-use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
@@ -68,23 +65,6 @@ impl SafeDisplay for DeploymentError {
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
-}
-
-fn authorize_environment_permission(
-    auth: &AuthCtx,
-    environment: &Environment,
-    verb: EnvironmentVerb,
-) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
-        verb: Some(verb),
-        owner: ApplicationOwnerPattern::Application {
-            account: environment.owner_account_id.to_string(),
-            application: environment.application_name.0.clone(),
-        },
-        resource: EnvironmentResourcePattern::Environment(CardEnvironmentName(
-            environment.name.0.clone(),
-        )),
-    }))
 }
 
 error_forwarding!(
@@ -131,11 +111,7 @@ impl DeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeployment,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeployment)?;
 
         let deployments = self
             .deployment_repo
@@ -177,12 +153,8 @@ impl DeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeployment,
-        )
-        .map_err(|_| DeploymentError::DeploymentNotFound(deployment_revision))?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeployment)
+            .map_err(|_| DeploymentError::DeploymentNotFound(deployment_revision))?;
 
         let deployment: Deployment = self
             .deployment_repo
@@ -338,11 +310,7 @@ impl DeploymentService {
             .get_deployment_and_environment(environment_id, deployment_revision, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewAgentTypes,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewAgentTypes)?;
 
         let agent_types = self
             .deployment_repo
@@ -370,11 +338,7 @@ impl DeploymentService {
             .get_deployment_and_environment(environment_id, deployment_revision, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewAgentTypes,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewAgentTypes)?;
 
         let agent_types = self
             .deployment_repo

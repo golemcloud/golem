@@ -355,15 +355,6 @@ mod tests {
         ) -> Result<AuthCtx, RegistryServiceError> {
             unimplemented!()
         }
-        async fn get_auth_details_for_environment(
-            &self,
-            _: EnvironmentId,
-            _: bool,
-            _: &AuthCtx,
-        ) -> Result<golem_service_base::model::auth::AuthDetailsForEnvironment, RegistryServiceError>
-        {
-            unimplemented!()
-        }
         async fn get_resource_limits(
             &self,
             _: AccountId,

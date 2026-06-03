@@ -308,7 +308,7 @@ impl DebugService for DebugServiceDefault {
             .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?;
 
         self.auth_service
-            .check_user_allowed_to_debug_in_environment(component.environment_id, auth_ctx)
+            .check_user_allowed_to_debug_agent(&component, agent_id, auth_ctx)
             .await
             .map_err(|e| match e {
                 AuthServiceError::DebuggingNotAllowed => DebugServiceError::Unauthorized {

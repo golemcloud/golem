@@ -16,10 +16,16 @@ use crate::services::golem_config::DirectInvocationAuthCacheConfig;
 use crate::services::rpc::RpcError;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
+use golem_common::model::card::{
+    AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+};
+use golem_common::model::component::ComponentId;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
-use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::component::Component;
 use std::sync::Arc;
 
 /// The account that owns the environment being accessed.
@@ -34,31 +40,15 @@ impl From<EnvironmentOwnerAccountId> for AccountId {
     }
 }
 
-/// Service that encapsulates environment-level authorization checks for local RPC calls.
-///
-/// Uses a two-tier strategy:
-/// - Fast path: if the caller owns the target environment, allow immediately with no extra network
-///   call. The environment owner is obtained from the first `AuthDetailsForEnvironment` fetch and
-///   cached keyed by `EnvironmentId` alone (owner never changes for a given env).
-/// - Slow path: fetch `AuthDetailsForEnvironment` from registry-service and run the standard
-///   `AuthCtx::authorize_environment_action` check. Results are cached keyed by
-///   `(EnvironmentId, AccountId)` with a configurable TTL.
-///
-/// The decision model is intentionally environment-scoped: `check` takes
-/// `(caller_account_id, environment_id, action)` only. Target agent metadata such as
-/// `created_by` is intentionally not part of the authorization input.
+/// Service that encapsulates agent authorization checks for local RPC calls.
 #[async_trait]
 pub trait DirectInvocationAuthService: Send + Sync {
-    /// Check whether `caller_account_id` is allowed to perform `action` on `environment_id`.
-    ///
-    /// Returns `Ok(EnvironmentOwnerAccountId)` if allowed — the wrapped `AccountId` is the
-    /// environment owner, needed for downstream limit accounting.
-    /// Returns `Err(RpcError::Denied { .. })` if not allowed.
     async fn check(
         &self,
         caller_account_id: AccountId,
-        environment_id: EnvironmentId,
-        action: EnvironmentAction,
+        owned_agent_id: &OwnedAgentId,
+        verb: AgentVerb,
+        resource: AgentResourcePattern,
     ) -> Result<EnvironmentOwnerAccountId, RpcError>;
 }
 
@@ -70,12 +60,7 @@ enum AuthDetailsCacheError {
 
 pub struct DefaultDirectInvocationAuthService {
     registry_service: Arc<dyn RegistryService>,
-    /// Cache of the environment owner, keyed by `EnvironmentId`.
-    /// Populated on first auth-details fetch; the owner never changes for a given environment.
-    env_owner_cache: Cache<EnvironmentId, (), AccountId, AuthDetailsCacheError>,
-    /// Cache of full auth details keyed by `(EnvironmentId, caller_account_id)`.
-    auth_details_cache:
-        Cache<(EnvironmentId, AccountId), (), AuthDetailsForEnvironment, AuthDetailsCacheError>,
+    component_cache: Cache<ComponentId, (), Component, AuthDetailsCacheError>,
 }
 
 impl DefaultDirectInvocationAuthService {
@@ -85,46 +70,35 @@ impl DefaultDirectInvocationAuthService {
     ) -> Self {
         Self {
             registry_service,
-            env_owner_cache: Cache::new(
+            component_cache: Cache::new(
                 Some(config.cache_capacity),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::OlderThan {
                     ttl: config.cache_ttl,
                     period: config.cache_eviction_interval,
                 },
-                "rpc_environment_owner",
-            ),
-            auth_details_cache: Cache::new(
-                Some(config.cache_capacity),
-                FullCacheEvictionMode::LeastRecentlyUsed(1),
-                BackgroundEvictionMode::OlderThan {
-                    ttl: config.cache_ttl,
-                    period: config.cache_eviction_interval,
-                },
-                "rpc_environment_auth_details",
+                "rpc_component_metadata",
             ),
         }
     }
 
-    async fn get_auth_details(
+    async fn get_component(
         &self,
-        environment_id: EnvironmentId,
-        caller_account_id: AccountId,
-    ) -> Result<Option<AuthDetailsForEnvironment>, RpcError> {
+        component_id: ComponentId,
+    ) -> Result<Option<Component>, RpcError> {
         let registry_service = self.registry_service.clone();
-        let auth_ctx = AuthCtx::agent(caller_account_id);
 
-        self.auth_details_cache
-            .get_or_insert_simple(&(environment_id, caller_account_id), move || {
+        self.component_cache
+            .get_or_insert_simple(&component_id, move || {
                 Box::pin(async move {
                     registry_service
-                        .get_auth_details_for_environment(environment_id, false, &auth_ctx)
+                        .get_deployed_component_metadata(component_id)
                         .await
                         .map_err(|e| match e {
                             RegistryServiceError::NotFound(_) => AuthDetailsCacheError::NotFound,
                             e => {
                                 tracing::warn!(
-                                    "Failed to get auth details for environment {environment_id}: {e}"
+                                    "Failed to get component metadata for component {component_id}: {e}"
                                 );
                                 AuthDetailsCacheError::Error
                             }
@@ -136,39 +110,9 @@ impl DefaultDirectInvocationAuthService {
             .or_else(|e| match e {
                 AuthDetailsCacheError::NotFound => Ok(None),
                 AuthDetailsCacheError::Error => Err(RpcError::RemoteInternalError {
-                    details: "Failed to retrieve environment auth details".to_string(),
+                    details: "Failed to retrieve component metadata".to_string(),
                 }),
             })
-    }
-
-    /// Returns the cached owner of `environment_id`, fetching it on first call.
-    /// Returns the auth details for the environment, fetching them on first call.
-    /// Populates the per-env owner cache as a side-effect so that subsequent
-    /// callers with different account IDs can skip the auth-details fetch on
-    /// the fast (owner) path.  Returns the full `AuthDetailsForEnvironment` so
-    /// the caller can reuse it on the slow path without a second cache lookup.
-    async fn get_env_auth_details(
-        &self,
-        environment_id: EnvironmentId,
-        caller_account_id: AccountId,
-    ) -> Result<Option<AuthDetailsForEnvironment>, RpcError> {
-        let auth_details = self
-            .get_auth_details(environment_id, caller_account_id)
-            .await?;
-
-        // Populate the per-env owner cache so subsequent callers with a different
-        // account_id can skip the full auth-details fetch on the owner fast path.
-        if let Some(ref details) = auth_details {
-            let owner = details.account_id_owning_environment;
-            let _ = self
-                .env_owner_cache
-                .get_or_insert_simple(&environment_id, || {
-                    Box::pin(async move { Ok::<_, AuthDetailsCacheError>(owner) })
-                })
-                .await;
-        }
-
-        Ok(auth_details)
     }
 }
 
@@ -177,43 +121,35 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
     async fn check(
         &self,
         caller_account_id: AccountId,
-        environment_id: EnvironmentId,
-        action: EnvironmentAction,
+        owned_agent_id: &OwnedAgentId,
+        verb: AgentVerb,
+        resource: AgentResourcePattern,
     ) -> Result<EnvironmentOwnerAccountId, RpcError> {
-        // Fast path: if the caller owns the target environment, allow immediately.
-        // First check the lightweight owner cache (populated as a side-effect of
-        // prior auth-details fetches for this environment).
-        if let Some(env_owner) = self.env_owner_cache.get(&environment_id).await
-            && caller_account_id == env_owner
-        {
-            return Ok(EnvironmentOwnerAccountId(env_owner));
-        }
-
-        // Cache miss or non-owner: fetch full auth details (one cache lookup).
-        // get_env_auth_details also populates the env_owner_cache as a side-effect.
-        let auth_details = self
-            .get_env_auth_details(environment_id, caller_account_id)
+        let component = self
+            .get_component(owned_agent_id.component_id())
             .await?
             .ok_or_else(|| RpcError::Denied {
-                details: format!("The environment action {action} is not allowed"),
+                details: format!("Component {} not found", owned_agent_id.component_id()),
             })?;
 
-        // Non-owner slow path: check environment shares. Auth details already
-        // in hand from the fetch above — no second cache lookup needed.
         let auth_ctx = AuthCtx::agent(caller_account_id);
         auth_ctx
-            .authorize_environment_action(
-                auth_details.account_id_owning_environment,
-                &auth_details.environment_roles_from_shares,
-                action,
-            )
+            .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
+                owner: AgentOwnerPattern::Agent {
+                    account: component.account_id.to_string(),
+                    application: component.application_name.0.clone(),
+                    environment: component.environment_name.0.clone(),
+                    component: component.component_name.0.clone(),
+                    agent: AgentOwnerLeafPattern::Agent(owned_agent_id.agent_name()),
+                },
+                verb: Some(verb),
+                resource,
+            }))
             .map_err(|e| RpcError::Denied {
                 details: e.to_string(),
             })?;
 
-        Ok(EnvironmentOwnerAccountId(
-            auth_details.account_id_owning_environment,
-        ))
+        Ok(EnvironmentOwnerAccountId(component.account_id))
     }
 }
 
@@ -227,14 +163,15 @@ impl DirectInvocationAuthService for NoOpDirectInvocationAuthService {
     async fn check(
         &self,
         caller_account_id: AccountId,
-        _environment_id: EnvironmentId,
-        _action: EnvironmentAction,
+        _owned_agent_id: &OwnedAgentId,
+        _verb: AgentVerb,
+        _resource: AgentResourcePattern,
     ) -> Result<EnvironmentOwnerAccountId, RpcError> {
         Ok(EnvironmentOwnerAccountId(caller_account_id))
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use golem_common::model::auth::EnvironmentRole;

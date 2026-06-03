@@ -18,17 +18,18 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment_share::{
     EnvironmentShareRepoError, EnvironmentShareRevisionRecord,
 };
+use crate::services::auth::authorize_environment_share_permission;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
 use golem_common::model::account::AccountId;
+use golem_common::model::card::EnvironmentShareVerb;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_share::{
     EnvironmentShare, EnvironmentShareCreation, EnvironmentShareId, EnvironmentShareRevision,
     EnvironmentShareUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -107,10 +108,11 @@ impl EnvironmentShareService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateShare,
+        authorize_environment_share_permission(
+            auth,
+            &environment,
+            None,
+            EnvironmentShareVerb::Create,
         )?;
 
         let id = EnvironmentShareId::new();
@@ -146,10 +148,11 @@ impl EnvironmentShareService {
             .get_with_environment(environment_share_id, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateShare,
+        authorize_environment_share_permission(
+            auth,
+            &environment,
+            Some(environment_share_id),
+            EnvironmentShareVerb::Update,
         )?;
 
         if update.current_revision != environment_share.revision {
@@ -193,10 +196,11 @@ impl EnvironmentShareService {
             .get_with_environment(environment_share_id, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteShare,
+        authorize_environment_share_permission(
+            auth,
+            &environment,
+            Some(environment_share_id),
+            EnvironmentShareVerb::Delete,
         )?;
 
         if environment_share.revision != current_revision {
@@ -256,10 +260,11 @@ impl EnvironmentShareService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewShares,
+        authorize_environment_share_permission(
+            auth,
+            &environment,
+            None,
+            EnvironmentShareVerb::View,
         )?;
 
         let result = self
@@ -290,10 +295,11 @@ impl EnvironmentShareService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewShares,
+        authorize_environment_share_permission(
+            auth,
+            &environment,
+            None,
+            EnvironmentShareVerb::View,
         )?;
 
         let result = self
@@ -333,10 +339,11 @@ impl EnvironmentShareService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewShares,
+        authorize_environment_share_permission(
+            auth,
+            &environment,
+            Some(environment_share_id),
+            EnvironmentShareVerb::View,
         )
         .map_err(|_| EnvironmentShareError::EnvironmentShareNotFound(environment_share_id))?;
 

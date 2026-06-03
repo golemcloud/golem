@@ -110,6 +110,7 @@ pub enum AgentVerb {
     CancelInvocation,
     ActivatePlugin,
     DeactivatePlugin,
+    Debug,
 }
 impl VerbPattern for AgentVerb {
     fn parse_verb(verb: &str) -> Option<Self> {
@@ -125,6 +126,7 @@ impl VerbPattern for AgentVerb {
             "cancel-invocation" => Some(Self::CancelInvocation),
             "activate-plugin" => Some(Self::ActivatePlugin),
             "deactivate-plugin" => Some(Self::DeactivatePlugin),
+            "debug" => Some(Self::Debug),
             _ => None,
         }
     }

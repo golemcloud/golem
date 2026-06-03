@@ -19,13 +19,15 @@ use crate::repo::model::resource_definition::{
     ResourceDefinitionCreationArgs, ResourceDefinitionRepoError, ResourceDefinitionRevisionRecord,
 };
 use crate::repo::resource_definition::ResourceDefinitionRepo;
+use crate::services::auth::authorize_resource_definition_permission;
+use golem_common::model::card::EnvironmentResourceDefinitionVerb;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::quota::{
     ResourceDefinition, ResourceDefinitionCreation, ResourceDefinitionId,
     ResourceDefinitionRevision, ResourceDefinitionUpdate, ResourceLimit, ResourceName,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
 
@@ -107,10 +109,11 @@ impl ResourceDefinitionService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateResourceDefinition,
+        authorize_resource_definition_permission(
+            auth,
+            &environment,
+            Some(&data.name),
+            EnvironmentResourceDefinitionVerb::Create,
         )?;
 
         let id = ResourceDefinitionId::new();
@@ -154,10 +157,11 @@ impl ResourceDefinitionService {
             .get_with_environment(resource_definition_id, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateResourceDefinition,
+        authorize_resource_definition_permission(
+            auth,
+            &environment,
+            Some(&resource_definition.name),
+            EnvironmentResourceDefinitionVerb::Update,
         )?;
 
         if update.current_revision != resource_definition.revision {
@@ -221,10 +225,11 @@ impl ResourceDefinitionService {
             .get_with_environment(resource_definition_id, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteResourceDefinition,
+        authorize_resource_definition_permission(
+            auth,
+            &environment,
+            Some(&resource_definition.name),
+            EnvironmentResourceDefinitionVerb::Delete,
         )?;
 
         if current_revision != resource_definition.revision {
@@ -289,10 +294,11 @@ impl ResourceDefinitionService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewResourceDefinition,
+        authorize_resource_definition_permission(
+            auth,
+            &environment,
+            Some(&resource_definition.name),
+            EnvironmentResourceDefinitionVerb::View,
         )
         .map_err(|_| ResourceDefinitionError::ResourceDefinitionNotFound(resource_definition_id))?;
 
@@ -316,10 +322,11 @@ impl ResourceDefinitionService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewResourceDefinition,
+        authorize_resource_definition_permission(
+            auth,
+            &environment,
+            Some(resource_name),
+            EnvironmentResourceDefinitionVerb::View,
         )?;
 
         let resource_definition: ResourceDefinition = self
@@ -358,10 +365,11 @@ impl ResourceDefinitionService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<ResourceDefinition>, ResourceDefinitionError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewResourceDefinition,
+        authorize_resource_definition_permission(
+            auth,
+            environment,
+            None,
+            EnvironmentResourceDefinitionVerb::View,
         )?;
 
         let resource_definitions: Vec<ResourceDefinition> = self
@@ -400,10 +408,11 @@ impl ResourceDefinitionService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewResourceDefinition,
+        authorize_resource_definition_permission(
+            auth,
+            &environment,
+            Some(&resource_definition.name),
+            EnvironmentResourceDefinitionVerb::View,
         )
         .map_err(|_| ResourceDefinitionError::ResourceDefinitionNotFound(resource_definition_id))?;
 

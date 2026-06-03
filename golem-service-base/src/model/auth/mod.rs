@@ -276,14 +276,6 @@ impl SafeDisplay for AuthorizationError {
     }
 }
 
-/// All information required to answer environment level authorization questions
-/// together with an AuthCtx
-#[derive(Debug, Clone)]
-pub struct AuthDetailsForEnvironment {
-    pub account_id_owning_environment: AccountId,
-    pub environment_roles_from_shares: BTreeSet<EnvironmentRole>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserAuthCtx {
     pub account_id: AccountId,
@@ -1109,11 +1101,10 @@ mod test {
 }
 
 mod protobuf {
-    use super::AuthDetailsForEnvironment;
     use super::{
         AdminImpersonationAuthCtx, AgentAuthCtx, AuthCtx, AuthorizationError, UserAuthCtx,
     };
-    use golem_common::model::auth::{AccountRole, EnvironmentRole};
+    use golem_common::model::auth::AccountRole;
     use golem_common::model::card::{CardId, EffectiveSurface, GrantSurface, PermissionTarget};
 
     fn deserialize_effective_surface(
@@ -1192,45 +1183,6 @@ mod protobuf {
                     .map_err(|err| format!("invalid permission target: {err}"))
             })
             .collect()
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment>
-        for AuthDetailsForEnvironment
-    {
-        type Error = String;
-        fn try_from(
-            value: golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment,
-        ) -> Result<Self, Self::Error> {
-            let environment_roles_from_shares = value
-                .environment_roles_from_shares()
-                .map(EnvironmentRole::try_from)
-                .collect::<Result<_, _>>()?;
-
-            let account_id_owning_environment = value
-                .account_id_owning_environment
-                .ok_or("missing account_id")?
-                .try_into()?;
-
-            Ok(Self {
-                account_id_owning_environment,
-                environment_roles_from_shares,
-            })
-        }
-    }
-
-    impl From<AuthDetailsForEnvironment>
-        for golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment
-    {
-        fn from(value: AuthDetailsForEnvironment) -> Self {
-            Self {
-                account_id_owning_environment: Some(value.account_id_owning_environment.into()),
-                environment_roles_from_shares: value
-                    .environment_roles_from_shares
-                    .into_iter()
-                    .map(|er| golem_api_grpc::proto::golem::auth::EnvironmentRole::from(er) as i32)
-                    .collect(),
-            }
-        }
     }
 
     impl TryFrom<golem_api_grpc::proto::golem::auth::UserAuthCtx> for UserAuthCtx {

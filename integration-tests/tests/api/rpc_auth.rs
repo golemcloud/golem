@@ -45,7 +45,6 @@
 //! ```
 
 use golem_client::api::RegistryServiceClient;
-use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::permission_share::{
     PermissionShareCreation, PermissionShareData, PermissionShareName,
 };
@@ -111,15 +110,6 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
 
     let (_, caller_env) = caller.app_and_env().await?;
     let caller_component = store_rpc_component(&caller, &caller_env.id).await?;
-
-    // Keep the legacy environment share while RPC worker auth still uses EnvironmentAction checks.
-    owner
-        .share_environment(
-            &owner_env.id,
-            &caller.account_id,
-            &[EnvironmentRole::Deployer],
-        )
-        .await?;
 
     // Grant caller access to the owner's component and agents through permission shares.
     owner

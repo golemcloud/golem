@@ -20,11 +20,8 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::http_api_deployment::{
     HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
 };
-use golem_common::model::card::owner::EnvironmentOwnerPattern;
-use golem_common::model::card::{
-    ClassPermissionTarget, EnvironmentHttpApiDeploymentResourcePattern,
-    EnvironmentHttpApiDeploymentVerb, PermissionTarget,
-};
+use crate::services::auth::authorize_http_api_deployment_permission;
+use golem_common::model::card::EnvironmentHttpApiDeploymentVerb;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{Environment, EnvironmentId};
@@ -33,7 +30,7 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeploymentUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
 
@@ -133,10 +130,11 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            &environment,
+            Some(&data.domain),
+            EnvironmentHttpApiDeploymentVerb::Create,
         )?;
 
         self.domain_registration_service
@@ -219,17 +217,19 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            &environment,
+            Some(&http_api_deployment.domain),
+            EnvironmentHttpApiDeploymentVerb::View,
         )
         .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id))?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            &environment,
+            Some(&http_api_deployment.domain),
+            EnvironmentHttpApiDeploymentVerb::Update,
         )?;
 
         if update.current_revision != http_api_deployment.revision {
@@ -295,17 +295,19 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            &environment,
+            Some(&http_api_deployment.domain),
+            EnvironmentHttpApiDeploymentVerb::View,
         )
         .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id))?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            &environment,
+            Some(&http_api_deployment.domain),
+            EnvironmentHttpApiDeploymentVerb::Delete,
         )?;
 
         if current_revision != http_api_deployment.revision {
@@ -355,10 +357,11 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            &environment,
+            Some(&http_api_deployment.domain),
+            EnvironmentHttpApiDeploymentVerb::View,
         )
         .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id))?;
 
@@ -392,6 +395,7 @@ impl HttpApiDeploymentService {
         authorize_http_api_deployment_permission(
             auth,
             environment,
+            None,
             EnvironmentHttpApiDeploymentVerb::View,
         )?;
 
@@ -423,10 +427,11 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            &environment,
+            None,
+            EnvironmentHttpApiDeploymentVerb::View,
         )?;
 
         let http_api_deployments: Vec<HttpApiDeployment> = self
@@ -465,10 +470,11 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            &environment,
+            Some(&http_api_deployment.domain),
+            EnvironmentHttpApiDeploymentVerb::View,
         )
         .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id))?;
 
@@ -492,10 +498,11 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            &environment,
+            Some(domain),
+            EnvironmentHttpApiDeploymentVerb::View,
         )
         .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(domain.clone()))?;
 
@@ -532,10 +539,11 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            &environment,
+            Some(domain),
+            EnvironmentHttpApiDeploymentVerb::View,
         )
         .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(domain.clone()))?;
 
@@ -550,22 +558,4 @@ impl HttpApiDeploymentService {
 
         Ok(http_api_deployment)
     }
-}
-
-fn authorize_http_api_deployment_permission(
-    auth: &AuthCtx,
-    environment: &Environment,
-    verb: EnvironmentHttpApiDeploymentVerb,
-) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::EnvironmentHttpApiDeployment(
-        ClassPermissionTarget {
-            verb: Some(verb),
-            owner: EnvironmentOwnerPattern::Environment {
-                account: environment.owner_account_id.to_string(),
-                application: environment.application_name.0.clone(),
-                environment: environment.name.0.clone(),
-            },
-            resource: EnvironmentHttpApiDeploymentResourcePattern::Any,
-        },
-    ))
 }

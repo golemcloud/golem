@@ -19,15 +19,12 @@ use crate::repo::model::agent_secrets::{
     AgentSecretCreationRecord, AgentSecretRepoError, AgentSecretRevisionRecord,
 };
 use crate::repo::model::audit::DeletableRevisionAuditFields;
+use crate::services::auth::authorize_agent_secret_permission;
 use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretId, AgentSecretRevision, AgentSecretUpdate,
     CanonicalAgentSecretPath,
 };
-use golem_common::model::card::owner::EnvironmentOwnerPattern;
-use golem_common::model::card::{
-    ClassPermissionTarget, EnvironmentAgentSecretResourcePattern, EnvironmentAgentSecretVerb,
-    PermissionTarget,
-};
+use golem_common::model::card::EnvironmentAgentSecretVerb;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::schema::adapters::analysed_type::{
@@ -36,7 +33,7 @@ use golem_common::schema::adapters::analysed_type::{
 use golem_common::schema::adapters::value::value_to_schema_value;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::agent_secret::AgentSecret;
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::sync::Arc;
@@ -111,10 +108,11 @@ impl AgentSecretService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateAgentSecret,
+        authorize_agent_secret_permission(
+            auth,
+            &environment,
+            Some(&data.path.0),
+            EnvironmentAgentSecretVerb::Create,
         )?;
 
         // The REST DTO carries an `AnalysedType` + legacy-shaped JSON, so
@@ -184,10 +182,11 @@ impl AgentSecretService {
         let (mut agent_secret, environment) =
             self.get_with_environment(agent_secret_id, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateAgentSecret,
+        authorize_agent_secret_permission(
+            auth,
+            &environment,
+            Some(&agent_secret.path.0),
+            EnvironmentAgentSecretVerb::Update,
         )?;
 
         if update.current_revision != agent_secret.revision {
@@ -252,10 +251,11 @@ impl AgentSecretService {
         let (mut agent_secret, environment) =
             self.get_with_environment(agent_secret_id, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteAgentSecret,
+        authorize_agent_secret_permission(
+            auth,
+            &environment,
+            Some(&agent_secret.path.0),
+            EnvironmentAgentSecretVerb::Delete,
         )?;
 
         if agent_secret.revision != current_revision {
@@ -315,7 +315,12 @@ impl AgentSecretService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<AgentSecret>, AgentSecretError> {
-        authorize_agent_secret_permission(auth, environment, EnvironmentAgentSecretVerb::View)?;
+        authorize_agent_secret_permission(
+            auth,
+            environment,
+            None,
+            EnvironmentAgentSecretVerb::View,
+        )?;
 
         let result = self.list_in_environment_unchecked(environment.id).await?;
 
@@ -361,31 +366,14 @@ impl AgentSecretService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewAgentSecret,
+        authorize_agent_secret_permission(
+            auth,
+            &environment,
+            Some(&agent_secret.path.0),
+            EnvironmentAgentSecretVerb::View,
         )
         .map_err(|_| AgentSecretError::AgentSecretNotFound(agent_secret_id))?;
 
         Ok((agent_secret, environment))
     }
-}
-
-fn authorize_agent_secret_permission(
-    auth: &AuthCtx,
-    environment: &Environment,
-    verb: EnvironmentAgentSecretVerb,
-) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::EnvironmentAgentSecret(
-        ClassPermissionTarget {
-            verb: Some(verb),
-            owner: EnvironmentOwnerPattern::Environment {
-                account: environment.owner_account_id.to_string(),
-                application: environment.application_name.0.clone(),
-                environment: environment.name.0.clone(),
-            },
-            resource: EnvironmentAgentSecretResourcePattern::Any,
-        },
-    ))
 }

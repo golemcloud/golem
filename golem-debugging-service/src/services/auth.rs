@@ -13,20 +13,25 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use golem_common::model::AgentId;
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
+use golem_common::model::card::{
+    AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::component::Component;
 use std::sync::Arc;
 
 #[async_trait]
 pub trait AuthService: Send + Sync {
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError>;
-    async fn check_user_allowed_to_debug_in_environment(
+    async fn check_user_allowed_to_debug_agent(
         &self,
-        environment_id: EnvironmentId,
+        component: &Component,
+        agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<(), AuthServiceError>;
 }
@@ -77,26 +82,24 @@ impl AuthService for GrpcAuthService {
             })
     }
 
-    async fn check_user_allowed_to_debug_in_environment(
+    async fn check_user_allowed_to_debug_agent(
         &self,
-        environment_id: EnvironmentId,
+        component: &Component,
+        agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<(), AuthServiceError> {
-        let auth_details = self
-            .client
-            .get_auth_details_for_environment(environment_id, false, auth_ctx)
-            .await
-            .map_err(|e| match e {
-                RegistryServiceError::NotFound(_) => AuthServiceError::DebuggingNotAllowed,
-                other => other.into(),
-            })?;
-
         auth_ctx
-            .authorize_environment_action(
-                auth_details.account_id_owning_environment,
-                &auth_details.environment_roles_from_shares,
-                EnvironmentAction::DebugWorker,
-            )
+            .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
+                owner: AgentOwnerPattern::Agent {
+                    account: component.account_id.to_string(),
+                    application: component.application_name.0.clone(),
+                    environment: component.environment_name.0.clone(),
+                    component: component.component_name.0.clone(),
+                    agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
+                },
+                verb: Some(AgentVerb::Debug),
+                resource: AgentResourcePattern::Any,
+            }))
             .map_err(|_| AuthServiceError::DebuggingNotAllowed)?;
 
         Ok(())

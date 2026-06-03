@@ -41,6 +41,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentInvocationMode, AgentPrincipal, Principal, UntypedDataValue,
 };
+use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -49,7 +50,6 @@ use golem_common::model::{
 };
 
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::auth::EnvironmentAction;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -804,8 +804,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.direct_invocation_auth
                 .check(
                     self_created_by,
-                    owned_agent_id.environment_id,
-                    EnvironmentAction::CreateWorker,
+                    owned_agent_id,
+                    AgentVerb::Invoke,
+                    AgentResourcePattern::Any,
                 )
                 .await?;
 
@@ -865,8 +866,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.direct_invocation_auth
                 .check(
                     self_created_by,
-                    owned_agent_id.environment_id,
-                    EnvironmentAction::UpdateWorker,
+                    owned_agent_id,
+                    AgentVerb::Invoke,
+                    AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
                 )
                 .await?;
 
@@ -940,8 +942,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.direct_invocation_auth
                 .check(
                     self_created_by,
-                    owned_agent_id.environment_id,
-                    EnvironmentAction::UpdateWorker,
+                    owned_agent_id,
+                    AgentVerb::Invoke,
+                    AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
                 )
                 .await?;
 
