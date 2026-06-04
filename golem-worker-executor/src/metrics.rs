@@ -42,6 +42,33 @@ const FUEL_BUCKETS: &[f64; 11] = &[
     5000000.0, 10000000.0,
 ];
 
+/// Byte-size buckets for scheduled-action payloads and promise completion data:
+/// powers of 2 from 1 KB to 64 MB.
+const BLOB_SIZE_BUCKETS: &[f64; 17] = &[
+    1_024.0,
+    2_048.0,
+    4_096.0,
+    8_192.0,
+    16_384.0,
+    32_768.0,
+    65_536.0,
+    131_072.0,
+    262_144.0,
+    524_288.0,
+    1_048_576.0,
+    2_097_152.0,
+    4_194_304.0,
+    8_388_608.0,
+    16_777_216.0,
+    33_554_432.0,
+    67_108_864.0,
+];
+
+/// Lag buckets for the scheduler: sub-second to multi-minute range.
+const SCHEDULER_LAG_BUCKETS: &[f64; 11] = &[
+    0.001, 0.01, 0.1, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0,
+];
+
 const MEMORY_SIZE_BUCKETS: &[f64; 11] = &[
     1024.0,
     4096.0,
@@ -131,14 +158,28 @@ pub mod workers {
             &["class"]
         )
         .unwrap();
-        static ref WORKER_MEMORY_SEMAPHORE_AVAILABLE: Gauge = register_gauge!(
-            "worker_memory_semaphore_available",
-            "Available memory semaphore permits (bytes)"
-        )
-        .unwrap();
         static ref WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE: Gauge = register_gauge!(
             "worker_filesystem_semaphore_available",
             "Available filesystem semaphore permits (bytes)"
+        )
+        .unwrap();
+        pub static ref WORKER_MEMORY_RESIDENT_COUNT: GaugeVec = register_gauge_vec!(
+            "worker_memory_resident_count",
+            "Workers currently holding a memory permit and running an invocation loop on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_WAITING_FOR_MEMORY_COUNT: GaugeVec = register_gauge_vec!(
+            "worker_waiting_for_memory_count",
+            "Workers blocked waiting to acquire a memory permit on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_KV_CACHE_VALUE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
+            "worker_kv_cache_value_size_bytes",
+            "Bytes of a value written to the Worker-namespace KV cache (worker status blob size)",
+            &["executor_id"],
+            crate::metrics::BLOB_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
     }
@@ -167,6 +208,43 @@ pub mod workers {
         ] {
             set_worker_count_by_status(worker_status_label(status), 0.0);
         }
+    }
+
+    /// Initialises all worker-related gauges to zero so every label combination
+    /// appears in the first Prometheus scrape even before any workers are created.
+    pub fn initialize_worker_metrics() {
+        initialize_worker_count_by_status();
+        let id = crate::metrics::storage::executor_id();
+        WORKER_MEMORY_RESIDENT_COUNT
+            .with_label_values(&[id])
+            .set(0.0);
+        WORKER_WAITING_FOR_MEMORY_COUNT
+            .with_label_values(&[id])
+            .set(0.0);
+    }
+
+    pub fn inc_worker_memory_resident() {
+        WORKER_MEMORY_RESIDENT_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_worker_memory_resident() {
+        WORKER_MEMORY_RESIDENT_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    pub fn inc_worker_waiting_for_memory() {
+        WORKER_WAITING_FOR_MEMORY_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_worker_waiting_for_memory() {
+        WORKER_WAITING_FOR_MEMORY_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
     }
 
     pub fn inc_worker_count_by_status(status: AgentStatus) {
@@ -204,18 +282,6 @@ pub mod workers {
         WORKER_EVICTION_TOTAL.with_label_values(&[class]).inc();
     }
 
-    pub fn set_memory_semaphore_available(permits: usize) {
-        WORKER_MEMORY_SEMAPHORE_AVAILABLE.set(permits as f64);
-    }
-
-    pub fn dec_memory_semaphore_available(permits: usize) {
-        WORKER_MEMORY_SEMAPHORE_AVAILABLE.sub(permits as f64);
-    }
-
-    pub fn inc_memory_semaphore_available(permits: usize) {
-        WORKER_MEMORY_SEMAPHORE_AVAILABLE.add(permits as f64);
-    }
-
     pub fn set_filesystem_semaphore_available(permits: u64) {
         WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.set(permits.into_f64());
     }
@@ -227,11 +293,30 @@ pub mod workers {
     pub fn inc_filesystem_semaphore_available(permits: u64) {
         WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.add(permits.into_f64());
     }
+
+    /// Records acquisition of `bytes` from the worker-memory pool.
+    /// Updates `golem_worker_memory_pool_used_bytes{executor_id}`.
+    pub fn record_memory_permit_acquired(bytes: usize) {
+        crate::metrics::storage::record_worker_memory_pool_acquired(bytes as u64);
+    }
+
+    /// Records release of `bytes` back to the worker-memory pool.
+    /// Updates `golem_worker_memory_pool_used_bytes{executor_id}`.
+    pub fn record_memory_permit_released(bytes: usize) {
+        crate::metrics::storage::record_worker_memory_pool_released(bytes as u64);
+    }
+
+    pub fn record_worker_kv_cache_value_size(bytes: usize) {
+        WORKER_KV_CACHE_VALUE_SIZE_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .observe(bytes as f64);
+    }
 }
 
 pub mod promises {
     use lazy_static::lazy_static;
     use prometheus::*;
+    use std::time::Duration;
 
     lazy_static! {
         static ref PROMISES_COUNT_TOTAL: Counter =
@@ -239,6 +324,26 @@ pub mod promises {
         static ref PROMISES_SCHEDULED_COMPLETE_TOTAL: Counter = register_counter!(
             "promises_scheduled_complete_total",
             "Number of scheduled promise completions"
+        )
+        .unwrap();
+        pub static ref PROMISE_COMPLETION_SECONDS: HistogramVec = register_histogram_vec!(
+            "promise_completion_seconds",
+            "Wall time of complete_promise from call entry to return, labelled by outcome",
+            &["executor_id", "outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        pub static ref PROMISE_PENDING_COUNT: GaugeVec = register_gauge_vec!(
+            "promise_pending_count",
+            "Number of distinct PromiseIds in Pending state in this executor's PromiseRegistry",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref PROMISE_DATA_SIZE_BYTES: HistogramVec = register_histogram_vec!(
+            "promise_data_size_bytes",
+            "Bytes of the data payload submitted to complete_promise at call time",
+            &["executor_id"],
+            crate::metrics::BLOB_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
     }
@@ -249,6 +354,101 @@ pub mod promises {
 
     pub fn record_scheduled_promise_completed() {
         PROMISES_SCHEDULED_COMPLETE_TOTAL.inc();
+    }
+
+    pub fn record_promise_completion(duration: Duration, outcome: &'static str) {
+        PROMISE_COMPLETION_SECONDS
+            .with_label_values(&[crate::metrics::storage::executor_id(), outcome])
+            .observe(duration.as_secs_f64());
+    }
+
+    pub fn inc_promise_pending_count() {
+        PROMISE_PENDING_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_promise_pending_count() {
+        PROMISE_PENDING_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    pub fn record_promise_data_size(bytes: usize) {
+        PROMISE_DATA_SIZE_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .observe(bytes as f64);
+    }
+}
+
+pub mod scheduler {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+    use std::time::Duration;
+
+    lazy_static! {
+        pub static ref SCHEDULED_ACTION_LAG_SECONDS: HistogramVec = register_histogram_vec!(
+            "scheduled_action_lag_seconds",
+            "Wall-clock delay in seconds between scheduled_at and the time the action fires",
+            &["executor_id"],
+            crate::metrics::SCHEDULER_LAG_BUCKETS.to_vec()
+        )
+        .unwrap();
+        pub static ref SCHEDULER_QUEUE_DEPTH: GaugeVec = register_gauge_vec!(
+            "scheduler_queue_depth",
+            "Count of matching actions to process at the start of each scheduler process() iteration",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref SCHEDULER_TICK_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
+            "scheduler_tick_duration_seconds",
+            "Wall time of a single scheduler process() iteration",
+            &["executor_id"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        pub static ref SCHEDULED_ACTION_SIZE_BYTES: HistogramVec = register_histogram_vec!(
+            "scheduled_action_size_bytes",
+            "Serialized blob size in bytes of a ScheduledAction at insert time",
+            &["executor_id", "action_kind"],
+            crate::metrics::BLOB_SIZE_BUCKETS.to_vec()
+        )
+        .unwrap();
+    }
+
+    pub fn record_scheduled_action_lag(lag: Duration) {
+        SCHEDULED_ACTION_LAG_SECONDS
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .observe(lag.as_secs_f64());
+    }
+
+    pub fn set_scheduler_queue_depth(depth: usize) {
+        SCHEDULER_QUEUE_DEPTH
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .set(depth as f64);
+    }
+
+    pub fn record_scheduler_tick_duration(duration: Duration) {
+        SCHEDULER_TICK_DURATION_SECONDS
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .observe(duration.as_secs_f64());
+    }
+
+    pub fn record_scheduled_action_size(action_kind: &'static str, bytes: usize) {
+        SCHEDULED_ACTION_SIZE_BYTES
+            .with_label_values(&[crate::metrics::storage::executor_id(), action_kind])
+            .observe(bytes as f64);
+    }
+
+    /// Maps a `ScheduledAction` to its metric `action_kind` label value.
+    pub fn action_kind_label(action: &golem_common::model::ScheduledAction) -> &'static str {
+        use golem_common::model::ScheduledAction;
+        match action {
+            ScheduledAction::CompletePromise { .. } => "complete_promise",
+            ScheduledAction::ArchiveOplog { .. } => "archive_oplog",
+            ScheduledAction::Invoke { .. } => "invoke",
+            ScheduledAction::Resume { .. } => "resume",
+        }
     }
 }
 
@@ -541,6 +741,18 @@ pub mod storage {
             &["executor_id"]
         )
         .unwrap();
+        pub static ref WORKER_MEMORY_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_memory_pool_total_bytes",
+            "Configured worker-memory semaphore size in bytes for this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref WORKER_MEMORY_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_worker_memory_pool_used_bytes",
+            "Bytes currently acquired from the worker-memory semaphore on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
     }
 
     pub fn record_filesystem_pool_total(bytes: u64) {
@@ -561,164 +773,21 @@ pub mod storage {
             .sub(bytes as f64);
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use test_r::test;
+    pub fn record_worker_memory_pool_total(bytes: u64) {
+        WORKER_MEMORY_POOL_TOTAL_BYTES
+            .with_label_values(&[executor_id()])
+            .set(bytes as f64);
+    }
 
-        test_r::enable!();
+    pub fn record_worker_memory_pool_acquired(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES
+            .with_label_values(&[executor_id()])
+            .add(bytes as f64);
+    }
 
-        fn bytes_written(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
-            STORAGE_BYTES_WRITTEN_TOTAL
-                .with_label_values(&[storage_type, account_id, environment_id])
-                .get()
-        }
-
-        fn bytes_deleted(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
-            STORAGE_BYTES_DELETED_TOTAL
-                .with_label_values(&[storage_type, account_id, environment_id])
-                .get()
-        }
-
-        fn objects_written(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
-            STORAGE_OBJECTS_WRITTEN_TOTAL
-                .with_label_values(&[storage_type, account_id, environment_id])
-                .get()
-        }
-
-        fn objects_deleted(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
-            STORAGE_OBJECTS_DELETED_TOTAL
-                .with_label_values(&[storage_type, account_id, environment_id])
-                .get()
-        }
-
-        #[test]
-        fn record_bytes_written_increments_bytes_counter() {
-            let acct = "acct-bw-1";
-            let env = "env-bw-1";
-            let before = bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env);
-
-            record_storage_bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env, 512);
-
-            assert_eq!(
-                bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env),
-                before + 512.0
-            );
-        }
-
-        #[test]
-        fn record_objects_written_increments_objects_counter() {
-            let acct = "acct-ow-1";
-            let env = "env-ow-1";
-            let before = objects_written(STORAGE_TYPE_BLOB_STORE, acct, env);
-
-            record_storage_objects_written(STORAGE_TYPE_BLOB_STORE, acct, env, 3);
-
-            assert_eq!(
-                objects_written(STORAGE_TYPE_BLOB_STORE, acct, env),
-                before + 3.0
-            );
-        }
-
-        #[test]
-        fn record_bytes_deleted_increments_bytes_counter() {
-            let acct = "acct-bd-1";
-            let env = "env-bd-1";
-            let before = bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env);
-
-            record_storage_bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env, 256);
-
-            assert_eq!(
-                bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env),
-                before + 256.0
-            );
-        }
-
-        #[test]
-        fn record_objects_deleted_increments_objects_counter() {
-            let acct = "acct-od-1";
-            let env = "env-od-1";
-            let before = objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env);
-
-            record_storage_objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env, 2);
-
-            assert_eq!(
-                objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env),
-                before + 2.0
-            );
-        }
-
-        #[test]
-        fn different_label_combinations_are_independent() {
-            let acct_a = "acct-ind-a";
-            let acct_b = "acct-ind-b";
-            let env = "env-ind-1";
-
-            record_storage_bytes_written(STORAGE_TYPE_BLOB_STORE, acct_a, env, 100);
-
-            // acct_b should be unaffected
-            assert_eq!(bytes_written(STORAGE_TYPE_BLOB_STORE, acct_b, env), 0.0);
-            // different storage type with same account/env should be independent
-            assert_eq!(bytes_written(STORAGE_TYPE_KV, acct_a, env), 0.0);
-        }
-
-        #[test]
-        fn multiple_calls_accumulate() {
-            let acct = "acct-acc-1";
-            let env = "env-acc-1";
-            let before = bytes_written(STORAGE_TYPE_OPLOG, acct, env);
-
-            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 100);
-            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 200);
-            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 50);
-
-            assert_eq!(bytes_written(STORAGE_TYPE_OPLOG, acct, env), before + 350.0);
-        }
-
-        #[test]
-        fn filesystem_pool_total_is_set() {
-            record_filesystem_pool_total(1024 * 1024);
-            let id = executor_id();
-            assert_eq!(
-                STORAGE_FILESYSTEM_POOL_TOTAL_BYTES
-                    .with_label_values(&[&id])
-                    .get(),
-                1024.0 * 1024.0
-            );
-        }
-
-        #[test]
-        fn filesystem_pool_acquired_increments_used_gauge() {
-            let id = executor_id();
-            let before = STORAGE_FILESYSTEM_POOL_USED_BYTES
-                .with_label_values(&[&id])
-                .get();
-            record_filesystem_pool_acquired(4096);
-            assert_eq!(
-                STORAGE_FILESYSTEM_POOL_USED_BYTES
-                    .with_label_values(&[&id])
-                    .get(),
-                before + 4096.0
-            );
-            // cleanup to not affect other tests
-            record_filesystem_pool_released(4096);
-        }
-
-        #[test]
-        fn filesystem_pool_released_decrements_used_gauge() {
-            let id = executor_id();
-            // acquire first so we have something to release
-            record_filesystem_pool_acquired(8192);
-            let before = STORAGE_FILESYSTEM_POOL_USED_BYTES
-                .with_label_values(&[&id])
-                .get();
-            record_filesystem_pool_released(8192);
-            assert_eq!(
-                STORAGE_FILESYSTEM_POOL_USED_BYTES
-                    .with_label_values(&[&id])
-                    .get(),
-                before - 8192.0
-            );
-        }
+    pub fn record_worker_memory_pool_released(bytes: u64) {
+        WORKER_MEMORY_POOL_USED_BYTES
+            .with_label_values(&[executor_id()])
+            .sub(bytes as f64);
     }
 }

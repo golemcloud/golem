@@ -145,11 +145,22 @@ impl PromiseService for LazyPromiseService {
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
+        crate::metrics::promises::record_promise_data_size(data.len());
+        let start = std::time::Instant::now();
+
         let lock = self.0.read().await;
-        lock.as_ref().unwrap().complete(promise_id, data).await
+        let result = lock.as_ref().unwrap().complete(promise_id, data).await;
+
+        let outcome = match &result {
+            Ok(true) => "fulfilled",
+            Ok(false) => "already_fulfilled",
+            Err(_) => "failed",
+        };
+        crate::metrics::promises::record_promise_completion(start.elapsed(), outcome);
+
+        result
     }
 
-    // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
     async fn cleanup(&self) {
         let lock = self.0.read().await;
         lock.as_ref().unwrap().cleanup().await
@@ -271,6 +282,7 @@ impl PromiseService for DefaultPromiseService {
             .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
 
         record_promise_created();
+        crate::metrics::promises::inc_promise_pending_count();
 
         // start tracking the promise locally so poll does not need to go to redis
         {
@@ -343,6 +355,11 @@ impl PromiseService for DefaultPromiseService {
         {
             let mut reg = self.registry.lock().await;
             reg.complete(&promise_id, data.clone()).await;
+        }
+
+        // Decrement the pending count on the first successful completion.
+        if written {
+            crate::metrics::promises::dec_promise_pending_count();
         }
 
         // Wake up the worker that owns the promise, ensuring that it resumes its work.
