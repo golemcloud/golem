@@ -2168,7 +2168,83 @@ pub mod api_token {
 
 pub mod account {
     use crate::command::shared_args::AccountIdOptionalArg;
-    use clap::Subcommand;
+    use clap::{Args, Subcommand};
+    use golem_common::model::account::AccountId;
+    use golem_common::model::permission_share::PermissionShareId;
+
+    #[derive(Debug, Args)]
+    pub struct PermissionShareGrantArgs {
+        /// Lower positive permission grant. Can be specified multiple times.
+        #[arg(long = "lower-positive", action = clap::ArgAction::Append)]
+        pub lower_positive: Option<Vec<String>>,
+
+        /// Lower negative permission grant. Can be specified multiple times.
+        #[arg(long = "lower-negative", action = clap::ArgAction::Append)]
+        pub lower_negative: Option<Vec<String>>,
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum PermissionShareSubcommand {
+        /// List permission shares owned by this account, or received by this account with --received.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_LIST)]
+        List {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// List permission shares targeting the account instead of owned by the account.
+            #[arg(long)]
+            received: bool,
+        },
+        /// Get a permission share by ID.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_GET)]
+        Get {
+            /// Permission share ID.
+            permission_share_id: PermissionShareId,
+        },
+        /// Get a permission share by owner account and name.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_GET_BY_NAME)]
+        GetByName {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// Permission share name.
+            name: String,
+        },
+        /// Create a new permission share.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_NEW)]
+        New {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+
+            /// Target account receiving the permissions.
+            target_account_id: AccountId,
+
+            /// Permission share name.
+            name: String,
+
+            #[command(flatten)]
+            grants: PermissionShareGrantArgs,
+        },
+        /// Update an existing permission share.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_UPDATE)]
+        Update {
+            /// Permission share ID.
+            permission_share_id: PermissionShareId,
+
+            /// New permission share name. Defaults to the existing name.
+            #[arg(long)]
+            name: Option<String>,
+
+            #[command(flatten)]
+            grants: PermissionShareGrantArgs,
+        },
+        /// Delete an existing permission share.
+        #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_DELETE)]
+        Delete {
+            /// Permission share ID.
+            permission_share_id: PermissionShareId,
+        },
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum AccountSubcommand {
@@ -2201,6 +2277,11 @@ pub mod account {
         Delete {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
+        },
+        /// Manage permission shares owned by an account.
+        PermissionShare {
+            #[command(subcommand)]
+            subcommand: PermissionShareSubcommand,
         },
     }
 }

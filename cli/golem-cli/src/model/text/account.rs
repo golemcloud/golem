@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::model::text::fmt::*;
-use golem_client::model::Account;
+use golem_client::model::{Account, PermissionShare};
+use golem_common::model::permission_share::PermissionShareData;
 use serde::{Deserialize, Serialize};
 
 fn account_fields(account: &Account) -> Vec<(String, String)> {
@@ -69,6 +70,76 @@ impl MessageWithFields for AccountUpdateView {
 
     fn fields(&self) -> Vec<(String, String)> {
         account_fields(&self.0)
+    }
+}
+
+fn permission_share_fields(share: &PermissionShare) -> Vec<(String, String)> {
+    let mut fields = FieldsBuilder::new();
+
+    fields
+        .fmt_field("Permission share ID", &share.id, format_main_id)
+        .field("Name", &share.name)
+        .field("Revision", &share.revision)
+        .fmt_field("Owner account ID", &share.owner_account_id, format_id)
+        .fmt_field("Target account ID", &share.target_account_id, format_id)
+        .field("Lower positive", &format_grants(&share.data.lower_positive))
+        .field("Lower negative", &format_grants(&share.data.lower_negative));
+
+    fields.build()
+}
+
+fn format_grants(grants: &[String]) -> String {
+    if grants.is_empty() {
+        "(none)".to_string()
+    } else {
+        grants.join("\n")
+    }
+}
+
+fn grant_count(data: &PermissionShareData) -> usize {
+    data.lower_positive.len() + data.lower_negative.len()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionShareGetView(pub PermissionShare);
+
+impl MessageWithFields for PermissionShareGetView {
+    fn message(&self) -> String {
+        format!(
+            "Got permission share {}",
+            format_message_highlight(&self.0.id)
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        permission_share_fields(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionShareListView(pub Vec<PermissionShare>);
+
+impl TextView for PermissionShareListView {
+    fn log(&self) {
+        let mut table = new_table_full_condensed(vec![
+            Column::new("ID"),
+            Column::new("Name"),
+            Column::new("Owner").fixed(),
+            Column::new("Target").fixed(),
+            Column::new("Grants").fixed(),
+        ]);
+
+        for share in &self.0 {
+            table.add_row(vec![
+                share.id.to_string(),
+                share.name.to_string(),
+                share.owner_account_id.to_string(),
+                share.target_account_id.to_string(),
+                grant_count(&share.data).to_string(),
+            ]);
+        }
+
+        log_table(table);
     }
 }
 
