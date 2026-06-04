@@ -385,15 +385,22 @@ fn temporary_agent_effective_surface(account_id: AccountId) -> EffectiveSurface 
                     resource: AgentResourcePattern::Any,
                 }),
                 PermissionTarget::Agent(ClassPermissionTarget {
-                    owner: AgentOwnerPattern::AccountAgents { account },
+                    owner: AgentOwnerPattern::AccountAgents {
+                        account: account.clone(),
+                    },
                     verb: Some(AgentVerb::Invoke),
                     resource: AgentResourcePattern::Any,
                 }),
                 PermissionTarget::Agent(ClassPermissionTarget {
                     owner: AgentOwnerPattern::AccountAgents {
-                        account: account_id.to_string(),
+                        account: account.clone(),
                     },
                     verb: Some(AgentVerb::Resume),
+                    resource: AgentResourcePattern::Any,
+                }),
+                PermissionTarget::Agent(ClassPermissionTarget {
+                    owner: AgentOwnerPattern::AccountAgents { account },
+                    verb: Some(AgentVerb::UpdateRevision),
                     resource: AgentResourcePattern::Any,
                 }),
             ],

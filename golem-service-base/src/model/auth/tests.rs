@@ -206,6 +206,10 @@ fn agent_context_can_authorize_temporary_same_account_permissions() {
         ctx.authorize_permission(&agent_target(account_id, AgentVerb::Resume))
             .is_ok()
     );
+    assert!(
+        ctx.authorize_permission(&agent_target(account_id, AgentVerb::UpdateRevision))
+            .is_ok()
+    );
 }
 
 #[test]
