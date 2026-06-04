@@ -34,7 +34,6 @@ use golem_service_base::repo::{BindingsStack, RepoError, ResultExt};
 use indoc::{formatdoc, indoc};
 use sqlx::{Database, Row};
 use std::fmt::Debug;
-use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -812,12 +811,12 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn list_visible_to_account(
         &self,
-        account_id: Uuid,
+        _account_id: Uuid,
         account_email: Option<&str>,
         app_name: Option<&str>,
         env_name: Option<&str>,
     ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError> {
-        let mut binding_stack = BindingsStack::new(2);
+        let mut binding_stack = BindingsStack::new(1);
 
         let account_email_filter = if let Some(account_email) = account_email {
             let i = binding_stack.push(account_email);
@@ -894,19 +893,13 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
             WHERE
                 a.deleted_at IS NULL
-                AND a.account_id = $1
                 {account_email_filter}
                 {app_name_filter}
                 {env_name_filter}
             ORDER BY a.email, ap.name, e.name
         "#};
 
-        let query_as = {
-            let binding_stack = binding_stack;
-            sqlx::query_as(&query)
-                .bind(account_id)
-                .pipe(|q| binding_stack.apply(q))
-        };
+        let query_as = binding_stack.apply(sqlx::query_as(&query));
 
         let result = self
             .with_ro("list_visible_to_account")
