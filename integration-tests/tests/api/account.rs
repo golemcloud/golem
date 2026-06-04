@@ -19,7 +19,6 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
-use std::assert_matches;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 

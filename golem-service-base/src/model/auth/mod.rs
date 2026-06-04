@@ -389,6 +389,13 @@ fn temporary_agent_effective_surface(account_id: AccountId) -> EffectiveSurface 
                     verb: Some(AgentVerb::Invoke),
                     resource: AgentResourcePattern::Any,
                 }),
+                PermissionTarget::Agent(ClassPermissionTarget {
+                    owner: AgentOwnerPattern::AccountAgents {
+                        account: account_id.to_string(),
+                    },
+                    verb: Some(AgentVerb::Resume),
+                    resource: AgentResourcePattern::Any,
+                }),
             ],
             negative: Vec::new(),
         }],
