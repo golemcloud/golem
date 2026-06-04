@@ -30,7 +30,6 @@ pub mod diff;
 pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
-pub mod environment_share;
 pub mod error;
 pub mod http_api_deployment;
 pub mod invocation_context;

@@ -67,7 +67,7 @@ impl PermissionSharesApi {
         let record = recorded_http_api_request!(
             "create_permission_share",
             account_id = account_id.0.to_string(),
-            target_account_id = payload.0.target_account_id.to_string()
+            target_account_email = payload.0.target_account_email.as_str().to_string()
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;

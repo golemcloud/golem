@@ -9923,7 +9923,6 @@ components:
       - versionCheck
       - securityOverrides
       - ownerAccountId
-      - rolesFromActiveShares
       properties:
         id:
           type: string
@@ -9950,13 +9949,6 @@ components:
         ownerAccountId:
           type: string
           format: uuid
-        rolesFromActiveShares:
-          type: array
-          description: |-
-            Roles in the environment that were given to the current user by shares. The owner always has full access.
-            Note that even if getting a deleted environment only non-deleted shares are considered.
-          items:
-            $ref: '#/components/schemas/EnvironmentRole'
         currentDeployment:
           $ref: '#/components/schemas/EnvironmentCurrentDeploymentView'
     EnvironmentCreation:
@@ -10041,12 +10033,6 @@ components:
           $ref: '#/components/schemas/PluginRegistrationDto'
         pluginAccount:
           $ref: '#/components/schemas/AccountSummary'
-    EnvironmentRole:
-      type: string
-      enum:
-      - admin
-      - viewer
-      - deployer
     EnvironmentSummary:
       type: object
       title: EnvironmentSummary
@@ -10058,7 +10044,6 @@ components:
       - compatibilityCheck
       - versionCheck
       - securityOverrides
-      - rolesFromActiveShares
       properties:
         id:
           type: string
@@ -10077,10 +10062,6 @@ components:
           type: boolean
         securityOverrides:
           type: boolean
-        rolesFromActiveShares:
-          type: array
-          items:
-            $ref: '#/components/schemas/EnvironmentRole'
         currentDeployment:
           $ref: '#/components/schemas/EnvironmentCurrentDeploymentView'
     EnvironmentUpdate:
@@ -11040,13 +11021,12 @@ components:
       type: object
       title: PermissionShareCreation
       required:
-      - targetAccountId
+      - targetAccountEmail
       - name
       - data
       properties:
-        targetAccountId:
+        targetAccountEmail:
           type: string
-          format: uuid
         name:
           type: string
         data:

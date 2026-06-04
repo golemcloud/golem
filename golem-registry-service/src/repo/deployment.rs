@@ -1297,17 +1297,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 env.environment_id,
                 env.owner_account_id,
                 {deployment_revision_expr} AS deployment_revision_id,
-                {current_deployment_revision_expr} AS current_deployment_revision_id,
-                COALESCE((
-                  SELECT esr.roles
-                  FROM environment_shares es
-                  JOIN environment_share_revisions esr
-                    ON esr.environment_share_id = es.environment_share_id
-                   AND esr.revision_id = es.current_revision_id
-                  WHERE es.environment_id = env.environment_id
-                    AND es.grantee_account_id = $1
-                    AND es.deleted_at IS NULL
-                ), 0) AS roles_bitmask
+                {current_deployment_revision_expr} AS current_deployment_revision_id
               FROM env
             )
             SELECT
@@ -1315,8 +1305,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
               r.agent_type_name, r.canonical_agent_type_name,
               r.component_id, c.name AS component_name, r.component_revision_id,
               r.webhook_prefix_authority_and_path, r.agent_type,
-              target.owner_account_id,
-              target.roles_bitmask AS environment_roles_from_shares
+              target.owner_account_id
             FROM target
             JOIN deployment_registered_agent_types r
               ON r.environment_id = target.environment_id

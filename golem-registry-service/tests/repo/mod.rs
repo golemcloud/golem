@@ -22,7 +22,6 @@ use golem_registry_service::repo::application::ApplicationRepo;
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::deployment::DeploymentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
-use golem_registry_service::repo::environment_share::EnvironmentShareRepo;
 use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::McpDeploymentRepo;
 use golem_registry_service::repo::model::account::{
@@ -72,7 +71,6 @@ pub struct Deps {
     pub mcp_deployment_repo: Box<dyn McpDeploymentRepo>,
     pub deployment_repo: Box<dyn HttpApiDeploymentRepo>,
     pub full_deployment_repo: Box<dyn DeploymentRepo>,
-    pub environment_share_repo: Box<dyn EnvironmentShareRepo>,
     pub plugin_repo: Box<dyn PluginRepo>,
     pub registry_change_repo: Box<dyn RegistryChangeRepo>,
     pub test_db: TestDb,

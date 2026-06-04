@@ -85,13 +85,13 @@ impl AccountCommandHandler {
             }
             PermissionShareSubcommand::New {
                 account_id,
-                target_account_id,
+                target_account_email,
                 name,
                 grants,
             } => {
                 self.cmd_permission_share_new(
                     account_id.account_id,
-                    target_account_id,
+                    target_account_email,
                     name,
                     grants,
                 )
@@ -256,7 +256,7 @@ impl AccountCommandHandler {
     async fn cmd_permission_share_new(
         &self,
         account_id: Option<AccountId>,
-        target_account_id: AccountId,
+        target_account_email: String,
         name: String,
         grants: PermissionShareGrantArgs,
     ) -> anyhow::Result<()> {
@@ -269,7 +269,7 @@ impl AccountCommandHandler {
             .create_permission_share(
                 &account_id.0,
                 &PermissionShareCreation {
-                    target_account_id,
+                    target_account_email: AccountEmail::new(target_account_email),
                     name: PermissionShareName(name),
                     data: permission_share_data(grants),
                 },

@@ -609,12 +609,12 @@ pub const ACCOUNT_PERMISSION_SHARE_GET_BY_NAME: &str = "Examples:
 
 pub const ACCOUNT_PERMISSION_SHARE_NEW: &str = "Examples:
   # Share permissions with another account
-  golem-cli account permission-share new acc-target staging-access \
+  golem-cli account permission-share new target@example.com staging-access \
     --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
     --lower-positive 'component(my-account/my-app/staging) @ target@example.com : view : *'
 
   # Add a lower negative grant by repeating the flag
-  golem-cli account permission-share new acc-target staging-access \
+  golem-cli account permission-share new target@example.com staging-access \
     --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
     --lower-negative 'component(my-account/my-app/staging) @ target@example.com : delete : *'";
 

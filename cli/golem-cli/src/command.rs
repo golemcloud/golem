@@ -2169,7 +2169,6 @@ pub mod api_token {
 pub mod account {
     use crate::command::shared_args::AccountIdOptionalArg;
     use clap::{Args, Subcommand};
-    use golem_common::model::account::AccountId;
     use golem_common::model::permission_share::PermissionShareId;
 
     #[derive(Debug, Args)]
@@ -2216,8 +2215,8 @@ pub mod account {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
 
-            /// Target account receiving the permissions.
-            target_account_id: AccountId,
+            /// Target account email receiving the permissions.
+            target_account_email: String,
 
             /// Permission share name.
             name: String,
