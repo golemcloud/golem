@@ -26,11 +26,11 @@ Choose tests based on what you changed. **Do not run `cargo make test`** — it 
 | Core logic, shared types, utilities | `cargo make unit-tests` |
 | Worker executor functionality | `cargo make worker-executor-tests` |
 | Service integration | `cargo make integration-tests` |
-| CLI changes | `cargo make cli-tests` |
+| CLI changes | `cargo make cli-integration-tests` |
 | HTTP API endpoints | `cargo make api-tests-http` |
 | gRPC API endpoints | `cargo make api-tests-grpc` |
 | Rust SDK (`sdks/rust/`) | `cargo test -p golem-rust` + `cargo make worker-executor-tests` |
-| TypeScript SDK (`sdks/ts/`) | `npx pnpm run test` (in `sdks/ts/`) + `cargo make cli-tests` |
+| TypeScript SDK (`sdks/ts/`) | `npx pnpm run test` (in `sdks/ts/`) + `cargo make cli-integration-tests` |
 | MoonBit SDK (`sdks/moonbit/`) | `moon test` (in `sdks/moonbit/golem_sdk/`) |
 
 If your change spans multiple areas, run multiple test suites.

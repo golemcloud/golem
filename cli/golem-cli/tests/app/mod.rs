@@ -21,20 +21,6 @@ mod build_and_deploy_all;
 mod directory_source_ifs;
 mod plugins;
 
-tag_suite!(app, group1);
-sequential_suite!(app);
-
-tag_suite!(plugins, group1);
-sequential_suite!(plugins);
-
-tag_suite!(build_and_deploy_all, group2);
-sequential_suite!(build_and_deploy_all);
-
-tag_suite!(directory_source_ifs, group3);
-sequential_suite!(directory_source_ifs);
-
-sequential_suite!(agents);
-
 inherit_test_dep!(Tracing);
 
 use crate::{Tracing, crate_path, workspace_path};
@@ -58,7 +44,7 @@ use std::str::FromStr;
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::{inherit_test_dep, sequential_suite, tag_suite};
+use test_r::inherit_test_dep;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -66,6 +52,8 @@ use tokio::time::Instant;
 use tracing::info;
 use url::Url;
 use uuid::Uuid;
+
+const GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR: &str = "GOLEM_CLI_TEST_BIN_PROFILE";
 
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
@@ -335,6 +323,8 @@ impl TestContext {
             .unwrap_or_default()
             .0;
 
+        let binary_profile = test_binary_profile();
+
         // NOTE: GOLEM_CLI_TEST_DIR is intended to be used for debugging one test at a time,
         //       locally, while keeping the test dir
         let (test_dir, working_dir) = match std::env::var("GOLEM_CLI_TEST_DIR") {
@@ -370,26 +360,8 @@ impl TestContext {
 
         let ctx = Self {
             quiet,
-            golem_path: {
-                let path = workspace_path().join(format!(
-                    "target/debug/golem{}",
-                    std::env::consts::EXE_SUFFIX
-                ));
-                if !path.exists() {
-                    panic!("golem binary not found at {}", path.display());
-                }
-                path
-            },
-            golem_cli_path: {
-                let path = workspace_path().join(format!(
-                    "target/debug/golem-cli{}",
-                    std::env::consts::EXE_SUFFIX
-                ));
-                if !path.exists() {
-                    panic!("golem-cli binary not found at {}", path.display());
-                }
-                path
-            },
+            golem_path: test_binary_path(&binary_profile, "golem"),
+            golem_cli_path: test_binary_path(&binary_profile, "golem-cli"),
             _test_dir: test_dir,
             config_dir: TempDir::new().unwrap(),
             data_dir: TempDir::new().unwrap(),
@@ -1092,6 +1064,38 @@ where
             .with_context(|| format!("failed to match regex: {expected}"))?;
         Ok(())
     }
+}
+
+fn test_binary_profile() -> String {
+    match std::env::var(GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR) {
+        Ok(profile) if profile.trim().is_empty() => "debug".to_string(),
+        Ok(profile)
+            if profile == "debug"
+                || profile == "dev-ci"
+                || profile == "dev-release"
+                || profile == "dev-release-ci" =>
+        {
+            profile
+        }
+        Ok(profile) => panic!(
+            "Unsupported {GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR} value: {profile}. Expected 'debug', 'dev-ci', 'dev-release', or 'dev-release-ci'"
+        ),
+        Err(_) => "debug".to_string(),
+    }
+}
+
+fn test_binary_path(profile: &str, binary_name: &str) -> PathBuf {
+    let path = workspace_path().join(format!(
+        "target/{profile}/{binary_name}{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    if !path.exists() {
+        panic!(
+            "{binary_name} binary for {profile} profile not found at {}. Build it first, or set {GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR}=debug to use the default debug binaries.",
+            path.display()
+        );
+    }
+    path
 }
 
 fn merge_into_manifest(path: &Path, update: &str) -> anyhow::Result<()> {

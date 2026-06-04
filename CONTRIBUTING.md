@@ -101,8 +101,15 @@ The **CLI tests** are similar to the integration tests but interact with the run
 To run all CLI tests use
 
 ```shell
-cargo make cli-tests
+cargo make cli-integration-tests
 ```
+
+For faster local runs with dev-release binaries, use:
+
+```shell
+cargo make cli-integration-tests-dev-release
+```
+
 #### Running sharding tests
 For sharding-related tests with file logging:
 

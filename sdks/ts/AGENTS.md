@@ -99,7 +99,7 @@ This SDK is part of the main Golem repository but is **not built by `cargo make 
 cargo make cli-integration-tests
 ```
 
-Use `cargo make cli-integration-tests-group1` through `cargo make cli-integration-tests-group6` to isolate failures or rerun only part of the CLI integration suite.
+Use `cargo make cli-integration-tests` to run the CLI integration suite. For faster local runs with dev-release binaries, use `cargo make cli-integration-tests-dev-release`. To isolate failures, run targeted `cargo-test-r` filters or lower local concurrency with `CLI_TEST_THREADS=1 cargo make cli-integration-tests`.
 
 ## Testing Local SDK Changes
 

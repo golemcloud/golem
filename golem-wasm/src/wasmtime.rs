@@ -504,6 +504,9 @@ async fn decode_param_impl(
                 details: format!("in {context} unsupported type (future/stream/error-context)"),
             })
         }
+        Type::Map(_) => Err(EncodingError::ParamTypeMismatch {
+            details: format!("in {context} unsupported type (map)"),
+        }),
         Type::Borrow(_) => match param {
             Value::Handle { uri, resource_id } => {
                 let uri = Uri { value: uri.clone() };
@@ -827,6 +830,9 @@ pub async fn encode_output(
                 details: "Unsupported value type (future/stream/error-context)".to_string(),
             })
         }
+        Val::Map(_) => Err(EncodingError::ValueMismatch {
+            details: "Unsupported value type (map)".to_string(),
+        }),
     }
 }
 
@@ -902,5 +908,6 @@ pub fn type_to_analysed_type(typ: &Type) -> Result<AnalysedType, String> {
         Type::Future(_) | Type::Stream(_) | Type::ErrorContext => {
             Err("Cannot extract information about future/stream/error-context type".to_string())
         }
+        Type::Map(_) => Err("Cannot extract information about map type".to_string()),
     }
 }
