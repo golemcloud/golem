@@ -24,7 +24,7 @@ permissions:
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
   MOONBIT_INSTALL_VERSION: "0.9.2+bbe2b338f"
-  WASM_RQUICKJS_VERSION: "0.2.4"
+  WASM_RQUICKJS_VERSION: "0.3.4"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -153,6 +153,36 @@ jobs:
           artifact-name: worker-executor-tests-${{ matrix.group.name }}-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  build-cli-test-bins:
+    env:
+      CARGO_BUILD_JOBS: 20
+      GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-shared-key: 'cli-dev-release-ci'
+          cache-save-if: 'true'
+      - name: Build CLI test binaries
+        env:
+          QUIET: true
+        run: cargo make --profile ci build-cli-test-bins
+        timeout-minutes: 20
+      - name: Package CLI test binaries
+        run: |
+          mkdir -pv tmp/golem-cli-test-binaries
+          cp target/dev-release-ci/golem target/dev-release-ci/golem-cli tmp/golem-cli-test-binaries/
+          find tmp/golem-cli-test-binaries -type f | sort
+        timeout-minutes: 2
+      - name: Save CLI test binaries to cache
+        uses: actions/cache/save@v5
+        with:
+          path: tmp/golem-cli-test-binaries
+          key: golem-cli-test-binaries-${{ github.run_id }}
+
   it:
     env:
       CARGO_BUILD_JOBS: 10
@@ -191,23 +221,6 @@ jobs:
             description: "IT #12"
           - name: integration-tests-group13
             description: "IT #13"
-          - name: cli-integration-tests-group1
-            description: "CLI tests #1"
-          - name: cli-integration-tests-group2
-            description: "CLI tests #2"
-            runner: blacksmith-16vcpu-ubuntu-2204
-          - name: cli-integration-tests-group3
-            description: "CLI tests #3"
-            runner: blacksmith-16vcpu-ubuntu-2204
-          - name: cli-integration-tests-group4
-            description: "CLI tests #4"
-            runner: blacksmith-16vcpu-ubuntu-2204
-          - name: cli-integration-tests-group5
-            description: "CLI tests #5"
-            runner: blacksmith-16vcpu-ubuntu-2204
-          - name: cli-integration-tests-group6
-            description: "CLI tests #6"
-            runner: blacksmith-16vcpu-ubuntu-2204
 
     steps:
       - uses: actions/checkout@v5
@@ -224,79 +237,6 @@ jobs:
           redis-version: latest
           auto-start: false
 
-      - name: Install wasm-tools
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        run: cargo binstall --force --locked wasm-tools@1.227.1
-      - name: Install wit-bindgen
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
-
-      - name: Setup Node
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        uses: ./.github/actions/setup-js-wasm-tools
-        with:
-          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
-          install-wasi-sdk: ${{ matrix.group.name == 'cli-integration-tests-group2' }}
-          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
-          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-
-      - name: Setup Java
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Setup SBT
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        uses: sbt/setup-sbt@v1
-
-      - name: Setup MoonBit
-        if: matrix.group.name == 'cli-integration-tests-group2'
-        uses: hustcer/setup-moonbit@v1
-        with:
-          version: ${{ env.MOONBIT_INSTALL_VERSION }}
-          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
-
-      - name: Install MoonBit SDK tools dependencies
-        if: matrix.group.name == 'cli-integration-tests-group2'
-        working-directory: sdks/moonbit/golem_sdk_tools
-        run: moon update && moon install
-
-      - name: Sync WIT dependencies
-        if: matrix.group.name == 'cli-integration-tests-group2'
-        run: cargo make wit
-
-      - name: Build agent_guest.wasm
-        if: matrix.group.name == 'cli-integration-tests-group2'
-        working-directory: sdks/scala
-        run: ./scripts/generate-agent-guest-wasm.sh
-
-      - name: Publish Scala SDK locally
-        if: matrix.group.name == 'cli-integration-tests-group2'
-        working-directory: sdks/scala
-        run: |
-          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
-
-      - name: Restore built TS SDK
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
-
-      - name: Install TS SDK dependencies
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        working-directory: sdks/ts
-        run: pnpm install --frozen-lockfile
 
       - uses: ./.github/actions/restore-binaries
         with:
@@ -316,6 +256,122 @@ jobs:
         if: always()
         with:
           artifact-name: '${{ matrix.group.name }}-report'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  it-cli:
+    name: it-cli
+    env:
+      CARGO_BUILD_JOBS: 10
+      GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    needs:
+      - build-and-store
+      - build-golem-ts
+      - build-cli-test-bins
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip1 wasm32-wasip2'
+          install-cargo-binstall: 'true'
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.49.0
+        with:
+          redis-version: latest
+          auto-start: false
+
+      - name: Install wasm-tools
+        run: cargo binstall --force --locked wasm-tools@1.227.1
+      - name: Install wit-bindgen
+        run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
+
+      - name: Setup Node
+        uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup SBT
+        uses: sbt/setup-sbt@v1
+
+      - name: Setup MoonBit
+        uses: hustcer/setup-moonbit@v1
+        with:
+          version: ${{ env.MOONBIT_INSTALL_VERSION }}
+          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
+
+      - name: Install MoonBit SDK tools dependencies
+        working-directory: sdks/moonbit/golem_sdk_tools
+        run: moon update && moon install
+
+      - name: Sync WIT dependencies
+        run: cargo make wit
+
+      - name: Build agent_guest.wasm
+        working-directory: sdks/scala
+        run: ./scripts/generate-agent-guest-wasm.sh
+
+      - name: Publish Scala SDK locally
+        working-directory: sdks/scala
+        run: |
+          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
+
+      - name: Restore built TS SDK
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            sdks/ts/packages/golem-ts-sdk/dist
+            sdks/ts/packages/golem-ts-sdk/types
+            sdks/ts/packages/golem-ts-sdk/wasm
+            sdks/ts/packages/golem-ts-typegen/dist
+            sdks/ts/packages/golem-ts-types-core/dist
+            sdks/ts/packages/golem-ts-bridge/dist
+            sdks/ts/packages/golem-ts-repl/dist
+          key: golem-ts-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Install TS SDK dependencies
+        working-directory: sdks/ts
+        run: pnpm install --frozen-lockfile
+
+      - uses: ./.github/actions/restore-binaries
+        with:
+          run-id: ${{ github.run_id }}
+          copy-to-target: 'true'
+
+      - name: Restore CLI test binaries
+        uses: actions/cache/restore@v5
+        with:
+          path: tmp/golem-cli-test-binaries
+          key: golem-cli-test-binaries-${{ github.run_id }}
+          fail-on-cache-miss: true
+      - name: Install CLI test binaries
+        run: |
+          mkdir -pv target/dev-release-ci
+          cp tmp/golem-cli-test-binaries/* target/dev-release-ci/
+          chmod +x target/dev-release-ci/*
+
+      - name: CLI integration tests
+        env:
+          QUIET: true
+          GOLEM_PRESET: quick
+        run: cargo make --profile ci cli-integration-tests
+        timeout-minutes: 30
+      - uses: ./.github/actions/publish-test-report
+        if: always()
+        with:
+          artifact-name: it-cli-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   scala-sdk-integration-tests:
@@ -883,6 +939,7 @@ jobs:
       - golem-wasm-guest
       - worker-tests
       - it
+      - it-cli
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
       CARGO_BUILD_JOBS: 20

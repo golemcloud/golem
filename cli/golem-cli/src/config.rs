@@ -48,9 +48,7 @@ static BUILTIN_LOCAL_URL_ONCE: OnceLock<BuiltinLocalUrlState> = OnceLock::new();
 
 fn builtin_local_url_state() -> &'static BuiltinLocalUrlState {
     BUILTIN_LOCAL_URL_ONCE.get_or_init(|| {
-        if cfg!(debug_assertions)
-            && let Ok(override_url) = std::env::var(BUILTIN_LOCAL_URL_ENV)
-        {
+        if let Ok(override_url) = std::env::var(BUILTIN_LOCAL_URL_ENV) {
             return BuiltinLocalUrlState {
                 url: Url::parse(&override_url).unwrap_or_else(|err| {
                     panic!("Failed to parse {BUILTIN_LOCAL_URL_ENV} ({override_url}): {err}")

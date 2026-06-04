@@ -25,7 +25,7 @@ fn my_test() {
 | Core logic, utilities | `cargo make unit-tests` |
 | Worker executor functionality | `cargo make worker-executor-tests` |
 | Service integration | `cargo make integration-tests` |
-| CLI changes | `cargo make cli-tests` |
+| CLI changes | `cargo make cli-integration-tests` |
 
 **Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
 

@@ -148,16 +148,15 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
         HasSelf<DurableWorkerCtx<Ctx>>,
     >(&mut linker, get)?;
 
-    wasmtime_wasi_http::bindings::http::outgoing_handler::add_to_linker::<
+    wasmtime_wasi_http::p2::bindings::http::outgoing_handler::add_to_linker::<
         _,
         HasSelf<DurableWorkerCtx<Ctx>>,
     >(&mut linker, get)?;
-    let http_link_options = wasmtime_wasi_http::bindings::LinkOptions::default();
-    wasmtime_wasi_http::bindings::http::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
-        &mut linker,
-        &(&http_link_options).into(),
-        get,
-    )?;
+    let http_link_options = wasmtime_wasi_http::p2::bindings::LinkOptions::default();
+    wasmtime_wasi_http::p2::bindings::http::types::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<Ctx>>,
+    >(&mut linker, &(&http_link_options).into(), get)?;
 
     crate::preview2::wasi::blobstore::blobstore::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
