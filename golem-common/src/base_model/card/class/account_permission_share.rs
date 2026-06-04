@@ -17,46 +17,68 @@ use super::{
     PolymorphicPermissionPattern, ResourcePattern, VerbPattern,
 };
 use crate::base_model::card::parsing::CardParseError;
-use crate::model::card::owner::EmptyOwnerPattern;
+use crate::model::card::owner::AccountOwnerPattern;
+use crate::model::permission_share::PermissionShareName;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct SystemResourcePattern;
+pub enum AccountPermissionShareResourcePattern {
+    Any,
+    Name(PermissionShareName),
+}
 
-impl ResourcePattern for SystemResourcePattern {
+impl AccountPermissionShareResourcePattern {
+    pub fn any() -> Self {
+        Self::Any
+    }
+
+    pub fn name(value: PermissionShareName) -> Self {
+        Self::Name(value)
+    }
+}
+
+impl ResourcePattern for AccountPermissionShareResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource.is_empty() {
-            Ok(SystemResourcePattern)
+        if resource == "*" {
+            Ok(AccountPermissionShareResourcePattern::Any)
+        } else if !resource.is_empty() {
+            Ok(AccountPermissionShareResourcePattern::Name(
+                PermissionShareName(resource.to_string()),
+            ))
         } else {
             Err(CardParseError::InvalidResource {
-                class: SystemClass::NAME.to_string(),
+                class: AccountPermissionShareClass::NAME.to_string(),
                 resource: resource.to_string(),
             })
         }
     }
 
-    fn subsumes(&self, _other: &Self) -> bool {
-        true
+    fn subsumes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Any, _) => true,
+            (Self::Name(a), Self::Name(b)) => a == b,
+            (Self::Name(_), Self::Any) => false,
+        }
     }
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum SystemVerb {
-    CreateAccount,
-    ImpersonateUser,
-    ViewDefaultPlan,
-    ViewAccountSummariesReport,
-    ViewAccountCountsReport,
+pub enum AccountPermissionShareVerb {
+    View,
+    Create,
+    Update,
+    Delete,
 }
-impl VerbPattern for SystemVerb {
+
+impl VerbPattern for AccountPermissionShareVerb {
     fn parse_verb(verb: &str) -> Option<Self> {
         match verb {
-            "create-account" => Some(Self::CreateAccount),
-            "impersonate-user" => Some(Self::ImpersonateUser),
-            "view-default-plan" => Some(Self::ViewDefaultPlan),
-            "view-account-summaries-report" => Some(Self::ViewAccountSummariesReport),
-            "view-account-counts-report" => Some(Self::ViewAccountCountsReport),
+            "view" => Some(Self::View),
+            "create" => Some(Self::Create),
+            "update" => Some(Self::Update),
+            "delete" => Some(Self::Delete),
             _ => None,
         }
     }
@@ -64,21 +86,21 @@ impl VerbPattern for SystemVerb {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub struct SystemClass;
+pub struct AccountPermissionShareClass;
 
-impl PermissionClass for SystemClass {
-    type Verb = SystemVerb;
-    type Owner = EmptyOwnerPattern;
-    type Resource = SystemResourcePattern;
-    const NAME: &'static str = "system";
+impl PermissionClass for AccountPermissionShareClass {
+    type Verb = AccountPermissionShareVerb;
+    type Owner = AccountOwnerPattern;
+    type Resource = AccountPermissionShareResourcePattern;
+    const NAME: &'static str = "account.permission-share";
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
-        PermissionPattern::System(pattern)
+        PermissionPattern::AccountPermissionShare(pattern)
     }
 
     fn into_polymorphic_permission(
         pattern: PolymorphicClassPermissionPattern<Self>,
     ) -> PolymorphicPermissionPattern {
-        PolymorphicPermissionPattern::System(pattern)
+        PolymorphicPermissionPattern::AccountPermissionShare(pattern)
     }
 }

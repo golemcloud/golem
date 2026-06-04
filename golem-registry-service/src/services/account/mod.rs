@@ -20,6 +20,7 @@ use crate::config::PrecreatedAccount;
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
+use crate::services::auth::authorize_system_permission;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -29,11 +30,10 @@ use golem_common::model::account::{
 };
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::{
-    AccountResourcePattern, AccountVerb, ClassPermissionTarget, PermissionTarget,
+    AccountResourcePattern, AccountVerb, ClassPermissionTarget, PermissionTarget, SystemVerb,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::GlobalAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -126,7 +126,7 @@ impl AccountService {
         account: AccountCreation,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        auth.authorize_global_action(GlobalAction::CreateAccount)?;
+        authorize_system_permission(auth, SystemVerb::CreateAccount)?;
 
         let id = AccountId::new();
         info!("Creating account: {}", id);
@@ -272,7 +272,7 @@ impl AccountService {
         plan_id: PlanId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        auth.authorize_global_action(GlobalAction::CreateAccount)?;
+        authorize_system_permission(auth, SystemVerb::CreateAccount)?;
 
         if id == AccountId::SYSTEM {
             Err(anyhow!("Cannot create account with reserved account id"))?

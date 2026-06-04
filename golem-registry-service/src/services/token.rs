@@ -15,6 +15,7 @@
 use super::account::{AccountError, AccountService};
 use crate::repo::model::token::TokenRecord;
 use crate::repo::token::TokenRepo;
+use crate::services::auth::authorize_system_permission;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -25,9 +26,10 @@ use golem_common::model::auth::{TokenSecret, TokenWithSecret};
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::{
     AccountTokenResourcePattern, AccountTokenVerb, ClassPermissionTarget, PermissionTarget,
+    SystemVerb,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError, GlobalAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -263,7 +265,7 @@ impl TokenService {
         expires_at: DateTime<Utc>,
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
-        auth.authorize_global_action(GlobalAction::ImpersonateUser)?;
+        authorize_system_permission(auth, SystemVerb::ImpersonateUser)?;
 
         // Verify the target account exists.
         self.account_service

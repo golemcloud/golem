@@ -14,6 +14,7 @@
 
 mod account;
 mod account_oauth2_identity;
+mod account_permission_share;
 mod account_plugin;
 mod account_token;
 mod account_usage;
@@ -55,6 +56,7 @@ use std::fmt::Debug;
 
 pub use account::*;
 pub use account_oauth2_identity::*;
+pub use account_permission_share::*;
 pub use account_plugin::*;
 pub use account_token::*;
 pub use account_usage::*;
@@ -125,6 +127,7 @@ macro_rules! card_permission_classes {
             EnvironmentInitialFiles: EnvironmentInitialFilesClass,
             EnvironmentKvBucket: EnvironmentKvBucketClass,
             EnvironmentBlobBucket: EnvironmentBlobBucketClass,
+            AccountPermissionShare: AccountPermissionShareClass,
         }
     };
 }

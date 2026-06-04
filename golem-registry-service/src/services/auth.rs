@@ -21,7 +21,9 @@ use crate::services::permission_share::{PermissionShareError, PermissionShareSer
 use chrono::Utc;
 use golem_common::model::account::{Account, AccountId};
 use golem_common::model::auth::{TokenId, TokenSecret};
-use golem_common::model::card::owner::{ApplicationOwnerPattern, EnvironmentOwnerPattern};
+use golem_common::model::card::owner::{
+    ApplicationOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern,
+};
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     Card, ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
@@ -36,7 +38,7 @@ use golem_common::model::card::{
     EnvironmentRetryPolicyResourcePattern, EnvironmentRetryPolicyVerb,
     EnvironmentSecuritySchemeName, EnvironmentSecuritySchemeResourcePattern,
     EnvironmentSecuritySchemeVerb, EnvironmentShareResourcePattern, EnvironmentShareVerb,
-    EnvironmentVerb, PermissionTarget,
+    EnvironmentVerb, PermissionTarget, SystemResourcePattern, SystemVerb,
 };
 use golem_common::model::component::ComponentName;
 use golem_common::model::domain_registration::Domain;
@@ -46,7 +48,7 @@ use golem_common::model::quota::ResourceName;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{
-    AdminImpersonationAuthCtx, AuthCtx, AuthorizationError, GlobalAction, UserAuthCtx,
+    AdminImpersonationAuthCtx, AuthCtx, AuthorizationError, UserAuthCtx,
 };
 use golem_service_base::repo::RepoError;
 use std::collections::BTreeSet;
@@ -75,6 +77,17 @@ pub fn authorize_environment_permission(
         resource: EnvironmentResourcePattern::Environment(CardEnvironmentName(
             environment.name.0.clone(),
         )),
+    }))
+}
+
+pub fn authorize_system_permission(
+    auth: &AuthCtx,
+    verb: SystemVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::System(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EmptyOwnerPattern,
+        resource: SystemResourcePattern,
     }))
 }
 
@@ -365,8 +378,7 @@ impl AuthService {
                         effective_surface,
                     });
 
-                    if admin_auth_ctx
-                        .authorize_global_action(GlobalAction::ImpersonateUser)
+                    if authorize_system_permission(&admin_auth_ctx, SystemVerb::ImpersonateUser)
                         .is_err()
                     {
                         warn!(
