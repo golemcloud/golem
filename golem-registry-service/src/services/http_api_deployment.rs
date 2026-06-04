@@ -20,8 +20,11 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::http_api_deployment::{
     HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
 };
-use crate::services::auth::authorize_http_api_deployment_permission;
-use golem_common::model::card::EnvironmentHttpApiDeploymentVerb;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentHttpApiDeploymentResourcePattern,
+    EnvironmentHttpApiDeploymentVerb, PermissionTarget,
+};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{Environment, EnvironmentId};
@@ -63,6 +66,32 @@ pub enum HttpApiDeploymentError {
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+fn authorize_http_api_deployment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    domain: Option<&Domain>,
+    verb: EnvironmentHttpApiDeploymentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentHttpApiDeployment(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: domain
+                .map(
+                    |domain| EnvironmentHttpApiDeploymentResourcePattern::DomainPath {
+                        domain: domain.0.clone(),
+                        path_glob: "/**".to_string(),
+                    },
+                )
+                .unwrap_or(EnvironmentHttpApiDeploymentResourcePattern::Any),
+        },
+    ))
 }
 
 impl SafeDisplay for HttpApiDeploymentError {

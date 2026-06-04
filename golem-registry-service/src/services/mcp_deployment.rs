@@ -18,8 +18,11 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::mcp_deployment::McpDeploymentRepo;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::mcp_deployment::{McpDeploymentRepoError, McpDeploymentRevisionRecord};
-use crate::services::auth::authorize_mcp_deployment_permission;
-use golem_common::model::card::EnvironmentMcpDeploymentVerb;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentMcpDeploymentName, EnvironmentMcpDeploymentResourcePattern,
+    EnvironmentMcpDeploymentVerb, PermissionTarget,
+};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{Environment, EnvironmentId};
@@ -61,6 +64,31 @@ pub enum McpDeploymentError {
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+fn authorize_mcp_deployment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    domain: Option<&Domain>,
+    verb: EnvironmentMcpDeploymentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentMcpDeployment(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: domain
+                .map(|domain| {
+                    EnvironmentMcpDeploymentResourcePattern::Name(EnvironmentMcpDeploymentName(
+                        domain.0.clone(),
+                    ))
+                })
+                .unwrap_or(EnvironmentMcpDeploymentResourcePattern::Any),
+        },
+    ))
 }
 
 impl SafeDisplay for McpDeploymentError {

@@ -21,7 +21,6 @@ use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::domain_registration::{
     DomainRegistrationRecord, DomainRegistrationRepoError,
 };
-use crate::services::auth::authorize_domain_registration_permission;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -29,12 +28,17 @@ pub use config::{
     AvailableDomainsConfig, DomainRegistrationConfig, RestrictedAvailableDomainsConfig,
 };
 pub use errors::DomainRegistrationError;
-use golem_common::model::card::EnvironmentDomainRegistrationVerb;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, DomainLabel, DomainNamePattern,
+    EnvironmentDomainRegistrationResourcePattern, EnvironmentDomainRegistrationVerb,
+    PermissionTarget,
+};
 use golem_common::model::domain_registration::{
     Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };
 use golem_common::model::environment::{Environment, EnvironmentId};
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use regex::Regex;
 use std::sync::Arc;
 
@@ -366,6 +370,35 @@ impl DomainMatcher {
             }
         }
     }
+}
+
+fn authorize_domain_registration_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    domain: Option<&Domain>,
+    verb: EnvironmentDomainRegistrationVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentDomainRegistration(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: domain
+                .map(|domain| {
+                    EnvironmentDomainRegistrationResourcePattern::Domain(DomainNamePattern {
+                        labels: domain
+                            .0
+                            .split('.')
+                            .map(|label| DomainLabel(label.to_string()))
+                            .collect(),
+                    })
+                })
+                .unwrap_or(EnvironmentDomainRegistrationResourcePattern::Any),
+        },
+    ))
 }
 
 #[cfg(test)]

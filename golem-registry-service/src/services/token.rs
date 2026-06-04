@@ -15,7 +15,6 @@
 use super::account::{AccountError, AccountService};
 use crate::repo::model::token::TokenRecord;
 use crate::repo::token::TokenRepo;
-use crate::services::auth::authorize_system_permission;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -23,10 +22,10 @@ use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenId;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
-use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::{
     AccountTokenResourcePattern, AccountTokenVerb, ClassPermissionTarget, PermissionTarget,
-    SystemVerb,
+    SystemResourcePattern, SystemVerb,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -318,6 +317,14 @@ fn authorize_account_token_permission(
     resource: AccountTokenResourcePattern,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&account_token_permission_target(account_id, verb, resource))
+}
+
+fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::System(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EmptyOwnerPattern,
+        resource: SystemResourcePattern,
+    }))
 }
 
 fn account_token_permission_target(

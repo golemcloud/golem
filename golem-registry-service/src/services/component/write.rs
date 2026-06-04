@@ -17,7 +17,6 @@ use crate::metrics::storage::record_component_uploaded;
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::AccountUsageService;
-use crate::services::auth::authorize_component_permission;
 use crate::services::component::utils::prepare_component_files_for_upload;
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
@@ -32,7 +31,11 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
-use golem_common::model::card::ComponentVerb;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
+    ComponentVerb, PermissionTarget,
+};
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
     ComponentRevision, ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
@@ -47,7 +50,7 @@ use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
@@ -980,6 +983,23 @@ fn validate_component_metadata_invariants(
     }
 
     Ok(())
+}
+
+fn authorize_component_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    component_name: &ComponentName,
+    verb: ComponentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Component(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_id.to_string(),
+            application: environment.application_name.0.clone(),
+            environment: environment.name.0.clone(),
+        },
+        resource: ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
+    }))
 }
 
 fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), ComponentError> {

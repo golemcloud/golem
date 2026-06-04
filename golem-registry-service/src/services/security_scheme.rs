@@ -17,11 +17,14 @@ use crate::model::security_scheme::SecurityScheme;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::security_scheme::{SecuritySchemeRepoError, SecuritySchemeRevisionRecord};
 use crate::repo::security_scheme::SecuritySchemeRepo;
-use crate::services::auth::authorize_security_scheme_permission;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
-use golem_common::model::card::EnvironmentSecuritySchemeVerb;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentSecuritySchemeName, EnvironmentSecuritySchemeResourcePattern,
+    EnvironmentSecuritySchemeVerb, PermissionTarget,
+};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::security_scheme::{
     SecuritySchemeCreation, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
@@ -53,6 +56,31 @@ pub enum SecuritySchemeError {
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+fn authorize_security_scheme_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    name: Option<&SecuritySchemeName>,
+    verb: EnvironmentSecuritySchemeVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentSecurityScheme(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: name
+                .map(|name| {
+                    EnvironmentSecuritySchemeResourcePattern::Name(EnvironmentSecuritySchemeName(
+                        name.0.clone(),
+                    ))
+                })
+                .unwrap_or(EnvironmentSecuritySchemeResourcePattern::Any),
+        },
+    ))
 }
 
 impl SafeDisplay for SecuritySchemeError {

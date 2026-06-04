@@ -18,12 +18,14 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment_share::{
     EnvironmentShareRepoError, EnvironmentShareRevisionRecord,
 };
-use crate::services::auth::authorize_environment_share_permission;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::card::EnvironmentShareVerb;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentShareResourcePattern, EnvironmentShareVerb, PermissionTarget,
+};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_share::{
     EnvironmentShare, EnvironmentShareCreation, EnvironmentShareId, EnvironmentShareRevision,
@@ -50,6 +52,25 @@ pub enum EnvironmentShareError {
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+fn authorize_environment_share_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    environment_share_id: Option<EnvironmentShareId>,
+    verb: EnvironmentShareVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentShare(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_id.to_string(),
+            application: environment.application_name.0.clone(),
+            environment: environment.name.0.clone(),
+        },
+        resource: environment_share_id
+            .map(EnvironmentShareResourcePattern::Share)
+            .unwrap_or(EnvironmentShareResourcePattern::Any),
+    }))
 }
 
 impl SafeDisplay for EnvironmentShareError {

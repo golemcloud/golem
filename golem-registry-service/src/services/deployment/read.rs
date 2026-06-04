@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use super::mirror::{DeployedAgentTypeMirror, ResolvedAgentTypeMirror, schema_mirror_error};
+use super::authorize_environment_permission;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
-use crate::services::auth::authorize_environment_permission;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;

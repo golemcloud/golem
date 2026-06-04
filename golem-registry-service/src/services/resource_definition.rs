@@ -19,8 +19,12 @@ use crate::repo::model::resource_definition::{
     ResourceDefinitionCreationArgs, ResourceDefinitionRepoError, ResourceDefinitionRevisionRecord,
 };
 use crate::repo::resource_definition::ResourceDefinitionRepo;
-use crate::services::auth::authorize_resource_definition_permission;
-use golem_common::model::card::EnvironmentResourceDefinitionVerb;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentResourceDefinitionName,
+    EnvironmentResourceDefinitionResourcePattern, EnvironmentResourceDefinitionVerb,
+    PermissionTarget,
+};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::quota::{
     ResourceDefinition, ResourceDefinitionCreation, ResourceDefinitionId,
@@ -49,6 +53,31 @@ pub enum ResourceDefinitionError {
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+fn authorize_resource_definition_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    name: Option<&ResourceName>,
+    verb: EnvironmentResourceDefinitionVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentResourceDefinition(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: name
+                .map(|name| {
+                    EnvironmentResourceDefinitionResourcePattern::Name(
+                        EnvironmentResourceDefinitionName(name.0.clone()),
+                    )
+                })
+                .unwrap_or(EnvironmentResourceDefinitionResourcePattern::Any),
+        },
+    ))
 }
 
 impl SafeDisplay for ResourceDefinitionError {

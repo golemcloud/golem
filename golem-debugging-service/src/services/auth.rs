@@ -13,27 +13,15 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::model::AgentId;
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
-use golem_common::model::card::{
-    AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
-};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::component::Component;
 use std::sync::Arc;
 
 #[async_trait]
 pub trait AuthService: Send + Sync {
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError>;
-    async fn check_user_allowed_to_debug_agent(
-        &self,
-        component: &Component,
-        agent_id: &AgentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), AuthServiceError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -80,28 +68,5 @@ impl AuthService for GrpcAuthService {
                 }
                 other => other.into(),
             })
-    }
-
-    async fn check_user_allowed_to_debug_agent(
-        &self,
-        component: &Component,
-        agent_id: &AgentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), AuthServiceError> {
-        auth_ctx
-            .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
-                owner: AgentOwnerPattern::Agent {
-                    account: component.account_id.to_string(),
-                    application: component.application_name.0.clone(),
-                    environment: component.environment_name.0.clone(),
-                    component: component.component_name.0.clone(),
-                    agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
-                },
-                verb: Some(AgentVerb::Debug),
-                resource: AgentResourcePattern::Any,
-            }))
-            .map_err(|_| AuthServiceError::DebuggingNotAllowed)?;
-
-        Ok(())
     }
 }

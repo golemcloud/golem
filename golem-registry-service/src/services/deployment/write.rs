@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use super::DeployValidationError;
+use super::authorize_environment_permission;
 use super::deployment_context::DeploymentContext;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
-use crate::services::auth::authorize_environment_permission;
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::deploy_validation_error::format_validation_errors;
 use crate::services::environment::{EnvironmentError, EnvironmentService};

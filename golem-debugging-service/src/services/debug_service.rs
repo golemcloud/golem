@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::auth::{AuthService, AuthServiceError};
 use crate::debug_context::DebugContext;
 use crate::debug_session::PlaybackOverridesInternal;
 use crate::debug_session::{DebugSessionData, DebugSessionId, DebugSessions};
@@ -21,12 +20,17 @@ use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
+use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
+use golem_common::model::card::{
+    AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, AgentMetadata, OwnedAgentId};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::component::Component;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::oplog::Oplog;
 use golem_worker_executor::services::worker_event::WorkerEventReceiver;
@@ -152,7 +156,6 @@ impl Display for DebugServiceError {
 pub struct DebugServiceDefault {
     component_service: Arc<dyn ComponentService>,
     debug_session: Arc<dyn DebugSessions>,
-    auth_service: Arc<dyn AuthService>,
     all: All<DebugContext>,
 }
 
@@ -161,12 +164,10 @@ impl DebugServiceDefault {
         let component_service = all.component_service();
         let extra_deps = all.extra_deps();
         let debug_session = extra_deps.debug_session();
-        let auth_service = extra_deps.auth_service();
 
         Self {
             component_service,
             debug_session,
-            auth_service,
             all,
         }
     }
@@ -307,15 +308,7 @@ impl DebugService for DebugServiceDefault {
             .await
             .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?;
 
-        self.auth_service
-            .check_user_allowed_to_debug_agent(&component, agent_id, auth_ctx)
-            .await
-            .map_err(|e| match e {
-                AuthServiceError::DebuggingNotAllowed => DebugServiceError::Unauthorized {
-                    message: e.to_safe_string(),
-                },
-                e => DebugServiceError::internal(e.to_string(), Some(agent_id.clone())),
-            })?;
+        authorize_debugging(auth_ctx, &component, agent_id)?;
 
         let owned_agent_id = OwnedAgentId::new(component.environment_id, agent_id);
 
@@ -650,6 +643,30 @@ impl DebugService for DebugServiceDefault {
 
         Ok(())
     }
+}
+
+fn authorize_debugging(
+    auth_ctx: &AuthCtx,
+    component: &Component,
+    agent_id: &AgentId,
+) -> Result<(), DebugServiceError> {
+    auth_ctx
+        .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::Agent {
+                account: component.account_id.to_string(),
+                application: component.application_name.0.clone(),
+                environment: component.environment_name.0.clone(),
+                component: component.component_name.0.clone(),
+                agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
+            },
+            verb: Some(AgentVerb::Debug),
+            resource: AgentResourcePattern::Any,
+        }))
+        .map_err(|e| DebugServiceError::Unauthorized {
+            message: e.to_safe_string(),
+        })?;
+
+    Ok(())
 }
 
 #[cfg(test)]

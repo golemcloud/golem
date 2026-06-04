@@ -1142,6 +1142,7 @@ mod tests {
         RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting, UntypedJsonDataValue,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
+    use golem_common::model::card::AgentVerb;
     use golem_common::model::component::{
         CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
     };

@@ -19,8 +19,11 @@ use crate::repo::model::retry_policy::{
     RetryPolicyCreationRecord, RetryPolicyRepoError, RetryPolicyRevisionRecord,
 };
 use crate::repo::retry_policy::RetryPolicyRepo;
-use crate::services::auth::authorize_retry_policy_permission;
-use golem_common::model::card::EnvironmentRetryPolicyVerb;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentRetryPolicyName, EnvironmentRetryPolicyResourcePattern,
+    EnvironmentRetryPolicyVerb, PermissionTarget,
+};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::retry_policy::{
     RetryPolicyCreation, RetryPolicyId, RetryPolicyRevision, RetryPolicyUpdate,
@@ -322,6 +325,31 @@ impl RetryPolicyService {
 
         Ok((retry_policy, environment))
     }
+}
+
+fn authorize_retry_policy_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    name: Option<&str>,
+    verb: EnvironmentRetryPolicyVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentRetryPolicy(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: name
+                .map(|name| {
+                    EnvironmentRetryPolicyResourcePattern::Name(EnvironmentRetryPolicyName(
+                        name.to_string(),
+                    ))
+                })
+                .unwrap_or(EnvironmentRetryPolicyResourcePattern::Any),
+        },
+    ))
 }
 
 fn predicate_json(value: serde_json::Value) -> Result<String, RetryPolicyError> {

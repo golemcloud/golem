@@ -20,7 +20,6 @@ use crate::config::PrecreatedAccount;
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
-use crate::services::auth::authorize_system_permission;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -28,9 +27,10 @@ use anyhow::anyhow;
 use golem_common::model::account::{
     Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
-use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::{
-    AccountResourcePattern, AccountVerb, ClassPermissionTarget, PermissionTarget, SystemVerb,
+    AccountResourcePattern, AccountVerb, ClassPermissionTarget, PermissionTarget,
+    SystemResourcePattern, SystemVerb,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -341,6 +341,14 @@ fn authorize_account_permission(
     verb: AccountVerb,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&account_permission_target(account_id, verb))
+}
+
+fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::System(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EmptyOwnerPattern,
+        resource: SystemResourcePattern,
+    }))
 }
 
 fn account_permission_target(account_id: AccountId, verb: AccountVerb) -> PermissionTarget {

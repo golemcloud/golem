@@ -19,12 +19,15 @@ use crate::repo::model::agent_secrets::{
     AgentSecretCreationRecord, AgentSecretRepoError, AgentSecretRevisionRecord,
 };
 use crate::repo::model::audit::DeletableRevisionAuditFields;
-use crate::services::auth::authorize_agent_secret_permission;
 use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretId, AgentSecretRevision, AgentSecretUpdate,
     CanonicalAgentSecretPath,
 };
-use golem_common::model::card::EnvironmentAgentSecretVerb;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentAgentSecretKeyPathPattern,
+    EnvironmentAgentSecretResourcePattern, EnvironmentAgentSecretVerb, PermissionTarget,
+};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::schema::adapters::analysed_type::{
@@ -54,6 +57,32 @@ pub enum AgentSecretError {
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+fn authorize_agent_secret_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    key: Option<&[String]>,
+    verb: EnvironmentAgentSecretVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentAgentSecret(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: key
+                .map(|key| {
+                    EnvironmentAgentSecretResourcePattern::Key(
+                        EnvironmentAgentSecretKeyPathPattern::parse(&key.join("."))
+                            .expect("agent secret keys are valid card resources"),
+                    )
+                })
+                .unwrap_or(EnvironmentAgentSecretResourcePattern::Any),
+        },
+    ))
 }
 
 impl SafeDisplay for AgentSecretError {
