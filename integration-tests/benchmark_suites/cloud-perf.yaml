@@ -15,9 +15,41 @@
 #
 # Note: clusterSize is ignored in Cloud mode (the observed cluster size is
 # read from shard-manager at run start and recorded in result metadata).
+#
+# Suite order rationale: throughput benchmarks run first because they involve
+# RPC worker pairs and HTTP deployments — the most complex setup. Running them
+# early surfaces infrastructure issues (stuck workers, port-forward drops)
+# before spending time on the simpler benchmarks.
 
 name: cloud-perf
 benchmarks:
+  # Throughput — measures invocation throughput across six implementations:
+  # rust agent (gRPC), TS agent (gRPC), rust agent (HTTP), TS agent (HTTP),
+  # TS RPC pair, rust RPC pair.
+  # size   = number of workers per implementation (×6 implementations total)
+  # length = unused for echo
+  - name: throughput-echo
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 10, 50, 100, 250]
+    length: [1000]
+
+  # size   = number of workers per implementation
+  # length = payload size in bytes sent to large_input
+  - name: throughput-large-input
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 10, 25, 50]
+    length: [100, 10000]
+
+  # size   = number of workers per implementation
+  # length = CPU work length passed to cpu_intensive
+  - name: throughput-cpu-intensive
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 10, 25, 50]
+    length: [100]
+
   # Cold-start: compilation cache disabled — measures true cold-start latency
   # with no warm compiled artefact available.
   # size   = number of unique components created (each in its own env)
@@ -40,6 +72,8 @@ benchmarks:
   # artefact is available in the cache.
   # size   = number of unique components created (each in its own env)
   # length = seconds to wait per component for pre-compilation warm-up
+  # NOTE: if results here are close to the cache-disabled entries above, the
+  # warm-up wait is too short and compilation hasn't finished — bump length.
   - name: cold-start-unknown-small
     iterations: 3
     clusterSize: [2]
@@ -88,28 +122,3 @@ benchmarks:
     clusterSize: [2]
     size: [10, 50, 100, 200]
     length: [5000]
-
-  # Throughput — measures invocation throughput across six implementations.
-  # size   = number of workers per implementation
-  # length = unused for echo
-  - name: throughput-echo
-    iterations: 3
-    clusterSize: [2]
-    size: [1, 10, 50, 100, 250]
-    length: [1000]
-
-  # size   = number of workers per implementation
-  # length = payload size in bytes sent to large_input
-  - name: throughput-large-input
-    iterations: 3
-    clusterSize: [2]
-    size: [1, 10, 25, 50]
-    length: [100, 10000]
-
-  # size   = number of workers per implementation
-  # length = CPU work length passed to cpu_intensive
-  - name: throughput-cpu-intensive
-    iterations: 3
-    clusterSize: [2]
-    size: [1, 10, 25, 50]
-    length: [100]
