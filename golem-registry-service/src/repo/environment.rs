@@ -32,10 +32,97 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::{BindingsStack, RepoError, ResultExt};
 use indoc::{formatdoc, indoc};
-use sqlx::{Database, Row};
+use sqlx::{Database, Encode, Row, Type};
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvironmentVisibilityFilter {
+    All,
+    None,
+    Scopes(Vec<EnvironmentVisibilityScope>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EnvironmentVisibilityScope {
+    pub account_email: Option<String>,
+    pub app_name: Option<String>,
+    pub env_name: Option<String>,
+}
+
+impl EnvironmentVisibilityScope {
+    pub fn account(account_email: impl Into<String>) -> Self {
+        Self {
+            account_email: Some(account_email.into()),
+            app_name: None,
+            env_name: None,
+        }
+    }
+
+    pub fn application(
+        account_email: impl Into<String>,
+        app_name: impl Into<String>,
+        env_name: Option<String>,
+    ) -> Self {
+        Self {
+            account_email: Some(account_email.into()),
+            app_name: Some(app_name.into()),
+            env_name,
+        }
+    }
+
+    pub fn any_owner(env_name: Option<String>) -> Self {
+        Self {
+            account_email: None,
+            app_name: None,
+            env_name,
+        }
+    }
+
+    fn subsumes(&self, other: &Self) -> bool {
+        optional_field_subsumes(&self.account_email, &other.account_email)
+            && optional_field_subsumes(&self.app_name, &other.app_name)
+            && optional_field_subsumes(&self.env_name, &other.env_name)
+    }
+
+    fn is_all(&self) -> bool {
+        self.account_email.is_none() && self.app_name.is_none() && self.env_name.is_none()
+    }
+}
+
+impl EnvironmentVisibilityFilter {
+    pub fn from_scopes(scopes: impl IntoIterator<Item = EnvironmentVisibilityScope>) -> Self {
+        let mut normalized: BTreeSet<EnvironmentVisibilityScope> = BTreeSet::new();
+
+        for scope in scopes {
+            if scope.is_all() {
+                return Self::All;
+            }
+
+            if normalized.iter().any(|existing| existing.subsumes(&scope)) {
+                continue;
+            }
+
+            normalized.retain(|existing| !scope.subsumes(existing));
+            normalized.insert(scope);
+        }
+
+        if normalized.is_empty() {
+            Self::None
+        } else {
+            Self::Scopes(normalized.into_iter().collect())
+        }
+    }
+}
+
+fn optional_field_subsumes<T: Eq>(left: &Option<T>, right: &Option<T>) -> bool {
+    match left {
+        Some(left) => right.as_ref().is_some_and(|right| left == right),
+        None => true,
+    }
+}
 
 #[async_trait]
 pub trait EnvironmentRepo: Send + Sync {
@@ -85,6 +172,7 @@ pub trait EnvironmentRepo: Send + Sync {
     async fn list_visible_to_account(
         &self,
         account_id: Uuid,
+        visibility_filter: &EnvironmentVisibilityFilter,
         account_email: Option<&str>,
         app_name: Option<&str>,
         env_name: Option<&str>,
@@ -196,15 +284,23 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn list_visible_to_account(
         &self,
         account_id: Uuid,
+        visibility_filter: &EnvironmentVisibilityFilter,
         account_email: Option<&str>,
         app_name: Option<&str>,
         env_name: Option<&str>,
     ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError> {
         self.repo
-            .list_visible_to_account(account_id, account_email, app_name, env_name)
+            .list_visible_to_account(
+                account_id,
+                visibility_filter,
+                account_email,
+                app_name,
+                env_name,
+            )
             .instrument(info_span!(
                 SPAN_NAME,
                 account_id = %account_id,
+                visibility_filter = ?visibility_filter,
                 account_email = ?account_email,
                 app_name = ?app_name,
                 env_name = ?env_name
@@ -835,11 +931,14 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn list_visible_to_account(
         &self,
         _account_id: Uuid,
+        visibility_filter: &EnvironmentVisibilityFilter,
         account_email: Option<&str>,
         app_name: Option<&str>,
         env_name: Option<&str>,
     ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError> {
         let mut binding_stack = BindingsStack::new(1);
+
+        let visibility_filter = visibility_filter_sql(visibility_filter, &mut binding_stack);
 
         let account_email_filter = if let Some(account_email) = account_email {
             let i = binding_stack.push(account_email);
@@ -916,6 +1015,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
             WHERE
                 a.deleted_at IS NULL
+                {visibility_filter}
                 {account_email_filter}
                 {app_name_filter}
                 {env_name_filter}
@@ -930,6 +1030,59 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             .await?;
 
         Ok(result)
+    }
+}
+
+fn visibility_filter_sql<'q, DB: Database, R>(
+    visibility_filter: &EnvironmentVisibilityFilter,
+    binding_stack: &mut BindingsStack<'q, DB, R>,
+) -> String
+where
+    String: Encode<'q, DB> + Type<DB>,
+{
+    match visibility_filter {
+        EnvironmentVisibilityFilter::All => "".to_string(),
+        EnvironmentVisibilityFilter::None => "AND 1 = 0".to_string(),
+        EnvironmentVisibilityFilter::Scopes(scopes) => {
+            let clauses = scopes
+                .iter()
+                .map(|scope| visibility_scope_sql(scope, binding_stack))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+
+            format!("AND ({clauses})")
+        }
+    }
+}
+
+fn visibility_scope_sql<'q, DB: Database, R>(
+    scope: &EnvironmentVisibilityScope,
+    binding_stack: &mut BindingsStack<'q, DB, R>,
+) -> String
+where
+    String: Encode<'q, DB> + Type<DB>,
+{
+    let mut conditions = Vec::new();
+
+    if let Some(account_email) = &scope.account_email {
+        let i = binding_stack.push(account_email.clone());
+        conditions.push(format!("a.email = ${i}"));
+    }
+
+    if let Some(app_name) = &scope.app_name {
+        let i = binding_stack.push(app_name.clone());
+        conditions.push(format!("ap.name = ${i}"));
+    }
+
+    if let Some(env_name) = &scope.env_name {
+        let i = binding_stack.push(env_name.clone());
+        conditions.push(format!("e.name = ${i}"));
+    }
+
+    if conditions.is_empty() {
+        "1 = 1".to_string()
+    } else {
+        format!("({})", conditions.join(" AND "))
     }
 }
 

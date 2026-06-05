@@ -16,7 +16,10 @@ use super::account_usage::AccountUsageService;
 use super::account_usage::error::{AccountUsageError, LimitExceededError};
 use super::application::ApplicationService;
 use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
-use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
+use crate::repo::environment::{
+    EnvironmentRepo, EnvironmentRevisionRecord, EnvironmentVisibilityFilter,
+    EnvironmentVisibilityScope,
+};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment::EnvironmentRepoError;
 use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
@@ -26,7 +29,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::owner::{AccountOwnerPattern, ApplicationOwnerPattern};
 use golem_common::model::card::{
-    ApplicationResourcePattern, ApplicationVerb, ClassPermissionTarget,
+    ApplicationResourcePattern, ApplicationVerb, ClassPermissionTarget, EffectiveSurface,
     EnvironmentName as CardEnvironmentName, EnvironmentResourcePattern, EnvironmentVerb,
     PermissionTarget,
 };
@@ -371,9 +374,12 @@ impl EnvironmentService {
         auth: &AuthCtx,
     ) -> Result<Vec<EnvironmentWithDetails>, EnvironmentError> {
         // When we go for an admin ui / view, this should be extended with an optional, admin-only parameter that allows listing for a different account.
+        let visibility_filter = visible_environment_filter(auth);
+
         self.environment_repo
             .list_visible_to_account(
                 auth.access_account_id().0,
+                &visibility_filter,
                 account_email.map(|ae| ae.as_str()),
                 app_name.map(|an| an.0.as_str()),
                 env_name.map(|en| en.0.as_str()),
@@ -387,6 +393,76 @@ impl EnvironmentService {
             .filter(|e| authorize_environment_details(auth, e, EnvironmentVerb::View).is_ok())
             .collect::<Vec<_>>()
             .pipe(Ok)
+    }
+}
+
+fn visible_environment_filter(auth: &AuthCtx) -> EnvironmentVisibilityFilter {
+    match auth {
+        AuthCtx::System => EnvironmentVisibilityFilter::All,
+        AuthCtx::User(user) => visible_environment_filter_from_surface(&user.effective_surface),
+        AuthCtx::AdminImpersonation(ctx) => {
+            visible_environment_filter_from_surface(&ctx.effective_surface)
+        }
+        AuthCtx::Agent(agent) => agent
+            .account_email
+            .as_ref()
+            .map(|account| {
+                EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::account(
+                    account.as_str(),
+                )])
+            })
+            .unwrap_or(EnvironmentVisibilityFilter::None),
+    }
+}
+
+fn visible_environment_filter_from_surface(
+    effective_surface: &EffectiveSurface,
+) -> EnvironmentVisibilityFilter {
+    EnvironmentVisibilityFilter::from_scopes(
+        effective_surface
+            .lower
+            .iter()
+            .flat_map(|surface| surface.positive.iter())
+            .filter_map(visible_environment_scope_from_target),
+    )
+}
+
+fn visible_environment_scope_from_target(
+    target: &PermissionTarget,
+) -> Option<EnvironmentVisibilityScope> {
+    let PermissionTarget::Environment(target) = target else {
+        return None;
+    };
+
+    if !matches!(target.verb, None | Some(EnvironmentVerb::View)) {
+        return None;
+    }
+
+    let env_name = match &target.resource {
+        EnvironmentResourcePattern::Any => None,
+        EnvironmentResourcePattern::Environment(environment)
+        | EnvironmentResourcePattern::Revision { environment, .. } => Some(environment.0.clone()),
+    };
+
+    match &target.owner {
+        ApplicationOwnerPattern::AnyApplications => {
+            Some(EnvironmentVisibilityScope::any_owner(env_name))
+        }
+        ApplicationOwnerPattern::AccountApplications { account } => {
+            Some(EnvironmentVisibilityScope {
+                account_email: Some(account.as_str().to_string()),
+                app_name: None,
+                env_name,
+            })
+        }
+        ApplicationOwnerPattern::Application {
+            account,
+            application,
+        } => Some(EnvironmentVisibilityScope::application(
+            account.as_str(),
+            application.0.clone(),
+            env_name,
+        )),
     }
 }
 
@@ -450,4 +526,100 @@ fn authorize_application_permission(
         },
         resource,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::card::{EffectiveSurface, GrantSurface};
+    use test_r::test;
+
+    fn environment_target(
+        account: &str,
+        application: &str,
+        verb: Option<EnvironmentVerb>,
+        resource: EnvironmentResourcePattern,
+    ) -> PermissionTarget {
+        PermissionTarget::Environment(ClassPermissionTarget {
+            verb,
+            owner: ApplicationOwnerPattern::Application {
+                account: AccountEmail::new(account),
+                application: ApplicationName(application.to_string()),
+            },
+            resource,
+        })
+    }
+
+    #[test]
+    fn visible_environment_filter_uses_lower_view_grants_only_and_normalizes_scopes() {
+        let surface = EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![
+                    PermissionTarget::Environment(ClassPermissionTarget {
+                        verb: Some(EnvironmentVerb::View),
+                        owner: ApplicationOwnerPattern::AccountApplications {
+                            account: AccountEmail::new("owner@golem"),
+                        },
+                        resource: EnvironmentResourcePattern::Any,
+                    }),
+                    environment_target(
+                        "owner@golem",
+                        "narrower-app",
+                        Some(EnvironmentVerb::View),
+                        EnvironmentResourcePattern::Environment(CardEnvironmentName(
+                            "narrower-env".to_string(),
+                        )),
+                    ),
+                    environment_target(
+                        "shared@golem",
+                        "shared-app",
+                        Some(EnvironmentVerb::View),
+                        EnvironmentResourcePattern::Environment(CardEnvironmentName(
+                            "shared-env".to_string(),
+                        )),
+                    ),
+                    environment_target(
+                        "ignored@golem",
+                        "ignored-app",
+                        Some(EnvironmentVerb::Deploy),
+                        EnvironmentResourcePattern::Any,
+                    ),
+                ],
+                negative: vec![environment_target(
+                    "owner@golem",
+                    "negative-app",
+                    Some(EnvironmentVerb::View),
+                    EnvironmentResourcePattern::Any,
+                )],
+            }],
+            upper: Vec::new(),
+        };
+
+        let filter = visible_environment_filter_from_surface(&surface);
+
+        assert_eq!(
+            filter,
+            EnvironmentVisibilityFilter::Scopes(vec![
+                EnvironmentVisibilityScope {
+                    account_email: Some("owner@golem".to_string()),
+                    app_name: None,
+                    env_name: None,
+                },
+                EnvironmentVisibilityScope {
+                    account_email: Some("shared@golem".to_string()),
+                    app_name: Some("shared-app".to_string()),
+                    env_name: Some("shared-env".to_string()),
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn visible_environment_filter_for_agent_without_email_is_empty() {
+        assert_eq!(
+            visible_environment_filter(&AuthCtx::agent(AccountId::new())),
+            EnvironmentVisibilityFilter::None,
+        );
+    }
 }
