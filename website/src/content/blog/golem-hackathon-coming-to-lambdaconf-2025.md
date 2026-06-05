@@ -9,7 +9,7 @@ originalUrl: "https://golem.cloud/post/golem-hackathon-coming-to-lambdaconf-2025
 
 Co-located with LambdaConf 2025 May 14, 2025 | Holiday Inn, Estes Park
 
-![Golem Hackathon coming to LambdaConf 2025!](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055d6_67f39f696c4f29c52ac3a46a_hackathon%2520b%25262.png)
+![Golem Hackathon coming to LambdaConf 2025!](/blog-images/68d76ba7edec7ec0b5c055d6_67f39f696c4f29c52ac3a46a_hackathon_20b_262.png)
 
 ## **About Golem**
 

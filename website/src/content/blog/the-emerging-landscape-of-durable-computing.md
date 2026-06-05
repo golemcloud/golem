@@ -103,7 +103,7 @@ The dimensional values have the following meanings:
 
 If you spot any inaccuracies, or have publicly disclosed data which could help fill in the gaps, then please reach out.
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055da_67559f0f16c5f7501359f4e0_13%252520Dimensions%252520of%252520Durability%252520-%2525202023-1.png)
+![](/blog-images/68d76ba7edec7ec0b5c055da_67559f0f16c5f7501359f4e0_13_2520Dimensions_2520of_2520Durability_2520-_25202023-1.png)
 
 ### Summary
 

@@ -386,7 +386,7 @@ One way to do this composition is to use `wasm-tools compose`, but it is more co
 
 The following diagram demonstrates how the components in the example are interacting with each other:
 
-![](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055eb_67559f0f16c5f7501359f4f8_Untitled.png)
+![](/blog-images/68d76ba7edec7ec0b5c055eb_67559f0f16c5f7501359f4f8_Untitled.png)
 
 ## **Conclusion**
 

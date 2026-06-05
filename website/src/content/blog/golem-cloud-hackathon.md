@@ -7,7 +7,7 @@ date: "2023-12-04"
 # date sourced from site-deploy timestamp "Mon Dec 04 2023" embedded in first wayback snapshot of post (web.archive.org/web/20231207191912/https://www.golem.cloud/post/golem-cloud-hackathon)
 ---
 
-![Golem Cloud Hackathon](https://cdn.prod.website-files.com/68d76ba7edec7ec0b5c05532/68d76ba7edec7ec0b5c055bd_67559f0f16c5f7501359f4e1_Correct%2520meetup%2520Hackathon.jpeg)
+![Golem Cloud Hackathon](/blog-images/68d76ba7edec7ec0b5c055bd_67559f0f16c5f7501359f4e1_Correct_20meetup_20Hackathon.jpeg)
 
 Explore Golem Cloud and learn WebAssembly! Calling all **Rust**, **Go**, **C/C++**, and **Python** developers to join us at the Golem Cloud Hackathon. Your mission? Design a unique Golem App and seize the opportunity to win amazing rewards, including a **MacBook Pro** for the top app. This Hackathon is a continuation of the momentum from [**WasmCon**](https://events.linuxfoundation.org/wasmcon/)**by the**[**Linux Foundation**](https://www.linuxfoundation.org/). It's the perfect platform to both craft a novel application on Golem and deepen your understanding of WebAssembly (Wasm). Join us, and let's innovate together!
 
