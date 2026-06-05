@@ -83,17 +83,18 @@ async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Cha
 }
 
 async fn try_get_routing_table(host: &str, grpc_port: u16) -> crate::Result<RoutingTable> {
-    let mut client =
-        ShardManagerServiceClient::connect(format!("http://{host}:{grpc_port}"))
-            .await
-            .map_err(|e| anyhow!("Failed to connect to shard-manager: {e}"))?
-            .send_compressed(CompressionEncoding::Gzip)
-            .accept_compressed(CompressionEncoding::Gzip);
+    let mut client = ShardManagerServiceClient::connect(format!("http://{host}:{grpc_port}"))
+        .await
+        .map_err(|e| anyhow!("Failed to connect to shard-manager: {e}"))?
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip);
 
     let routing_table = client
         .get_routing_table(GetRoutingTableRequest {})
         .await
-        .map_err(|e| anyhow!("Unable to fetch the routing table from shard-manager-service: {e}"))?;
+        .map_err(|e| {
+            anyhow!("Unable to fetch the routing table from shard-manager-service: {e}")
+        })?;
 
     match routing_table.into_inner() {
         shardmanager::v1::GetRoutingTableResponse {
