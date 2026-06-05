@@ -17,7 +17,7 @@ use super::component::{ComponentError, ComponentService};
 use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::plugin::PluginRecord;
 use crate::repo::plugin::PluginRepo;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::{
     AccountPluginName, AccountPluginResourcePattern, AccountPluginVerb, ClassPermissionTarget,
@@ -93,19 +93,20 @@ impl PluginRegistrationService {
         data: PluginRegistrationCreation,
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
-        self.account_service
-            .get(account_id, auth)
-            .await
-            .map_err(|err| match err {
-                AccountError::AccountNotFound(account_id) => {
-                    PluginRegistrationError::ParentAccountNotFound(account_id)
-                }
-                other => other.into(),
-            })?;
+        let account =
+            self.account_service
+                .get(account_id, auth)
+                .await
+                .map_err(|err| match err {
+                    AccountError::AccountNotFound(account_id) => {
+                        PluginRegistrationError::ParentAccountNotFound(account_id)
+                    }
+                    other => other.into(),
+                })?;
 
         authorize_account_plugin_permission(
             auth,
-            account_id,
+            &account.email,
             AccountPluginVerb::Register,
             AccountPluginResourcePattern::Name(AccountPluginName(data.name.clone())),
         )?;
@@ -150,10 +151,15 @@ impl PluginRegistrationService {
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
         let plugin = self.get_plugin(plugin_id, false, auth).await?;
+        let account = self
+            .account_service
+            .get(plugin.account_id, &AuthCtx::System)
+            .await
+            .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id))?;
 
         authorize_account_plugin_permission(
             auth,
-            plugin.account_id,
+            &account.email,
             AccountPluginVerb::Delete,
             AccountPluginResourcePattern::Name(AccountPluginName(plugin.name.clone())),
         )?;
@@ -185,9 +191,15 @@ impl PluginRegistrationService {
             ))?
             .try_into()?;
 
+        let account = self
+            .account_service
+            .get(plugin.account_id, &AuthCtx::System)
+            .await
+            .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id))?;
+
         authorize_account_plugin_permission(
             auth,
-            plugin.account_id,
+            &account.email,
             AccountPluginVerb::View,
             AccountPluginResourcePattern::Name(AccountPluginName(plugin.name.clone())),
         )
@@ -203,19 +215,20 @@ impl PluginRegistrationService {
     ) -> Result<Vec<PluginRegistration>, PluginRegistrationError> {
         // Optimally this is fetched together with the plugin data instead of up front
         // see EnvironmentService::list_in_application for a better pattern
-        self.account_service
-            .get(account_id, auth)
-            .await
-            .map_err(|err| match err {
-                AccountError::AccountNotFound(account_id) => {
-                    PluginRegistrationError::ParentAccountNotFound(account_id)
-                }
-                other => other.into(),
-            })?;
+        let account =
+            self.account_service
+                .get(account_id, auth)
+                .await
+                .map_err(|err| match err {
+                    AccountError::AccountNotFound(account_id) => {
+                        PluginRegistrationError::ParentAccountNotFound(account_id)
+                    }
+                    other => other.into(),
+                })?;
 
         authorize_account_plugin_permission(
             auth,
-            account_id,
+            &account.email,
             AccountPluginVerb::View,
             AccountPluginResourcePattern::Any,
         )?;
@@ -266,24 +279,26 @@ impl PluginRegistrationService {
 
 fn authorize_account_plugin_permission(
     auth: &AuthCtx,
-    account_id: AccountId,
+    account_email: &AccountEmail,
     verb: AccountPluginVerb,
     resource: AccountPluginResourcePattern,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&account_plugin_permission_target(
-        account_id, verb, resource,
+        account_email,
+        verb,
+        resource,
     ))
 }
 
 fn account_plugin_permission_target(
-    account_id: AccountId,
+    account_email: &AccountEmail,
     verb: AccountPluginVerb,
     resource: AccountPluginResourcePattern,
 ) -> PermissionTarget {
     PermissionTarget::AccountPlugin(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {
-            account: account_id.to_string(),
+            account: account_email.clone(),
         },
         resource,
     })

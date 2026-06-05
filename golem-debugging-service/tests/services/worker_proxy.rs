@@ -152,6 +152,7 @@ impl WorkerProxy for TestWorkerProxy {
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
             effective_surface: golem_common::model::card::EffectiveSurface {
@@ -212,6 +213,7 @@ impl WorkerProxy for TestWorkerProxy {
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
             effective_surface: golem_common::model::card::EffectiveSurface {
@@ -264,6 +266,7 @@ impl WorkerProxy for TestWorkerProxy {
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
             effective_surface: golem_common::model::card::EffectiveSurface {

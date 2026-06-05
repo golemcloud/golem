@@ -58,8 +58,8 @@ fn authorize_environment_permission(
     auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
         verb: Some(verb),
         owner: ApplicationOwnerPattern::Application {
-            account: environment.owner_account_id.to_string(),
-            application: environment.application_name.0.clone(),
+            account: environment.owner_account_email.clone(),
+            application: environment.application_name.clone(),
         },
         resource: EnvironmentResourcePattern::Environment(CardEnvironmentName(
             environment.name.0.clone(),

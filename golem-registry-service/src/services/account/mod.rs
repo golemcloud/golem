@@ -25,7 +25,8 @@ use crate::services::registry_change_notifier::{
 };
 use anyhow::anyhow;
 use golem_common::model::account::{
-    Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
+    Account, AccountCreation, AccountEmail, AccountId, AccountRevision, AccountSetPlan,
+    AccountUpdate,
 };
 use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::{
@@ -142,7 +143,7 @@ impl AccountService {
     ) -> Result<Account, AccountError> {
         let mut account: Account = self.load(account_id).await?;
 
-        authorize_account_permission(auth, account_id, AccountVerb::Update)?;
+        authorize_account_permission(auth, &account.email, AccountVerb::Update)?;
 
         if update.current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -165,7 +166,7 @@ impl AccountService {
     ) -> Result<Account, AccountError> {
         let mut account: Account = self.load(account_id).await?;
 
-        authorize_account_permission(auth, account_id, AccountVerb::SetPlan)?;
+        authorize_account_permission(auth, &account.email, AccountVerb::SetPlan)?;
 
         if update.current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -195,7 +196,7 @@ impl AccountService {
     ) -> Result<Account, AccountError> {
         let mut account: Account = self.load(account_id).await?;
 
-        authorize_account_permission(auth, account_id, AccountVerb::Delete)?;
+        authorize_account_permission(auth, &account.email, AccountVerb::Delete)?;
 
         if current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -227,10 +228,11 @@ impl AccountService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        authorize_account_permission(auth, account_id, AccountVerb::View)
+        let account = self.load(account_id).await?;
+        authorize_account_permission(auth, &account.email, AccountVerb::View)
             .map_err(|_| AccountError::AccountNotFound(account_id))?;
 
-        self.load(account_id).await
+        Ok(account)
     }
 
     pub async fn get_by_email(
@@ -247,7 +249,7 @@ impl AccountService {
             ))?
             .try_into()?;
 
-        authorize_account_permission(auth, account.id, AccountVerb::View)
+        authorize_account_permission(auth, &account.email, AccountVerb::View)
             .map_err(|_| AccountError::AccountByEmailNotFound(account_email.to_string()))?;
 
         Ok(account)
@@ -278,8 +280,8 @@ impl AccountService {
             Err(anyhow!("Cannot create account with reserved account id"))?
         };
 
-        let email = account.email.into_inner();
-        let account_root_card = account_root_card_record(id, &account.roles);
+        let email = account.email.clone().into_inner();
+        let account_root_card = account_root_card_record(id, account.email.clone(), &account.roles);
 
         let record = AccountRevisionRecord::new(
             id,
@@ -337,10 +339,10 @@ impl AccountService {
 
 fn authorize_account_permission(
     auth: &AuthCtx,
-    account_id: AccountId,
+    account_email: &AccountEmail,
     verb: AccountVerb,
 ) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&account_permission_target(account_id, verb))
+    auth.authorize_permission(&account_permission_target(account_email, verb))
 }
 
 fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
@@ -351,11 +353,11 @@ fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), A
     }))
 }
 
-fn account_permission_target(account_id: AccountId, verb: AccountVerb) -> PermissionTarget {
+fn account_permission_target(account_email: &AccountEmail, verb: AccountVerb) -> PermissionTarget {
     PermissionTarget::Account(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {
-            account: account_id.to_string(),
+            account: account_email.clone(),
         },
         resource: AccountResourcePattern,
     })

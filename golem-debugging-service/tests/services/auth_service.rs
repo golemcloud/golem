@@ -26,6 +26,7 @@ impl AuthService for TestAuthService {
         }
         Ok(AuthCtx::User(UserAuthCtx {
             account_id: self.test_ctx.account_id,
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
             effective_surface: EffectiveSurface {
@@ -34,7 +35,7 @@ impl AuthService for TestAuthService {
                     positive: vec![PermissionTarget::Agent(ClassPermissionTarget {
                         verb: None,
                         owner: AgentOwnerPattern::AccountAgents {
-                            account: self.test_ctx.account_id.to_string(),
+                            account: golem_common::model::account::AccountEmail::new("test@golem"),
                         },
                         resource: AgentResourcePattern::Any,
                     })],

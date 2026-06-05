@@ -568,6 +568,7 @@ impl TestWorkerExecutor {
     pub fn auth_ctx(&self) -> AuthCtx {
         AuthCtx::User(UserAuthCtx {
             account_id: self.context.account_id,
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             account_plan_id: self.context.account_plan_id,
             account_roles: self.context.account_roles.clone(),
             effective_surface: golem_common::model::card::EffectiveSurface {

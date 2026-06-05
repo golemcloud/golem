@@ -13,28 +13,32 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::account::AccountEmail;
+use crate::model::application::ApplicationName;
+use crate::model::component::ComponentName;
+use crate::model::environment::EnvironmentName;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum ComponentOwnerPattern {
     AnyComponents,
     AccountComponents {
-        account: String,
+        account: AccountEmail,
     },
     ApplicationComponents {
-        account: String,
-        application: String,
+        account: AccountEmail,
+        application: ApplicationName,
     },
     EnvironmentComponents {
-        account: String,
-        application: String,
-        environment: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
     },
     Component {
-        account: String,
-        application: String,
-        environment: String,
-        component: String,
+        account: AccountEmail,
+        application: ApplicationName,
+        environment: EnvironmentName,
+        component: ComponentName,
     },
 }
 
@@ -43,28 +47,28 @@ impl ComponentOwnerPattern {
         match parse_segments(value)?.as_slice() {
             ["*", "*", "*", "*"] => Ok(Self::AnyComponents),
             [account, "*", "*", "*"] => Ok(Self::AccountComponents {
-                account: parse_concrete_segment(account)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
             }),
             [account, application, "*", "*"] => Ok(Self::ApplicationComponents {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
             }),
             [account, application, environment, "*"] => Ok(Self::EnvironmentComponents {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
-                environment: parse_concrete_segment(environment)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(parse_concrete_segment(environment)?)?,
             }),
             [account, application, environment, component] => Ok(Self::Component {
-                account: parse_concrete_segment(account)?.to_string(),
-                application: parse_concrete_segment(application)?.to_string(),
-                environment: parse_concrete_segment(environment)?.to_string(),
-                component: parse_concrete_segment(component)?.to_string(),
+                account: AccountEmail::new(parse_concrete_segment(account)?),
+                application: ApplicationName::try_from(parse_concrete_segment(application)?)?,
+                environment: EnvironmentName::try_from(parse_concrete_segment(environment)?)?,
+                component: ComponentName(parse_concrete_segment(component)?.to_string()),
             }),
             _ => Err(value.to_string()),
         }
     }
 
-    fn account_part(&self) -> Option<&str> {
+    fn account_part(&self) -> Option<&AccountEmail> {
         match self {
             Self::AnyComponents => None,
             Self::AccountComponents { account }
@@ -74,7 +78,7 @@ impl ComponentOwnerPattern {
         }
     }
 
-    fn application_part(&self) -> Option<(&str, &str)> {
+    fn application_part(&self) -> Option<(&AccountEmail, &ApplicationName)> {
         match self {
             Self::ApplicationComponents {
                 account,
@@ -94,7 +98,7 @@ impl ComponentOwnerPattern {
         }
     }
 
-    fn environment_part(&self) -> Option<(&str, &str, &str)> {
+    fn environment_part(&self) -> Option<(&AccountEmail, &ApplicationName, &EnvironmentName)> {
         match self {
             Self::EnvironmentComponents {
                 account,

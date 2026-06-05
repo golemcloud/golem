@@ -270,6 +270,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.compatibility_check, r.version_check, r.security_overrides,
 
                         a.account_id as owner_account_id,
+                        a.email as owner_account_email,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
@@ -325,6 +326,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.compatibility_check, r.version_check, r.security_overrides,
 
                         a.account_id as owner_account_id,
+                        a.email as owner_account_email,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
@@ -378,6 +380,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         r.compatibility_check, r.version_check, r.security_overrides,
 
                         a.account_id as owner_account_id,
+                        a.email as owner_account_email,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
@@ -447,6 +450,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                        FROM applications ap
                        JOIN accounts a ON a.account_id = ap.account_id
                        WHERE ap.application_id = environments.application_id) AS owner_account_id,
+                      (SELECT a.email
+                       FROM applications ap
+                       JOIN accounts a ON a.account_id = ap.account_id
+                       WHERE ap.application_id = environments.application_id) AS owner_account_email,
 
                       NULL AS current_deployment_revision,
                       NULL AS current_deployment_deployment_revision,
@@ -469,6 +476,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 revision,
 
                 owner_account_id: environment_record.owner_account_id,
+                owner_account_email: environment_record.owner_account_email,
 
                 current_deployment_revision: environment_record.current_deployment_revision,
                 current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
@@ -509,6 +517,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                        FROM applications ap
                        JOIN accounts a ON a.account_id = ap.account_id
                        WHERE ap.application_id = environments.application_id) AS owner_account_id,
+                      (SELECT a.email
+                       FROM applications ap
+                       JOIN accounts a ON a.account_id = ap.account_id
+                       WHERE ap.application_id = environments.application_id) AS owner_account_email,
 
                       NULL AS current_deployment_revision,
                       NULL AS current_deployment_deployment_revision,
@@ -549,6 +561,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 revision,
 
                 owner_account_id: environment_record.owner_account_id,
+                owner_account_email: environment_record.owner_account_email,
 
                 current_deployment_revision: environment_record.current_deployment_revision,
                 current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
@@ -603,6 +616,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                              FROM applications ap
                              JOIN accounts a ON a.account_id = ap.account_id
                              WHERE ap.application_id = environments.application_id) AS owner_account_id,
+                            (SELECT a.email
+                             FROM applications ap
+                             JOIN accounts a ON a.account_id = ap.account_id
+                             WHERE ap.application_id = environments.application_id) AS owner_account_email,
 
                             -- Current deployment info
                             (
@@ -660,6 +677,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     revision,
 
                     owner_account_id: environment_record.owner_account_id,
+                    owner_account_email: environment_record.owner_account_email,
 
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record
@@ -712,6 +730,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                              FROM applications ap
                              JOIN accounts a ON a.account_id = ap.account_id
                              WHERE ap.application_id = environments.application_id) AS owner_account_id,
+                            (SELECT a.email
+                             FROM applications ap
+                             JOIN accounts a ON a.account_id = ap.account_id
+                             WHERE ap.application_id = environments.application_id) AS owner_account_email,
 
                             -- Current deployment info
                             (
@@ -793,6 +815,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     revision,
 
                     owner_account_id: environment_record.owner_account_id,
+                    owner_account_email: environment_record.owner_account_email,
 
                     current_deployment_revision: environment_record.current_deployment_revision,
                     current_deployment_deployment_revision: environment_record

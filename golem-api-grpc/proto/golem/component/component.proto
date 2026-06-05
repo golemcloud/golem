@@ -25,4 +25,5 @@ message Component {
   string object_store_key = 18;
   string application_name = 19;
   string environment_name = 20;
+  string account_email = 21;
 }

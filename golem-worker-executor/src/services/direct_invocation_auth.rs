@@ -132,14 +132,18 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
                 details: format!("Component {} not found", owned_agent_id.component_id()),
             })?;
 
-        let auth_ctx = AuthCtx::agent(caller_account_id);
+        let auth_ctx = if caller_account_id == component.account_id {
+            AuthCtx::agent_with_email(caller_account_id, component.account_email.clone())
+        } else {
+            AuthCtx::agent(caller_account_id)
+        };
         auth_ctx
             .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
                 owner: AgentOwnerPattern::Agent {
-                    account: component.account_id.to_string(),
-                    application: component.application_name.0.clone(),
-                    environment: component.environment_name.0.clone(),
-                    component: component.component_name.0.clone(),
+                    account: component.account_email.clone(),
+                    application: component.application_name.clone(),
+                    environment: component.environment_name.clone(),
+                    component: component.component_name.clone(),
                     agent: AgentOwnerLeafPattern::Agent(owned_agent_id.agent_name()),
                 },
                 verb: Some(verb),

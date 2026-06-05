@@ -1954,6 +1954,7 @@ mod tests {
                 hash: diff::Hash::empty(),
                 application_id: ApplicationId::new(),
                 account_id: AccountId::new(),
+                account_email: golem_common::model::account::AccountEmail::new("test@golem"),
                 application_name: golem_common::model::application::ApplicationName::try_from(
                     "test-app".to_string(),
                 )

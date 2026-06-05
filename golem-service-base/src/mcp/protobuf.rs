@@ -1,5 +1,6 @@
 use crate::mcp::{AgentTypeImplementers, CompiledMcp};
 use golem_common::base_model::domain_registration::Domain;
+use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentTypeImplementer};
 use golem_common::schema::RegisteredAgentTypeSchema;
 
@@ -18,6 +19,7 @@ impl From<CompiledMcp> for golem_api_grpc::proto::golem::mcp::CompiledMcp {
 
         Self {
             account_id: Some(value.account_id.into()),
+            account_email: value.account_email.into_inner(),
             environment_id: Some(value.environment_id.into()),
             deployment_revision: value.deployment_revision.into(),
             domain: value.domain.0,
@@ -61,6 +63,7 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcp> for CompiledMcp {
                 .ok_or("Missing account_id")?
                 .try_into()
                 .map_err(|e| format!("Invalid account_id: {}", e))?,
+            account_email: AccountEmail::new(value.account_email),
             environment_id: value
                 .environment_id
                 .ok_or("Missing environment_id")?

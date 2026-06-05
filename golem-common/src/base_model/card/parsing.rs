@@ -16,8 +16,6 @@ use super::class::card_permission_classes;
 use crate::base_model::card::*;
 use crate::model::card::owner::OwnerPattern;
 use crate::model::card::recipient::{PolymorphicRecipientPattern, RecipientPattern};
-use combine::parser::char::{char, spaces};
-use combine::{EasyParser, Parser, any, eof, many, none_of};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -179,44 +177,18 @@ struct PermissionParts {
 }
 
 fn permission_parts(value: &str) -> Result<PermissionParts, String> {
-    let mut parser = (
-        many(none_of("(".chars())),
-        char('('),
-        many(none_of("@".chars())),
-        spaces(),
-        char('@'),
-        spaces(),
-        many(none_of(":".chars())),
-        char(':'),
-        many(none_of(":".chars())),
-        char(':'),
-        many(any()),
-    )
-        .skip(eof());
-
-    #[allow(clippy::type_complexity)]
-    let ((class, _, owner, _, _, _, recipient, _, verb, _, resource), _): (
-        (
-            String,
-            char,
-            String,
-            (),
-            char,
-            (),
-            String,
-            char,
-            String,
-            char,
-            String,
-        ),
-        &str,
-    ) = parser.easy_parse(value).map_err(|err| err.to_string())?;
-
-    let owner = owner.trim();
-    let owner = owner
-        .strip_suffix(')')
-        .ok_or_else(|| "missing class owner close before recipient separator".to_string())?
-        .trim();
+    let (class, rest) = value
+        .split_once('(')
+        .ok_or_else(|| "missing class owner open".to_string())?;
+    let (owner, rest) = rest
+        .split_once(") @ ")
+        .ok_or_else(|| "missing class owner close before recipient separator".to_string())?;
+    let (recipient, rest) = rest
+        .split_once(':')
+        .ok_or_else(|| "missing verb separator".to_string())?;
+    let (verb, resource) = rest
+        .split_once(':')
+        .ok_or_else(|| "missing resource separator".to_string())?;
 
     Ok(PermissionParts {
         class: class.trim().to_string(),

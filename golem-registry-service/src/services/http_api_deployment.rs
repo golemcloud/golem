@@ -78,9 +78,9 @@ fn authorize_http_api_deployment_permission(
         ClassPermissionTarget {
             verb: Some(verb),
             owner: EnvironmentOwnerPattern::Environment {
-                account: environment.owner_account_id.to_string(),
-                application: environment.application_name.0.clone(),
-                environment: environment.name.0.clone(),
+                account: environment.owner_account_email.clone(),
+                application: environment.application_name.clone(),
+                environment: environment.name.clone(),
             },
             resource: domain
                 .map(

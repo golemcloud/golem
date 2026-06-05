@@ -164,6 +164,7 @@ message CompiledRoutes {
   golem.common.EnvironmentId environment_id = 2;
   uint64 deployment_revision = 3;
   repeated SecuritySchemeDetails security_schemes = 4;
+  string account_email = 5;
   repeated CompiledRoute routes = 6;
 }
 

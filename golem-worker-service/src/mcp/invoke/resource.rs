@@ -103,7 +103,10 @@ pub async fn invoke_resource(
         agent_id: parsed_agent_id.to_string(),
     };
 
-    let auth_ctx = golem_service_base::model::auth::AuthCtx::agent(mcp_resource.account_id);
+    let auth_ctx = golem_service_base::model::auth::AuthCtx::agent_with_email(
+        mcp_resource.account_id,
+        mcp_resource.account_email.clone(),
+    );
 
     let agent_output = worker_service
         .invoke_agent(
@@ -471,6 +474,7 @@ mod tests {
             environment_id: harness.environment_id,
             account_id: harness.account_id,
             schema_graph: Arc::new(SchemaGraph::empty()),
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),

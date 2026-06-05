@@ -14,7 +14,7 @@
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_common::error_forwarding;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{Application, ApplicationId, ApplicationName};
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::SqlDateTime;
@@ -38,6 +38,7 @@ pub struct ApplicationRecord {
     pub application_id: Uuid,
     pub name: String,
     pub account_id: Uuid,
+    pub account_email: String,
     #[sqlx(flatten)]
     pub audit: AuditFields,
 }
@@ -65,6 +66,7 @@ impl ApplicationRevisionRecord {
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ApplicationExtRevisionRecord {
     pub account_id: Uuid,
+    pub account_email: String,
 
     pub entity_created_at: SqlDateTime,
 
@@ -80,6 +82,7 @@ impl TryFrom<ApplicationExtRevisionRecord> for Application {
             id: ApplicationId(value.revision.application_id),
             revision: value.revision.revision_id.try_into()?,
             account_id: AccountId(value.account_id),
+            account_email: AccountEmail::new(value.account_email),
             name: ApplicationName(value.revision.name),
         })
     }

@@ -18,7 +18,7 @@ use self::error::LimitExceededError;
 use crate::repo::account_usage::AccountUsageRepo;
 use crate::repo::model::account_usage::{AccountUsage as RepoAccountUsage, UsageType};
 use crate::services::account_usage::error::AccountUsageError;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::{
     AccountUsageResourcePattern, AccountUsageVerb, ClassPermissionTarget, PermissionTarget,
@@ -222,7 +222,12 @@ impl AccountUsageService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<ResourceLimits, AccountUsageError> {
-        authorize_account_usage_permission(auth, account_id, AccountUsageVerb::View)?;
+        let account_email = auth
+            .access_account_email()
+            .filter(|_| auth.access_account_id() == account_id)
+            .ok_or_else(|| AccountUsageError::AccountNotfound(account_id))?;
+
+        authorize_account_usage_permission(auth, account_email, AccountUsageVerb::View)?;
 
         let account_usage = self
             .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
@@ -275,20 +280,20 @@ impl AccountUsageService {
 
 fn authorize_account_usage_permission(
     auth: &AuthCtx,
-    account_id: AccountId,
+    account_email: &AccountEmail,
     verb: AccountUsageVerb,
 ) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&account_usage_permission_target(account_id, verb))
+    auth.authorize_permission(&account_usage_permission_target(account_email, verb))
 }
 
 fn account_usage_permission_target(
-    account_id: AccountId,
+    account_email: &AccountEmail,
     verb: AccountUsageVerb,
 ) -> PermissionTarget {
     PermissionTarget::AccountUsage(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {
-            account: account_id.to_string(),
+            account: account_email.clone(),
         },
         resource: AccountUsageResourcePattern,
     })

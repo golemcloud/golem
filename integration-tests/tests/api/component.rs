@@ -827,6 +827,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                 component_revision: component.revision,
                 component_name: component.component_name.0.clone(),
                 account_id: component.account_id,
+                account_email: user.account_email.clone(),
             },
             webhook_prefix_authority_and_path: None
         }]

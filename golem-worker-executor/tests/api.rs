@@ -3725,6 +3725,7 @@ async fn worker_created_by_reflects_component_owner_not_caller(
     // what happens during cross-account RPC.
     let caller_auth_ctx: golem_api_grpc::proto::golem::auth::AuthCtx = AuthCtx::User(UserAuthCtx {
         account_id: caller_account_id,
+        account_email: golem_common::model::account::AccountEmail::new("caller@golem"),
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
         effective_surface: golem_common::model::card::EffectiveSurface {
@@ -3818,6 +3819,7 @@ async fn worker_environment_reflects_component_not_caller(
 
     let caller_auth_ctx: golem_api_grpc::proto::golem::auth::AuthCtx = AuthCtx::User(UserAuthCtx {
         account_id: caller_account_id,
+        account_email: golem_common::model::account::AccountEmail::new("caller@golem"),
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
         effective_surface: golem_common::model::card::EffectiveSurface {
@@ -3962,6 +3964,7 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
 
     let caller_auth_ctx: golem_api_grpc::proto::golem::auth::AuthCtx = AuthCtx::User(UserAuthCtx {
         account_id: caller_account_id,
+        account_email: golem_common::model::account::AccountEmail::new("caller@golem"),
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
         effective_surface: golem_common::model::card::EffectiveSurface {

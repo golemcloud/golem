@@ -17,7 +17,7 @@ mod tests;
 
 use axum::http::header;
 use golem_common::SafeDisplay;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::card::owner::{
     AgentOwnerPattern, ApplicationOwnerPattern, EnvironmentOwnerPattern,
@@ -176,6 +176,7 @@ impl SafeDisplay for AuthorizationError {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserAuthCtx {
     pub account_id: AccountId,
+    pub account_email: AccountEmail,
     pub account_plan_id: PlanId,
     pub account_roles: BTreeSet<AccountRole>,
     pub effective_surface: EffectiveSurface,
@@ -187,6 +188,7 @@ pub struct UserAuthCtx {
 /// without any data lookups
 pub struct AgentAuthCtx {
     pub account_id: AccountId,
+    pub account_email: Option<AccountEmail>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -196,6 +198,7 @@ pub struct AgentAuthCtx {
 pub struct AdminImpersonationAuthCtx {
     pub admin_account_id: AccountId,
     pub target_account_id: AccountId,
+    pub target_account_email: AccountEmail,
     pub target_account_roles: BTreeSet<AccountRole>,
     pub target_account_plan_id: PlanId,
     pub effective_surface: EffectiveSurface,
@@ -224,12 +227,23 @@ impl AuthCtx {
     }
 
     pub fn agent(account_id: AccountId) -> AuthCtx {
-        AuthCtx::Agent(AgentAuthCtx { account_id })
+        AuthCtx::Agent(AgentAuthCtx {
+            account_id,
+            account_email: None,
+        })
+    }
+
+    pub fn agent_with_email(account_id: AccountId, account_email: AccountEmail) -> AuthCtx {
+        AuthCtx::Agent(AgentAuthCtx {
+            account_id,
+            account_email: Some(account_email),
+        })
     }
 
     pub fn admin_impersonation(
         admin_account_id: AccountId,
         target_account_id: AccountId,
+        target_account_email: AccountEmail,
         target_account_roles: BTreeSet<AccountRole>,
         target_account_plan_id: PlanId,
         effective_surface: EffectiveSurface,
@@ -237,6 +251,7 @@ impl AuthCtx {
         AuthCtx::AdminImpersonation(AdminImpersonationAuthCtx {
             admin_account_id,
             target_account_id,
+            target_account_email,
             target_account_roles,
             target_account_plan_id,
             effective_surface,
@@ -250,9 +265,11 @@ impl AuthCtx {
         match self {
             Self::User(inner) => Self::Agent(AgentAuthCtx {
                 account_id: inner.account_id,
+                account_email: Some(inner.account_email.clone()),
             }),
             Self::Agent(inner) => Self::Agent(AgentAuthCtx {
                 account_id: inner.account_id,
+                account_email: inner.account_email.clone(),
             }),
             Self::System => Self::System,
             // Down't downgrade impersonation auth contexts for better logging
@@ -300,6 +317,15 @@ impl AuthCtx {
         }
     }
 
+    pub fn access_account_email(&self) -> Option<&AccountEmail> {
+        match self {
+            Self::User(user) => Some(&user.account_email),
+            Self::Agent(agent) => agent.account_email.as_ref(),
+            Self::AdminImpersonation(ctx) => Some(&ctx.target_account_email),
+            Self::System => None,
+        }
+    }
+
     /// Returns the access account ID.
     ///
     /// Prefer calling `actor_account_id()` for audit writes or `access_account_id()` for
@@ -331,7 +357,8 @@ impl AuthCtx {
                 authorize_effective_surface_permission(&ctx.effective_surface, target)
             }
             Self::Agent(agent) => {
-                let effective_surface = temporary_agent_effective_surface(agent.account_id);
+                let effective_surface =
+                    temporary_agent_effective_surface(agent.account_email.as_ref());
                 authorize_effective_surface_permission(&effective_surface, target)
             }
         }
@@ -356,8 +383,14 @@ fn authorize_effective_surface_permission(
     }
 }
 
-fn temporary_agent_effective_surface(account_id: AccountId) -> EffectiveSurface {
-    let account = account_id.to_string();
+fn temporary_agent_effective_surface(account: Option<&AccountEmail>) -> EffectiveSurface {
+    let Some(account) = account else {
+        return EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        };
+    };
 
     EffectiveSurface {
         source_card_ids: Vec::new(),
@@ -399,7 +432,9 @@ fn temporary_agent_effective_surface(account_id: AccountId) -> EffectiveSurface 
                     resource: AgentResourcePattern::Any,
                 }),
                 PermissionTarget::Agent(ClassPermissionTarget {
-                    owner: AgentOwnerPattern::AccountAgents { account },
+                    owner: AgentOwnerPattern::AccountAgents {
+                        account: account.clone(),
+                    },
                     verb: Some(AgentVerb::UpdateRevision),
                     resource: AgentResourcePattern::Any,
                 }),
@@ -636,6 +671,7 @@ mod protobuf {
     use super::{
         AdminImpersonationAuthCtx, AgentAuthCtx, AuthCtx, AuthorizationError, UserAuthCtx,
     };
+    use golem_common::model::account::AccountEmail;
     use golem_common::model::auth::AccountRole;
     use golem_common::model::card::{CardId, EffectiveSurface, GrantSurface, PermissionTarget};
 
@@ -734,6 +770,7 @@ mod protobuf {
             Ok(Self {
                 account_roles,
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
+                account_email: AccountEmail::new(value.account_email),
                 account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
                 effective_surface,
             })
@@ -744,6 +781,7 @@ mod protobuf {
         fn from(value: UserAuthCtx) -> Self {
             Self {
                 account_id: Some(value.account_id.into()),
+                account_email: value.account_email.into_inner(),
                 plan_id: Some(value.account_plan_id.into()),
                 account_roles: value
                     .account_roles
@@ -762,6 +800,11 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
+                account_email: if value.account_email.is_empty() {
+                    None
+                } else {
+                    Some(AccountEmail::new(value.account_email))
+                },
             })
         }
     }
@@ -770,6 +813,10 @@ mod protobuf {
         fn from(value: AgentAuthCtx) -> Self {
             Self {
                 account_id: Some(value.account_id.into()),
+                account_email: value
+                    .account_email
+                    .map(AccountEmail::into_inner)
+                    .unwrap_or_default(),
             }
         }
     }
@@ -804,6 +851,7 @@ mod protobuf {
                     .target_account_id
                     .ok_or("missing target_account_id")?
                     .try_into()?,
+                target_account_email: AccountEmail::new(value.target_account_email),
                 target_account_roles,
                 target_account_plan_id: value
                     .target_account_plan_id
@@ -821,6 +869,7 @@ mod protobuf {
             Self {
                 admin_account_id: Some(value.admin_account_id.into()),
                 target_account_id: Some(value.target_account_id.into()),
+                target_account_email: value.target_account_email.into_inner(),
                 target_account_roles: value
                     .target_account_roles
                     .into_iter()

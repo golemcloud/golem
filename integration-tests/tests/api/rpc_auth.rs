@@ -124,21 +124,21 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
                     lower_positive: vec![
                         format!(
                             "environment({}/{}) @ {} : view : {}",
-                            owner.account_id,
+                            owner.account_email.as_str(),
                             owner_env.application_name.0,
                             caller.account_email.as_str(),
                             owner_env.name.0,
                         ),
                         format!(
                             "component({}/{}/{}) @ {} : view : *",
-                            owner.account_id,
+                            owner.account_email.as_str(),
                             owner_env.application_name.0,
                             owner_env.name.0,
                             caller.account_email.as_str(),
                         ),
                         format!(
                             "agent({}/{}/{}/{}/*) @ {} : view : *",
-                            owner.account_id,
+                            owner.account_email.as_str(),
                             owner_env.application_name.0,
                             owner_env.name.0,
                             owner_component.component_name.0,
@@ -146,7 +146,7 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
                         ),
                         format!(
                             "agent({}/{}/{}/{}/*) @ {} : invoke : *",
-                            owner.account_id,
+                            owner.account_email.as_str(),
                             owner_env.application_name.0,
                             owner_env.name.0,
                             owner_component.component_name.0,

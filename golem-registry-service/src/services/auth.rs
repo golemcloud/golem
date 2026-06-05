@@ -109,6 +109,7 @@ impl AuthService {
 
                 Ok(AuthCtx::User(UserAuthCtx {
                     account_id: target_account.id,
+                    account_email: target_account.email.clone(),
                     account_roles,
                     account_plan_id: target_account.plan_id,
                     effective_surface,
@@ -129,6 +130,7 @@ impl AuthService {
                         self.materialize_effective_surface(&admin_account).await?;
                     let admin_auth_ctx = AuthCtx::User(UserAuthCtx {
                         account_id: admin_account.id,
+                        account_email: admin_account.email.clone(),
                         account_roles,
                         account_plan_id: admin_account.plan_id,
                         effective_surface,
@@ -156,6 +158,7 @@ impl AuthService {
                 Ok(AuthCtx::AdminImpersonation(AdminImpersonationAuthCtx {
                     admin_account_id,
                     target_account_id: target_account.id,
+                    target_account_email: target_account.email.clone(),
                     target_account_roles,
                     target_account_plan_id: target_account.plan_id,
                     effective_surface,

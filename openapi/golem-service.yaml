@@ -14982,12 +14982,15 @@ components:
         accountId:
           type: string
           format: uuid
+        accountEmail:
+          type: string
         name:
           type: string
       required:
       - id
       - revision
       - accountId
+      - accountEmail
       - name
     ApplicationCreation:
       title: ApplicationCreation
@@ -15652,6 +15655,8 @@ components:
         ownerAccountId:
           type: string
           format: uuid
+        ownerAccountEmail:
+          type: string
         currentDeployment:
           $ref: '#/components/schemas/EnvironmentCurrentDeploymentView'
       required:
@@ -15665,6 +15670,7 @@ components:
       - versionCheck
       - securityOverrides
       - ownerAccountId
+      - ownerAccountEmail
     EnvironmentCreation:
       title: EnvironmentCreation
       type: object
@@ -17086,11 +17092,14 @@ components:
         accountId:
           type: string
           format: uuid
+        accountEmail:
+          type: string
       required:
       - componentId
       - componentRevision
       - componentName
       - accountId
+      - accountEmail
     ResourceCapacityLimit:
       title: ResourceCapacityLimit
       type: object

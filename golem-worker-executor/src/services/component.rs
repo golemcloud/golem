@@ -678,6 +678,7 @@ mod tests {
             hash: golem_common::model::diff::Hash::new(blake3::hash(b"component-hash")),
             application_id: ApplicationId::new(),
             account_id: golem_common::model::account::AccountId::new(),
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
             application_name: ApplicationName::try_from("test-app".to_string()).unwrap(),
             environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_size: 1,

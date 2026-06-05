@@ -112,6 +112,7 @@ pub async fn get_agent_capabilities(
     let mut prompts = vec![];
 
     let account_id = compiled_mcp.account_id;
+    let account_email = compiled_mcp.account_email.clone();
     let environment_id = compiled_mcp.environment_id;
 
     tracing::info!(
@@ -162,6 +163,7 @@ pub async fn get_agent_capabilities(
             // and its prompt instead of exposing a broken method.
             let agent_method_mcp = McpAgentCapability::from_agent_method(
                 &account_id,
+                &account_email,
                 &environment_id,
                 &agent_type.type_name,
                 agent_type.mode,

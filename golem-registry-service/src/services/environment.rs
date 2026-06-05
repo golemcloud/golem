@@ -140,7 +140,7 @@ impl EnvironmentService {
 
         authorize_environment_permission(
             auth,
-            application.account_id,
+            &application.account_email,
             &application.name,
             EnvironmentVerb::Create,
             EnvironmentResourcePattern::Environment(CardEnvironmentName(data.name.0.clone())),
@@ -316,21 +316,21 @@ impl EnvironmentService {
         auth: &AuthCtx,
     ) -> Result<Vec<Environment>, EnvironmentError> {
         let mut authorized_environments = Vec::new();
-        let mut application_owner_id = None;
+        let mut application_owner_email = None;
 
         for record in self
             .environment_repo
             .list_by_app(application_id.0, auth.access_account_id().0)
             .await?
         {
-            let owner_account_id = record.owner_account_id();
+            let owner_account_email = record.owner_account_email();
 
             let environment: Option<Environment> = record
                 .into_revision_record()
                 .map(|r| r.try_into())
                 .transpose()?;
 
-            application_owner_id.get_or_insert(owner_account_id);
+            application_owner_email.get_or_insert(owner_account_email);
 
             if let Some(environment) = environment
                 && authorize_environment_model(auth, &environment, EnvironmentVerb::View).is_ok()
@@ -339,16 +339,16 @@ impl EnvironmentService {
             }
         }
 
-        match (application_owner_id, authorized_environments.is_empty()) {
+        match (application_owner_email, authorized_environments.is_empty()) {
             (Some(_), false) => {
                 // checked above using the authorized environment actions -> only return authorized environments
                 Ok(authorized_environments)
             }
-            (Some(application_owner_id), true) => {
+            (Some(application_owner_email), true) => {
                 // application exists but has no environments -> only leak existence if account-level permissions are present
                 authorize_application_permission(
                     auth,
-                    application_owner_id,
+                    &application_owner_email,
                     ApplicationVerb::ListAllEnvironments,
                     ApplicationResourcePattern::Any,
                 )
@@ -392,7 +392,7 @@ impl EnvironmentService {
 
 fn authorize_environment_permission(
     auth: &AuthCtx,
-    account_id: AccountId,
+    account_email: &AccountEmail,
     application_name: &ApplicationName,
     verb: EnvironmentVerb,
     resource: EnvironmentResourcePattern,
@@ -400,8 +400,8 @@ fn authorize_environment_permission(
     auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
         verb: Some(verb),
         owner: ApplicationOwnerPattern::Application {
-            account: account_id.to_string(),
-            application: application_name.0.clone(),
+            account: account_email.clone(),
+            application: application_name.clone(),
         },
         resource,
     }))
@@ -414,7 +414,7 @@ fn authorize_environment_model(
 ) -> Result<(), AuthorizationError> {
     authorize_environment_permission(
         auth,
-        environment.owner_account_id,
+        &environment.owner_account_email,
         &environment.application_name,
         verb,
         EnvironmentResourcePattern::Environment(CardEnvironmentName(environment.name.0.clone())),
@@ -428,7 +428,7 @@ fn authorize_environment_details(
 ) -> Result<(), AuthorizationError> {
     authorize_environment_permission(
         auth,
-        environment.account.id,
+        &environment.account.email,
         &environment.application.name,
         verb,
         EnvironmentResourcePattern::Environment(CardEnvironmentName(
@@ -439,14 +439,14 @@ fn authorize_environment_details(
 
 fn authorize_application_permission(
     auth: &AuthCtx,
-    account_id: AccountId,
+    account_email: &AccountEmail,
     verb: ApplicationVerb,
     resource: ApplicationResourcePattern,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::Application(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {
-            account: account_id.to_string(),
+            account: account_email.clone(),
         },
         resource,
     }))

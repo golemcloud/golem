@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::account::{AccountId, AccountSummary};
+use crate::base_model::account::{AccountEmail, AccountId, AccountSummary};
 use crate::base_model::application::{ApplicationId, ApplicationName, ApplicationSummary};
 use crate::base_model::deployment::{
     CurrentDeploymentRevision, DeploymentRevision, DeploymentVersion,
@@ -34,6 +34,8 @@ declare_revision!(EnvironmentRevision);
 
 declare_transparent_newtypes! {
     #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(transparent))]
     pub struct EnvironmentName(pub String);
 }
 
@@ -97,6 +99,7 @@ declare_structs! {
         pub security_overrides: bool,
 
         pub owner_account_id: AccountId,
+        pub owner_account_email: AccountEmail,
 
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
     }

@@ -397,17 +397,20 @@ impl DeploymentService {
             .await?
             .ok_or_else(|| DeploymentError::AgentTypeNotFound(agent_type_name.0.clone()))?;
 
-        let owner_account_id = AccountId(record.owner_account_id);
         let environment_id = EnvironmentId(record.environment_id);
 
         // Map authorization failure to NotFound to prevent resource enumeration
         auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
             owner: AgentOwnerPattern::Agent {
-                account: owner_account_id.to_string(),
-                application: app_name.0.clone(),
-                environment: environment_name.0.clone(),
-                component: record.component_name.clone(),
-                agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name.0.clone()),
+                account: golem_common::model::account::AccountEmail::new(
+                    record.owner_account_email.clone(),
+                ),
+                application: app_name.clone(),
+                environment: environment_name.clone(),
+                component: golem_common::model::component::ComponentName(
+                    record.component_name.clone(),
+                ),
+                agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name.clone()),
             },
             verb: Some(AgentVerb::View),
             resource: AgentResourcePattern::Any,

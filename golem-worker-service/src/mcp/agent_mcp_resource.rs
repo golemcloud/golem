@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::account::AccountId;
+use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
@@ -30,6 +30,7 @@ pub struct AgentMcpResource {
     /// Per-agent schema graph that constructor / method `SchemaType::Ref`
     /// bodies resolve against (see [`super::agent_mcp_tool::AgentMcpTool`]).
     pub schema_graph: Arc<SchemaGraph>,
+    pub account_email: AccountEmail,
     pub constructor: AgentConstructorSchema,
     pub method: AgentMethodSchema,
     pub component_id: ComponentId,

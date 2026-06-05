@@ -1201,6 +1201,7 @@ mod tests {
             hash: Hash::empty(),
             application_id: ApplicationId(Uuid::new_v4()),
             account_id: AccountId(Uuid::new_v4()),
+            account_email: golem_common::model::account::AccountEmail::new("weather@golem"),
             application_name: ApplicationName::try_from("weather-app".to_string()).unwrap(),
             environment_name: EnvironmentName::try_from("prod").unwrap(),
             component_size: 0,

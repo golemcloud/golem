@@ -653,10 +653,10 @@ fn authorize_debugging(
     auth_ctx
         .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
             owner: AgentOwnerPattern::Agent {
-                account: component.account_id.to_string(),
-                application: component.application_name.0.clone(),
-                environment: component.environment_name.0.clone(),
-                component: component.component_name.0.clone(),
+                account: component.account_email.clone(),
+                application: component.application_name.clone(),
+                environment: component.environment_name.clone(),
+                component: component.component_name.clone(),
                 agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
             },
             verb: Some(AgentVerb::Debug),
