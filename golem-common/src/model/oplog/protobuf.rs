@@ -28,7 +28,6 @@ use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
 use crate::model::AgentInvocationResult;
 use crate::model::Empty;
-use crate::model::account::AccountEmail;
 use crate::model::agent::DataValue;
 use crate::model::agent::UntypedDataValue;
 use crate::model::component::PluginPriority;
@@ -354,7 +353,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .created_by
                     .ok_or("Missing created_by field")?
                     .try_into()?,
-                created_by_email: AccountEmail::new(create.created_by_email),
                 parent: match create.parent {
                     Some(parent) => Some(parent.try_into()?),
                     None => None,
@@ -811,7 +809,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             .map(Into::into)
                             .collect(),
                         created_by: Some(create.created_by.into()),
-                        created_by_email: create.created_by_email.into_inner(),
                         environment_id: Some(create.environment_id.into()),
                         parent: create.parent.map(Into::into),
                         component_size: create.component_size,
@@ -2180,7 +2177,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 env: create.env.into_iter().collect(),
                 environment_id: create.environment_id,
                 created_by: create.created_by,
-                created_by_email: create.created_by_email,
                 local_agent_config: create.local_agent_config.into_iter().map(Into::into).collect(),
                 parent: create.parent,
                 component_size: create.component_size,
@@ -2863,7 +2859,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 env,
                 environment_id,
                 created_by,
-                created_by_email,
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
@@ -2883,7 +2878,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .collect(),
                 environment_id: Some(environment_id.into()),
                 created_by: Some(created_by.into()),
-                created_by_email: created_by_email.into_inner(),
                 parent: parent.map(Into::into),
                 component_size,
                 initial_total_linear_memory_size,
@@ -3216,7 +3210,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .ok_or("Missing environment_id")?
                     .try_into()?;
                 let created_by = p.created_by.ok_or("Missing created_by")?.try_into()?;
-                let created_by_email = AccountEmail::new(p.created_by_email);
                 let parent = p.parent.map(|a| a.try_into()).transpose()?;
                 let initial_active_plugins = p
                     .initial_active_plugins
@@ -3242,7 +3235,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     env,
                     environment_id,
                     created_by,
-                    created_by_email,
                     parent,
                     component_size: p.component_size,
                     initial_total_linear_memory_size: p.initial_total_linear_memory_size,

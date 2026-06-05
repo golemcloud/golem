@@ -662,7 +662,6 @@ impl WorkerService for DefaultWorkerService {
                     env,
                     environment_id,
                     created_by,
-                    created_by_email,
                     timestamp,
                     parent,
                     component_size,
@@ -708,7 +707,7 @@ impl WorkerService for DefaultWorkerService {
                     config,
                     environment_id,
                     created_by,
-                    created_by_email,
+                    created_by_email: component_metadata.account_email,
                     created_at: timestamp,
                     parent,
                     last_known_status: AgentStatusRecord {

@@ -16,7 +16,7 @@ pub mod multipart;
 mod oplog_macro;
 pub(crate) mod public_types;
 
-use crate::base_model::account::{AccountEmail, AccountId};
+use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
@@ -79,7 +79,6 @@ oplog_entry! {
             env: Vec<(String, String)>,
             environment_id: EnvironmentId,
             created_by: AccountId,
-            created_by_email: AccountEmail,
             parent: Option<AgentId>,
             component_size: u64,
             initial_total_linear_memory_size: u64,
@@ -95,7 +94,6 @@ oplog_entry! {
             component_revision: ComponentRevision,
             env: BTreeMap<String, String>,
             created_by: AccountId,
-            created_by_email: AccountEmail,
             environment_id: EnvironmentId,
             parent: Option<AgentId>,
             component_size: u64,

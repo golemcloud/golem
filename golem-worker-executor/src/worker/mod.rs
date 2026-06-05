@@ -2703,7 +2703,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     initial_worker_metadata.env.clone(),
                     initial_worker_metadata.environment_id,
                     initial_worker_metadata.created_by,
-                    initial_worker_metadata.created_by_email.clone(),
                     initial_worker_metadata.parent.clone(),
                     initial_worker_metadata.last_known_status.component_size,
                     initial_worker_metadata

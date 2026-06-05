@@ -40,8 +40,7 @@ use crate::model::oplog::{
 use crate::model::regions::OplogRegion;
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountEmail, AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp,
-    TransactionId,
+    AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
 };
 use golem_wasm::analysis::analysed_type::{
     bool, r#enum, f64, field, handle, list, option, record, result_err, result_ok, s16, s32, str,
@@ -74,7 +73,6 @@ fn create_serialization_poem_serde_equivalence() {
             .into_iter()
             .collect(),
         created_by: AccountId::new(),
-        created_by_email: AccountEmail::new("test@golem"),
         local_agent_config: vec![TypedAgentConfigEntry {
             path: vec!["foo".to_string(), "bar".to_string()],
             value: 1.into_value_and_type(),

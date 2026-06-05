@@ -1159,7 +1159,7 @@ mod test {
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -2004,7 +2004,6 @@ mod test {
                         vec![],
                         owned_agent_id.environment_id(),
                         account_id,
-                        AccountEmail::new("test@golem"),
                         None,
                         100,
                         200,
@@ -3046,7 +3045,6 @@ mod test {
                 vec![],
                 EnvironmentId::new(),
                 AccountId::new(),
-                AccountEmail::new("test@golem"),
                 None,
                 0,
                 0,
