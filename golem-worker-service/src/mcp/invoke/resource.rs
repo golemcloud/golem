@@ -474,7 +474,7 @@ mod tests {
             environment_id: harness.environment_id,
             account_id: harness.account_id,
             schema_graph: Arc::new(SchemaGraph::empty()),
-            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
+            account_email: golem_common::model::account::AccountEmail::new("mcp@golem"),
             constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
