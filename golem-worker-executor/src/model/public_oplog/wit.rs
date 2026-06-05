@@ -59,6 +59,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 local_agent_config,
                 original_phantom_id,
                 instance_id,
+                ..
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: agent_id.into(),
@@ -842,6 +843,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                         params.created_by.uuid.low_bits,
                     ),
                 ),
+                created_by_email: golem_common::model::account::AccountEmail::new("unknown@golem"),
                 parent: params.parent.map(golem_common::model::AgentId::from),
                 component_size: params.component_size,
                 initial_total_linear_memory_size: params.initial_total_linear_memory_size,

@@ -460,6 +460,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: OplogIndex,
         _: EnvironmentId,
         _: AccountId,
+        _: AccountEmail,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()

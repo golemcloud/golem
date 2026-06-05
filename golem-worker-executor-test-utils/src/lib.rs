@@ -30,8 +30,16 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
+<<<<<<< HEAD
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, UntypedDataValue};
+||||||| parent of 74d47ab91 (stored created by email in create oplog entry)
+use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentMode, ParsedAgentId, UntypedDataValue};
+=======
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, UntypedDataValue};
+>>>>>>> 74d47ab91 (stored created by email in create oplog entry)
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::ComponentRevision;
@@ -1594,6 +1602,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn created_by(&self) -> AccountId {
         self.durable_ctx.created_by()
+    }
+
+    fn created_by_email(&self) -> &AccountEmail {
+        self.durable_ctx.created_by_email()
     }
 
     fn component_metadata(&self) -> &Component {
@@ -3198,6 +3210,7 @@ impl Rpc for FailingRpc {
         &self,
         owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
+        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -3207,6 +3220,7 @@ impl Rpc for FailingRpc {
             .create_demand(
                 owned_agent_id,
                 self_created_by,
+                self_created_by_email,
                 self_agent_id,
                 self_env,
                 self_stack,
@@ -3222,6 +3236,7 @@ impl Rpc for FailingRpc {
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
+        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -3242,6 +3257,7 @@ impl Rpc for FailingRpc {
                     method_name,
                     method_parameters,
                     self_created_by,
+                    self_created_by_email,
                     self_agent_id,
                     self_env,
                     self_stack,
@@ -3257,6 +3273,7 @@ impl Rpc for FailingRpc {
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
+        self_created_by_email: &golem_common::model::account::AccountEmail,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
@@ -3268,6 +3285,7 @@ impl Rpc for FailingRpc {
                 method_name,
                 method_parameters,
                 self_created_by,
+                self_created_by_email,
                 self_agent_id,
                 self_env,
                 self_stack,

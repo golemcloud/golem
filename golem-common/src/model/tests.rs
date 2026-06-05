@@ -17,8 +17,9 @@ use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode, AgentStatus,
-    AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey, PendingInvocationRef,
+    AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode, AgentStatus,
+    AgentStatusRecord, ComponentId, FilterComparator,
+    IdempotencyKey, PendingInvocationRef,
     PendingUpdateKind, PendingUpdateRef, StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
@@ -217,6 +218,7 @@ fn worker_filter_matches() {
         ],
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
+        created_by_email: AccountEmail::new("test@golem"),
         config: vec![TypedAgentConfigEntry {
             path: vec!["var1".to_string()],
             value: ValueAndType::new(golem_wasm::Value::String("value1".to_string()), str()),

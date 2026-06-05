@@ -691,6 +691,7 @@ impl WorkerService {
                 oplog_index_cut_off,
                 component.environment_id,
                 component.account_id,
+                component.account_email,
                 auth_ctx,
             )
             .await?;
@@ -1137,7 +1138,7 @@ mod tests {
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentInvocationOutput;
     use golem_common::model::Empty;
-    use golem_common::model::account::AccountId;
+    use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
         AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
         HttpEndpointDetails, NamedElementSchemas, RegisteredAgentType,
@@ -1610,6 +1611,7 @@ mod tests {
             _: OplogIndex,
             _: EnvironmentId,
             _: AccountId,
+            _: AccountEmail,
             _: AuthCtx,
         ) -> WorkerResult<()> {
             unimplemented!()

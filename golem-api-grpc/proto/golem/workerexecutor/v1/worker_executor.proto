@@ -70,6 +70,7 @@ message ForkWorkerRequest {
   golem.common.EnvironmentId environment_id = 5;
   golem.auth.AuthCtx auth_ctx = 6;
   optional golem.component.Principal principal = 7;
+  string component_owner_account_email = 8;
 }
 
 message ForkWorkerResponse {

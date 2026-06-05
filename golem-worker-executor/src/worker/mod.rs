@@ -2684,6 +2684,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     config: initial_agent_config,
                     environment_id: component.environment_id,
                     created_by: component.account_id,
+                    created_by_email: component.account_email.clone(),
                     created_at,
                     parent,
                     last_known_status: initial_status.clone(),
@@ -2702,6 +2703,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     initial_worker_metadata.env.clone(),
                     initial_worker_metadata.environment_id,
                     initial_worker_metadata.created_by,
+                    initial_worker_metadata.created_by_email.clone(),
                     initial_worker_metadata.parent.clone(),
                     initial_worker_metadata.last_known_status.component_size,
                     initial_worker_metadata
@@ -3469,6 +3471,7 @@ impl RunningWorker {
                     .current_filesystem_storage_usage,
                 component_version_for_replay,
                 worker_metadata.created_by,
+                worker_metadata.created_by_email,
                 worker_metadata.config,
                 last_snapshot_index,
             ),

@@ -91,14 +91,15 @@ message CreateParameters {
   map<string, string> env = 5;
   repeated TypedAgentConfigEntry config = 6;
   golem.common.AccountId created_by = 7;
-  optional AgentId parent = 8;
-  uint64 component_size = 9;
-  uint64 initial_total_linear_memory_size = 10;
-  repeated PluginInstallationDescription initial_active_plugins = 11;
-  golem.common.EnvironmentId environment_id = 12;
-  optional golem.common.UUID original_phantom_id = 13;
-  golem.common.UUID instance_id = 14;
-  golem.component.AgentMode agent_mode = 15;
+  string created_by_email = 8;
+  optional AgentId parent = 9;
+  uint64 component_size = 10;
+  uint64 initial_total_linear_memory_size = 11;
+  repeated PluginInstallationDescription initial_active_plugins = 12;
+  golem.common.EnvironmentId environment_id = 13;
+  optional golem.common.UUID original_phantom_id = 14;
+  golem.common.UUID instance_id = 15;
+  golem.component.AgentMode agent_mode = 16;
 }
 
 message HostCallParameters {

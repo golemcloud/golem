@@ -81,7 +81,7 @@ impl WebhookCallbackHandler {
 
         let body_binary = body_data.take().map(|bs| bs.data).unwrap_or_default();
 
-        let auth_ctx = AuthCtx::agent_with_email(
+        let auth_ctx = AuthCtx::agent(
             resolved_route.route.account_id,
             resolved_route.route.account_email.clone(),
         );

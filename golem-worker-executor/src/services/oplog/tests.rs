@@ -21,7 +21,7 @@ use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -69,6 +69,7 @@ fn make_agent_metadata(
         env: vec![],
         environment_id,
         created_by,
+        created_by_email: AccountEmail::new("test@golem"),
         config: Vec::new(),
         created_at: Timestamp::now_utc(),
         parent: None,
@@ -1565,6 +1566,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         local_agent_config: Vec::new(),
         environment_id,
         created_by: account_id,
+        created_by_email: AccountEmail::new("test@golem"),
         parent: None,
         component_size: 0,
         initial_total_linear_memory_size: 0,
@@ -2393,6 +2395,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             Vec::new(),
             environment_id,
             account_id,
+            AccountEmail::new("test@golem"),
             None,
             100,
             100,
@@ -2774,6 +2777,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
         Vec::new(),
         environment_id,
         account_id,
+        AccountEmail::new("test@golem"),
         None,
         100,
         100,
@@ -2790,6 +2794,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
         Vec::new(),
         environment_id,
         account_id,
+        AccountEmail::new("test@golem"),
         None,
         100,
         100,
@@ -2899,6 +2904,7 @@ async fn make_workers(
             Vec::new(),
             environment_id,
             account_id,
+            AccountEmail::new("test@golem"),
             None,
             100,
             100,

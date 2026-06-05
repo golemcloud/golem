@@ -134,14 +134,15 @@ message RawCreateParameters {
   repeated RawEnvVar env = 3;
   golem.common.EnvironmentId environment_id = 4;
   golem.common.AccountId created_by = 5;
-  optional AgentId parent = 6;
-  uint64 component_size = 7;
-  uint64 initial_total_linear_memory_size = 8;
-  repeated golem.component.EnvironmentPluginGrantId initial_active_plugins = 9;
-  repeated bytes local_agent_config = 10;
-  optional golem.common.UUID original_phantom_id = 11;
-  optional golem.common.UUID instance_id = 12;
-  golem.component.AgentMode agent_mode = 13;
+  string created_by_email = 6;
+  optional AgentId parent = 7;
+  uint64 component_size = 8;
+  uint64 initial_total_linear_memory_size = 9;
+  repeated golem.component.EnvironmentPluginGrantId initial_active_plugins = 10;
+  repeated bytes local_agent_config = 11;
+  optional golem.common.UUID original_phantom_id = 12;
+  optional golem.common.UUID instance_id = 13;
+  golem.component.AgentMode agent_mode = 14;
 }
 
 message RawHostCallParameters {

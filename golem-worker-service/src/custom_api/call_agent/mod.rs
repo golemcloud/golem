@@ -117,7 +117,7 @@ impl CallAgentHandler {
                 None,
                 Some(IdempotencyKey::fresh()),
                 invocation_context,
-                AuthCtx::agent_with_email(
+                AuthCtx::agent(
                     resolved_route.route.account_id,
                     resolved_route.route.account_email.clone(),
                 ),
@@ -242,7 +242,7 @@ impl CallAgentHandler {
             .worker_service
             .get_metadata(
                 agent_id,
-                AuthCtx::agent_with_email(
+                AuthCtx::agent(
                     resolved_route.route.account_id,
                     resolved_route.route.account_email.clone(),
                 ),

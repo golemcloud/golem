@@ -188,7 +188,7 @@ pub struct UserAuthCtx {
 /// without any data lookups
 pub struct AgentAuthCtx {
     pub account_id: AccountId,
-    pub account_email: Option<AccountEmail>,
+    pub account_email: AccountEmail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -226,17 +226,10 @@ impl AuthCtx {
         AuthCtx::System
     }
 
-    pub fn agent(account_id: AccountId) -> AuthCtx {
+    pub fn agent(account_id: AccountId, account_email: AccountEmail) -> AuthCtx {
         AuthCtx::Agent(AgentAuthCtx {
             account_id,
-            account_email: None,
-        })
-    }
-
-    pub fn agent_with_email(account_id: AccountId, account_email: AccountEmail) -> AuthCtx {
-        AuthCtx::Agent(AgentAuthCtx {
-            account_id,
-            account_email: Some(account_email),
+            account_email,
         })
     }
 
@@ -256,25 +249,6 @@ impl AuthCtx {
             target_account_plan_id,
             effective_surface,
         })
-    }
-
-    // Downgrade user auth context to agent auth context. This has weaker permissions
-    // than user auth contexts (due to missing account roles and plan information), but can lead to better
-    // cache hit rates if both user and agent auth is stored in the cache.
-    pub fn downgrade_to_agent(&self) -> Self {
-        match self {
-            Self::User(inner) => Self::Agent(AgentAuthCtx {
-                account_id: inner.account_id,
-                account_email: Some(inner.account_email.clone()),
-            }),
-            Self::Agent(inner) => Self::Agent(AgentAuthCtx {
-                account_id: inner.account_id,
-                account_email: inner.account_email.clone(),
-            }),
-            Self::System => Self::System,
-            // Down't downgrade impersonation auth contexts for better logging
-            Self::AdminImpersonation(inner) => Self::AdminImpersonation(inner.clone()),
-        }
     }
 
     pub fn is_system(&self) -> bool {
@@ -320,7 +294,7 @@ impl AuthCtx {
     pub fn access_account_email(&self) -> Option<&AccountEmail> {
         match self {
             Self::User(user) => Some(&user.account_email),
-            Self::Agent(agent) => agent.account_email.as_ref(),
+            Self::Agent(agent) => Some(&agent.account_email),
             Self::AdminImpersonation(ctx) => Some(&ctx.target_account_email),
             Self::System => None,
         }
@@ -357,8 +331,7 @@ impl AuthCtx {
                 authorize_effective_surface_permission(&ctx.effective_surface, target)
             }
             Self::Agent(agent) => {
-                let effective_surface =
-                    temporary_agent_effective_surface(agent.account_email.as_ref());
+                let effective_surface = temporary_agent_effective_surface(&agent.account_email);
                 authorize_effective_surface_permission(&effective_surface, target)
             }
         }
@@ -383,15 +356,7 @@ fn authorize_effective_surface_permission(
     }
 }
 
-fn temporary_agent_effective_surface(account: Option<&AccountEmail>) -> EffectiveSurface {
-    let Some(account) = account else {
-        return EffectiveSurface {
-            source_card_ids: Vec::new(),
-            lower: Vec::new(),
-            upper: Vec::new(),
-        };
-    };
-
+fn temporary_agent_effective_surface(account: &AccountEmail) -> EffectiveSurface {
     EffectiveSurface {
         source_card_ids: Vec::new(),
         lower: vec![GrantSurface {
@@ -800,11 +765,7 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
-                account_email: if value.account_email.is_empty() {
-                    None
-                } else {
-                    Some(AccountEmail::new(value.account_email))
-                },
+                account_email: AccountEmail::new(value.account_email),
             })
         }
     }
@@ -813,10 +774,7 @@ mod protobuf {
         fn from(value: AgentAuthCtx) -> Self {
             Self {
                 account_id: Some(value.account_id.into()),
-                account_email: value
-                    .account_email
-                    .map(AccountEmail::into_inner)
-                    .unwrap_or_default(),
+                account_email: value.account_email.into_inner(),
             }
         }
     }

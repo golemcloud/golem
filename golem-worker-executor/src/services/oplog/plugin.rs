@@ -101,6 +101,7 @@ pub trait OplogProcessorPlugin: Send + Sync {
         plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
         caller_account_id: AccountId,
+        caller_account_email: &golem_common::model::account::AccountEmail,
         idempotency_key: &IdempotencyKey,
     ) -> Result<InvocationStatus, WorkerExecutorError>;
 }
@@ -386,6 +387,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     proto_metadata,
                     initial_oplog_index,
                     proto_entries,
+                    &worker_metadata.created_by_email,
                 )
                 .await
                 .map_err(|e| {
@@ -444,6 +446,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         _plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
         caller_account_id: AccountId,
+        caller_account_email: &golem_common::model::account::AccountEmail,
         idempotency_key: &IdempotencyKey,
     ) -> Result<InvocationStatus, WorkerExecutorError> {
         self.worker_proxy
@@ -451,6 +454,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 target_agent_id,
                 idempotency_key.clone(),
                 caller_account_id,
+                caller_account_email,
                 Some(environment_id),
             )
             .await
@@ -1274,6 +1278,7 @@ impl ForwardingOplogState {
                 let oplog_plugins = self.oplog_plugins.clone();
                 let environment_id = metadata.environment_id;
                 let caller_account_id = metadata.created_by;
+                let caller_account_email = metadata.created_by_email.clone();
                 let plugin_clone = plugin.clone();
                 let target_clone = target_agent_id.clone();
                 let monitor = tokio::spawn(
@@ -1296,6 +1301,7 @@ impl ForwardingOplogState {
                                     &plugin_clone,
                                     &target_clone,
                                     caller_account_id,
+                                    &caller_account_email,
                                     &idempotency_key,
                                 )
                                 .await
@@ -1557,6 +1563,7 @@ impl ForwardingOplogState {
                     &plugin,
                     &old_target,
                     self.initial_worker_metadata.created_by,
+                    &self.initial_worker_metadata.created_by_email,
                     &last_key,
                 )
                 .await
@@ -1876,6 +1883,7 @@ mod tests {
             _plugin: &InstalledPlugin,
             _target_agent_id: &AgentId,
             caller_account_id: AccountId,
+            _caller_account_email: &golem_common::model::account::AccountEmail,
             _idempotency_key: &IdempotencyKey,
         ) -> Result<InvocationStatus, WorkerExecutorError> {
             self.lookups
@@ -2111,6 +2119,7 @@ mod tests {
             env: vec![],
             environment_id,
             created_by: account_id,
+            created_by_email: golem_common::model::account::AccountEmail::new("test@golem"),
             config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
