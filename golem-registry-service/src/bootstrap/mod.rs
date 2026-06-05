@@ -196,7 +196,10 @@ impl Services {
             .await
             .map_err(|e| e.into_anyhow())?;
 
-        let account_usage_service = Arc::new(AccountUsageService::new(repos.account_usage_repo));
+        let account_usage_service = Arc::new(AccountUsageService::new_with_account_service(
+            repos.account_usage_repo,
+            account_service.clone(),
+        ));
 
         let token_service = Arc::new(TokenService::new(
             repos.token_repo,

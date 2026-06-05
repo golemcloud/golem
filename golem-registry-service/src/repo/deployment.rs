@@ -1106,7 +1106,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         c.name AS component_name,
                         r.component_revision_id,
                         a.account_id AS owner_account_id,
-                        a.email AS owner_account_email,
+                        ac.email AS owner_account_email,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
@@ -1116,6 +1116,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON e.environment_id = r.environment_id
                     JOIN applications a
                         ON a.application_id = e.application_id
+                    JOIN accounts ac
+                        ON ac.account_id = a.account_id
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                         AND r.agent_type_name = $3
                 "#})
@@ -1143,7 +1145,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         c.name AS component_name,
                         r.component_revision_id,
                         a.account_id AS owner_account_id,
-                        a.email AS owner_account_email,
+                        ac.email AS owner_account_email,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
@@ -1153,6 +1155,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON e.environment_id = r.environment_id
                     JOIN applications a
                         ON a.application_id = e.application_id
+                    JOIN accounts ac
+                        ON ac.account_id = a.account_id
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                     ORDER BY r.agent_type_name
                 "#})
@@ -1179,7 +1183,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         c.name AS component_name,
                         r.component_revision_id,
                         a.account_id AS owner_account_id,
-                        a.email AS owner_account_email,
+                        ac.email AS owner_account_email,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM current_deployments cd
@@ -1193,6 +1197,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON e.environment_id = r.environment_id
                     JOIN applications a
                         ON a.application_id = e.application_id
+                    JOIN accounts ac
+                        ON ac.account_id = a.account_id
                     WHERE cd.environment_id = $1 AND r.agent_type_name = $2
                 "#})
                 .bind(environment_id)
@@ -1217,7 +1223,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         c.name AS component_name,
                         r.component_revision_id,
                         a.account_id AS owner_account_id,
-                        a.email AS owner_account_email,
+                        ac.email AS owner_account_email,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM current_deployments cd
@@ -1231,6 +1237,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON e.environment_id = r.environment_id
                     JOIN applications a
                         ON a.application_id = e.application_id
+                    JOIN accounts ac
+                        ON ac.account_id = a.account_id
                     WHERE cd.environment_id = $1
                     ORDER BY r.agent_type_name
                 "#})
