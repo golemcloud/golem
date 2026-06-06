@@ -68,13 +68,13 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
-use crate::services::{HasComponentService, HasOplogService};
+use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
-use crate::worker::status::calculate_last_known_status_for_existing_worker;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
@@ -3367,13 +3367,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
-            let latest_worker_status = calculate_last_known_status_for_existing_worker(
+            let agent_mode = worker.initial_worker_metadata.agent_mode;
+            let latest_worker_status = calculate_last_known_status_with_checkpoint(
                 this,
                 &owned_agent_id,
-                worker.initial_worker_metadata.agent_mode,
+                agent_mode,
                 worker.last_known_status,
             )
-            .await;
+            .await
+            .expect("Failed to calculate worker status for existing worker");
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
             if should_restart_after_shard_assignment_change(&latest_worker_status) {
@@ -4605,6 +4607,12 @@ impl HasConfig for PrivateDurableWorkerState {
 impl HasComponentService for PrivateDurableWorkerState {
     fn component_service(&self) -> Arc<dyn ComponentService> {
         self.component_service.clone()
+    }
+}
+
+impl HasWorkerService for PrivateDurableWorkerState {
+    fn worker_service(&self) -> Arc<dyn WorkerService> {
+        self.worker_service.clone()
     }
 }
 

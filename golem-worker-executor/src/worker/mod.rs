@@ -17,14 +17,13 @@ pub mod invocation;
 mod invocation_loop;
 pub mod read_only_cache;
 pub mod status;
+pub mod status_checkpointer;
 pub mod status_flusher;
 
 use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
-use self::status::{
-    calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
-};
+use self::status::update_status_with_new_entries;
 use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
@@ -47,7 +46,7 @@ use crate::services::{
     UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
-use crate::worker::status::calculate_last_known_status;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
@@ -212,6 +211,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     metrics_status: WorkerStatusMetric,
     last_known_status_detached: Arc<AtomicBool>,
     status_flusher: Arc<status_flusher::AgentStatusFlusher>,
+    status_checkpointer: status_checkpointer::StatusCheckpointer,
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     update_state_lock: Mutex<()>,
@@ -334,10 +334,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }) = deps.worker_service().get(owned_agent_id).await
         {
             // update with latest data from oplog
-            let last_known_status = calculate_last_known_status(
+            let agent_mode = initial_worker_metadata.agent_mode;
+            let last_known_status = calculate_last_known_status_with_checkpoint(
                 deps,
                 owned_agent_id,
-                initial_worker_metadata.agent_mode,
+                agent_mode,
                 last_known_status,
             )
             .await
@@ -459,6 +460,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status_detached.clone(),
         );
 
+        let status_checkpointer = status_checkpointer::StatusCheckpointer::new(
+            owned_agent_id.clone(),
+            initial_worker_metadata.agent_mode == AgentMode::Ephemeral,
+            deps.config().agent_status_checkpoint.enabled,
+            deps.config().agent_status_checkpoint.min_oplog_delta,
+            deps.worker_service(),
+        );
+
         let worker = Worker {
             owned_agent_id,
             parsed_agent_id: agent_id.clone(),
@@ -483,6 +492,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             update_state_lock: Mutex::new(()),
             last_known_status_detached,
             status_flusher,
+            status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
             desired_extra_filesystem_storage: AtomicU64::new(0),
@@ -633,10 +643,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Transition the worker into a deleting state.
     /// Rejects all new invocations and stops any running execution.
     pub async fn start_deleting(&self) -> Result<(), WorkerExecutorError> {
-        // Stop any future background flush from resurrecting the cached status blob after the
-        // upcoming `WorkerService::remove`/`remove_cached_status` deletes it. This awaits any
-        // in-flight flush so no write can land after the delete.
+        // Stop any future background flush or clean-checkpoint write from resurrecting the cached
+        // status after the upcoming `WorkerService::remove`/`remove_cached_status` deletes it (the
+        // latter clears both the live cache and the checkpoint). Each awaits any in-flight write so
+        // none can land after the delete.
         self.status_flusher.begin_delete().await;
+        self.status_checkpointer.begin_delete().await;
         let error = WorkerExecutorError::invalid_request("Worker is being deleted");
         self.stop_internal(false, Some(error), FinalWorkerState::Deleting)
             .await;
@@ -2504,13 +2516,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status,
             }) => {
                 // make sure we are fully up to date on the oplog
-                let current_status = calculate_last_known_status_for_existing_worker(
+                let agent_mode = initial_worker_metadata.agent_mode;
+                let current_status = calculate_last_known_status_with_checkpoint(
                     this,
                     owned_agent_id,
-                    initial_worker_metadata.agent_mode,
+                    agent_mode,
                     last_known_status,
                 )
-                .await;
+                .await
+                .expect("Failed to calculate worker status for existing worker");
 
                 // Use the CREATE-time revision: `agent_id` parsing and
                 // `resolve_agent_properties` must stay tied to the metadata
@@ -2750,16 +2764,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.commit_and_update_state_inner(&update_state_lock_guard, CommitLevel::Always)
             .await;
         if self.last_known_status_detached.load(Ordering::Relaxed) {
-            debug!("Worker status was detached from oplog, reloading it from scratch");
+            debug!("Worker status was detached from oplog, recomputing it");
 
-            // reload status from scratch
-            let worker_status = calculate_last_known_status_for_existing_worker(
-                self,
-                &self.owned_agent_id,
-                self.agent_mode(),
-                None,
-            )
-            .await;
+            // The in-memory status is no longer foldable (a jump deleted its index, or a revert
+            // moved the oplog behind it), so we recompute. Prefer folding forward from the clean
+            // checkpoint (which predates any jump region) over a full re-read of the oplog.
+            let agent_mode = self.agent_mode();
+            let owned_agent_id = &self.owned_agent_id;
+            let worker_status =
+                calculate_last_known_status_with_checkpoint(self, owned_agent_id, agent_mode, None)
+                    .await
+                    .expect("Failed to recompute worker status for existing worker");
 
             // Install the recomputed status while still detached, so a concurrent background sweep
             // keeps skipping (the in-memory status is not authoritative until it is installed).
@@ -2901,6 +2916,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 debug!("worker was not waiting for permit anymore, not starting");
             }
         }
+    }
+
+    /// Writes a *clean* status checkpoint from the current in-memory status if eligible (see
+    /// [`status_checkpointer::StatusCheckpointer::maybe_checkpoint`]).
+    ///
+    /// Must only be called at structurally clean boundaries where no jumpable oplog region is open
+    /// (snapshot save, idle suspend). Skipped while the status is detached, because then the
+    /// in-memory status is not authoritative — checkpointing it could persist a baseline inside a
+    /// region. Best-effort and bounded by the throttle; never blocks meaningfully.
+    pub(crate) async fn checkpoint_status(&self, reason: status_checkpointer::CheckpointReason) {
+        if self.last_known_status_detached.load(Ordering::Acquire) {
+            return;
+        }
+        let status = self.last_known_status.read().await.clone();
+        self.status_checkpointer
+            .maybe_checkpoint(&status, reason)
+            .await;
     }
 
     /// Synchronously persists any pending cached-status changes for this worker. Used at lifecycle

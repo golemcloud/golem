@@ -20,6 +20,7 @@ use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
+use crate::worker::status_checkpointer;
 use crate::worker::{
     FinalWorkerState, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
 };
@@ -375,6 +376,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         // The worker is going idle; persist its cached status synchronously now instead of leaving
         // it for the next background sweep, so reads of an idle worker see an up-to-date blob.
         worker.force_flush_status().await;
+
+        // Idle is a structurally clean boundary (the invocation loop has exited and committed, so
+        // no jumpable region is open): write a throttled clean status checkpoint so a later
+        // jump-induced recompute can fold forward from here.
+        worker
+            .checkpoint_status(status_checkpointer::CheckpointReason::Idle)
+            .await;
     }
 }
 
@@ -1373,6 +1381,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                         ))
                                         .await;
                                     debug!("Periodic snapshot saved successfully");
+
+                                    // A snapshot is committed between invocations, so no jumpable
+                                    // region is open: a clean boundary to checkpoint the status,
+                                    // aligning the checkpoint with the snapshot index.
+                                    self.parent
+                                        .checkpoint_status(
+                                            status_checkpointer::CheckpointReason::Snapshot,
+                                        )
+                                        .await;
                                 }
                                 Err(err) => {
                                     warn!("Failed to convert snapshot payload: {err}");

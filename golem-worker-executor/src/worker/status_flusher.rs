@@ -477,6 +477,21 @@ mod tests {
             });
             Ok(status_value)
         }
+        async fn read_status_checkpoint(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) -> Option<AgentStatusRecord> {
+            None
+        }
+        async fn write_status_checkpoint(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _previous_checkpoint: Option<&AgentStatusRecord>,
+            checkpoint: AgentStatusRecord,
+        ) -> Result<AgentStatusRecord, String> {
+            Ok(checkpoint)
+        }
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,

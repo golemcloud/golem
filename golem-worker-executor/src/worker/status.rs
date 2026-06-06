@@ -1,5 +1,4 @@
-use crate::services::{HasComponentService, HasConfig, HasOplogService};
-use async_recursion::async_recursion;
+use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
@@ -32,8 +31,15 @@ where
         .expect("Failed to calculate oplog index for existing worker")
 }
 
-/// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.
-#[async_recursion]
+/// Gets the last cached worker status record and the new oplog entries and calculates the new worker
+/// status, falling back to a full recompute from the start of the oplog when the cached baseline can
+/// no longer be folded forward (e.g. a jump deleted its index).
+///
+/// This is the no-checkpoint variant; callers that have a [`WorkerService`] should prefer
+/// [`calculate_last_known_status_with_checkpoint`] so a jump-induced full recompute can instead fold
+/// forward from the clean status checkpoint.
+///
+/// [`WorkerService`]: crate::services::worker::WorkerService
 pub async fn calculate_last_known_status<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
@@ -43,43 +49,162 @@ pub async fn calculate_last_known_status<T>(
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
-    let last_known = last_known.unwrap_or_default();
+    calculate_last_known_status_with_checkpoint_reader(
+        this,
+        owned_agent_id,
+        agent_mode,
+        last_known,
+        || async { None },
+    )
+    .await
+}
 
+/// Calculates the latest worker status, folding forward from the freshest usable baseline and, on a
+/// fold failure, from the *clean* status checkpoint read from `this`'s [`WorkerService`].
+///
+/// This is the variant production callers should use: the checkpoint is read from
+/// `this.worker_service()`, so callers no longer pass a checkpoint-read closure. The read still
+/// happens lazily (only when the live cache baseline cannot be folded), so the common path pays no
+/// extra read. See [`calculate_last_known_status_with_checkpoint_reader`] for the baseline order.
+///
+/// [`WorkerService`]: crate::services::worker::WorkerService
+pub async fn calculate_last_known_status_with_checkpoint<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    last_known: Option<AgentStatusRecord>,
+) -> Option<AgentStatusRecord>
+where
+    T: HasOplogService + HasConfig + HasComponentService + HasWorkerService + Sync,
+{
+    let worker_service = this.worker_service();
+    calculate_last_known_status_with_checkpoint_reader(
+        this,
+        owned_agent_id,
+        agent_mode,
+        last_known,
+        || async move {
+            worker_service
+                .read_status_checkpoint(owned_agent_id, agent_mode)
+                .await
+        },
+    )
+    .await
+}
+
+/// Calculates the latest worker status, trying baselines in order of decreasing freshness:
+///
+/// 1. the live cached status (`last_known`), folded forward — the common cold-load path;
+/// 2. on a fold failure (e.g. a jump deleted the cached index), the *clean* status checkpoint
+///    (read lazily via `read_checkpoint`), folded forward — this predates any later jump region and
+///    avoids re-reading the whole oplog;
+/// 3. a full recompute from the start of the oplog.
+///
+/// The checkpoint read happens only when the live cache baseline is absent or its fold is
+/// impossible, so the common path pays no extra read.
+///
+/// Most callers should use [`calculate_last_known_status_with_checkpoint`], which sources the
+/// checkpoint from `this.worker_service()`. This lower-level variant takes an explicit
+/// `read_checkpoint` closure for the few callers that cannot satisfy [`HasWorkerService`] for `this`
+/// — notably the `DefaultWorkerService` cold path, which reaches its own `read_status_checkpoint`
+/// through `&self` without an owning `Arc`.
+pub async fn calculate_last_known_status_with_checkpoint_reader<T, Fut>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    last_known: Option<AgentStatusRecord>,
+    read_checkpoint: impl FnOnce() -> Fut,
+) -> Option<AgentStatusRecord>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+    Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
+{
+    // 1. Try folding forward from the live cached status.
+    if let Some(last_known) = last_known
+        && let Some(status) =
+            try_fold_status_from(this, owned_agent_id, agent_mode, last_known).await
+    {
+        crate::metrics::workers::record_agent_status_recompute("cache");
+        return Some(status);
+    }
+
+    // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
+    //    index, or a revert moved the oplog behind it): try folding from the clean checkpoint.
+    if let Some(checkpoint) = read_checkpoint().await
+        && let Some(status) =
+            try_fold_status_from(this, owned_agent_id, agent_mode, checkpoint).await
+    {
+        crate::metrics::workers::record_agent_status_recompute("checkpoint");
+        return Some(status);
+    }
+
+    // 3. Fall back to a full recompute from the start of the oplog.
+    let status = try_fold_status_from(
+        this,
+        owned_agent_id,
+        agent_mode,
+        AgentStatusRecord::default(),
+    )
+    .await;
+    if status.is_some() {
+        crate::metrics::workers::record_agent_status_recompute("full");
+    }
+    status
+}
+
+/// Folds the oplog entries after `baseline.oplog_idx` onto `baseline`.
+///
+/// Returns `None` when the fold cannot produce a correct result from `baseline` alone:
+/// - the oplog does not exist (no `Create` entry);
+/// - `baseline` is ahead of the current last oplog index (e.g. a revert truncated the oplog below a
+///   stale checkpoint), so there is nothing to fold forward;
+/// - a newly added skipped/deleted region covers `baseline.oplog_idx` (see
+///   [`update_status_with_new_entries`]), making the baseline unusable.
+///
+/// On `None` the caller should retry from an earlier baseline (a checkpoint, or the start of the
+/// oplog). A `baseline` of [`AgentStatusRecord::default`] (oplog index 0) folds the whole oplog and
+/// never hits the region case, so it always succeeds when the oplog exists.
+pub async fn try_fold_status_from<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    baseline: AgentStatusRecord,
+) -> Option<AgentStatusRecord>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+{
     let last_oplog_index = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
         .await;
-    assert!(last_oplog_index >= last_known.oplog_idx);
 
     if last_oplog_index == OplogIndex::NONE {
-        // Worker status can only be recovered if we have at least the Create oplog entry, otherwise we cannot recover information like the component version
-        None
-    } else if last_known.oplog_idx == last_oplog_index {
-        Some(last_known)
-    } else {
-        let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
-            .oplog_service()
-            .read_range(
-                owned_agent_id,
-                agent_mode,
-                last_known.oplog_idx.next(),
-                last_oplog_index,
-            )
-            .await;
-
-        let final_status = update_status_with_new_entries(
-            agent_mode,
-            last_known,
-            new_entries,
-            &this.config().retry,
-        );
-
-        if let Some(final_status) = final_status {
-            Some(final_status)
-        } else {
-            calculate_last_known_status(this, owned_agent_id, agent_mode, None).await
-        }
+        // Worker status can only be recovered if we have at least the Create oplog entry, otherwise
+        // we cannot recover information like the component version.
+        return None;
     }
+
+    if last_oplog_index < baseline.oplog_idx {
+        // The baseline is ahead of the oplog (e.g. a revert truncated it below a stale checkpoint);
+        // we cannot fold forward, so the caller must retry from an earlier baseline.
+        return None;
+    }
+
+    if baseline.oplog_idx == last_oplog_index {
+        return Some(baseline);
+    }
+
+    let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
+        .oplog_service()
+        .read_range(
+            owned_agent_id,
+            agent_mode,
+            baseline.oplog_idx.next(),
+            last_oplog_index,
+        )
+        .await;
+
+    update_status_with_new_entries(agent_mode, baseline, new_entries, &this.config().retry)
 }
 
 // update a worker status with new entries. Returns None if the status cannot be calculated from the new entries alone and needs to be recalculated from the beginning.
@@ -1028,7 +1153,8 @@ mod test {
     use crate::services::{HasComponentService, HasConfig, HasOplogService};
     use crate::worker::status::{
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
-        calculate_oplog_processor_checkpoints,
+        calculate_last_known_status_with_checkpoint_reader, calculate_oplog_processor_checkpoints,
+        try_fold_status_from,
     };
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
@@ -1713,12 +1839,140 @@ mod test {
         let test_case = TestCase {
             owned_agent_id: owned_agent_id.clone(),
             entries: vec![],
+            read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
         let result =
             calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
                 .await;
         assert2::assert!(let None = result);
+    }
+
+    /// Builds an oplog where a clean idle boundary (idx 3) precedes an invocation that later jumps,
+    /// deleting the region [4, 7]. Returns the test case plus the clean-checkpoint baseline (idx 3),
+    /// a stale live baseline inside the deleted region (idx 6), and the expected final status.
+    fn jump_repair_fixture() -> (
+        TestCase,
+        AgentStatusRecord,
+        AgentStatusRecord,
+        AgentStatusRecord,
+    ) {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+
+        let test_case = TestCase::builder(0)
+            .agent_invocation_started("a", vec![], k1.clone()) // idx 2
+            .agent_invocation_finished(
+                AgentInvocationResult::AgentInitialization,
+                k1,
+                ComponentRevision::INITIAL,
+            ) // idx 3 (clean idle boundary)
+            .agent_invocation_started("b", vec![], k2.clone()) // idx 4
+            .grow_memory(10) // idx 5
+            .grow_memory(100) // idx 6
+            .jump(OplogIndex::from_u64(4)) // idx 7, deletes region [4, 7]
+            .agent_invocation_finished(
+                AgentInvocationResult::AgentInitialization,
+                k2,
+                ComponentRevision::INITIAL,
+            ) // idx 8
+            .build();
+
+        let final_expected = test_case.entries.last().unwrap().expected_status.clone();
+        let checkpoint = test_case.entries[2].expected_status.clone(); // idx 3, before the deleted region
+        let stale_live = test_case.entries[5].expected_status.clone(); // idx 6, inside the deleted region
+
+        (test_case, checkpoint, stale_live, final_expected)
+    }
+
+    #[test]
+    async fn checkpoint_repair_folds_from_checkpoint_after_jump() {
+        let (test_case, checkpoint, stale_live, final_expected) = jump_repair_fixture();
+
+        // The stale live baseline is inside the deleted region, so it cannot be folded forward.
+        let direct = try_fold_status_from(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            stale_live.clone(),
+        )
+        .await;
+        assert2::assert!(let None = direct);
+
+        test_case.read_starts.lock().unwrap().clear();
+
+        let repaired = calculate_last_known_status_with_checkpoint_reader(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(stale_live),
+            || async { Some(checkpoint) },
+        )
+        .await;
+
+        assert_eq!(repaired, Some(final_expected));
+
+        let read_starts = test_case.read_starts.lock().unwrap().clone();
+        assert!(
+            read_starts.contains(&4),
+            "expected a fold from the checkpoint baseline (read starting at idx 4), got {read_starts:?}"
+        );
+        assert!(
+            !read_starts.contains(&1),
+            "expected no full recompute from idx 1, got {read_starts:?}"
+        );
+    }
+
+    #[test]
+    async fn checkpoint_repair_falls_back_to_full_recompute_without_checkpoint() {
+        let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
+
+        test_case.read_starts.lock().unwrap().clear();
+
+        let result = calculate_last_known_status_with_checkpoint_reader(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(stale_live),
+            || async { None },
+        )
+        .await;
+
+        assert_eq!(result, Some(final_expected));
+
+        let read_starts = test_case.read_starts.lock().unwrap().clone();
+        assert!(
+            read_starts.contains(&1),
+            "expected a full recompute from idx 1, got {read_starts:?}"
+        );
+    }
+
+    #[test]
+    async fn checkpoint_repair_falls_back_to_full_recompute_when_checkpoint_unusable() {
+        let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
+
+        // A checkpoint that itself falls inside the deleted region (idx 5) cannot be folded forward
+        // either, so we must fall back to a full recompute.
+        let unusable_checkpoint = test_case.entries[4].expected_status.clone(); // idx 5
+
+        test_case.read_starts.lock().unwrap().clear();
+
+        let result = calculate_last_known_status_with_checkpoint_reader(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(stale_live),
+            || async { Some(unusable_checkpoint) },
+        )
+        .await;
+
+        assert_eq!(result, Some(final_expected));
+
+        let read_starts = test_case.read_starts.lock().unwrap().clone();
+        assert!(
+            read_starts.contains(&1),
+            "expected a full recompute from idx 1, got {read_starts:?}"
+        );
     }
 
     struct TestCaseBuilder {
@@ -2120,6 +2374,7 @@ mod test {
                     .into_iter()
                     .map(|entry| entry.rounded())
                     .collect(),
+                read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
     }
@@ -2143,6 +2398,9 @@ mod test {
     struct TestCase {
         owned_agent_id: OwnedAgentId,
         entries: Vec<TestEntry>,
+        /// Records the `start_idx` of every `read`/`read_range` so tests can assert which baseline
+        /// a recompute folded from. Shared across `self.clone()`s handed out by `oplog_service()`.
+        read_starts: Arc<std::sync::Mutex<Vec<u64>>>,
     }
 
     impl TestCase {
@@ -2217,6 +2475,7 @@ mod test {
         ) -> BTreeMap<OplogIndex, OplogEntry> {
             let mut result = BTreeMap::new();
             let idx_u64: u64 = idx.into();
+            self.read_starts.lock().unwrap().push(idx_u64);
             for i in idx_u64..(idx_u64 + n) {
                 if let Some(entry) = self.entries.get((i - 1) as usize) {
                     result.insert(OplogIndex::from_u64(i), entry.oplog_entry.clone());

@@ -38,6 +38,7 @@ impl NamespaceRoutedKeyValueStorage {
         match namespace {
             KeyValueStorageNamespace::Worker { .. } => &self.cache,
             KeyValueStorageNamespace::AgentStatus { .. } => &self.cache,
+            KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => &self.cache,
             _ => &self.persistent,
         }
     }
@@ -123,6 +124,18 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
     ) -> Result<Vec<Option<Bytes>>, String> {
         self.backend_for_namespace(&namespace)
             .get_many(svc_name, api_name, entity_name, namespace, keys)
+            .await
+    }
+
+    async fn get_all(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, String> {
+        self.backend_for_namespace(&namespace)
+            .get_all(svc_name, api_name, entity_name, namespace)
             .await
     }
 

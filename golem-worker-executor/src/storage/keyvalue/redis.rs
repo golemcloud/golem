@@ -39,6 +39,11 @@ impl RedisKeyValueStorage {
             KeyValueStorageNamespace::AgentStatus { agent_id } => {
                 Some(format!("agent-status:{}", agent_id.to_redis_key()))
             }
+            // Per-agent clean checkpoint hash; same per-agent isolation as `AgentStatus`.
+            KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => Some(format!(
+                "agent-status-checkpoint:{}",
+                agent_id.to_redis_key()
+            )),
             KeyValueStorageNamespace::RunningWorkers => None,
             KeyValueStorageNamespace::Promise { .. } => Some("promises".to_string()),
             KeyValueStorageNamespace::Schedule => None,
@@ -202,6 +207,57 @@ impl KeyValueStorage for RedisKeyValueStorage {
         }
 
         Ok(serialized)
+    }
+
+    async fn get_all(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, String> {
+        let pairs: Vec<(String, Bytes)> = match Self::use_hash(&namespace) {
+            // `HGETALL` returns every field/value of the hash in a single atomic command.
+            Some(ns) => {
+                let map: HashMap<String, Bytes> = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .hgetall(ns)
+                    .await
+                    .map_err(|redis_err| redis_err.to_string())?;
+                map.into_iter().collect()
+            }
+            // Non-hash namespaces map onto the whole keyspace; this path is not used for split
+            // agent status, but is provided for completeness (not atomic across the two commands).
+            None => {
+                let keys: Vec<String> = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .keys("*".to_string())
+                    .await
+                    .map_err(|redis_err| redis_err.to_string())?;
+                if keys.is_empty() {
+                    Vec::new()
+                } else {
+                    let values: Vec<Option<Bytes>> = self
+                        .redis
+                        .with(svc_name, api_name)
+                        .mget(keys.clone())
+                        .await
+                        .map_err(|redis_err| redis_err.to_string())?;
+                    keys.into_iter()
+                        .zip(values)
+                        .filter_map(|(k, v)| v.map(|bytes| (k, bytes)))
+                        .collect()
+                }
+            }
+        };
+
+        for (_, value) in &pairs {
+            record_redis_deserialized_size(svc_name, entity_name, value.len());
+        }
+
+        Ok(pairs)
     }
 
     async fn del(

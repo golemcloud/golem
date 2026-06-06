@@ -21,7 +21,7 @@ use crate::services::shard::ShardService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
-use crate::worker::status::calculate_last_known_status_for_existing_worker;
+use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -259,6 +259,36 @@ pub trait WorkerService: Send + Sync {
         status_value: AgentStatusRecord,
     ) -> Result<AgentStatusRecord, String>;
 
+    /// Reads the worker's *clean* status checkpoint, if any.
+    ///
+    /// The checkpoint is a full `AgentStatusRecord` written only at structurally clean boundaries
+    /// (snapshot save / throttled idle) and stored in its own per-agent hash
+    /// (see [`KeyValueStorageNamespace::AgentStatusCheckpoint`]). Because it is never advanced into
+    /// an open jump region, it serves as a fold baseline for status recompute that predates any
+    /// later jump, avoiding a full re-read of the oplog from index 1.
+    ///
+    /// Returns `None` on a cache miss or stale format. The transient `agent_mode` field (not part
+    /// of the persisted `core`) is restored from `agent_mode`.
+    async fn read_status_checkpoint(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Option<AgentStatusRecord>;
+
+    /// Writes the worker's *clean* status checkpoint blob.
+    ///
+    /// Same split layout and delta semantics as [`write_cached_status`](Self::write_cached_status),
+    /// but targeting the [`KeyValueStorageNamespace::AgentStatusCheckpoint`] hash. No-op for
+    /// ephemeral workers (returning the value unchanged). Returns the reassembled record so the
+    /// caller can use it as the baseline for the next delta. Returns `Err` instead of panicking so
+    /// callers can treat checkpoint writes as best-effort (the oplog remains the source of truth).
+    async fn write_status_checkpoint(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        previous_checkpoint: Option<&AgentStatusRecord>,
+        checkpoint: AgentStatusRecord,
+    ) -> Result<AgentStatusRecord, String>;
+
     /// Updates the `RunningWorkers` recovery index for the worker according to `status_value`.
     ///
     /// This is the authoritative index consulted on crash/reshard recovery to decide which workers
@@ -347,6 +377,16 @@ impl DefaultWorkerService {
         }
     }
 
+    /// Namespace holding the agent's *clean* status checkpoint. Same physical split layout as
+    /// [`Self::status_namespace`], but written only at structurally clean boundaries (snapshot
+    /// save / throttled idle) and never advanced by the background flusher, so it can serve as a
+    /// fold baseline that always predates any later jump region.
+    fn checkpoint_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
+        KeyValueStorageNamespace::AgentStatusCheckpoint {
+            agent_id: agent_id.clone(),
+        }
+    }
+
     /// Key holding only the worker's immutable `AgentMode`, stored separately from the status
     /// so `get_agent_mode` can resolve the oplog namespace without reading the whole
     /// `AgentStatusRecord`. Populated lazily on a `get_agent_mode` cache miss (durable workers
@@ -369,42 +409,47 @@ impl DefaultWorkerService {
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
     /// `Durable` deserialization default; callers must restore it from the authoritative source.
     async fn read_cached_status(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentStatusRecord> {
-        let agent_id = &owned_agent_id.agent_id;
+        self.read_split_status(
+            owned_agent_id,
+            Self::status_namespace(&owned_agent_id.agent_id),
+        )
+        .await
+    }
 
-        // List the agent's status fields, then read them all in one consistent batch. The agent
-        // is owned by a single executor (sharding), so there is no concurrent writer for it while
-        // we read.
-        let field_names = self
-            .key_value_storage
-            .with("worker", "read_cached_status")
-            .keys(Self::status_namespace(agent_id))
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to list agent status fields for {owned_agent_id}: {err}")
-            });
-
-        if !field_names.iter().any(|f| f == STATUS_CORE_FIELD) {
-            // No core field -> nothing cached (or a torn/partial write); treat as a cache miss.
-            return None;
-        }
-
-        let values = self
+    /// Reads a split status record (live cache or checkpoint) from `namespace`, reassembling it
+    /// from the `core` / `regions` / `updates` / `ir:{key}` fields. Returns `None` if `core` is
+    /// missing (cache miss / torn write) or any field cannot be deserialized in the current format.
+    ///
+    /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
+    /// `Durable` deserialization default; callers must restore it from the authoritative source.
+    async fn read_split_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        namespace: KeyValueStorageNamespace,
+    ) -> Option<AgentStatusRecord> {
+        // Single atomic read of every field of the per-agent status hash (`core`, `regions`,
+        // `updates`, `ir:{key}`). This is one round-trip (Redis `HGETALL`, a single
+        // `SELECT ... WHERE namespace`, or one locked scan in memory) that observes a consistent
+        // snapshot, so it cannot reassemble a torn, mixed-generation record. (A naive
+        // `keys` + `get_many` would be two round-trips, leaving a window where a concurrent writer
+        // — the background status flusher for the live cache, or the clean-checkpoint writer for
+        // the checkpoint namespace — could add a new `ir:{key}` field the earlier `keys` did not
+        // list, yielding a record at the newer `core.oplog_idx` missing an invocation result.)
+        let fields = self
             .key_value_storage
             .with_entity("worker", "read_cached_status", "agent_status")
-            .get_many_raw(Self::status_namespace(agent_id), field_names.clone())
+            .get_all_raw(namespace)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to get agent status for {owned_agent_id} from KV storage: {err}")
             });
 
-        // A field can vanish between `keys` and `get_many` only under a concurrent writer, which
-        // does not happen for an owned worker; drop any such `None` defensively.
-        let present_fields = field_names
-            .into_iter()
-            .zip(values)
-            .filter_map(|(name, value)| value.map(|bytes| (name, bytes)));
+        // No `core` field -> nothing cached (or a torn/partial write); treat as a cache miss.
+        if !fields.iter().any(|(name, _)| name == STATUS_CORE_FIELD) {
+            return None;
+        }
 
-        reassemble_cached_status(present_fields)
+        reassemble_cached_status(fields)
     }
 
     /// Writes the split status fields for an agent, sending only the parts that changed.
@@ -426,18 +471,17 @@ impl DefaultWorkerService {
     async fn write_status_fields(
         &self,
         owned_agent_id: &OwnedAgentId,
+        namespace: KeyValueStorageNamespace,
         previous_status: Option<&AgentStatusRecord>,
         core: &AgentStatusRecord,
         parts: &SplitStatusParts,
     ) -> Result<(), String> {
-        let agent_id = &owned_agent_id.agent_id;
-
         // On the cold path (no in-memory previous) we reconcile invocation-result fields against
         // what is currently stored, so that results removed by a revert are deleted.
         let existing_fields = if previous_status.is_none() {
             self.key_value_storage
                 .with("worker", "update_status")
-                .keys(Self::status_namespace(agent_id))
+                .keys(namespace.clone())
                 .await
                 .map_err(|err| {
                     format!("failed to list agent status fields for {owned_agent_id}: {err}")
@@ -458,7 +502,7 @@ impl DefaultWorkerService {
             to_delete.push(STATUS_CORE_FIELD.to_string());
             self.key_value_storage
                 .with("worker", "update_status")
-                .del_many(Self::status_namespace(agent_id), to_delete)
+                .del_many(namespace.clone(), to_delete)
                 .await
                 .map_err(|err| {
                     format!(
@@ -475,11 +519,72 @@ impl DefaultWorkerService {
 
         self.key_value_storage
             .with_entity("worker", "update_status", "agent_status")
-            .set_many_raw(Self::status_namespace(agent_id), &pairs)
+            .set_many_raw(namespace, &pairs)
             .await
             .map_err(|err| format!("failed to set agent status in KV storage: {err}"))?;
 
         Ok(())
+    }
+
+    /// Splits `status_value` and writes it to `namespace` (live cache or checkpoint), sending only
+    /// the changed parts (delta against `previous_status` when provided). Returns the reassembled
+    /// record so the caller can use it as the baseline for the next delta. No-op for ephemeral
+    /// workers (their status is never persisted), returning the value unchanged.
+    async fn write_split_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        namespace: KeyValueStorageNamespace,
+        previous_status: Option<&AgentStatusRecord>,
+        status_value: AgentStatusRecord,
+    ) -> Result<AgentStatusRecord, String> {
+        if status_value.agent_mode == AgentMode::Ephemeral {
+            return Ok(status_value);
+        }
+
+        // Split the record: take the unbounded fields out so `core` stays small and fixed-size.
+        // `split_status` moves the large fields out of `core` into `parts` (no clone).
+        let mut core = status_value;
+        let parts = split_status(&mut core);
+
+        self.write_status_fields(owned_agent_id, namespace, previous_status, &core, &parts)
+            .await?;
+
+        // Reassemble the record (moving the parts back into `core`, no clone) so the caller gets
+        // back a complete baseline for computing the next delta.
+        let mut reassembled = core;
+        reassembled.skipped_regions = parts.skipped_regions;
+        reassembled.deleted_regions = parts.deleted_regions;
+        reassembled.failed_updates = parts.failed_updates;
+        reassembled.successful_updates = parts.successful_updates;
+        reassembled.invocation_results = parts.invocation_results;
+        Ok(reassembled)
+    }
+
+    /// Deletes every field of a split status hash (`namespace`). Enumerating + deleting is fine on
+    /// the cold `remove` path: the agent is owned by this executor (no concurrent writer).
+    async fn remove_split_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        namespace: KeyValueStorageNamespace,
+    ) {
+        let status_fields = self
+            .key_value_storage
+            .with("worker", "remove")
+            .keys(namespace.clone())
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to list agent status fields for {owned_agent_id}: {err}")
+            });
+
+        if !status_fields.is_empty() {
+            self.key_value_storage
+                .with("worker", "remove")
+                .del_many(namespace, status_fields)
+                .await
+                .unwrap_or_else(|err| {
+                    panic!("failed to remove agent status in the KV storage: {err}")
+                });
+        }
     }
 
     /// Reads the dedicated `agent_mode` key, if present. Returns `None` on a cache miss or if the
@@ -628,15 +733,18 @@ impl WorkerService for DefaultWorkerService {
                         Some(status)
                     }
                     // No cached status (cache miss, missing for ephemeral workers, or stale
-                    // format) -> recompute from oplog.
+                    // format) -> recompute from oplog, preferring to fold forward from the clean
+                    // checkpoint (if any) over a full re-read.
                     None => {
-                        let last_known_status = calculate_last_known_status_for_existing_worker(
+                        let last_known_status = calculate_last_known_status_with_checkpoint_reader(
                             self,
                             owned_agent_id,
                             agent_mode,
                             None,
+                            || self.read_status_checkpoint(owned_agent_id, agent_mode),
                         )
-                        .await;
+                        .await
+                        .expect("Failed to recompute worker status for existing worker");
 
                         // Cold path: no in-memory previous, reconcile against stored fields.
                         self.update_cached_status(owned_agent_id, None, last_known_status.clone())
@@ -700,26 +808,11 @@ impl WorkerService for DefaultWorkerService {
 
         let agent_id = &owned_agent_id.agent_id;
 
-        // Delete every field of the agent's status hash. Enumerating + deleting is fine here:
-        // `remove` is a cold path and the agent is owned by this executor (no concurrent writer).
-        let status_fields = self
-            .key_value_storage
-            .with("worker", "remove")
-            .keys(Self::status_namespace(agent_id))
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to list agent status fields for {owned_agent_id}: {err}")
-            });
-
-        if !status_fields.is_empty() {
-            self.key_value_storage
-                .with("worker", "remove")
-                .del_many(Self::status_namespace(agent_id), status_fields)
-                .await
-                .unwrap_or_else(|err| {
-                    panic!("failed to remove agent status in the KV storage: {err}")
-                });
-        }
+        // Delete the live cached status hash and the clean checkpoint hash.
+        self.remove_split_status(owned_agent_id, Self::status_namespace(agent_id))
+            .await;
+        self.remove_split_status(owned_agent_id, Self::checkpoint_namespace(agent_id))
+            .await;
 
         // The `agent_mode` key has its own lifecycle and lives in the `Worker` namespace.
         self.key_value_storage
@@ -776,31 +869,55 @@ impl WorkerService for DefaultWorkerService {
     ) -> Result<AgentStatusRecord, String> {
         record_worker_call("write_status");
 
-        // Ephemeral workers are never cached (their oplog only exists while running). Return the
-        // value unchanged so callers can still use it as their in-memory baseline.
-        if status_value.agent_mode == AgentMode::Ephemeral {
-            return Ok(status_value);
-        }
-
         debug!("Writing cached agent status for {owned_agent_id} to {status_value:?}");
 
-        // Split the record: take the unbounded fields out so `core` stays small and fixed-size.
-        // `split_status` moves the large fields out of `core` into `parts` (no clone).
-        let mut core = status_value;
-        let parts = split_status(&mut core);
+        self.write_split_status(
+            owned_agent_id,
+            Self::status_namespace(&owned_agent_id.agent_id),
+            previous_status,
+            status_value,
+        )
+        .await
+    }
 
-        self.write_status_fields(owned_agent_id, previous_status, &core, &parts)
+    async fn read_status_checkpoint(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Option<AgentStatusRecord> {
+        record_worker_call("read_status_checkpoint");
+
+        let mut status = self
+            .read_split_status(
+                owned_agent_id,
+                Self::checkpoint_namespace(&owned_agent_id.agent_id),
+            )
             .await?;
+        // `agent_mode` is transient (not part of `core`); restore the authoritative value.
+        status.agent_mode = agent_mode;
+        Some(status)
+    }
 
-        // Reassemble the record (moving the parts back into `core`, no clone) so the caller gets
-        // back a complete baseline for computing the next delta.
-        let mut reassembled = core;
-        reassembled.skipped_regions = parts.skipped_regions;
-        reassembled.deleted_regions = parts.deleted_regions;
-        reassembled.failed_updates = parts.failed_updates;
-        reassembled.successful_updates = parts.successful_updates;
-        reassembled.invocation_results = parts.invocation_results;
-        Ok(reassembled)
+    async fn write_status_checkpoint(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        previous_checkpoint: Option<&AgentStatusRecord>,
+        checkpoint: AgentStatusRecord,
+    ) -> Result<AgentStatusRecord, String> {
+        record_worker_call("write_status_checkpoint");
+
+        debug!(
+            "Writing clean status checkpoint for {owned_agent_id} at oplog index {}",
+            checkpoint.oplog_idx
+        );
+
+        self.write_split_status(
+            owned_agent_id,
+            Self::checkpoint_namespace(&owned_agent_id.agent_id),
+            previous_checkpoint,
+            checkpoint,
+        )
+        .await
     }
 
     async fn set_assignment_tracking(

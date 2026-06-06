@@ -161,6 +161,28 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         Ok(result)
     }
 
+    async fn get_all(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, String> {
+        // Single read lock for the whole scan so the returned pairs are a consistent snapshot.
+        let _guard = self.kvs_lock.read().await;
+        let prefix = Self::composite_key(&namespace, "");
+        let mut result = Vec::new();
+        self.kvs
+            .iter_async(|key, value| {
+                if key.starts_with(&prefix) {
+                    result.push((key[prefix.len()..].to_string(), Bytes::from(value.clone())));
+                }
+                true
+            })
+            .await;
+        Ok(result)
+    }
+
     async fn del(
         &self,
         _svc_name: &'static str,

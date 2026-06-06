@@ -31,7 +31,7 @@ use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
 use crate::services::{HasOplogService, HasWorker};
-use crate::worker::status::calculate_last_known_status;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::{StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -646,10 +646,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 if let Some(last_known_status) = &result.last_known_status {
                     metadata.last_known_status = last_known_status.clone();
                 }
-                if let Some(status) = calculate_last_known_status(
+                let agent_mode = metadata.agent_mode;
+                if let Some(status) = calculate_last_known_status_with_checkpoint(
                     &self.state,
                     &owned_agent_id,
-                    metadata.agent_mode,
+                    agent_mode,
                     result.last_known_status,
                 )
                 .await
