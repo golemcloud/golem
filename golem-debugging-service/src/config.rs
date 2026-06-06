@@ -76,6 +76,7 @@ impl DebugConfig {
             oplog: self.oplog,
             suspend: self.suspend,
             active_workers: self.active_workers,
+            agent_status_flush: Default::default(),
             scheduler: self.scheduler,
             public_worker_api: self.public_worker_api,
             memory: self.memory,

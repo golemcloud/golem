@@ -17,6 +17,7 @@ pub mod invocation;
 mod invocation_loop;
 pub mod read_only_cache;
 pub mod status;
+pub mod status_flusher;
 
 use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
@@ -209,7 +210,8 @@ pub struct Worker<Ctx: WorkerCtx> {
     registered_concurrent_account: RegisteredConcurrentAccount,
     last_known_status: Arc<RwLock<AgentStatusRecord>>,
     metrics_status: WorkerStatusMetric,
-    last_known_status_detached: AtomicBool,
+    last_known_status_detached: Arc<AtomicBool>,
+    status_flusher: Arc<status_flusher::AgentStatusFlusher>,
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     update_state_lock: Mutex<()>,
@@ -446,6 +448,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let current_component = Arc::new(arc_swap::ArcSwap::from(initial_component));
 
+        let last_known_status_detached = Arc::new(AtomicBool::new(false));
+        let status_flusher = status_flusher::AgentStatusFlusher::new(
+            owned_agent_id.clone(),
+            initial_worker_metadata.agent_mode == AgentMode::Ephemeral,
+            deps.config().agent_status_flush.enabled,
+            deps.worker_service(),
+            deps.active_workers().status_flush_queue(),
+            current_status.clone(),
+            last_known_status_detached.clone(),
+        );
+
         let worker = Worker {
             owned_agent_id,
             parsed_agent_id: agent_id.clone(),
@@ -468,7 +481,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
             update_state_lock: Mutex::new(()),
-            last_known_status_detached: AtomicBool::new(false),
+            last_known_status_detached,
+            status_flusher,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
             desired_extra_filesystem_storage: AtomicU64::new(0),
@@ -619,6 +633,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Transition the worker into a deleting state.
     /// Rejects all new invocations and stops any running execution.
     pub async fn start_deleting(&self) -> Result<(), WorkerExecutorError> {
+        // Stop any future background flush from resurrecting the cached status blob after the
+        // upcoming `WorkerService::remove`/`remove_cached_status` deletes it. This awaits any
+        // in-flight flush so no write can land after the delete.
+        self.status_flusher.begin_delete().await;
         let error = WorkerExecutorError::invalid_request("Worker is being deleted");
         self.stop_internal(false, Some(error), FinalWorkerState::Deleting)
             .await;
@@ -2256,6 +2274,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Make sure the oplog is committed
                 self.oplog.commit(CommitLevel::Always).await;
 
+                // Persist any pending cached-status changes synchronously before the worker leaves
+                // memory, so a subsequent cold load does not have to re-fold oplog entries that were
+                // only reflected in the (deferred) in-memory status. Best-effort: a failure is
+                // logged/metered inside `flush` and re-queued; the blob is reconstructable from the
+                // oplog, so it must not block the stop.
+                if let Err(err) = self
+                    .status_flusher
+                    .flush(status_flusher::FlushReason::Forced)
+                    .await
+                {
+                    debug!("Forced status flush on stop failed (will retry in background): {err}");
+                }
+
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
                     crate::metrics::workers::dec_worker_memory_resident();
@@ -2718,10 +2749,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.commit_and_update_state_inner(&update_state_lock_guard, CommitLevel::Always)
             .await;
-        if self
-            .last_known_status_detached
-            .swap(false, Ordering::Relaxed)
-        {
+        if self.last_known_status_detached.load(Ordering::Relaxed) {
             debug!("Worker status was detached from oplog, reloading it from scratch");
 
             // reload status from scratch
@@ -2733,7 +2761,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await;
 
+            // Install the recomputed status while still detached, so a concurrent background sweep
+            // keeps skipping (the in-memory status is not authoritative until it is installed).
             self.update_last_known_status(worker_status.clone()).await;
+
+            // Now the in-memory status is authoritative again; clear the flag and force a flush.
+            self.last_known_status_detached
+                .store(false, Ordering::Relaxed);
+
+            // The status was just recomputed from scratch; persist it synchronously (a full
+            // reconcile write, since the baseline was invalidated on detach) so the cache is
+            // immediately consistent rather than waiting for the next background sweep. Best-effort:
+            // a failure is logged/metered and re-queued inside `flush`.
+            if let Err(err) = self
+                .status_flusher
+                .flush(status_flusher::FlushReason::Forced)
+                .await
+            {
+                debug!("Forced status flush on reattach failed (will retry in background): {err}");
+            }
 
             // ensure we hold mutex for the full duration
             drop(update_state_lock_guard);
@@ -2775,6 +2821,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 tracing::debug!("Detaching worker_status from oplog");
                 self.last_known_status_detached
                     .store(true, Ordering::Release);
+                // The in-memory status is no longer authoritative, and after reattach it will be
+                // recomputed from scratch, so the persisted baseline can no longer be trusted: the
+                // next flush must be a full reconcile write.
+                self.status_flusher.invalidate_baseline().await;
                 true
             }
         } else {
@@ -2853,20 +2903,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    /// Synchronously persists any pending cached-status changes for this worker. Used at lifecycle
+    /// boundaries (e.g. suspend) so the cached blob is up to date when the worker goes idle, rather
+    /// than waiting for the next background sweep.
+    pub(crate) async fn force_flush_status(&self) {
+        // Best-effort: a failure is logged/metered and re-queued inside `flush`; the blob is
+        // reconstructable from the oplog so it must not block the caller (e.g. suspend).
+        if let Err(err) = self
+            .status_flusher
+            .flush(status_flusher::FlushReason::Forced)
+            .await
+        {
+            debug!("Forced status flush failed (will retry in background): {err}");
+        }
+    }
+
     async fn update_last_known_status(&self, new_status: AgentStatusRecord) {
         let previous_metrics_status = self.metrics_status.status();
-        // The in-memory `last_known_status` is kept in sync with what is cached in the KV store, so
-        // we can use the value we are about to replace as the "previously cached" status to compute
-        // a minimal delta write (only the changed parts are sent).
+        // The in-memory `last_known_status` is the authoritative live status; the flusher reads it
+        // when it persists the cached blob. We replace it here and hand the (previous, new) pair to
+        // the flusher, which updates the `RunningWorkers` recovery index synchronously and either
+        // marks the worker dirty for the background sweeper or writes the blob inline (when
+        // background flushing is disabled).
         let previous_status = {
             let mut guard = self.last_known_status.write().await;
             std::mem::replace(&mut *guard, new_status.clone())
         };
         self.metrics_status
             .update(previous_metrics_status, new_status.status);
-        // TODO: We should do this in the background on a timer instead of on every commit.
-        self.worker_service()
-            .update_cached_status(&self.owned_agent_id, Some(&previous_status), new_status)
+        self.status_flusher
+            .on_status_changed(&previous_status, &new_status)
             .await;
     }
 }

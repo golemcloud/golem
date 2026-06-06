@@ -232,28 +232,62 @@ pub trait WorkerService: Send + Sync {
     /// exists in either namespace.
     async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode>;
 
-    /// Updates the cached status for the worker.
+    /// Writes the cached status *blob* for the worker (no `RunningWorkers` index maintenance).
     ///
     /// The cached `AgentStatusRecord` is stored split across several fields of a per-agent hash
     /// (see [`KeyValueStorageNamespace::AgentStatus`]): a small `core`, the `regions`, the
     /// `updates`, and one field per idempotency key. Only the fields that actually changed are
     /// written, so the unbounded parts (most notably the invocation results) are not re-sent on
-    /// every commit.
+    /// every flush.
     ///
-    /// `previous_status` is the status currently held in the cache (i.e. the last value passed to
-    /// this method, kept in sync with storage). When provided, the delta of changed fields is
-    /// computed against it. Pass `None` on cold paths (worker create, recompute after a cache miss,
-    /// detach reload) where the previously stored fields are reconciled by reading them back.
+    /// `previous_status` is the status currently held in the cache (i.e. the last value
+    /// successfully written). When provided, the delta of changed fields is computed against it.
+    /// Pass `None` on cold paths (worker create, recompute after a cache miss, detach reload) where
+    /// the previously stored fields are reconciled by reading them back.
     ///
-    /// The `AgentMode` is read from `status_value.agent_mode`. Cached status is only written for
-    /// durable workers; for ephemeral workers this is a no-op (their oplog only exists while they
-    /// are running, and they keep the status in memory on the owning executor).
+    /// On success the (reassembled) status is returned so the caller can use it as the baseline
+    /// for the next delta. The `AgentMode` is read from `status_value.agent_mode`. Cached status is
+    /// only written for durable workers; for ephemeral workers this is a no-op (returning the
+    /// passed status unchanged).
+    ///
+    /// Returns `Err` instead of panicking so the background flusher can re-queue the worker on a
+    /// transient storage failure.
+    async fn write_cached_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        previous_status: Option<&AgentStatusRecord>,
+        status_value: AgentStatusRecord,
+    ) -> Result<AgentStatusRecord, String>;
+
+    /// Updates the `RunningWorkers` recovery index for the worker according to `status_value`.
+    ///
+    /// This is the authoritative index consulted on crash/reshard recovery to decide which workers
+    /// to resume, so it is always maintained synchronously (never deferred to the background
+    /// flusher). The worker is added when [`should_track_for_assignment_recovery`] holds and
+    /// removed otherwise. No-op for ephemeral workers.
+    async fn set_assignment_tracking(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        status_value: &AgentStatusRecord,
+    );
+
+    /// Convenience cold-path helper that writes the blob *and* updates the recovery index in one
+    /// call. Panics on a blob write failure (cold paths cannot meaningfully recover). Hot paths use
+    /// the background flusher (blob) together with [`set_assignment_tracking`] (index) instead.
     async fn update_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
-    );
+    ) {
+        self.set_assignment_tracking(owned_agent_id, &status_value)
+            .await;
+        self.write_cached_status(owned_agent_id, previous_status, status_value)
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to write cached status for {owned_agent_id}: {err}")
+            });
+    }
 }
 
 #[derive(Clone)]
@@ -395,7 +429,7 @@ impl DefaultWorkerService {
         previous_status: Option<&AgentStatusRecord>,
         core: &AgentStatusRecord,
         parts: &SplitStatusParts,
-    ) {
+    ) -> Result<(), String> {
         let agent_id = &owned_agent_id.agent_id;
 
         // On the cold path (no in-memory previous) we reconcile invocation-result fields against
@@ -405,18 +439,17 @@ impl DefaultWorkerService {
                 .with("worker", "update_status")
                 .keys(Self::status_namespace(agent_id))
                 .await
-                .unwrap_or_else(|err| {
-                    panic!("failed to list agent status fields for {owned_agent_id}: {err}")
-                })
+                .map_err(|err| {
+                    format!("failed to list agent status fields for {owned_agent_id}: {err}")
+                })?
         } else {
             Vec::new()
         };
 
         let (sets, dels) =
-            compute_status_field_writes(previous_status, &existing_fields, core, parts)
-                .unwrap_or_else(|err| {
-                    panic!("failed to serialize agent status for {owned_agent_id}: {err}")
-                });
+            compute_status_field_writes(previous_status, &existing_fields, core, parts).map_err(
+                |err| format!("failed to serialize agent status for {owned_agent_id}: {err}"),
+            )?;
 
         // Delete stale fields first, dropping `core` along with them so the cache reads as a miss
         // until the final `set_many` re-establishes it (see atomicity note above).
@@ -427,9 +460,11 @@ impl DefaultWorkerService {
                 .with("worker", "update_status")
                 .del_many(Self::status_namespace(agent_id), to_delete)
                 .await
-                .unwrap_or_else(|err| {
-                    panic!("failed to remove stale agent status fields for {owned_agent_id}: {err}")
-                });
+                .map_err(|err| {
+                    format!(
+                        "failed to remove stale agent status fields for {owned_agent_id}: {err}"
+                    )
+                })?;
         }
 
         // Single atomic write: core + changed parts + new/updated invocation results.
@@ -442,7 +477,9 @@ impl DefaultWorkerService {
             .with_entity("worker", "update_status", "agent_status")
             .set_many_raw(Self::status_namespace(agent_id), &pairs)
             .await
-            .unwrap_or_else(|err| panic!("failed to set agent status in KV storage: {err}"));
+            .map_err(|err| format!("failed to set agent status in KV storage: {err}"))?;
+
+        Ok(())
     }
 
     /// Reads the dedicated `agent_mode` key, if present. Returns `None` on a cache miss or if the
@@ -485,7 +522,7 @@ impl DefaultWorkerService {
             .unwrap_or_else(|err| panic!("failed to set agent mode in KV storage: {err}"));
     }
 
-    fn should_track_for_assignment_recovery(status: &AgentStatusRecord) -> bool {
+    pub(crate) fn should_track_for_assignment_recovery(status: &AgentStatusRecord) -> bool {
         matches!(
             status.status,
             AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Interrupted
@@ -731,64 +768,87 @@ impl WorkerService for DefaultWorkerService {
         }
     }
 
-    async fn update_cached_status(
+    async fn write_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
-    ) {
-        record_worker_call("update_status");
+    ) -> Result<AgentStatusRecord, String> {
+        record_worker_call("write_status");
 
-        // Ephemeral workers are never cached (their oplog only exists while running).
+        // Ephemeral workers are never cached (their oplog only exists while running). Return the
+        // value unchanged so callers can still use it as their in-memory baseline.
         if status_value.agent_mode == AgentMode::Ephemeral {
-            return;
+            return Ok(status_value);
         }
 
-        debug!("Updating cached agent status for {owned_agent_id} to {status_value:?}");
+        debug!("Writing cached agent status for {owned_agent_id} to {status_value:?}");
 
         // Split the record: take the unbounded fields out so `core` stays small and fixed-size.
+        // `split_status` moves the large fields out of `core` into `parts` (no clone).
         let mut core = status_value;
         let parts = split_status(&mut core);
 
         self.write_status_fields(owned_agent_id, previous_status, &core, &parts)
-            .await;
+            .await?;
 
-        {
-            let shard_assignment = self
-                .shard_service
-                .current_assignment()
-                .expect("sharding assignment is not ready");
+        // Reassemble the record (moving the parts back into `core`, no clone) so the caller gets
+        // back a complete baseline for computing the next delta.
+        let mut reassembled = core;
+        reassembled.skipped_regions = parts.skipped_regions;
+        reassembled.deleted_regions = parts.deleted_regions;
+        reassembled.failed_updates = parts.failed_updates;
+        reassembled.successful_updates = parts.successful_updates;
+        reassembled.invocation_results = parts.invocation_results;
+        Ok(reassembled)
+    }
 
-            let shard_id =
-                ShardId::from_agent_id(&owned_agent_id.agent_id, shard_assignment.number_of_shards);
+    async fn set_assignment_tracking(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        status_value: &AgentStatusRecord,
+    ) {
+        record_worker_call("set_assignment_tracking");
 
-            if Self::should_track_for_assignment_recovery(&core) {
-                debug!("Adding worker to the set of running workers in shard {shard_id}");
+        // Ephemeral workers are never tracked for recovery (mirrors `write_cached_status`).
+        if status_value.agent_mode == AgentMode::Ephemeral {
+            return;
+        }
 
-                self
-                    .key_value_storage
-                    .with_entity("worker", "add", "agent_id")
-                    .add_to_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "failed to add worker to the set of running workers per shard ids on KV storage: {err}"
-                        )
-                    });
-            } else {
-                debug!("Removing worker from the set of running workers in shard {shard_id}");
+        let shard_assignment = self
+            .shard_service
+            .current_assignment()
+            .expect("sharding assignment is not ready");
 
-                self
-                    .key_value_storage
-                    .with_entity("worker", "remove", "agent_id")
-                    .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "failed to remove worker from the set of running worker ids per shard on KV storage: {err}"
-                        )
-                    });
-            }
+        let shard_id =
+            ShardId::from_agent_id(&owned_agent_id.agent_id, shard_assignment.number_of_shards);
+
+        if Self::should_track_for_assignment_recovery(status_value) {
+            debug!("Adding worker to the set of running workers in shard {shard_id}");
+
+            self
+                .key_value_storage
+                .with_entity("worker", "add", "agent_id")
+                .add_to_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to add worker to the set of running workers per shard ids on KV storage: {err}"
+                    )
+                });
+        } else {
+            debug!("Removing worker from the set of running workers in shard {shard_id}");
+
+            self
+                .key_value_storage
+                .with_entity("worker", "remove", "agent_id")
+                .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to remove worker from the set of running worker ids per shard on KV storage: {err}"
+                    )
+                });
         }
     }
 }

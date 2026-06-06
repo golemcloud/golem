@@ -662,11 +662,19 @@ mod tests {
             None
         }
 
-        async fn update_cached_status(
+        async fn write_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
             _previous_status: Option<&AgentStatusRecord>,
-            _status_value: AgentStatusRecord,
+            status_value: AgentStatusRecord,
+        ) -> Result<AgentStatusRecord, String> {
+            Ok(status_value)
+        }
+
+        async fn set_assignment_tracking(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _status_value: &AgentStatusRecord,
         ) {
         }
     }

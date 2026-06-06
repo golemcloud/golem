@@ -367,14 +367,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         // Making sure all pending commits are flushed
         // Make sure all pending commits are done
-        store
-            .lock()
-            .await
-            .data()
-            .get_public_state()
-            .worker()
+        let worker = store.lock().await.data().get_public_state().worker();
+        worker
             .commit_oplog_and_update_state(CommitLevel::Always)
             .await;
+
+        // The worker is going idle; persist its cached status synchronously now instead of leaving
+        // it for the next background sweep, so reads of an idle worker see an up-to-date blob.
+        worker.force_flush_status().await;
     }
 }
 
