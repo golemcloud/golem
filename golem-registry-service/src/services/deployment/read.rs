@@ -369,6 +369,8 @@ impl DeploymentService {
             .get_in_application(application.id, environment_name, auth)
             .await?;
 
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewAgentTypes)?;
+
         self.get_deployed_agent_type(environment.id, agent_type_name)
             .await
     }
@@ -454,6 +456,8 @@ impl DeploymentService {
             .environment_service
             .get_in_application(application.id, environment_name, auth)
             .await?;
+
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewAgentTypes)?;
 
         // Validate that the deployment revision exists in this environment
         self.deployment_repo

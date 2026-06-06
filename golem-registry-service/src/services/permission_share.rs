@@ -23,8 +23,9 @@ use golem_common::model::account::{Account, AccountEmail, AccountId};
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    AccountPermissionShareResourcePattern, AccountPermissionShareVerb, Card, CardId, CardManagedBy,
-    CardParseError, ClassPermissionTarget, PermissionPattern, PermissionTarget,
+    AccountPermissionShareResourcePattern, AccountPermissionShareVerb, Card, CardAlgebraError,
+    CardId, CardManagedBy, CardParseError, ClassPermissionTarget, EffectiveSurface,
+    PermissionPattern, PermissionTarget,
 };
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareId,
@@ -52,6 +53,8 @@ pub enum PermissionShareError {
     InvalidGrant { grant: String, message: String },
     #[error("Permission grant recipient must be '*' or target account '{target_account}'")]
     InvalidRecipient { target_account: String },
+    #[error("Permission grants are not delegable by the caller: {0}")]
+    GrantNotDelegable(String),
     #[error("Concurrent update attempt")]
     ConcurrentModification,
     #[error(transparent)]
@@ -69,6 +72,7 @@ impl SafeDisplay for PermissionShareError {
             Self::TargetAccountNotFound(_) => self.to_string(),
             Self::InvalidGrant { .. } => self.to_string(),
             Self::InvalidRecipient { .. } => self.to_string(),
+            Self::GrantNotDelegable(_) => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -113,7 +117,8 @@ impl PermissionShareService {
             .await?;
 
         let id = PermissionShareId::new();
-        let card = self.permission_share_card(id, &data.data, target_account.email.as_str())?;
+        let card =
+            self.permission_share_card(id, &data.data, target_account.email.as_str(), auth)?;
         let revision = PermissionShareRevisionRecord::creation(
             id,
             data.name,
@@ -172,6 +177,7 @@ impl PermissionShareService {
             permission_share_id,
             &update.data,
             target_account.email.as_str(),
+            auth,
         )?;
 
         share.revision = share.revision.next()?;
@@ -264,7 +270,14 @@ impl PermissionShareService {
             ))?
             .try_into()?;
 
-        self.authorize_view(&share, auth).await?;
+        self.authorize_view(&share, auth)
+            .await
+            .map_err(|err| match err {
+                PermissionShareError::Unauthorized(_) => {
+                    PermissionShareError::PermissionShareNotFound(permission_share_id)
+                }
+                other => other,
+            })?;
 
         Ok(share)
     }
@@ -384,12 +397,13 @@ impl PermissionShareService {
         permission_share_id: PermissionShareId,
         data: &PermissionShareData,
         target_account: &str,
+        auth: &AuthCtx,
     ) -> Result<CardRecord, PermissionShareError> {
         let parsed = self.parse_and_validate_data_for_target(data, target_account)?;
-        let card_id = Uuid::now_v7();
+        validate_derivation(auth, &parsed)?;
 
         Ok(CardRecord::creation(
-            CardId(card_id),
+            CardId::new(),
             Vec::new(),
             parsed.lower_positive,
             parsed.lower_negative,
@@ -492,6 +506,37 @@ fn validate_recipient(
             target_account: target_account.to_string(),
         }),
     }
+}
+
+fn validate_derivation(
+    auth: &AuthCtx,
+    parsed: &ParsedPermissionShareData,
+) -> Result<(), PermissionShareError> {
+    match auth {
+        AuthCtx::System => Ok(()),
+        AuthCtx::User(user) => {
+            validate_effective_surface_derivation(&user.effective_surface, parsed)
+        }
+        AuthCtx::AdminImpersonation(ctx) => {
+            validate_effective_surface_derivation(&ctx.effective_surface, parsed)
+        }
+        AuthCtx::Agent(_) => Err(PermissionShareError::GrantNotDelegable(
+            "agent contexts cannot delegate permission grants".to_string(),
+        )),
+    }
+}
+
+fn validate_effective_surface_derivation(
+    effective_surface: &EffectiveSurface,
+    parsed: &ParsedPermissionShareData,
+) -> Result<(), PermissionShareError> {
+    effective_surface
+        .validates_derivation(&parsed.lower_positive, &parsed.upper_positive)
+        .map_err(derivation_error)
+}
+
+fn derivation_error(error: CardAlgebraError) -> PermissionShareError {
+    PermissionShareError::GrantNotDelegable(format!("{error:?}"))
 }
 
 fn invalid_grant(grant: &str, err: CardParseError) -> PermissionShareError {

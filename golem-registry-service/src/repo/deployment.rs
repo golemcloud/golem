@@ -1112,12 +1112,16 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     FROM deployment_registered_agent_types r
                     JOIN components c
                         ON c.component_id = r.component_id
+                        AND c.deleted_at IS NULL
                     JOIN environments e
                         ON e.environment_id = r.environment_id
+                        AND e.deleted_at IS NULL
                     JOIN applications a
                         ON a.application_id = e.application_id
+                        AND a.deleted_at IS NULL
                     JOIN accounts ac
                         ON ac.account_id = a.account_id
+                        AND ac.deleted_at IS NULL
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                         AND r.agent_type_name = $3
                 "#})
@@ -1151,12 +1155,16 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     FROM deployment_registered_agent_types r
                     JOIN components c
                         ON c.component_id = r.component_id
+                        AND c.deleted_at IS NULL
                     JOIN environments e
                         ON e.environment_id = r.environment_id
+                        AND e.deleted_at IS NULL
                     JOIN applications a
                         ON a.application_id = e.application_id
+                        AND a.deleted_at IS NULL
                     JOIN accounts ac
                         ON ac.account_id = a.account_id
+                        AND ac.deleted_at IS NULL
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                     ORDER BY r.agent_type_name
                 "#})
@@ -1193,12 +1201,16 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
                     JOIN components c
                         ON c.component_id = r.component_id
+                        AND c.deleted_at IS NULL
                     JOIN environments e
                         ON e.environment_id = r.environment_id
+                        AND e.deleted_at IS NULL
                     JOIN applications a
                         ON a.application_id = e.application_id
+                        AND a.deleted_at IS NULL
                     JOIN accounts ac
                         ON ac.account_id = a.account_id
+                        AND ac.deleted_at IS NULL
                     WHERE cd.environment_id = $1 AND r.agent_type_name = $2
                 "#})
                 .bind(environment_id)
@@ -1233,12 +1245,16 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
                     JOIN components c
                         ON c.component_id = r.component_id
+                        AND c.deleted_at IS NULL
                     JOIN environments e
                         ON e.environment_id = r.environment_id
+                        AND e.deleted_at IS NULL
                     JOIN applications a
                         ON a.application_id = e.application_id
+                        AND a.deleted_at IS NULL
                     JOIN accounts ac
                         ON ac.account_id = a.account_id
+                        AND ac.deleted_at IS NULL
                     WHERE cd.environment_id = $1
                     ORDER BY r.agent_type_name
                 "#})
@@ -1412,10 +1428,13 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON c.component_id = r.component_id
                     JOIN environments e
                         ON e.environment_id = r.environment_id
+                        AND e.deleted_at IS NULL
                     JOIN applications a
                         ON a.application_id = e.application_id
+                        AND a.deleted_at IS NULL
                     JOIN accounts ac
                         ON ac.account_id = a.account_id
+                        AND ac.deleted_at IS NULL
                     WHERE r.environment_id = $1
                         AND r.deployment_revision_id = (
                             SELECT deployment_revision_id FROM deployment_registered_agent_types
@@ -1458,12 +1477,16 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     FROM deployment_registered_agent_types r
                     JOIN components c
                         ON c.component_id = r.component_id
+                        AND c.deleted_at IS NULL
                     JOIN environments e
                         ON e.environment_id = r.environment_id
+                        AND e.deleted_at IS NULL
                     JOIN applications a
                         ON a.application_id = e.application_id
+                        AND a.deleted_at IS NULL
                     JOIN accounts ac
                         ON ac.account_id = a.account_id
+                        AND ac.deleted_at IS NULL
                     WHERE r.environment_id = $1
                         AND r.deployment_revision_id = (
                             SELECT deployment_revision_id FROM deployment_registered_agent_types

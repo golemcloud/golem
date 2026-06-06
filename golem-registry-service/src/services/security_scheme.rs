@@ -358,7 +358,8 @@ impl SecuritySchemeService {
             environment,
             Some(name),
             EnvironmentSecuritySchemeVerb::View,
-        )?;
+        )
+        .map_err(|_| SecuritySchemeError::SecuritySchemeForNameNotFound(name.clone()))?;
 
         let result = self
             .security_scheme_repo

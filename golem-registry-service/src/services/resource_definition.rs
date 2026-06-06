@@ -356,7 +356,10 @@ impl ResourceDefinitionService {
             &environment,
             Some(resource_name),
             EnvironmentResourceDefinitionVerb::View,
-        )?;
+        )
+        .map_err(|_| {
+            ResourceDefinitionError::ResourceDefinitionByNameNotFound(resource_name.clone())
+        })?;
 
         let resource_definition: ResourceDefinition = self
             .resource_definition_repo

@@ -146,8 +146,7 @@ impl EnvironmentService {
             &application.name,
             EnvironmentVerb::Create,
             EnvironmentResourcePattern::Environment(CardEnvironmentName(data.name.0.clone())),
-        )
-        .map_err(|_| EnvironmentError::ParentApplicationNotFound(application_id))?;
+        )?;
 
         self.account_usage_service
             .ensure_environment_within_limits(application.account_id)
@@ -194,8 +193,7 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         let mut environment = self.get(environment_id, false, auth).await?;
 
-        authorize_environment_model(auth, &environment, EnvironmentVerb::Update)
-            .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id))?;
+        authorize_environment_model(auth, &environment, EnvironmentVerb::Update)?;
 
         if update.current_revision != environment.revision {
             return Err(EnvironmentError::ConcurrentModification);
@@ -244,8 +242,7 @@ impl EnvironmentService {
     ) -> Result<(), EnvironmentError> {
         let mut environment = self.get(environment_id, false, auth).await?;
 
-        authorize_environment_model(auth, &environment, EnvironmentVerb::Delete)
-            .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id))?;
+        authorize_environment_model(auth, &environment, EnvironmentVerb::Delete)?;
 
         if current_revision != environment.revision {
             return Err(EnvironmentError::ConcurrentModification);
