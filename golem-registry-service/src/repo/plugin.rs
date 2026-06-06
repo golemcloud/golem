@@ -1,5 +1,5 @@
 use crate::repo::model::BindFields;
-use crate::repo::model::plugin::PluginRecord;
+use crate::repo::model::plugin::{PluginAuthRecord, PluginRecord};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
@@ -21,7 +21,7 @@ pub trait PluginRepo: Send + Sync {
         &self,
         plugin_id: Uuid,
         include_deleted: bool,
-    ) -> RepoResult<Option<PluginRecord>>;
+    ) -> RepoResult<Option<PluginAuthRecord>>;
 
     async fn get_by_name_and_version(
         &self,
@@ -75,7 +75,7 @@ impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
         &self,
         plugin_id: Uuid,
         include_deleted: bool,
-    ) -> RepoResult<Option<PluginRecord>> {
+    ) -> RepoResult<Option<PluginAuthRecord>> {
         self.repo
             .get_by_id(plugin_id, include_deleted)
             .instrument(Self::span_id(plugin_id))
@@ -203,7 +203,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
         &self,
         plugin_id: Uuid,
         include_deleted: bool,
-    ) -> RepoResult<Option<PluginRecord>> {
+    ) -> RepoResult<Option<PluginAuthRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -214,7 +214,8 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         p.provided_wit_package,
                         p.json_schema, p.validate_url, p.transform_url,
                         p.component_id, p.component_revision_id,
-                        p.wasm_content_hash
+                        p.wasm_content_hash,
+                        a.email AS account_email
                     FROM accounts a
                     JOIN plugins p
                         ON p.account_id = a.account_id
@@ -248,14 +249,11 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         p.json_schema, p.validate_url, p.transform_url,
                         p.component_id, p.component_revision_id,
                         p.wasm_content_hash
-                    FROM accounts a
-                    JOIN plugins p
-                        ON p.account_id = a.account_id
+                    FROM plugins p
                     WHERE
-                        a.account_id = $1
+                        p.account_id = $1
                         AND p.name = $2
                         AND p.version = $3
-                        AND a.deleted_at IS NULL
                         AND p.deleted_at IS NULL
                 "#})
                 .bind(account_id)
@@ -277,12 +275,9 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         p.json_schema, p.validate_url, p.transform_url,
                         p.component_id, p.component_revision_id,
                         p.wasm_content_hash
-                    FROM accounts a
-                    JOIN plugins p
-                        ON p.account_id = a.account_id
+                    FROM plugins p
                     WHERE
-                        a.account_id = $1
-                        AND a.deleted_at IS NULL
+                        p.account_id = $1
                         AND p.deleted_at IS NULL
                 "#})
                 .bind(account_id),

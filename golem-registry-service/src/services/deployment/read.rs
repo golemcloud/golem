@@ -318,6 +318,8 @@ impl DeploymentService {
                 environment_id.0,
                 deployment_revision.into(),
                 &agent_type_name.0,
+                environment.owner_account_id.0,
+                environment.owner_account_email.as_str(),
             )
             .await?
             .ok_or(DeploymentError::AgentTypeNotFound(
@@ -342,7 +344,12 @@ impl DeploymentService {
 
         let agent_types = self
             .deployment_repo
-            .list_deployment_agent_types(environment_id.0, deployment_revision.into())
+            .list_deployment_agent_types(
+                environment_id.0,
+                deployment_revision.into(),
+                environment.owner_account_id.0,
+                environment.owner_account_email.as_str(),
+            )
             .await?
             .into_iter()
             .map(|r| r.try_into())
@@ -471,6 +478,8 @@ impl DeploymentService {
                 environment.id.0,
                 deployment_revision.into(),
                 &agent_type_name.0,
+                environment.owner_account_id.0,
+                environment.owner_account_email.as_str(),
             )
             .await?
             .ok_or(DeploymentError::AgentTypeNotFound(

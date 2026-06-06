@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::model::environment_plugin_grant::{
-    EnvironmentPluginGrantRecord, EnvironmentPluginGrantRepoError,
-    EnvironmentPluginGrantWithDetailsRecord,
+    EnvironmentPluginGrantAuthWithDetailsRecord, EnvironmentPluginGrantRecord,
+    EnvironmentPluginGrantRepoError, EnvironmentPluginGrantWithDetailsRecord,
 };
 use crate::repo::model::BindFields;
 use async_trait::async_trait;
@@ -47,7 +47,7 @@ pub trait EnvironmentPluginGrantRepo: Send + Sync {
         &self,
         environment_plugin_grant_id: Uuid,
         include_deleted: bool,
-    ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
+    ) -> Result<Option<EnvironmentPluginGrantAuthWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
 
     async fn list_by_environment(
         &self,
@@ -109,7 +109,7 @@ impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
         &self,
         environment_plugin_grant_id: Uuid,
         include_deleted: bool,
-    ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>
+    ) -> Result<Option<EnvironmentPluginGrantAuthWithDetailsRecord>, EnvironmentPluginGrantRepoError>
     {
         let span = Self::span_id(environment_plugin_grant_id);
         self.repo
@@ -229,7 +229,7 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
         &self,
         environment_plugin_grant_id: Uuid,
         include_deleted: bool,
-    ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>
+    ) -> Result<Option<EnvironmentPluginGrantAuthWithDetailsRecord>, EnvironmentPluginGrantRepoError>
     {
         let result = self
             .with_ro("get_by_id")
@@ -266,9 +266,22 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                         p.created_at AS plugin_created_at,
                         p.created_by AS plugin_created_by,
                         p.deleted_at AS plugin_deleted_at,
-                        p.deleted_by AS plugin_deleted_by
+                        p.deleted_by AS plugin_deleted_by,
+
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
 
                         FROM environment_plugin_grants epg
+                        INNER JOIN environments e
+                            ON e.environment_id = epg.environment_id
+                        INNER JOIN environment_revisions er
+                            ON er.environment_id = e.environment_id
+                            AND er.revision_id = e.current_revision_id
+                        INNER JOIN applications ap
+                            ON ap.application_id = e.application_id
+                        INNER JOIN accounts a
+                            ON a.account_id = ap.account_id
                         INNER JOIN plugins p
                             ON p.plugin_id = epg.plugin_id
                         INNER JOIN accounts pa
@@ -286,6 +299,9 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                                     AND pa.deleted_at IS NULL
                                 )
                             )
+                            AND e.deleted_at IS NULL
+                            AND ap.deleted_at IS NULL
+                            AND a.deleted_at IS NULL
                 "#})
                 .bind(environment_plugin_grant_id)
                 .bind(include_deleted),

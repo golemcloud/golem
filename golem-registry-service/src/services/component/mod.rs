@@ -22,9 +22,12 @@ use super::component_object_store::ComponentObjectStore;
 use super::deployment::DeploymentService;
 use super::environment::EnvironmentService;
 use crate::repo::component::ComponentRepo;
+use crate::repo::model::component::ComponentAuthExtRevisionRecord;
 use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
 use futures::stream::BoxStream;
+use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
@@ -33,7 +36,8 @@ use golem_common::model::card::{
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::diff::DIFF_MODEL_VERSION;
+use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::model::component::Component;
@@ -75,32 +79,17 @@ impl ComponentService {
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
-        let environment = self
-            .environment_service
-            .get(EnvironmentId(record.environment_id), false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id)
-                }
-                other => other.into(),
-            })?;
+        let environment = environment_from_component_record(&record)?;
 
         authorize_component_permission(
             auth,
             &environment,
             ComponentVerb::View,
-            ComponentResourcePattern::Component(CardComponentName(record.name.clone())),
+            ComponentResourcePattern::Component(CardComponentName(record.component.name.clone())),
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.owner_account_email,
-            environment.application_name,
-            environment.name,
-        )?)
+        Ok(record.try_into_model()?)
     }
 
     pub async fn get_deployed_component(
@@ -119,32 +108,17 @@ impl ComponentService {
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
-        let environment = self
-            .environment_service
-            .get(EnvironmentId(record.environment_id), false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id)
-                }
-                other => other.into(),
-            })?;
+        let environment = environment_from_component_record(&record)?;
 
         authorize_component_permission(
             auth,
             &environment,
             ComponentVerb::View,
-            ComponentResourcePattern::Component(CardComponentName(record.name.clone())),
+            ComponentResourcePattern::Component(CardComponentName(record.component.name.clone())),
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.owner_account_email,
-            environment.application_name,
-            environment.name,
-        )?)
+        Ok(record.try_into_model()?)
     }
 
     pub async fn get_all_deployed_component_versions(
@@ -159,23 +133,11 @@ impl ComponentService {
             .get_all_deployed_by_id(component_id.0)
             .await?;
 
-        let environment_id: EnvironmentId =
-            if let Some(environment_id) = records.first().map(|r| &r.environment_id) {
-                (*environment_id).into()
-            } else {
-                return Err(ComponentError::ComponentNotFound(component_id));
-            };
-
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id)
-                }
-                other => other.into(),
-            })?;
+        let environment = if let Some(record) = records.first() {
+            environment_from_component_record(record)?
+        } else {
+            return Err(ComponentError::ComponentNotFound(component_id));
+        };
 
         authorize_component_permission(
             auth,
@@ -187,15 +149,7 @@ impl ComponentService {
 
         let components = records
             .into_iter()
-            .map(|r| {
-                r.try_into_model(
-                    environment.application_id,
-                    environment.owner_account_id,
-                    environment.owner_account_email.clone(),
-                    environment.application_name.clone(),
-                    environment.name.clone(),
-                )
-            })
+            .map(|r| r.try_into_model())
             .collect::<Result<_, _>>()?;
 
         Ok(components)
@@ -216,35 +170,20 @@ impl ComponentService {
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
-        let environment = self
-            .environment_service
-            .get(EnvironmentId(record.environment_id), false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id)
-                }
-                other => other.into(),
-            })?;
+        let environment = environment_from_component_record(&record)?;
 
         authorize_component_permission(
             auth,
             &environment,
             ComponentVerb::View,
             ComponentResourcePattern::Revision {
-                component: CardComponentName(record.name.clone()),
+                component: CardComponentName(record.component.name.clone()),
                 revision: revision.into(),
             },
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.owner_account_email,
-            environment.application_name,
-            environment.name,
-        )?)
+        Ok(record.try_into_model()?)
     }
 
     pub async fn list_staged_components(
@@ -542,4 +481,23 @@ fn authorize_component_permission(
         },
         resource,
     }))
+}
+
+pub(super) fn environment_from_component_record(
+    record: &ComponentAuthExtRevisionRecord,
+) -> Result<Environment, ComponentError> {
+    Ok(Environment {
+        id: EnvironmentId(record.component.environment_id),
+        revision: record.environment_revision_id.try_into()?,
+        application_id: ApplicationId(record.application_id),
+        application_name: ApplicationName(record.application_name.clone()),
+        name: EnvironmentName(record.environment_name.clone()),
+        diff_model_version: DIFF_MODEL_VERSION,
+        compatibility_check: record.environment_compatibility_check,
+        version_check: record.environment_version_check,
+        security_overrides: record.environment_security_overrides,
+        owner_account_id: AccountId(record.owner_account_id),
+        owner_account_email: AccountEmail::new(record.owner_account_email.clone()),
+        current_deployment: None,
+    })
 }

@@ -88,22 +88,17 @@ impl TokenService {
         token_id: TokenId,
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
-        let token: TokenWithSecret = self
+        let record = self
             .token_repo
             .get_by_id(token_id.0)
             .await?
-            .ok_or(TokenError::TokenNotFound(token_id))?
-            .into();
-
-        let account = self
-            .account_service
-            .get(token.account_id, &AuthCtx::System)
-            .await
-            .map_err(|_| TokenError::TokenNotFound(token_id))?;
+            .ok_or(TokenError::TokenNotFound(token_id))?;
+        let account_email = record.account_email();
+        let token: TokenWithSecret = record.token.into();
 
         authorize_account_token_permission(
             auth,
-            &account.email,
+            &account_email,
             AccountTokenVerb::View,
             AccountTokenResourcePattern::Token(token_id),
         )
@@ -117,22 +112,17 @@ impl TokenService {
         secret: &TokenSecret,
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
-        let token: TokenWithSecret = self
+        let record = self
             .token_repo
             .get_by_secret(secret.secret())
             .await?
-            .ok_or(TokenError::TokenBySecretNotFound)?
-            .into();
-
-        let account = self
-            .account_service
-            .get(token.account_id, &AuthCtx::System)
-            .await
-            .map_err(|_| TokenError::TokenBySecretNotFound)?;
+            .ok_or(TokenError::TokenBySecretNotFound)?;
+        let account_email = record.account_email();
+        let token: TokenWithSecret = record.token.into();
 
         authorize_account_token_permission(
             auth,
-            &account.email,
+            &account_email,
             AccountTokenVerb::View,
             AccountTokenResourcePattern::Token(token.id),
         )
@@ -302,22 +292,16 @@ impl TokenService {
     }
 
     pub async fn delete(&self, token_id: TokenId, auth: &AuthCtx) -> Result<(), TokenError> {
-        let token: TokenWithSecret = self
+        let record = self
             .token_repo
             .get_by_id(token_id.0)
             .await?
-            .ok_or(TokenError::TokenNotFound(token_id))?
-            .into();
-
-        let account = self
-            .account_service
-            .get(token.account_id, &AuthCtx::System)
-            .await
-            .map_err(|_| TokenError::TokenNotFound(token_id))?;
+            .ok_or(TokenError::TokenNotFound(token_id))?;
+        let account_email = record.account_email();
 
         authorize_account_token_permission(
             auth,
-            &account.email,
+            &account_email,
             AccountTokenVerb::Delete,
             AccountTokenResourcePattern::Token(token_id),
         )?;

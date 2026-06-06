@@ -290,7 +290,7 @@ impl ApplicationService {
 
         let result: Application = self
             .application_repo
-            .get_by_name(account_id.0, &name.0)
+            .get_by_name(account_id.0, account.email.as_str(), &name.0)
             .await?
             .ok_or(ApplicationError::ApplicationByNameNotFound(name.clone()))?
             .try_into()?;
@@ -328,7 +328,7 @@ impl ApplicationService {
 
         let result = self
             .application_repo
-            .list_by_owner(account_id.0)
+            .list_by_owner(account_id.0, account.email.as_str())
             .await?
             .into_iter()
             .map(|r| r.try_into())

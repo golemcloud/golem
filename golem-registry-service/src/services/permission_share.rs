@@ -16,7 +16,7 @@ use super::account::{AccountError, AccountService};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::permission_share::{
-    PermissionShareRepoError, PermissionShareRevisionRecord,
+    PermissionShareAuthExtRevisionRecord, PermissionShareRepoError, PermissionShareRevisionRecord,
 };
 use crate::repo::permission_share::PermissionShareRepo;
 use golem_common::model::account::{Account, AccountEmail, AccountId};
@@ -158,11 +158,13 @@ impl PermissionShareService {
         update: PermissionShareUpdate,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        let mut share = self.get(permission_share_id, auth).await?;
-        let owner_account = self.get_account(share.owner_account_id).await?;
+        let record = self.get_record_by_id(permission_share_id).await?;
+        let owner_account_email = record.owner_account_email();
+        let target_account_email = record.target_account_email();
+        let mut share: PermissionShare = record.share.try_into()?;
         authorize_permission_share_permission(
             auth,
-            &owner_account.email,
+            &owner_account_email,
             AccountPermissionShareVerb::Update,
             AccountPermissionShareResourcePattern::Name(share.name.clone()),
         )?;
@@ -171,11 +173,10 @@ impl PermissionShareService {
             return Err(PermissionShareError::ConcurrentModification);
         }
 
-        let target_account = self.get_account(share.target_account_id).await?;
         let replacement_card = self.permission_share_card(
             permission_share_id,
             &update.data,
-            target_account.email.as_str(),
+            target_account_email.as_str(),
             auth,
         )?;
 
@@ -218,11 +219,12 @@ impl PermissionShareService {
         current_revision: PermissionShareRevision,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        let mut share = self.get(permission_share_id, auth).await?;
-        let owner_account = self.get_account(share.owner_account_id).await?;
+        let record = self.get_record_by_id(permission_share_id).await?;
+        let owner_account_email = record.owner_account_email();
+        let mut share: PermissionShare = record.share.try_into()?;
         authorize_permission_share_permission(
             auth,
-            &owner_account.email,
+            &owner_account_email,
             AccountPermissionShareVerb::Delete,
             AccountPermissionShareResourcePattern::Name(share.name.clone()),
         )?;
@@ -260,17 +262,12 @@ impl PermissionShareService {
         permission_share_id: PermissionShareId,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        let share: PermissionShare = self
-            .permission_share_repo
-            .get_by_id(permission_share_id.0)
-            .await?
-            .ok_or(PermissionShareError::PermissionShareNotFound(
-                permission_share_id,
-            ))?
-            .try_into()?;
+        let record = self.get_record_by_id(permission_share_id).await?;
+        let owner_account_email = record.owner_account_email();
+        let target_account_email = record.target_account_email();
+        let share: PermissionShare = record.share.try_into()?;
 
-        self.authorize_view(&share, auth)
-            .await
+        self.authorize_view(&share, &owner_account_email, &target_account_email, auth)
             .map_err(|err| match err {
                 PermissionShareError::Unauthorized(_) => {
                     PermissionShareError::PermissionShareNotFound(permission_share_id)
@@ -279,6 +276,18 @@ impl PermissionShareService {
             })?;
 
         Ok(share)
+    }
+
+    async fn get_record_by_id(
+        &self,
+        permission_share_id: PermissionShareId,
+    ) -> Result<PermissionShareAuthExtRevisionRecord, PermissionShareError> {
+        self.permission_share_repo
+            .get_by_id(permission_share_id.0)
+            .await?
+            .ok_or(PermissionShareError::PermissionShareNotFound(
+                permission_share_id,
+            ))
     }
 
     pub async fn get_by_owner_and_name(
@@ -429,23 +438,23 @@ impl PermissionShareService {
         })
     }
 
-    async fn authorize_view(
+    fn authorize_view(
         &self,
         share: &PermissionShare,
+        owner_account_email: &AccountEmail,
+        target_account_email: &AccountEmail,
         auth: &AuthCtx,
     ) -> Result<(), PermissionShareError> {
-        let owner_account = self.get_account(share.owner_account_id).await?;
-        let target_account = self.get_account(share.target_account_id).await?;
         authorize_permission_share_permission(
             auth,
-            &owner_account.email,
+            owner_account_email,
             AccountPermissionShareVerb::View,
             AccountPermissionShareResourcePattern::Name(share.name.clone()),
         )
         .or_else(|_| {
             authorize_permission_share_permission(
                 auth,
-                &target_account.email,
+                target_account_email,
                 AccountPermissionShareVerb::View,
                 AccountPermissionShareResourcePattern::Name(share.name.clone()),
             )

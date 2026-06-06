@@ -124,12 +124,16 @@ pub trait DeploymentRepo: Send + Sync {
         environment_id: Uuid,
         deployment_revision_id: i64,
         agent_type_name: &str,
+        owner_account_id: Uuid,
+        owner_account_email: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>>;
 
     async fn list_deployment_agent_types(
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
+        owner_account_id: Uuid,
+        owner_account_email: &str,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
 
     async fn get_deployed_agent_type(
@@ -364,9 +368,17 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         environment_id: Uuid,
         deployment_revision_id: i64,
         agent_type_name: &str,
+        owner_account_id: Uuid,
+        owner_account_email: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
         self.repo
-            .get_deployment_agent_type(environment_id, deployment_revision_id, agent_type_name)
+            .get_deployment_agent_type(
+                environment_id,
+                deployment_revision_id,
+                agent_type_name,
+                owner_account_id,
+                owner_account_email,
+            )
             .instrument(info_span!(
                 SPAN_NAME,
                 environment_id = %environment_id,
@@ -380,9 +392,16 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
+        owner_account_id: Uuid,
+        owner_account_email: &str,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
         self.repo
-            .list_deployment_agent_types(environment_id, deployment_revision_id)
+            .list_deployment_agent_types(
+                environment_id,
+                deployment_revision_id,
+                owner_account_id,
+                owner_account_email,
+            )
             .instrument(info_span!(
                 SPAN_NAME,
                 environment_id = %environment_id,
@@ -1093,6 +1112,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         environment_id: Uuid,
         deployment_revision_id: i64,
         agent_type_name: &str,
+        owner_account_id: Uuid,
+        owner_account_email: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
         self.with_ro("get_deployment_agent_type")
             .fetch_optional_as(
@@ -1105,29 +1126,22 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.component_id,
                         c.name AS component_name,
                         r.component_revision_id,
-                        a.account_id AS owner_account_id,
-                        ac.email AS owner_account_email,
+                        $4 AS owner_account_id,
+                        $5 AS owner_account_email,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     JOIN components c
                         ON c.component_id = r.component_id
-                        AND c.deleted_at IS NULL
-                    JOIN environments e
-                        ON e.environment_id = r.environment_id
-                        AND e.deleted_at IS NULL
-                    JOIN applications a
-                        ON a.application_id = e.application_id
-                        AND a.deleted_at IS NULL
-                    JOIN accounts ac
-                        ON ac.account_id = a.account_id
-                        AND ac.deleted_at IS NULL
+                        AND c.environment_id = r.environment_id
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                         AND r.agent_type_name = $3
                 "#})
                 .bind(environment_id)
                 .bind(deployment_revision_id)
-                .bind(agent_type_name),
+                .bind(agent_type_name)
+                .bind(owner_account_id)
+                .bind(owner_account_email),
             )
             .await
     }
@@ -1136,6 +1150,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
+        owner_account_id: Uuid,
+        owner_account_email: &str,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
         self.with_ro("list_deployment_agent_types")
             .fetch_all_as(
@@ -1148,28 +1164,21 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.component_id,
                         c.name AS component_name,
                         r.component_revision_id,
-                        a.account_id AS owner_account_id,
-                        ac.email AS owner_account_email,
+                        $3 AS owner_account_id,
+                        $4 AS owner_account_email,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     JOIN components c
                         ON c.component_id = r.component_id
-                        AND c.deleted_at IS NULL
-                    JOIN environments e
-                        ON e.environment_id = r.environment_id
-                        AND e.deleted_at IS NULL
-                    JOIN applications a
-                        ON a.application_id = e.application_id
-                        AND a.deleted_at IS NULL
-                    JOIN accounts ac
-                        ON ac.account_id = a.account_id
-                        AND ac.deleted_at IS NULL
+                        AND c.environment_id = r.environment_id
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                     ORDER BY r.agent_type_name
                 "#})
                 .bind(environment_id)
-                .bind(deployment_revision_id),
+                .bind(deployment_revision_id)
+                .bind(owner_account_id)
+                .bind(owner_account_email),
             )
             .await
     }

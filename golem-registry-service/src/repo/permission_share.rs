@@ -16,8 +16,8 @@ use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::permission_share::{
-    PermissionShareExtRevisionRecord, PermissionShareRecord, PermissionShareRepoError,
-    PermissionShareRevisionRecord,
+    PermissionShareAuthExtRevisionRecord, PermissionShareExtRevisionRecord, PermissionShareRecord,
+    PermissionShareRepoError, PermissionShareRevisionRecord,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -55,7 +55,7 @@ pub trait PermissionShareRepo: Send + Sync {
     async fn get_by_id(
         &self,
         permission_share_id: Uuid,
-    ) -> Result<Option<PermissionShareExtRevisionRecord>, PermissionShareRepoError>;
+    ) -> Result<Option<PermissionShareAuthExtRevisionRecord>, PermissionShareRepoError>;
 
     async fn get_by_owner_and_name(
         &self,
@@ -137,7 +137,7 @@ impl<Repo: PermissionShareRepo> PermissionShareRepo for LoggedPermissionShareRep
     async fn get_by_id(
         &self,
         permission_share_id: Uuid,
-    ) -> Result<Option<PermissionShareExtRevisionRecord>, PermissionShareRepoError> {
+    ) -> Result<Option<PermissionShareAuthExtRevisionRecord>, PermissionShareRepoError> {
         self.repo
             .get_by_id(permission_share_id)
             .instrument(Self::span_permission_share_id(permission_share_id))
@@ -393,13 +393,21 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         permission_share_id: Uuid,
-    ) -> Result<Option<PermissionShareExtRevisionRecord>, PermissionShareRepoError> {
+    ) -> Result<Option<PermissionShareAuthExtRevisionRecord>, PermissionShareRepoError> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT ps.owner_account_id, ps.target_account_id,
-                           psr.permission_share_id, psr.revision_id, psr.name, psr.card_id, psr.data, psr.created_at, psr.created_by, psr.deleted
+                           psr.permission_share_id, psr.revision_id, psr.name, psr.card_id, psr.data, psr.created_at, psr.created_by, psr.deleted,
+                           owner.email AS owner_account_email,
+                           target.email AS target_account_email
                     FROM permission_shares ps
+                    JOIN accounts owner
+                        ON owner.account_id = ps.owner_account_id
+                       AND owner.deleted_at IS NULL
+                    JOIN accounts target
+                        ON target.account_id = ps.target_account_id
+                       AND target.deleted_at IS NULL
                     JOIN permission_share_revisions psr
                         ON psr.permission_share_id = ps.permission_share_id
                        AND psr.revision_id = ps.current_revision_id

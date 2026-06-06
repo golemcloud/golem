@@ -37,6 +37,7 @@ pub trait ApplicationRepo: Send + Sync {
     async fn get_by_name(
         &self,
         owner_account_id: Uuid,
+        owner_account_email: &str,
         name: &str,
     ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError>;
 
@@ -48,6 +49,7 @@ pub trait ApplicationRepo: Send + Sync {
     async fn list_by_owner(
         &self,
         owner_account_id: Uuid,
+        owner_account_email: &str,
     ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError>;
 
     async fn create(
@@ -96,10 +98,11 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn get_by_name(
         &self,
         owner_account_id: Uuid,
+        owner_account_email: &str,
         name: &str,
     ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         self.repo
-            .get_by_name(owner_account_id, name)
+            .get_by_name(owner_account_id, owner_account_email, name)
             .instrument(Self::span_name(name))
             .await
     }
@@ -117,9 +120,10 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn list_by_owner(
         &self,
         owner_account_id: Uuid,
+        owner_account_email: &str,
     ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         self.repo
-            .list_by_owner(owner_account_id)
+            .list_by_owner(owner_account_id, owner_account_email)
             .instrument(Self::span_owner_id(owner_account_id))
             .await
     }
@@ -196,6 +200,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn get_by_name(
         &self,
         owner_account_id: Uuid,
+        owner_account_email: &str,
         name: &str,
     ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         let result: Option<ApplicationExtRevisionRecord> = self
@@ -204,23 +209,21 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 sqlx::query_as(indoc! {r#"
                     SELECT
                         ap.account_id,
-                        a.email as account_email,
+                        $2 as account_email,
                         ap.created_at as entity_created_at,
                         r.application_id, r.revision_id, r.name,
                         r.created_at, r.created_by, r.deleted
-                    FROM accounts a
-                    JOIN applications ap
-                        ON ap.account_id = a.account_id
+                    FROM applications ap
                     JOIN application_revisions r
                         ON r.application_id = ap.application_id
                         AND r.revision_id = ap.current_revision_id
                     WHERE
-                        a.account_id = $1
-                        AND ap.name = $2
-                        AND a.deleted_at IS NULL
+                        ap.account_id = $1
+                        AND ap.name = $3
                         AND ap.deleted_at IS NULL
                 "#})
                 .bind(owner_account_id)
+                .bind(owner_account_email)
                 .bind(name),
             )
             .await?;
@@ -263,6 +266,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn list_by_owner(
         &self,
         owner_account_id: Uuid,
+        owner_account_email: &str,
     ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError> {
         let result = self
             .with_ro("list_by_owner")
@@ -270,23 +274,21 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 sqlx::query_as(indoc! {r#"
                     SELECT
                         ap.account_id,
-                        a.email as account_email,
+                        $2 as account_email,
                         ap.created_at as entity_created_at,
                         r.application_id, r.revision_id, r.name,
                         r.created_at, r.created_by, r.deleted
-                    FROM accounts a
-                    JOIN applications ap
-                        ON ap.account_id = a.account_id
+                    FROM applications ap
                     JOIN application_revisions r
                         ON r.application_id = ap.application_id
                         AND r.revision_id = ap.current_revision_id
                     WHERE
-                        a.account_id = $1
-                        AND a.deleted_at IS NULL
+                        ap.account_id = $1
                         AND ap.deleted_at IS NULL
                     ORDER BY r.name
                 "#})
-                .bind(owner_account_id),
+                .bind(owner_account_id)
+                .bind(owner_account_email),
             )
             .await?;
 

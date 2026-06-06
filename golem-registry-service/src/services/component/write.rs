@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ComponentError;
+use super::{ComponentError, environment_from_component_record};
 use crate::metrics::storage::record_component_uploaded;
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
@@ -279,18 +279,9 @@ impl ComponentWriteService {
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
-        let environment = self
-            .environment_service
-            .get(EnvironmentId(component_record.environment_id), false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id)
-                }
-                other => other.into(),
-            })?;
+        let environment = environment_from_component_record(&component_record)?;
 
-        let component_name = ComponentName(component_record.name.clone());
+        let component_name = ComponentName(component_record.component.name.clone());
 
         authorize_component_permission(auth, &environment, &component_name, ComponentVerb::View)
             .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
@@ -300,13 +291,7 @@ impl ComponentWriteService {
             return Err(ComponentError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
-        let mut component = component_record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.owner_account_email.clone(),
-            environment.application_name.clone(),
-            environment.name.clone(),
-        )?;
+        let mut component = component_record.try_into_model()?;
 
         if component_update.current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?
@@ -482,29 +467,14 @@ impl ComponentWriteService {
             .await?
             .ok_or(ComponentError::ComponentNotFound(component_id))?;
 
-        let environment = self
-            .environment_service
-            .get(EnvironmentId(component_record.environment_id), false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id)
-                }
-                other => other.into(),
-            })?;
+        let environment = environment_from_component_record(&component_record)?;
 
-        let component_name = ComponentName(component_record.name.clone());
+        let component_name = ComponentName(component_record.component.name.clone());
         authorize_component_permission(auth, &environment, &component_name, ComponentVerb::View)
             .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
         authorize_component_permission(auth, &environment, &component_name, ComponentVerb::Delete)?;
 
-        let component = component_record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.owner_account_email,
-            environment.application_name,
-            environment.name,
-        )?;
+        let component = component_record.try_into_model()?;
 
         if current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?

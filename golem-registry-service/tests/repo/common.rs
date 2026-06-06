@@ -162,7 +162,7 @@ pub async fn test_application_create(deps: &Deps) {
 
     let app = deps
         .application_repo
-        .get_by_name(owner.revision.account_id, &app_name)
+        .get_by_name(owner.revision.account_id, &owner.revision.email, &app_name)
         .await
         .unwrap();
     assert!(app.is_none());
@@ -190,7 +190,7 @@ pub async fn test_application_create(deps: &Deps) {
 
     let app_2 = deps
         .application_repo
-        .get_by_name(owner.revision.account_id, &app_name)
+        .get_by_name(owner.revision.account_id, &owner.revision.email, &app_name)
         .await
         .unwrap();
     let_assert!(Some(app_2) = app_2);
@@ -261,7 +261,7 @@ pub async fn test_application_delete(deps: &Deps) {
     assert!(get_by_id.is_none());
     let get_by_name = deps
         .application_repo
-        .get_by_name(user.revision.account_id, &app.revision.name)
+        .get_by_name(user.revision.account_id, &user.revision.email, &app.revision.name)
         .await
         .unwrap();
     assert!(get_by_name.is_none());
@@ -760,9 +760,9 @@ pub async fn test_component_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
-    assert!(revision_0 == get_revision_0.revision);
-    assert!(get_revision_0.environment_id == env.revision.environment_id);
-    assert!(get_revision_0.name == component_name);
+    assert!(revision_0 == get_revision_0.component.revision);
+    assert!(get_revision_0.component.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.component.name == component_name);
 
     let get_revision_0 = deps
         .component_repo
@@ -1554,8 +1554,8 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(fetched_deployment) = fetched_deployment);
-    assert!(fetched_deployment.revision.revision_id == revision_0.revision_id);
-    assert!(fetched_deployment.domain == domain);
+    assert!(fetched_deployment.deployment.revision.revision_id == revision_0.revision_id);
+    assert!(fetched_deployment.deployment.domain == domain);
 
     let fetched_by_domain = deps
         .mcp_deployment_repo

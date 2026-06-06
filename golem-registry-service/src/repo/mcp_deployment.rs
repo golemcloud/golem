@@ -14,8 +14,8 @@
 
 use crate::repo::model::BindFields;
 use crate::repo::model::mcp_deployment::{
-    McpDeploymentExtRevisionRecord, McpDeploymentRepoError, McpDeploymentRevisionIdentityRecord,
-    McpDeploymentRevisionRecord,
+    McpDeploymentAuthExtRevisionRecord, McpDeploymentExtRevisionRecord, McpDeploymentRepoError,
+    McpDeploymentRevisionIdentityRecord, McpDeploymentRevisionRecord,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -56,7 +56,7 @@ pub trait McpDeploymentRepo: Send + Sync {
     async fn get_staged_by_id(
         &self,
         mcp_deployment_id: Uuid,
-    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Option<McpDeploymentAuthExtRevisionRecord>>;
 
     async fn get_staged_by_domain(
         &self,
@@ -68,7 +68,7 @@ pub trait McpDeploymentRepo: Send + Sync {
         &self,
         mcp_deployment_id: Uuid,
         revision_id: i64,
-    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>>;
+    ) -> RepoResult<Option<McpDeploymentAuthExtRevisionRecord>>;
 
     async fn list_staged(
         &self,
@@ -158,7 +158,7 @@ impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo
     async fn get_staged_by_id(
         &self,
         mcp_deployment_id: Uuid,
-    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<McpDeploymentAuthExtRevisionRecord>> {
         self.repo
             .get_staged_by_id(mcp_deployment_id)
             .instrument(Self::span_id(mcp_deployment_id))
@@ -180,7 +180,7 @@ impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo
         &self,
         mcp_deployment_id: Uuid,
         revision_id: i64,
-    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<McpDeploymentAuthExtRevisionRecord>> {
         self.repo
             .get_by_id_and_revision(mcp_deployment_id, revision_id)
             .instrument(Self::span_id_and_revision(mcp_deployment_id, revision_id))
@@ -406,19 +406,35 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
     async fn get_staged_by_id(
         &self,
         mcp_deployment_id: Uuid,
-    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<McpDeploymentAuthExtRevisionRecord>> {
         self.with_ro("get_staged_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT m.environment_id, m.domain, mr.mcp_deployment_id,
                         mr.revision_id, mr.hash, mr.data,
                         mr.created_at, mr.created_by, mr.deleted,
-                        m.created_at as entity_created_at
+                        m.created_at as entity_created_at,
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
                     FROM mcp_deployments m
+                    JOIN environments e
+                        ON e.environment_id = m.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                            AND er.revision_id = e.current_revision_id
+                    JOIN applications ap
+                        ON ap.application_id = e.application_id
+                    JOIN accounts a
+                        ON a.account_id = ap.account_id
                     JOIN mcp_deployment_revisions mr
                         ON m.mcp_deployment_id = mr.mcp_deployment_id
                             AND m.current_revision_id = mr.revision_id
-                    WHERE m.mcp_deployment_id = $1 AND m.deleted_at IS NULL
+                    WHERE m.mcp_deployment_id = $1
+                        AND m.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "# })
                 .bind(mcp_deployment_id),
             )
@@ -453,18 +469,35 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
         &self,
         mcp_deployment_id: Uuid,
         revision_id: i64,
-    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>> {
+    ) -> RepoResult<Option<McpDeploymentAuthExtRevisionRecord>> {
         self.with_ro("get_by_id_and_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT m.environment_id, m.domain, mr.mcp_deployment_id,
                         mr.revision_id, mr.hash, mr.data,
                         mr.created_at, mr.created_by, mr.deleted,
-                        m.created_at as entity_created_at
+                        m.created_at as entity_created_at,
+                        er.name AS environment_name,
+                        ap.name AS application_name,
+                        a.email AS owner_account_email
                     FROM mcp_deployments m
+                    JOIN environments e
+                        ON e.environment_id = m.environment_id
+                    JOIN environment_revisions er
+                        ON er.environment_id = e.environment_id
+                            AND er.revision_id = e.current_revision_id
+                    JOIN applications ap
+                        ON ap.application_id = e.application_id
+                    JOIN accounts a
+                        ON a.account_id = ap.account_id
                     JOIN mcp_deployment_revisions mr
                         ON m.mcp_deployment_id = mr.mcp_deployment_id
-                    WHERE m.mcp_deployment_id = $1 AND mr.revision_id = $2 AND m.deleted_at IS NULL
+                    WHERE m.mcp_deployment_id = $1
+                        AND mr.revision_id = $2
+                        AND m.deleted_at IS NULL
+                        AND e.deleted_at IS NULL
+                        AND ap.deleted_at IS NULL
+                        AND a.deleted_at IS NULL
                 "# })
                 .bind(mcp_deployment_id)
                 .bind(revision_id),
