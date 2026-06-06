@@ -963,6 +963,12 @@ pub struct MemoryConfig {
     pub system_memory_override: Option<u64>,
     pub worker_memory_ratio: f64,
     pub worker_estimate_coefficient: f64,
+    /// Multiplier applied to a worker's `component_size` when estimating its
+    /// memory permit requirement. The compiled component is loaded into the
+    /// engine once per component (shared across all workers of that component),
+    /// so this term over-accounts per-worker memory for large components.
+    /// Lower this (e.g. to 0.0) to size permits primarily off linear memory.
+    pub component_size_coefficient: f64,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
     pub oom_retry_config: RetryConfig,
@@ -1003,6 +1009,11 @@ impl SafeDisplay for MemoryConfig {
             &mut result,
             "worker estimate coefficient: {}",
             self.worker_estimate_coefficient
+        );
+        let _ = writeln!(
+            &mut result,
+            "component size coefficient: {}",
+            self.component_size_coefficient
         );
         let _ = writeln!(
             &mut result,
@@ -1528,6 +1539,7 @@ impl Default for MemoryConfig {
             system_memory_override: None,
             worker_memory_ratio: 0.8,
             worker_estimate_coefficient: 1.1,
+            component_size_coefficient: 2.0,
             acquire_retry_delay: Duration::from_millis(500),
             oom_retry_config: RetryConfig {
                 max_attempts: u32::MAX,

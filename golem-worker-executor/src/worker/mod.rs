@@ -122,6 +122,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     update_state_lock: Mutex<()>,
     worker_estimate_coefficient: f64,
+    component_size_coefficient: f64,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
@@ -340,6 +341,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status: current_status,
             metrics_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
+            component_size_coefficient: deps.config().memory.component_size_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
             update_state_lock: Mutex::new(()),
@@ -410,6 +412,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Unloaded { .. } => {
                 this.mark_as_loading();
                 crate::metrics::workers::inc_worker_waiting_for_memory();
+                crate::metrics::wasm::record_worker_resident_linear_memory(
+                    this.get_latest_worker_metadata()
+                        .await
+                        .last_known_status
+                        .total_linear_memory_size,
+                );
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
                     this.memory_requirement().await?,
@@ -795,7 +803,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let ml = metadata.last_known_status.total_linear_memory_size as f64;
         let sw = metadata.last_known_status.component_size as f64;
-        let c = 2.0;
+        let c = self.component_size_coefficient;
         let x = self.worker_estimate_coefficient;
         Ok((x * (ml + c * sw)) as u64)
     }

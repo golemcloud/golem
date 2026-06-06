@@ -69,18 +69,26 @@ const SCHEDULER_LAG_BUCKETS: &[f64; 11] = &[
     0.001, 0.01, 0.1, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0,
 ];
 
-const MEMORY_SIZE_BUCKETS: &[f64; 11] = &[
-    1024.0,
-    4096.0,
-    16384.0,
-    65536.0,
-    262144.0,
-    1048576.0,
-    4194304.0,
-    16777216.0,
-    67108864.0,
-    268435456.0,
-    1073741824.0,
+/// Buckets for the size of a single `memory.grow` allocation. Deliberately
+/// fine-grained in the 1-32 MiB band where typical guest grows cluster, so
+/// that p90/p99 quantiles are not pinned to a coarse 4-16 MiB bucket edge.
+const MEMORY_SIZE_BUCKETS: &[f64; 16] = &[
+    65536.0,      // 64 KiB
+    262144.0,     // 256 KiB
+    1048576.0,    // 1 MiB
+    2097152.0,    // 2 MiB
+    4194304.0,    // 4 MiB
+    6291456.0,    // 6 MiB
+    8388608.0,    // 8 MiB
+    12582912.0,   // 12 MiB
+    16777216.0,   // 16 MiB
+    25165824.0,   // 24 MiB
+    33554432.0,   // 32 MiB
+    67108864.0,   // 64 MiB
+    134217728.0,  // 128 MiB
+    268435456.0,  // 256 MiB
+    536870912.0,  // 512 MiB
+    1073741824.0, // 1 GiB
 ];
 
 pub mod component {
@@ -508,6 +516,12 @@ pub mod wasm {
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
+        static ref WORKER_RESIDENT_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
+            "worker_resident_linear_memory_bytes",
+            "Per-worker cumulative linear memory size (total_linear_memory_size) observed when acquiring a memory permit",
+            crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     lazy_static! {
@@ -579,6 +593,10 @@ pub mod wasm {
 
     pub fn record_allocated_memory(amount: usize) {
         ALLOCATED_MEMORY_BYTES.observe(amount as f64);
+    }
+
+    pub fn record_worker_resident_linear_memory(bytes: u64) {
+        WORKER_RESIDENT_LINEAR_MEMORY_BYTES.observe(bytes as f64);
     }
 }
 
