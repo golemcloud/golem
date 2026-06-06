@@ -4,7 +4,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
-use crate::worker::status::calculate_last_known_status_for_existing_worker;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::base_model::worker_filter::{
@@ -229,14 +229,16 @@ impl DefaultWorkerEnumerationService {
 
             if let Some(worker_metadata) = worker_metadata {
                 let metadata = if precise {
-                    let last_known_status = calculate_last_known_status_for_existing_worker(
+                    let agent_mode = worker_metadata.initial_worker_metadata.agent_mode;
+                    let last_known_status = calculate_last_known_status_with_checkpoint(
                         self,
                         &owned_agent_id,
-                        worker_metadata.initial_worker_metadata.agent_mode,
+                        agent_mode,
                         worker_metadata.last_known_status,
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))
-                    .await;
+                    .await
+                    .expect("Failed to calculate worker status for existing worker");
 
                     AgentMetadata {
                         last_known_status,

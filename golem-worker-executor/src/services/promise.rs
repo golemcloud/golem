@@ -19,11 +19,11 @@ use crate::services::golem_config;
 use crate::services::oplog;
 use crate::services::worker;
 use crate::services::worker_activator::WorkerActivator;
-use crate::services::{HasComponentService, HasConfig, HasOplogService};
+use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
-use crate::worker::status::calculate_last_known_status;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
@@ -408,13 +408,14 @@ impl<Ctx: WorkerCtx> DefaultPromiseWorkerAccess<Ctx> {
     }
 }
 
-/// Adapter to satisfy the `HasOplogService + HasConfig + HasComponentService`
-/// bounds required by `calculate_last_known_status` without pulling in the
+/// Adapter to satisfy the `HasOplogService + HasConfig + HasComponentService + HasWorkerService`
+/// bounds required by `calculate_last_known_status_with_checkpoint` without pulling in the
 /// full `All<Ctx>`.
 struct StatusDeps {
     oplog_service: Arc<dyn oplog::OplogService>,
     config: Arc<golem_config::GolemConfig>,
     component_service: Arc<dyn component::ComponentService>,
+    worker_service: Arc<dyn worker::WorkerService>,
 }
 
 impl HasOplogService for StatusDeps {
@@ -432,6 +433,12 @@ impl HasConfig for StatusDeps {
 impl HasComponentService for StatusDeps {
     fn component_service(&self) -> Arc<dyn component::ComponentService> {
         self.component_service.clone()
+    }
+}
+
+impl HasWorkerService for StatusDeps {
+    fn worker_service(&self) -> Arc<dyn worker::WorkerService> {
+        self.worker_service.clone()
     }
 }
 
@@ -465,11 +472,13 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
                 oplog_service: self.oplog_service.clone(),
                 config: self.config.clone(),
                 component_service: self.component_service.clone(),
+                worker_service: self.worker_service.clone(),
             };
-            let last_known_status = calculate_last_known_status(
+            let agent_mode = initial_worker_metadata.agent_mode;
+            let last_known_status = calculate_last_known_status_with_checkpoint(
                 &status_deps,
                 &owned_agent_id,
-                initial_worker_metadata.agent_mode,
+                agent_mode,
                 last_known_status,
             )
             .await

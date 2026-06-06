@@ -69,6 +69,9 @@ impl SqliteKeyValueStorage {
             KeyValueStorageNamespace::AgentStatus { agent_id } => {
                 format!("agent-status:{}", agent_id.to_redis_key())
             }
+            KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => {
+                format!("agent-status-checkpoint:{}", agent_id.to_redis_key())
+            }
             KeyValueStorageNamespace::Promise { .. } => "promise".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {
@@ -229,6 +232,26 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .collect::<Vec<Option<Bytes>>>();
 
         Ok(values)
+    }
+
+    async fn get_all(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, String> {
+        let query = sqlx::query_as("SELECT key, value FROM kv_storage WHERE namespace = ?;")
+            .bind(Self::namespace(namespace));
+
+        let results: Vec<DBKeyValue> = self
+            .pool
+            .with_ro(svc_name, api_name)
+            .fetch_all_as(query)
+            .await
+            .map_err(|err| err.to_safe_string())?;
+
+        Ok(results.into_iter().map(|kv| kv.into_pair()).collect())
     }
 
     async fn del(

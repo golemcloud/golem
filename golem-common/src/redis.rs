@@ -325,6 +325,20 @@ impl RedisLabelledApi<'_> {
         )
     }
 
+    pub async fn hgetall<R, K>(&self, key: K) -> RedisResult<R>
+    where
+        R: FromValue,
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        self.record(
+            start,
+            "HGETALL",
+            self.pool.hgetall(self.prefixed_key(key)).await,
+        )
+    }
+
     pub async fn mset<K, V>(&self, key_values: HashMap<K, V>) -> RedisResult<()>
     where
         K: AsRef<str>,

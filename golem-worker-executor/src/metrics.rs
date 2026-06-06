@@ -420,6 +420,24 @@ pub mod workers {
             &["reason"]
         )
         .unwrap();
+        static ref AGENT_STATUS_RECOMPUTE_TOTAL: CounterVec = register_counter_vec!(
+            "agent_status_recompute_total",
+            "Number of agent status recomputes by the baseline used (cache/checkpoint/full)",
+            &["source"]
+        )
+        .unwrap();
+        static ref AGENT_STATUS_CHECKPOINT_WRITE_TOTAL: CounterVec = register_counter_vec!(
+            "agent_status_checkpoint_write_total",
+            "Number of clean agent status checkpoint writes by reason (snapshot/idle)",
+            &["reason"]
+        )
+        .unwrap();
+        static ref AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL: CounterVec = register_counter_vec!(
+            "agent_status_checkpoint_write_failed_total",
+            "Number of clean agent status checkpoint writes that failed, by reason (snapshot/idle)",
+            &["reason"]
+        )
+        .unwrap();
     }
 
     /// Counts one invocation interrupted because a linear-memory grow was
@@ -465,6 +483,24 @@ pub mod workers {
 
     pub fn record_agent_status_flush_failed(reason: &'static str) {
         AGENT_STATUS_FLUSH_FAILED_TOTAL
+            .with_label_values(&[reason])
+            .inc();
+    }
+
+    pub fn record_agent_status_recompute(source: &'static str) {
+        AGENT_STATUS_RECOMPUTE_TOTAL
+            .with_label_values(&[source])
+            .inc();
+    }
+
+    pub fn record_agent_status_checkpoint_write(reason: &'static str) {
+        AGENT_STATUS_CHECKPOINT_WRITE_TOTAL
+            .with_label_values(&[reason])
+            .inc();
+    }
+
+    pub fn record_agent_status_checkpoint_write_failed(reason: &'static str) {
+        AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL
             .with_label_values(&[reason])
             .inc();
     }

@@ -76,6 +76,20 @@ pub trait KeyValueStorage: Debug {
         keys: Vec<String>,
     ) -> Result<Vec<Option<Bytes>>, String>;
 
+    /// Returns every `(field, value)` pair stored under `namespace` in a single atomic read.
+    ///
+    /// For the per-agent hash namespaces (split agent status / checkpoint) this is one round-trip
+    /// that observes a consistent snapshot of all fields (Redis `HGETALL`, a single
+    /// `SELECT ... WHERE namespace`, or one locked scan in memory) — unlike `keys` + `get_many`,
+    /// which is two round-trips and can observe a torn write made between them.
+    async fn get_all(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, String>;
+
     async fn del(
         &self,
         svc_name: &'static str,
@@ -471,6 +485,15 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
+    pub async fn get_all_raw(
+        &self,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, String> {
+        self.storage
+            .get_all(self.svc_name, self.api_name, self.entity_name, namespace)
+            .await
+    }
+
     pub async fn add_to_set<V: BinarySerializer>(
         &self,
         namespace: KeyValueStorageNamespace,
@@ -637,6 +660,15 @@ pub enum KeyValueStorageNamespace {
     /// decoupled from the unbounded parts of the status. The `agent_id` is part of the namespace so
     /// each agent gets its own isolated key space (enabling per-agent `keys`/`del_many`).
     AgentStatus {
+        agent_id: AgentId,
+    },
+    /// Per-agent *clean* cached status checkpoint. Same physical layout as [`Self::AgentStatus`]
+    /// (one structure-per-agent split into `core` / `regions` / `updates` / `ir:{key}`), but
+    /// written only at structurally clean boundaries (snapshot save, throttled idle) where no
+    /// jumpable oplog region is open. It is never advanced by the background status flusher, so it
+    /// always holds a baseline before any later jump region and lets the status recompute fold
+    /// forward from it instead of re-reading the whole oplog from index 1.
+    AgentStatusCheckpoint {
         agent_id: AgentId,
     },
     Promise {
