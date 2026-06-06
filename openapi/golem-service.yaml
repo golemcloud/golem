@@ -4674,14 +4674,6 @@ paths:
           format: uuid
         explode: true
         style: simple
-      - in: query
-        name: include_deleted
-        deprecated: false
-        schema:
-          default: false
-          type: boolean
-        explode: true
-        style: form
       responses:
         '200':
           description: ''

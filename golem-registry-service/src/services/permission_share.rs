@@ -162,6 +162,15 @@ impl PermissionShareService {
         let owner_account_email = record.owner_account_email();
         let target_account_email = record.target_account_email();
         let mut share: PermissionShare = record.share.try_into()?;
+
+        self.authorize_view(&share, &owner_account_email, &target_account_email, auth)
+            .map_err(|err| match err {
+                PermissionShareError::Unauthorized(_) => {
+                    PermissionShareError::PermissionShareNotFound(permission_share_id)
+                }
+                other => other,
+            })?;
+
         authorize_permission_share_permission(
             auth,
             &owner_account_email,
@@ -221,7 +230,17 @@ impl PermissionShareService {
     ) -> Result<PermissionShare, PermissionShareError> {
         let record = self.get_record_by_id(permission_share_id).await?;
         let owner_account_email = record.owner_account_email();
+        let target_account_email = record.target_account_email();
         let mut share: PermissionShare = record.share.try_into()?;
+
+        self.authorize_view(&share, &owner_account_email, &target_account_email, auth)
+            .map_err(|err| match err {
+                PermissionShareError::Unauthorized(_) => {
+                    PermissionShareError::PermissionShareNotFound(permission_share_id)
+                }
+                other => other,
+            })?;
+
         authorize_permission_share_permission(
             auth,
             &owner_account_email,

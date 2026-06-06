@@ -302,6 +302,14 @@ impl TokenService {
         authorize_account_token_permission(
             auth,
             &account_email,
+            AccountTokenVerb::View,
+            AccountTokenResourcePattern::Token(token_id),
+        )
+        .map_err(|_| TokenError::TokenNotFound(token_id))?;
+
+        authorize_account_token_permission(
+            auth,
+            &account_email,
             AccountTokenVerb::Delete,
             AccountTokenResourcePattern::Token(token_id),
         )?;

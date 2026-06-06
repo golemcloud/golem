@@ -404,10 +404,8 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
                     FROM permission_shares ps
                     JOIN accounts owner
                         ON owner.account_id = ps.owner_account_id
-                       AND owner.deleted_at IS NULL
                     JOIN accounts target
                         ON target.account_id = ps.target_account_id
-                       AND target.deleted_at IS NULL
                     JOIN permission_share_revisions psr
                         ON psr.permission_share_id = ps.permission_share_id
                        AND psr.revision_id = ps.current_revision_id

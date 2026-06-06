@@ -118,7 +118,7 @@ impl EnvironmentPluginGrantService {
 
         let plugin = self
             .plugin_registration_service
-            .get_plugin(data.plugin_registration_id, false, auth)
+            .get_plugin(data.plugin_registration_id, auth)
             .await
             .map_err(|err| match err {
                 PluginRegistrationError::PluginRegistrationNotFound(plugin_registration_id) => {
@@ -161,7 +161,7 @@ impl EnvironmentPluginGrantService {
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentPluginGrantError> {
         let (grant, owner) = self
-            .get_by_id_with_environment(environment_plugin_grant_id, false, auth)
+            .get_by_id_with_environment(environment_plugin_grant_id, auth)
             .await?;
 
         authorize_environment_plugin_grant_permission_for_owner(
@@ -225,11 +225,10 @@ impl EnvironmentPluginGrantService {
     pub async fn get_by_id(
         &self,
         environment_plugin_grant_id: EnvironmentPluginGrantId,
-        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<EnvironmentPluginGrantWithDetails, EnvironmentPluginGrantError> {
         Ok(self
-            .get_by_id_with_environment(environment_plugin_grant_id, include_deleted, auth)
+            .get_by_id_with_environment(environment_plugin_grant_id, auth)
             .await?
             .0)
     }
@@ -243,7 +242,7 @@ impl EnvironmentPluginGrantService {
     ) -> Result<EnvironmentPluginGrantWithDetails, EnvironmentPluginGrantError> {
         let grant: EnvironmentPluginGrantWithDetails = self
             .environment_plugin_grant_repo
-            .get_by_id(environment_plugin_grant_id.0, false)
+            .get_by_id(environment_plugin_grant_id.0)
             .await?
             .ok_or(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
                 environment_plugin_grant_id,
@@ -298,7 +297,7 @@ impl EnvironmentPluginGrantService {
 
         let records = self
             .environment_plugin_grant_repo
-            .get_by_ids(&ids, false)
+            .get_by_ids(environment.id.0, &ids)
             .await?;
 
         // Build result map, verifying each grant belongs to this environment
@@ -329,7 +328,6 @@ impl EnvironmentPluginGrantService {
     async fn get_by_id_with_environment(
         &self,
         environment_plugin_grant_id: EnvironmentPluginGrantId,
-        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<
         (EnvironmentPluginGrantWithDetails, EnvironmentOwnerPattern),
@@ -337,7 +335,7 @@ impl EnvironmentPluginGrantService {
     > {
         let record = self
             .environment_plugin_grant_repo
-            .get_by_id(environment_plugin_grant_id.0, include_deleted)
+            .get_by_id(environment_plugin_grant_id.0)
             .await?
             .ok_or(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
                 environment_plugin_grant_id,

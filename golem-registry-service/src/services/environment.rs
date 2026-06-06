@@ -299,15 +299,36 @@ impl EnvironmentService {
         name: &EnvironmentName,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
-        let result: Environment = self
+        let application = self
+            .application_service
+            .get(application_id, auth)
+            .await
+            .map_err(|err| match err {
+                ApplicationError::ApplicationNotFound(application_id) => {
+                    EnvironmentError::ParentApplicationNotFound(application_id)
+                }
+                other => other.into(),
+            })?;
+
+        authorize_environment_permission(
+            auth,
+            &application.account_email,
+            &application.name,
+            EnvironmentVerb::View,
+            EnvironmentResourcePattern::Environment(CardEnvironmentName(name.0.clone())),
+        )
+        .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
+
+        let result = self
             .environment_repo
             .get_by_name(application_id.0, &name.0)
             .await?
             .ok_or(EnvironmentError::EnvironmentByNameNotFound(name.clone()))?
-            .try_into()?;
-
-        authorize_environment_model(auth, &result, EnvironmentVerb::View)
-            .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
+            .try_into_model(
+                application.name,
+                application.account_id,
+                application.account_email,
+            )?;
 
         Ok(result)
     }
@@ -341,7 +362,13 @@ impl EnvironmentService {
             .list_by_app(application_id.0)
             .await?
             .into_iter()
-            .map(Environment::try_from)
+            .map(|record| {
+                record.try_into_model(
+                    application.name.clone(),
+                    application.account_id,
+                    application.account_email.clone(),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?)
     }
 

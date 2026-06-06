@@ -129,7 +129,7 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         application_id: Uuid,
         name: &str,
-    ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
+    ) -> Result<Option<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn get_by_id(
         &self,
@@ -140,7 +140,7 @@ pub trait EnvironmentRepo: Send + Sync {
     async fn list_by_app(
         &self,
         application_id: Uuid,
-    ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
+    ) -> Result<Vec<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn create(
         &self,
@@ -205,7 +205,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         application_id: Uuid,
         name: &str,
-    ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
+    ) -> Result<Option<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
             .get_by_name(application_id, name)
             .instrument(Self::span_name(application_id, name))
@@ -226,7 +226,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn list_by_app(
         &self,
         application_id: Uuid,
-    ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
+    ) -> Result<Vec<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
             .list_by_app(application_id)
             .instrument(Self::span_env(application_id))
@@ -346,29 +346,22 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         application_id: Uuid,
         name: &str,
-    ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
+    ) -> Result<Option<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("get_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name, e.application_id, ap.name AS application_name,
-                        r.environment_id, r.revision_id, r.hash,
+                        e.application_id,
+                        r.environment_id, r.revision_id, r.name, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides,
-
-                        a.account_id as owner_account_id,
-                        a.email as owner_account_email,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
                         dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
-                    FROM accounts a
-                    JOIN applications ap
-                        ON ap.account_id = a.account_id
-                    JOIN environments e
-                        ON e.application_id = ap.application_id
+                    FROM environments e
                     JOIN environment_revisions r
                         ON r.environment_id = e.environment_id
                         AND r.revision_id = e.current_revision_id
@@ -383,10 +376,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND dr.revision_id = cdr.deployment_revision_id
 
                     WHERE
-                        ap.application_id = $1
+                        e.application_id = $1
                         AND e.name = $2
-                        AND a.deleted_at IS NULL
-                        AND ap.deleted_at IS NULL
                         AND e.deleted_at IS NULL
                 "# })
                 .bind(application_id)
@@ -454,32 +445,22 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn list_by_app(
         &self,
         application_id: Uuid,
-    ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
+    ) -> Result<Vec<EnvironmentScopedExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name, e.application_id, ap.name AS application_name,
-                        r.environment_id, r.revision_id, r.hash,
+                        e.application_id,
+                        r.environment_id, r.revision_id, r.name, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides,
-
-                        a.account_id as owner_account_id,
-                        a.email as owner_account_email,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
                         dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
-                    FROM accounts a
-                    JOIN applications ap
-                        ON ap.account_id = a.account_id
-                        AND ap.deleted_at IS NULL
-
-                    JOIN environments e
-                        ON e.application_id = ap.application_id
-                        AND e.deleted_at IS NULL
+                    FROM environments e
                     JOIN environment_revisions r
                         ON r.environment_id = e.environment_id
                         AND r.revision_id = e.current_revision_id
@@ -494,8 +475,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND dr.revision_id = cdr.deployment_revision_id
 
                     WHERE
-                        ap.application_id = $1
-                        AND a.deleted_at IS NULL
+                        e.application_id = $1
+                        AND e.deleted_at IS NULL
                     ORDER BY e.name
                 "#})
                 .bind(application_id),

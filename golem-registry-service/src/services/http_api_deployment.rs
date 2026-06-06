@@ -448,13 +448,16 @@ impl HttpApiDeploymentService {
         deployment_revision: DeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<Vec<HttpApiDeployment>, HttpApiDeploymentError> {
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
+        let (_, environment) = self
+            .deployment_service
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
             .await
             .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                DeploymentError::ParentEnvironmentNotFound(environment_id) => {
                     HttpApiDeploymentError::ParentEnvironmentNotFound(environment_id)
+                }
+                DeploymentError::DeploymentNotFound(deployment_revision) => {
+                    HttpApiDeploymentError::DeploymentRevisionNotFound(deployment_revision)
                 }
                 other => other.into(),
             })?;
