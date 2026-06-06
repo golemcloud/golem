@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::environment::{
-    EnvironmentRepoError, EnvironmentWithDetailsRecord, OptionalEnvironmentExtRevisionRecord,
-};
+use super::model::environment::{EnvironmentRepoError, EnvironmentWithDetailsRecord};
 use crate::repo::model::BindFields;
 pub use crate::repo::model::environment::{
     EnvironmentExtRecord, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
@@ -144,7 +142,7 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         application_id: Uuid,
         actor: Uuid,
-    ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError>;
+    ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn create(
         &self,
@@ -233,7 +231,7 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         application_id: Uuid,
         actor: Uuid,
-    ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError> {
+    ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
             .list_by_app(application_id, actor)
             .instrument(Self::span_env(application_id))
@@ -464,7 +462,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         application_id: Uuid,
         _actor: Uuid,
-    ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError> {
+    ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("list_by_owner")
             .fetch_all_as(
@@ -483,14 +481,14 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         dr.version as current_deployment_deployment_version,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
-                    INNER JOIN applications ap
+                    JOIN applications ap
                         ON ap.account_id = a.account_id
                         AND ap.deleted_at IS NULL
 
-                    LEFT JOIN environments e
+                    JOIN environments e
                         ON e.application_id = ap.application_id
                         AND e.deleted_at IS NULL
-                    LEFT JOIN environment_revisions r
+                    JOIN environment_revisions r
                         ON r.environment_id = e.environment_id
                         AND r.revision_id = e.current_revision_id
 

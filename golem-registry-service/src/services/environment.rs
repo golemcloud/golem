@@ -27,11 +27,10 @@ use crate::repo::plugin::PluginRepo;
 use crate::services::application::ApplicationError;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::card::owner::{AccountOwnerPattern, ApplicationOwnerPattern};
+use golem_common::model::card::owner::ApplicationOwnerPattern;
 use golem_common::model::card::{
-    ApplicationResourcePattern, ApplicationVerb, ClassPermissionTarget, EffectiveSurface,
-    EnvironmentName as CardEnvironmentName, EnvironmentResourcePattern, EnvironmentVerb,
-    PermissionTarget,
+    ClassPermissionTarget, EffectiveSurface, EnvironmentName as CardEnvironmentName,
+    EnvironmentResourcePattern, EnvironmentVerb, PermissionTarget,
 };
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentRevision,
@@ -318,52 +317,32 @@ impl EnvironmentService {
         application_id: ApplicationId,
         auth: &AuthCtx,
     ) -> Result<Vec<Environment>, EnvironmentError> {
-        let mut authorized_environments = Vec::new();
-        let mut application_owner_email = None;
+        let application = self
+            .application_service
+            .get(application_id, auth)
+            .await
+            .map_err(|err| match err {
+                ApplicationError::ApplicationNotFound(application_id) => {
+                    EnvironmentError::ParentApplicationNotFound(application_id)
+                }
+                other => other.into(),
+            })?;
 
-        for record in self
+        authorize_environment_permission(
+            auth,
+            &application.account_email,
+            &application.name,
+            EnvironmentVerb::View,
+            EnvironmentResourcePattern::Any,
+        )?;
+
+        Ok(self
             .environment_repo
             .list_by_app(application_id.0, auth.access_account_id().0)
             .await?
-        {
-            let owner_account_email = record.owner_account_email();
-
-            let environment: Option<Environment> = record
-                .into_revision_record()
-                .map(|r| r.try_into())
-                .transpose()?;
-
-            application_owner_email.get_or_insert(owner_account_email);
-
-            if let Some(environment) = environment
-                && authorize_environment_model(auth, &environment, EnvironmentVerb::View).is_ok()
-            {
-                authorized_environments.push(environment);
-            }
-        }
-
-        match (application_owner_email, authorized_environments.is_empty()) {
-            (Some(_), false) => {
-                // checked above using the authorized environment actions -> only return authorized environments
-                Ok(authorized_environments)
-            }
-            (Some(application_owner_email), true) => {
-                // application exists but has no environments -> only leak existence if account-level permissions are present
-                authorize_application_permission(
-                    auth,
-                    &application_owner_email,
-                    ApplicationVerb::ListAllEnvironments,
-                    ApplicationResourcePattern::Any,
-                )
-                .map_err(|_| EnvironmentError::ParentApplicationNotFound(application_id))?;
-
-                Ok(authorized_environments)
-            }
-            (None, _) => {
-                // parent application does not exist -> return notfound to prevent leakage
-                Err(EnvironmentError::ParentApplicationNotFound(application_id))
-            }
-        }
+            .into_iter()
+            .map(Environment::try_from)
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     pub async fn list_visible_environments(
@@ -403,15 +382,11 @@ fn visible_environment_filter(auth: &AuthCtx) -> EnvironmentVisibilityFilter {
         AuthCtx::AdminImpersonation(ctx) => {
             visible_environment_filter_from_surface(&ctx.effective_surface)
         }
-        AuthCtx::Agent(agent) => agent
-            .account_email
-            .as_ref()
-            .map(|account| {
-                EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::account(
-                    account.as_str(),
-                )])
-            })
-            .unwrap_or(EnvironmentVisibilityFilter::None),
+        AuthCtx::Agent(agent) => {
+            EnvironmentVisibilityFilter::from_scopes([EnvironmentVisibilityScope::account(
+                agent.account_email.as_str(),
+            )])
+        }
     }
 }
 
@@ -513,21 +488,6 @@ fn authorize_environment_details(
     )
 }
 
-fn authorize_application_permission(
-    auth: &AuthCtx,
-    account_email: &AccountEmail,
-    verb: ApplicationVerb,
-    resource: ApplicationResourcePattern,
-) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::Application(ClassPermissionTarget {
-        verb: Some(verb),
-        owner: AccountOwnerPattern::Account {
-            account: account_email.clone(),
-        },
-        resource,
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,14 +572,6 @@ mod tests {
                     env_name: Some("shared-env".to_string()),
                 },
             ])
-        );
-    }
-
-    #[test]
-    fn visible_environment_filter_for_agent_without_email_is_empty() {
-        assert_eq!(
-            visible_environment_filter(&AuthCtx::agent(AccountId::new())),
-            EnvironmentVisibilityFilter::None,
         );
     }
 }
