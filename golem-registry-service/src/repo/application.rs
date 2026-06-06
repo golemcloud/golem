@@ -19,7 +19,7 @@ use super::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
 use crate::repo::model::BindFields;
-use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
+use crate::repo::model::application::{ApplicationRevisionRecord, ApplicationScopedRecord};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -56,17 +56,17 @@ pub trait ApplicationRepo: Send + Sync {
         &self,
         account_id: Uuid,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError>;
+    ) -> Result<ApplicationScopedExtRevisionRecord, ApplicationRepoError>;
 
     async fn update(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError>;
+    ) -> Result<ApplicationScopedExtRevisionRecord, ApplicationRepoError>;
 
     async fn delete(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<ApplicationExtRevisionRecord>, ApplicationRepoError>;
+    ) -> Result<RequiresNotificationSignal<ApplicationScopedExtRevisionRecord>, ApplicationRepoError>;
 }
 
 pub struct LoggedApplicationRepo<Repo: ApplicationRepo> {
@@ -130,7 +130,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
         &self,
         account_id: Uuid,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+    ) -> Result<ApplicationScopedExtRevisionRecord, ApplicationRepoError> {
         self.repo
             .create(account_id, revision)
             .instrument(Self::span_owner_id(account_id))
@@ -140,7 +140,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn update(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+    ) -> Result<ApplicationScopedExtRevisionRecord, ApplicationRepoError> {
         let span = Self::span_app_id(revision.application_id);
         self.repo.update(revision).instrument(span).await
     }
@@ -148,7 +148,7 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn delete(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<ApplicationExtRevisionRecord>, ApplicationRepoError>
+    ) -> Result<RequiresNotificationSignal<ApplicationScopedExtRevisionRecord>, ApplicationRepoError>
     {
         let span = Self::span_app_id(revision.application_id);
         self.repo.delete(revision).instrument(span).await
@@ -291,16 +291,15 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         &self,
         account_id: Uuid,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+    ) -> Result<ApplicationScopedExtRevisionRecord, ApplicationRepoError> {
         self.with_tx_err("create", |tx| async move {
-            let application_record: ApplicationRecord = tx.fetch_one_as(
+            let application_record: ApplicationScopedRecord = tx.fetch_one_as(
                 sqlx::query_as(indoc! { r#"
                     INSERT INTO applications
                     (application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
                     VALUES ($1, $2, $3, $4, $4, NULL, $5, 0)
                     RETURNING application_id, name, account_id,
-                        (SELECT email FROM accounts WHERE account_id = applications.account_id) AS account_email,
-                        created_at, updated_at, deleted_at, modified_by, current_revision_id
+                        created_at, updated_at, deleted_at, modified_by
                 "# })
                     .bind(revision.application_id)
                     .bind(&revision.name)
@@ -312,10 +311,9 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
             let revision = Self::insert_revision(tx, revision).await?;
 
-            Ok(ApplicationExtRevisionRecord {
+            Ok(ApplicationScopedExtRevisionRecord {
                 account_id,
-                account_email: application_record.account_email,
-                entity_created_at: revision.audit.created_at.clone(),
+                entity_created_at: application_record.audit.created_at,
                 revision,
             })
         }.boxed()).await
@@ -324,33 +322,34 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn update(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+    ) -> Result<ApplicationScopedExtRevisionRecord, ApplicationRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision).await?;
 
-                let application_record: ApplicationRecord = tx.fetch_optional_as(
-                    sqlx::query_as(indoc! { r#"
+                let application_record: ApplicationScopedRecord = tx
+                    .fetch_optional_as(
+                        sqlx::query_as(indoc! { r#"
                         UPDATE applications
                         SET name = $1, updated_at = $2, modified_by = $3, current_revision_id = $4
                         WHERE application_id = $5
                         RETURNING application_id, name, account_id,
-                            (SELECT email FROM accounts WHERE account_id = applications.account_id) AS account_email,
-                            created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            created_at, updated_at, deleted_at, modified_by
                     "#})
-                    .bind(&revision.name)
-                    .bind(&revision.audit.created_at)
-                    .bind(revision.audit.created_by)
-                    .bind(revision.revision_id)
-                    .bind(revision.application_id)
-                )
-                .await
-                .to_error_on_unique_violation(ApplicationRepoError::ApplicationViolatesUniqueness)?
-                .ok_or(ApplicationRepoError::ConcurrentModification)?;
+                        .bind(&revision.name)
+                        .bind(&revision.audit.created_at)
+                        .bind(revision.audit.created_by)
+                        .bind(revision.revision_id)
+                        .bind(revision.application_id),
+                    )
+                    .await
+                    .to_error_on_unique_violation(
+                        ApplicationRepoError::ApplicationViolatesUniqueness,
+                    )?
+                    .ok_or(ApplicationRepoError::ConcurrentModification)?;
 
-                Ok(ApplicationExtRevisionRecord {
+                Ok(ApplicationScopedExtRevisionRecord {
                     account_id: application_record.account_id,
-                    account_email: application_record.account_email,
                     entity_created_at: application_record.audit.created_at,
                     revision,
                 })
@@ -363,20 +362,19 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn delete(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<ApplicationExtRevisionRecord>, ApplicationRepoError>
+    ) -> Result<RequiresNotificationSignal<ApplicationScopedExtRevisionRecord>, ApplicationRepoError>
     {
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision).await?;
 
-                let application_record: ApplicationRecord = tx.fetch_optional_as(
+                let application_record: ApplicationScopedRecord = tx.fetch_optional_as(
                     sqlx::query_as(indoc! { r#"
                         UPDATE applications
                         SET name = $1, updated_at = $2, deleted_at = $2, modified_by = $3, current_revision_id = $4
                         WHERE application_id = $5
                         RETURNING application_id, name, account_id,
-                            (SELECT email FROM accounts WHERE account_id = applications.account_id) AS account_email,
-                            created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            created_at, updated_at, deleted_at, modified_by
                     "#})
                     .bind(&revision.name)
                     .bind(&revision.audit.created_at)
@@ -421,9 +419,8 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 )
                 .await?;
 
-                Ok(ApplicationExtRevisionRecord {
+                Ok(ApplicationScopedExtRevisionRecord {
                     account_id: application_record.account_id,
-                    account_email: application_record.account_email,
                     entity_created_at: application_record.audit.created_at,
                     revision,
                 })

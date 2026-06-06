@@ -334,7 +334,8 @@ pub async fn test_environment_create(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(env_by_name) = env_by_name);
-    check!(env == env_by_name);
+    check!(env.application_id == env_by_name.application_id);
+    check!(env.revision == env_by_name.revision);
 
     let env_by_id = deps
         .environment_repo
@@ -342,7 +343,8 @@ pub async fn test_environment_create(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(env_by_id) = env_by_id);
-    check!(env == env_by_id);
+    check!(env.application_id == env_by_id.application_id);
+    check!(env.revision == env_by_id.revision);
 }
 
 pub async fn test_environment_list_visible_to_account_uses_visibility_filter(deps: &Deps) {

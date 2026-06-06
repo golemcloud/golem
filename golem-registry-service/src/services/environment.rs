@@ -180,7 +180,11 @@ impl EnvironmentService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(
+                application.name,
+                application.account_id,
+                application.account_email,
+            )?;
 
         Ok(result)
     }
@@ -213,6 +217,9 @@ impl EnvironmentService {
             environment.security_overrides = security_overrides;
         }
 
+        let application_name = environment.application_name.clone();
+        let owner_account_id = environment.owner_account_id;
+        let owner_account_email = environment.owner_account_email.clone();
         let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
@@ -229,7 +236,7 @@ impl EnvironmentService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(application_name, owner_account_id, owner_account_email)?;
 
         Ok(result)
     }

@@ -151,7 +151,7 @@ impl ApplicationService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(account.email)?;
 
         Ok(result)
     }
@@ -182,6 +182,7 @@ impl ApplicationService {
             application.name = new_name
         };
 
+        let account_email = application.account_email.clone();
         let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
         let record = ApplicationRevisionRecord::from_model(application, audit);
 
@@ -198,7 +199,7 @@ impl ApplicationService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(account_email)?;
 
         Ok(result)
     }

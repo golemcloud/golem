@@ -44,6 +44,15 @@ pub struct ApplicationRecord {
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ApplicationScopedRecord {
+    pub application_id: Uuid,
+    pub name: String,
+    pub account_id: Uuid,
+    #[sqlx(flatten)]
+    pub audit: AuditFields,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ApplicationRevisionRecord {
     pub application_id: Uuid,
     pub revision_id: i64,
