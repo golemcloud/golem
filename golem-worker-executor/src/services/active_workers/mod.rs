@@ -37,13 +37,17 @@ use component_charge::{ChargeSource, ComponentChargeGuard, ComponentChargeRegist
 use memory_probe::{MemoryProbe, default_probe};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 use tracing::{Instrument, debug};
 
 use crate::services::HasAll;
-use crate::services::golem_config::{FilesystemStorageConfig, MemoryConfig};
+use crate::services::golem_config::{
+    AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
+};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::Worker;
+use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -89,6 +93,7 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     /// Multiplier applied to a component's `component_size` when sizing its
     /// module charge.
     component_size_coefficient: f64,
+    status_flush_queue: Arc<AgentStatusFlushQueue>,
 }
 
 /// Identifies a compiled component for module-charge accounting.
@@ -98,12 +103,23 @@ type ComponentChargeKey = (ComponentId, ComponentRevision);
 pub type WorkerComponentCharge = ComponentChargeGuard<ComponentChargeKey, GateChargeSource>;
 
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
-    pub fn new(memory_config: &MemoryConfig, storage_config: &FilesystemStorageConfig) -> Self {
+    pub fn new(
+        memory_config: &MemoryConfig,
+        storage_config: &FilesystemStorageConfig,
+        agent_status_flush_config: &AgentStatusFlushConfig,
+        shutdown_token: CancellationToken,
+    ) -> Self {
         // Build the probe once and hand it to the measured-headroom gate, which
         // bases its decision on the pod's cgroup limit when constrained (not host
         // RAM).
         let probe = default_probe(memory_config.system_memory_override);
-        Self::new_with_probe(probe, memory_config, storage_config)
+        Self::new_with_probe(
+            probe,
+            memory_config,
+            storage_config,
+            agent_status_flush_config,
+            shutdown_token,
+        )
     }
 
     /// Like [`Self::new`] but with an explicitly provided memory probe instead of
@@ -114,6 +130,8 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         probe: Box<dyn MemoryProbe>,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
+        agent_status_flush_config: &AgentStatusFlushConfig,
+        shutdown_token: CancellationToken,
     ) -> Self {
         let admission = memory_config.enable_measured_admission.then(|| {
             Arc::new(AdmissionController::new(
@@ -141,6 +159,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             admission,
             component_charges,
             component_size_coefficient: memory_config.component_size_coefficient,
+            status_flush_queue: AgentStatusFlushQueue::new(
+                agent_status_flush_config.interval,
+                agent_status_flush_config.max_concurrency,
+                shutdown_token,
+            ),
         };
         active_workers.initialize_metrics();
         active_workers
@@ -161,6 +184,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.component_charges
             .acquire((component_id, component_revision), charge_bytes)
             .await
+    }
+
+    /// The per-executor queue used to batch cached agent status blob writes in the background.
+    pub fn status_flush_queue(&self) -> Arc<AgentStatusFlushQueue> {
+        self.status_flush_queue.clone()
     }
 
     pub async fn get_or_add<T>(

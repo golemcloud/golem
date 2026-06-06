@@ -1386,6 +1386,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     fn create_active_workers(
         &self,
         golem_config: &GolemConfig,
+        shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
         // The in-process test harness shares its process (and RSS) with the test
         // framework and other services, so a process-RSS probe cannot isolate
@@ -1400,10 +1401,14 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                 Box::new(FixedProbe::new(limit, 0)),
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
             )),
             None => Arc::new(ActiveWorkers::new(
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
             )),
         }
     }

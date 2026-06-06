@@ -167,10 +167,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// (cgroup/process/override). The in-process test harness overrides this to
     /// inject a probe with a pinned limit and usage so the gate is deterministic
     /// and isolated from the shared test process's RSS.
-    fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>> {
+    fn create_active_workers(
+        &self,
+        golem_config: &GolemConfig,
+        shutdown_token: CancellationToken,
+    ) -> Arc<ActiveWorkers<Ctx>> {
         Arc::new(ActiveWorkers::<Ctx>::new(
             &golem_config.memory,
             &golem_config.filesystem_storage,
+            &golem_config.agent_status_flush,
+            shutdown_token,
         ))
     }
 
@@ -782,7 +788,8 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_workers = bootstrap.create_active_workers(&golem_config);
+    let active_workers =
+        bootstrap.create_active_workers(&golem_config, shutdown_token.clone());
 
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
