@@ -31,7 +31,7 @@ benchmarks:
   - name: throughput-echo
     iterations: 3
     clusterSize: [2]
-    size: [1, 10, 50, 100, 250]
+    size: [1, 10, 50, 100]
     length: [1000]
 
   # size   = number of workers per implementation
