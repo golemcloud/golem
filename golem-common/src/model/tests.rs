@@ -471,3 +471,34 @@ fn agent_filter_mode_protobuf_round_trip() {
     let recovered: AgentFilter = proto.try_into().unwrap();
     assert_eq!(composite, recovered);
 }
+
+#[test]
+fn agent_status_record_agent_mode_is_not_serialized() {
+    use crate::serialization::{deserialize, serialize};
+
+    // `agent_mode` is `#[transient]`: it is excluded from the serialized status blob and stored
+    // under a separate KV key instead. A record serialized with a non-default mode must therefore
+    // deserialize back with the `Durable` default, while all other fields round-trip unchanged.
+    let original = AgentStatusRecord {
+        component_revision: ComponentRevision::new(7).unwrap(),
+        component_size: 1234,
+        agent_mode: AgentMode::Ephemeral,
+        ..AgentStatusRecord::default()
+    };
+
+    let bytes = serialize(&original).unwrap();
+    let recovered: AgentStatusRecord = deserialize(&bytes).unwrap();
+
+    assert_eq!(
+        recovered.agent_mode,
+        AgentMode::Durable,
+        "agent_mode must not be carried by the serialized blob (defaults on read)"
+    );
+
+    // Everything except the transient agent_mode must survive the round-trip.
+    let expected = AgentStatusRecord {
+        agent_mode: AgentMode::Durable,
+        ..original
+    };
+    assert_eq!(recovered, expected);
+}
