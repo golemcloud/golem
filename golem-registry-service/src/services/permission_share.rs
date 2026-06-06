@@ -35,7 +35,6 @@ use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::str::FromStr;
 use std::sync::Arc;
-use uuid::Uuid;
 
 const MAX_CARD_TREE_DELETE_ATTEMPTS: usize = 5;
 

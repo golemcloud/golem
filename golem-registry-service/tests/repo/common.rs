@@ -935,9 +935,9 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
-    assert!(revision_0 == get_revision_0.revision);
-    assert!(get_revision_0.environment_id == env.revision.environment_id);
-    assert!(get_revision_0.domain == domain);
+    assert!(revision_0 == get_revision_0.deployment.revision);
+    assert!(get_revision_0.deployment.environment_id == env.revision.environment_id);
+    assert!(get_revision_0.deployment.domain == domain);
 
     let get_revision_0 = deps
         .http_api_deployment_repo
