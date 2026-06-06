@@ -126,6 +126,15 @@ impl DefaultWorkerService {
         format!("worker:status:{}", agent_id.to_redis_key())
     }
 
+    /// Key holding only the worker's immutable `AgentMode`, stored separately from the status
+    /// blob so `get_agent_mode` can resolve the oplog namespace without deserializing the whole
+    /// `AgentStatusRecord`. Populated lazily on a `get_agent_mode` cache miss (durable workers
+    /// only); never written on the per-commit hot path. The value never changes for the life of
+    /// the worker.
+    fn agent_mode_key(agent_id: &AgentId) -> String {
+        format!("worker:agent_mode:{}", agent_id.to_redis_key())
+    }
+
     fn running_in_shard_key(shard_id: &ShardId) -> String {
         format!("worker:running_in_shard:{shard_id}")
     }
@@ -153,6 +162,46 @@ impl DefaultWorkerService {
             Some(Err(_)) => None,
             None => None,
         }
+    }
+
+    /// Reads the dedicated `agent_mode` key, if present. Returns `None` on a cache miss or if the
+    /// stored value cannot be deserialized in the current format (treated as a miss).
+    async fn read_cached_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
+        let value: Option<Result<AgentMode, String>> = self
+            .key_value_storage
+            .with_entity("worker", "read_cached_agent_mode", "agent_mode")
+            .get_attempt_deserialize(
+                KeyValueStorageNamespace::Worker {
+                    agent_id: owned_agent_id.agent_id(),
+                },
+                &Self::agent_mode_key(&owned_agent_id.agent_id),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to get agent mode for {owned_agent_id} from KV storage: {err}")
+            });
+
+        match value {
+            Some(Ok(agent_mode)) => Some(agent_mode),
+            Some(Err(_)) | None => None,
+        }
+    }
+
+    /// Populates the dedicated `agent_mode` key. Only called on a `get_agent_mode` cache miss for
+    /// durable workers, never on the per-commit hot path. The value is immutable for the life of
+    /// the worker, so concurrent writers would write the same value.
+    async fn write_cached_agent_mode(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        self.key_value_storage
+            .with_entity("worker", "write_cached_agent_mode", "agent_mode")
+            .set(
+                KeyValueStorageNamespace::Worker {
+                    agent_id: owned_agent_id.agent_id(),
+                },
+                &Self::agent_mode_key(&owned_agent_id.agent_id),
+                &agent_mode,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("failed to set agent mode in KV storage: {err}"));
     }
 
     fn should_track_for_assignment_recovery(status: &AgentStatusRecord) -> bool {
@@ -252,7 +301,14 @@ impl WorkerService for DefaultWorkerService {
                 };
 
                 let last_known_status = match self.read_cached_status(owned_agent_id).await {
-                    Some(status) => Some(status),
+                    Some(mut status) => {
+                        // `agent_mode` is `#[transient]` and therefore not part of the status
+                        // blob; restore it from the authoritative value resolved above so the
+                        // returned record carries the correct mode instead of the `Durable`
+                        // deserialization default.
+                        status.agent_mode = agent_mode;
+                        Some(status)
+                    }
                     // No cached status (cache miss, missing for ephemeral workers, or stale
                     // format) -> recompute from oplog.
                     None => {
@@ -325,11 +381,14 @@ impl WorkerService for DefaultWorkerService {
 
         self.key_value_storage
             .with("worker", "remove")
-            .del(
+            .del_many(
                 KeyValueStorageNamespace::Worker {
                     agent_id: owned_agent_id.agent_id(),
                 },
-                &Self::status_key(&owned_agent_id.agent_id),
+                vec![
+                    Self::status_key(&owned_agent_id.agent_id),
+                    Self::agent_mode_key(&owned_agent_id.agent_id),
+                ],
             )
             .await
             .unwrap_or_else(|err| {
@@ -340,18 +399,23 @@ impl WorkerService for DefaultWorkerService {
     async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
         record_worker_call("get_agent_mode");
 
-        // Fast path: cached `AgentStatusRecord` (only present for durable workers).
-        if let Some(status) = self.read_cached_status(owned_agent_id).await {
-            return Some(status.agent_mode);
+        // Fast path: dedicated `agent_mode` key (only populated for durable workers).
+        if let Some(agent_mode) = self.read_cached_agent_mode(owned_agent_id).await {
+            return Some(agent_mode);
         }
 
-        // Cache miss (e.g. ephemeral worker, or freshly-created durable worker before its
-        // first status write): probe both oplog namespaces. Constant-time existence checks.
+        // Cache miss (e.g. ephemeral worker, or durable worker whose dedicated key has not been
+        // populated yet): probe both oplog namespaces. Constant-time existence checks.
         if self
             .oplog_service
             .exists(owned_agent_id, AgentMode::Durable)
             .await
         {
+            // Populate the dedicated key so subsequent lookups skip the oplog probe. Only durable
+            // workers are cached (mirrors `update_cached_status`): an ephemeral worker's oplog is
+            // transient, so caching its mode could outlive the worker and return a stale `Some`.
+            self.write_cached_agent_mode(owned_agent_id, AgentMode::Durable)
+                .await;
             Some(AgentMode::Durable)
         } else if self
             .oplog_service

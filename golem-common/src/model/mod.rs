@@ -723,7 +723,7 @@ impl SafeDisplay for RetryConfig {
 /// By having an associated oplog_idx, the cached information can be used together with the
 /// tail of the oplog to determine the actual status of the worker.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
-#[desert(evolution(FieldAdded("agent_mode", AgentMode::Durable)))]
+#[desert(evolution())]
 pub struct AgentStatusRecord {
     pub status: AgentStatus,
     pub skipped_regions: DeletedRegions,
@@ -759,9 +759,10 @@ pub struct AgentStatusRecord {
     /// Timestamp of the last automatic snapshot entry in the oplog.
     pub last_automatic_snapshot_timestamp: Option<Timestamp>,
     /// The agent mode the worker was created with. Decided at create time and persisted in the
-    /// `Create` oplog entry; immutable for the life of the worker. Recorded here so that out-of-band
-    /// callers (e.g. `WorkerService::get_agent_mode`) can resolve the worker's oplog namespace
-    /// directly from the cached status record without a separate KV lookup.
+    /// `Create` oplog entry; immutable for the life of the worker. `#[transient]`: it is not part
+    /// of the serialized record (it is persisted separately) and defaults to `Durable` on
+    /// deserialization, so readers must restore it from its own source.
+    #[transient(AgentMode::Durable)]
     pub agent_mode: AgentMode,
 }
 
