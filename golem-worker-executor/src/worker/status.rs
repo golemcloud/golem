@@ -5,16 +5,14 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, OplogEntry, OplogPayload, TimestampedUpdateDescription,
-    UpdateDescription,
+    AgentError, AgentResourceId, OplogEntry, OplogPayload, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentInvocation, AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
-    IdempotencyKey, OplogProcessorCheckpointState, OwnedAgentId, RetryConfig, RetryPolicyState,
-    SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation,
+    AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
+    OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -70,14 +68,11 @@ where
             .await;
 
         let final_status = update_status_with_new_entries(
-            this,
-            owned_agent_id,
             agent_mode,
             last_known,
             new_entries,
             &this.config().retry,
-        )
-        .await;
+        );
 
         if let Some(final_status) = final_status {
             Some(final_status)
@@ -88,9 +83,7 @@ where
 }
 
 // update a worker status with new entries. Returns None if the status cannot be calculated from the new entries alone and needs to be recalculated from the beginning.
-pub async fn update_status_with_new_entries<T: HasOplogService + HasComponentService + Sync>(
-    this: &T,
-    owned_agent_id: &OwnedAgentId,
+pub fn update_status_with_new_entries(
     agent_mode: AgentMode,
     last_known: AgentStatusRecord,
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
@@ -150,14 +143,8 @@ pub async fn update_status_with_new_entries<T: HasOplogService + HasComponentSer
         &new_entries,
     );
 
-    let pending_invocations = calculate_pending_invocations(
-        this,
-        owned_agent_id,
-        agent_mode,
-        last_known.pending_invocations,
-        &new_entries,
-    )
-    .await;
+    let pending_invocations =
+        calculate_pending_invocations(last_known.pending_invocations, &new_entries);
     let (
         pending_updates,
         failed_updates,
@@ -493,15 +480,49 @@ fn calculate_skipped_regions(
     new_skipped
 }
 
-async fn calculate_pending_invocations<T: HasOplogService + HasComponentService + Sync>(
-    this: &T,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
-    initial: Vec<TimestampedAgentInvocation>,
+/// Determines whether a pending agent invocation payload is a manual update and, if so, returns
+/// its target revision.
+///
+/// Manual update payloads are tiny and always stored inline, so this never needs to download an
+/// external payload: an `External` payload is by definition not a manual update.
+fn manual_update_target_revision_of(
+    payload: &OplogPayload<AgentInvocationPayload>,
+) -> Option<ComponentRevision> {
+    fn target_revision(payload: &AgentInvocationPayload) -> Option<ComponentRevision> {
+        match payload {
+            AgentInvocationPayload::ManualUpdate { target_revision } => Some(*target_revision),
+            _ => None,
+        }
+    }
+
+    match payload {
+        OplogPayload::Inline(p) => target_revision(p),
+        OplogPayload::SerializedInline {
+            cached: Some(v), ..
+        } => target_revision(v),
+        OplogPayload::SerializedInline { bytes, .. } => {
+            deserialize::<AgentInvocationPayload>(bytes)
+                .map_err(|e| {
+                    tracing::warn!("Failed to deserialize pending agent invocation payload: {e}");
+                    e
+                })
+                .ok()
+                .as_ref()
+                .and_then(target_revision)
+        }
+        OplogPayload::External {
+            cached: Some(v), ..
+        } => target_revision(v),
+        OplogPayload::External { .. } => None,
+    }
+}
+
+fn calculate_pending_invocations(
+    initial: Vec<PendingInvocationRef>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> Vec<TimestampedAgentInvocation> {
+) -> Vec<PendingInvocationRef> {
     let mut result = initial;
-    for entry in entries.values() {
+    for (oplog_idx, entry) in entries {
         // Here we are handling two categories of oplog entries:
         // - "input" entries adding items to pending queues (PendingAgentInvocation, PendingUpdate)
         // - "output" entries removing items from pending queues when they got processed (AgentInvocationStarted, SuccessfulUpdate, FailedUpdate)
@@ -515,89 +536,38 @@ async fn calculate_pending_invocations<T: HasOplogService + HasComponentService 
         // - Incoming pending invocation or update that has not been processed yet is NOT affected by revert - they remain pending
         // - If a pending invocation or update was attempted (no matter if succeeded or not) in the reverted region, we remove it from
         //   the pending queue, so the revert will not make them retried.
+        //
+        // We only store a lightweight reference to the originating oplog entry; the full invocation
+        // payload (input parameters, snapshot data, oplog entry batches, ...) stays in the oplog and
+        // is hydrated on demand by the paths that actually execute the invocation.
 
         match entry {
             OplogEntry::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,
                 payload,
-                trace_id,
-                trace_states,
-                invocation_context,
+                ..
             } => {
-                let agent_payload: Option<AgentInvocationPayload> = match payload {
-                    OplogPayload::Inline(p) => Some(*p.clone()),
-                    OplogPayload::SerializedInline {
-                        cached: Some(v), ..
-                    } => Some((**v).clone()),
-                    OplogPayload::SerializedInline { bytes, .. } => {
-                        deserialize::<AgentInvocationPayload>(bytes)
-                            .map_err(|e| {
-                                tracing::warn!(
-                                    "Failed to deserialize pending agent invocation payload: {e}"
-                                );
-                                e
-                            })
-                            .ok()
-                    }
-                    OplogPayload::External {
-                        cached: Some(v), ..
-                    } => Some((**v).clone()),
-                    OplogPayload::External {
-                        payload_id,
-                        md5_hash,
-                        ..
-                    } => {
-                        match this
-                            .oplog_service()
-                            .download_raw_payload(
-                                owned_agent_id,
-                                agent_mode,
-                                payload_id.clone(),
-                                md5_hash.clone(),
-                            )
-                            .await
-                        {
-                            Ok(bytes) => deserialize::<AgentInvocationPayload>(&bytes)
-                                .map_err(|e| {
-                                    tracing::warn!(
-                                        "Failed to deserialize external pending agent invocation payload: {e}"
-                                    );
-                                    e
-                                })
-                                .ok(),
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to download external pending agent invocation payload: {e}"
-                                );
-                                None
-                            }
-                        }
-                    }
+                // A manual update is the only invocation variant without a semantic idempotency
+                // key, so we capture its target revision and drop the (freshly generated, unused)
+                // idempotency key for it.
+                let manual_update_target_revision = manual_update_target_revision_of(payload);
+                let idempotency_key = if manual_update_target_revision.is_some() {
+                    None
+                } else {
+                    Some(idempotency_key.clone())
                 };
-                if let Some(agent_payload) = agent_payload {
-                    let invocation_context_stack = InvocationContextStack::from_oplog_data(
-                        trace_id.clone(),
-                        trace_states.clone(),
-                        invocation_context.clone(),
-                    );
-                    let invocation = AgentInvocation::from_parts(
-                        idempotency_key.clone(),
-                        agent_payload,
-                        invocation_context_stack,
-                    );
-                    result.push(TimestampedAgentInvocation {
-                        timestamp: *timestamp,
-                        invocation,
-                    });
-                }
+                result.push(PendingInvocationRef {
+                    timestamp: *timestamp,
+                    oplog_index: *oplog_idx,
+                    idempotency_key,
+                    manual_update_target_revision,
+                });
             }
             OplogEntry::AgentInvocationStarted {
                 idempotency_key, ..
             } => {
-                result.retain(|invocation| {
-                    !invocation.invocation.has_idempotency_key(idempotency_key)
-                });
+                result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
             }
             OplogEntry::PendingUpdate {
                 description:
@@ -605,36 +575,18 @@ async fn calculate_pending_invocations<T: HasOplogService + HasComponentService 
                         target_revision, ..
                     },
                 ..
-            } => result.retain(|invocation| match invocation {
-                TimestampedAgentInvocation {
-                    invocation:
-                        AgentInvocation::ManualUpdate {
-                            target_revision: revision,
-                            ..
-                        },
-                    ..
-                } => revision != target_revision,
-                _ => true,
+            } => result.retain(|invocation| {
+                invocation.manual_update_target_revision.as_ref() != Some(target_revision)
             }),
             OplogEntry::FailedUpdate {
                 target_revision, ..
-            } => result.retain(|invocation| match invocation {
-                TimestampedAgentInvocation {
-                    invocation:
-                        AgentInvocation::ManualUpdate {
-                            target_revision: revision,
-                            ..
-                        },
-                    ..
-                } => revision != target_revision,
-                _ => true,
+            } => result.retain(|invocation| {
+                invocation.manual_update_target_revision.as_ref() != Some(target_revision)
             }),
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
-                result.retain(|invocation| {
-                    !invocation.invocation.has_idempotency_key(idempotency_key)
-                });
+                result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
             }
             _ => {}
         }
@@ -644,7 +596,7 @@ async fn calculate_pending_invocations<T: HasOplogService + HasComponentService 
 
 #[allow(clippy::type_complexity)]
 fn calculate_update_fields(
-    initial_pending_updates: VecDeque<TimestampedUpdateDescription>,
+    initial_pending_updates: VecDeque<PendingUpdateRef>,
     initial_failed_updates: Vec<FailedUpdateRecord>,
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
     initial_revision: ComponentRevision,
@@ -656,7 +608,7 @@ fn calculate_update_fields(
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
-    VecDeque<TimestampedUpdateDescription>,
+    VecDeque<PendingUpdateRef>,
     Vec<FailedUpdateRecord>,
     Vec<SuccessfulUpdateRecord>,
     ComponentRevision,
@@ -697,10 +649,15 @@ fn calculate_update_fields(
                 description,
                 ..
             } => {
-                pending_updates.push_back(TimestampedUpdateDescription {
+                let kind = match description {
+                    UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
+                    UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
+                };
+                pending_updates.push_back(PendingUpdateRef {
                     timestamp: *timestamp,
                     oplog_index: *oplog_idx,
-                    description: description.clone(),
+                    target_revision: *description.target_revision(),
+                    kind,
                 });
             }
             OplogEntry::FailedUpdate {
@@ -728,8 +685,8 @@ fn calculate_update_fields(
                 revision = *target_revision;
                 size = *new_component_size;
 
-                if let Some(TimestampedUpdateDescription {
-                    description: UpdateDescription::SnapshotBased { .. },
+                if let Some(PendingUpdateRef {
+                    kind: PendingUpdateKind::SnapshotBased,
                     oplog_index: applied_update_oplog_index,
                     ..
                 }) = pending_updates.pop_front()
@@ -1085,14 +1042,15 @@ mod test {
     use golem_common::model::oplog::host_functions::HostFunctionName;
     use golem_common::model::oplog::{
         AgentError, DurableFunctionType, HostRequest, HostRequestNoInput, HostResponse, OplogEntry,
-        OplogPayload, PayloadId, RawOplogPayload, TimestampedUpdateDescription, UpdateDescription,
+        OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
         AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
-        OplogProcessorCheckpointState, OwnedAgentId, RetryConfig, RetryPolicyState, ScanCursor,
-        SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation,
+        OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
+        PendingUpdateRef, RetryConfig, RetryPolicyState, ScanCursor, SuccessfulUpdateRecord,
+        Timestamp,
     };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -2015,10 +1973,18 @@ mod test {
                 invocation_context.to_oplog_data(),
             )
             .rounded();
+            let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
+            let ref_idempotency_key = invocation.idempotency_key().cloned();
+            let manual_update_target_revision = match &invocation {
+                AgentInvocation::ManualUpdate { target_revision } => Some(*target_revision),
+                _ => None,
+            };
             self.add(entry.clone(), move |mut status| {
-                status.pending_invocations.push(TimestampedAgentInvocation {
+                status.pending_invocations.push(PendingInvocationRef {
                     timestamp: entry.timestamp(),
-                    invocation,
+                    oplog_index: oplog_idx,
+                    idempotency_key: ref_idempotency_key.clone(),
+                    manual_update_target_revision,
                 });
                 status
             })
@@ -2029,7 +1995,7 @@ mod test {
             self.add(entry.clone(), move |mut status| {
                 status
                     .pending_invocations
-                    .retain(|ti| ti.invocation.idempotency_key() != Some(&idempotency_key));
+                    .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
                 status
             })
         }
@@ -2042,13 +2008,16 @@ mod test {
             let entry = OplogEntry::pending_update(update_description.clone()).rounded();
             let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             self.add(entry.clone(), move |mut status| {
-                status
-                    .pending_updates
-                    .push_back(TimestampedUpdateDescription {
-                        timestamp: entry.timestamp(),
-                        oplog_index: oplog_idx,
-                        description: update_description.clone(),
-                    });
+                let kind = match update_description {
+                    UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
+                    UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
+                };
+                status.pending_updates.push_back(PendingUpdateRef {
+                    timestamp: entry.timestamp(),
+                    oplog_index: oplog_idx,
+                    target_revision: *update_description.target_revision(),
+                    kind,
+                });
 
                 if !status.pending_invocations.is_empty() {
                     status.pending_invocations.pop();
@@ -2134,19 +2103,9 @@ mod test {
                     target_revision, ..
                 } = update_description
                 {
-                    status
-                        .pending_invocations
-                        .retain(|invocation| match invocation {
-                            TimestampedAgentInvocation {
-                                invocation:
-                                    AgentInvocation::ManualUpdate {
-                                        target_revision: revision,
-                                        ..
-                                    },
-                                ..
-                            } => *revision != target_revision,
-                            _ => true,
-                        });
+                    status.pending_invocations.retain(|invocation| {
+                        invocation.manual_update_target_revision != Some(target_revision)
+                    });
                 };
 
                 status

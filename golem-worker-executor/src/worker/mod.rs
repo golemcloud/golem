@@ -63,13 +63,15 @@ use golem_common::model::agent::{
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
+};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
-    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
-    TimestampedAgentInvocation,
+    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, ScheduledAction, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -392,7 +394,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut spans_map = HashMap::new();
         for inv in initial_pending_invocations {
-            if let Some(idempotency_key) = inv.invocation.idempotency_key() {
+            if let Some(idempotency_key) = inv.idempotency_key() {
                 spans_map.insert(idempotency_key.clone(), Span::current());
             }
         }
@@ -1174,12 +1176,80 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
     }
 
-    pub async fn pending_invocations(&self) -> Vec<TimestampedAgentInvocation> {
+    pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
         self.last_known_status
             .read()
             .await
             .pending_invocations
             .clone()
+    }
+
+    /// Reads the `PendingAgentInvocation` oplog entry referenced by `pending` and reconstructs the
+    /// full invocation, downloading its payload from external storage if needed. The status record
+    /// only keeps a lightweight reference, so callers that need to execute the invocation hydrate
+    /// it on demand.
+    async fn hydrate_pending_invocation(
+        &self,
+        pending: &PendingInvocationRef,
+    ) -> Result<TimestampedAgentInvocation, WorkerExecutorError> {
+        let entry = self.oplog.read(pending.oplog_index).await;
+        match entry {
+            OplogEntry::PendingAgentInvocation {
+                timestamp,
+                idempotency_key,
+                payload,
+                trace_id,
+                trace_states,
+                invocation_context,
+            } => {
+                let agent_payload = self.oplog.download_payload(payload).await.map_err(|e| {
+                    WorkerExecutorError::unknown(format!(
+                        "Failed to download pending agent invocation payload at oplog index {}: {e}",
+                        pending.oplog_index
+                    ))
+                })?;
+                let invocation_context = InvocationContextStack::from_oplog_data(
+                    trace_id,
+                    trace_states,
+                    invocation_context,
+                );
+                let invocation =
+                    AgentInvocation::from_parts(idempotency_key, agent_payload, invocation_context);
+                Ok(TimestampedAgentInvocation {
+                    timestamp,
+                    invocation,
+                })
+            }
+            other => Err(WorkerExecutorError::unknown(format!(
+                "Expected a PendingAgentInvocation oplog entry at index {}, but found {other:?}",
+                pending.oplog_index
+            ))),
+        }
+    }
+
+    /// Reads the `PendingUpdate` oplog entry referenced by `pending` and reconstructs the full
+    /// update description, including any snapshot payload reference. The status record only keeps
+    /// a lightweight reference, so callers that apply the update hydrate it on demand.
+    async fn hydrate_pending_update(
+        &self,
+        pending: &PendingUpdateRef,
+    ) -> Result<TimestampedUpdateDescription, WorkerExecutorError> {
+        let entry = self.oplog.read(pending.oplog_index).await;
+        match entry {
+            OplogEntry::PendingUpdate {
+                timestamp,
+                description,
+                ..
+            } => Ok(TimestampedUpdateDescription {
+                timestamp,
+                oplog_index: pending.oplog_index,
+                description,
+            }),
+            other => Err(WorkerExecutorError::unknown(format!(
+                "Expected a PendingUpdate oplog entry at index {}, but found {other:?}",
+                pending.oplog_index
+            ))),
+        }
     }
 
     pub async fn invocation_results(&self) -> HashMap<IdempotencyKey, OplogIndex> {
@@ -1218,7 +1288,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             vec![key],
             pending
                 .iter()
-                .filter_map(|entry| entry.invocation.idempotency_key())
+                .filter_map(|entry| entry.idempotency_key())
                 .collect(),
         ]
         .concat();
@@ -2084,7 +2154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let is_pending = status
                 .pending_invocations
                 .iter()
-                .any(|entry| entry.invocation.has_idempotency_key(key));
+                .any(|entry| entry.has_idempotency_key(key));
             let is_current = status.current_idempotency_key.as_ref() == Some(key);
             if is_pending || is_current {
                 LookupResult::Pending
@@ -2284,7 +2354,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut keys_to_fail: Vec<IdempotencyKey> = status
             .pending_invocations
             .iter()
-            .filter_map(|inv| inv.invocation.idempotency_key().cloned())
+            .filter_map(|inv| inv.idempotency_key().cloned())
             .collect();
         if let Some(current_key) = &status.current_idempotency_key
             && !keys_to_fail.contains(current_key)
@@ -2680,14 +2750,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let old_status = self.last_known_status.read().await.clone();
 
             let updated_status = update_status_with_new_entries(
-                self,
-                &self.owned_agent_id,
                 self.agent_mode(),
                 old_status.clone(),
                 new_entries,
                 &self.config().retry,
-            )
-            .await;
+            );
 
             if let Some(updated_status) = updated_status {
                 if updated_status != old_status {
@@ -3130,21 +3197,21 @@ impl RunningWorker {
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
         let (pending_update, component, component_metadata) = {
-            let pending_update = worker_metadata
+            let pending_update_ref = worker_metadata
                 .last_known_status
                 .pending_updates
                 .front()
                 .cloned();
 
-            let component_revision = pending_update.as_ref().map_or(
+            let component_revision = pending_update_ref.as_ref().map_or(
                 worker_metadata.last_known_status.component_revision,
                 |update| {
-                    let target_revision = *update.description.target_revision();
+                    let target_revision = update.target_revision;
                     info!(
                         "Attempting {} update from {} to revision {target_revision}",
-                        match update.description {
-                            UpdateDescription::Automatic { .. } => "automatic",
-                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
+                        match update.kind {
+                            PendingUpdateKind::Automatic => "automatic",
+                            PendingUpdateKind::SnapshotBased => "snapshot based",
                         },
                         worker_metadata.last_known_status.component_revision
                     );
@@ -3158,6 +3225,15 @@ impl RunningWorker {
                 .await
             {
                 Ok((component, component_metadata)) => {
+                    // The status record only keeps a lightweight reference to the pending update;
+                    // hydrate the full description (including any snapshot payload) from the oplog
+                    // before handing it to the worker context.
+                    let pending_update = match &pending_update_ref {
+                        Some(pending_update_ref) => {
+                            Some(parent.hydrate_pending_update(pending_update_ref).await?)
+                        }
+                        None => None,
+                    };
                     Ok((pending_update, component, component_metadata))
                 }
                 Err(error) => {
@@ -3193,11 +3269,9 @@ impl RunningWorker {
             .last_known_status
             .pending_updates
             .front()
-            .and_then(|update| match update.description {
-                UpdateDescription::SnapshotBased {
-                    target_revision, ..
-                } => Some(target_revision),
-                _ => None,
+            .and_then(|update| match update.kind {
+                PendingUpdateKind::SnapshotBased => Some(update.target_revision),
+                PendingUpdateKind::Automatic => None,
             })
             .unwrap_or(
                 worker_metadata

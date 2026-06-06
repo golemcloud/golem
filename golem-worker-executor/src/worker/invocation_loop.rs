@@ -562,8 +562,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
 
             // Then, try to process a pending invocation
-            if let Some(timestamped_invocation) = status.pending_invocations.first() {
-                let idempotency_key = timestamped_invocation.invocation.idempotency_key();
+            if let Some(pending_invocation) = status.pending_invocations.first() {
+                let idempotency_key = pending_invocation.idempotency_key();
                 let invocation_span = if let Some(idempotency_key) = idempotency_key {
                     let spans = self.parent.external_invocation_spans.read().await;
                     spans.get(idempotency_key).cloned()
@@ -572,6 +572,20 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 };
 
                 let invocation_span = invocation_span.unwrap_or(Span::current());
+
+                // The status record only stores a lightweight reference to the pending invocation;
+                // hydrate the full invocation (including its payload) from the oplog before running.
+                let timestamped_invocation = match self
+                    .parent
+                    .hydrate_pending_invocation(pending_invocation)
+                    .await
+                {
+                    Ok(invocation) => invocation,
+                    Err(error) => {
+                        warn!("Failed to hydrate pending invocation from oplog: {error}");
+                        break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
+                    }
+                };
 
                 let outcome = async {
                     let mut store = self.store.lock().await;
@@ -582,7 +596,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         store: store.deref_mut(),
                     };
                     invocation
-                        .external_invocation(timestamped_invocation.clone(), &invocation_span)
+                        .external_invocation(timestamped_invocation, &invocation_span)
                         .await
                 }
                 .instrument(span!(parent: &invocation_span, Level::INFO, "invocation_queue_pickup"))

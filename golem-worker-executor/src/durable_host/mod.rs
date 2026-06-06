@@ -3405,9 +3405,7 @@ fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::AgentInvocation;
-    use golem_common::model::TimestampedAgentInvocation;
-    use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+    use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
     use test_r::test;
 
     #[test]
@@ -3416,11 +3414,11 @@ mod tests {
             status: AgentStatus::Idle,
             ..AgentStatusRecord::default()
         };
-        status.pending_invocations.push(TimestampedAgentInvocation {
+        status.pending_invocations.push(PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
-            invocation: AgentInvocation::ManualUpdate {
-                target_revision: ComponentRevision::INITIAL,
-            },
+            oplog_index: OplogIndex::INITIAL,
+            idempotency_key: None,
+            manual_update_target_revision: Some(ComponentRevision::INITIAL),
         });
 
         assert!(should_restart_after_shard_assignment_change(&status));
@@ -3432,15 +3430,12 @@ mod tests {
             status: AgentStatus::Idle,
             ..AgentStatusRecord::default()
         };
-        status
-            .pending_updates
-            .push_back(TimestampedUpdateDescription {
-                timestamp: Timestamp::now_utc(),
-                oplog_index: OplogIndex::INITIAL,
-                description: UpdateDescription::Automatic {
-                    target_revision: ComponentRevision::INITIAL,
-                },
-            });
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL,
+            target_revision: ComponentRevision::INITIAL,
+            kind: PendingUpdateKind::Automatic,
+        });
 
         assert!(should_restart_after_shard_assignment_change(&status));
     }

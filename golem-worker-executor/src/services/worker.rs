@@ -510,10 +510,8 @@ impl HasComponentService for DefaultWorkerService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::AgentInvocation;
     use golem_common::model::Timestamp;
-    use golem_common::model::TimestampedAgentInvocation;
-    use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+    use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
     use std::collections::VecDeque;
     use test_r::test;
 
@@ -523,11 +521,13 @@ mod tests {
             status: AgentStatus::Idle,
             ..AgentStatusRecord::default()
         };
-        status.pending_invocations.push(TimestampedAgentInvocation {
+        status.pending_invocations.push(PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
-            invocation: AgentInvocation::ManualUpdate {
-                target_revision: golem_common::model::component::ComponentRevision::INITIAL,
-            },
+            oplog_index: OplogIndex::INITIAL,
+            idempotency_key: None,
+            manual_update_target_revision: Some(
+                golem_common::model::component::ComponentRevision::INITIAL,
+            ),
         });
 
         assert!(DefaultWorkerService::should_track_for_assignment_recovery(
@@ -539,12 +539,11 @@ mod tests {
     fn tracks_workers_with_pending_updates_for_assignment_recovery() {
         let status = AgentStatusRecord {
             status: AgentStatus::Idle,
-            pending_updates: VecDeque::from([TimestampedUpdateDescription {
+            pending_updates: VecDeque::from([PendingUpdateRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::INITIAL,
-                description: UpdateDescription::Automatic {
-                    target_revision: golem_common::model::component::ComponentRevision::INITIAL,
-                },
+                target_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                kind: PendingUpdateKind::Automatic,
             }]),
             ..AgentStatusRecord::default()
         };
