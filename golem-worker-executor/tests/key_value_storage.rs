@@ -367,10 +367,28 @@ fn ns2() -> Namespaces {
     }
 }
 
+// Exercises the per-agent `AgentStatus` namespace (Redis-hash routed) used by the split agent
+// status cache, across every backend.
+#[test_dep(scope = PerWorker, tagged_as = "ns3")]
+fn ns3() -> Namespaces {
+    Namespaces {
+        ns: KeyValueStorageNamespace::AgentStatus {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "test".to_string(),
+            },
+        },
+        ns2: KeyValueStorageNamespace::UserDefined {
+            environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
+            bucket: "test-bucket-2".to_string(),
+        },
+    }
+}
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres", "namespace_routed");
-define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2");
+define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2", "ns3");
 
 #[test]
 #[tracing::instrument]

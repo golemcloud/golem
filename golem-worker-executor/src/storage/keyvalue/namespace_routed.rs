@@ -37,6 +37,7 @@ impl NamespaceRoutedKeyValueStorage {
     ) -> &Arc<dyn KeyValueStorage + Send + Sync> {
         match namespace {
             KeyValueStorageNamespace::Worker { .. } => &self.cache,
+            KeyValueStorageNamespace::AgentStatus { .. } => &self.cache,
             _ => &self.persistent,
         }
     }

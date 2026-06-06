@@ -630,6 +630,15 @@ pub enum KeyValueStorageNamespace {
     Worker {
         agent_id: AgentId,
     },
+    /// Per-agent cached status. Unlike `Worker` (a flat key space), this namespace is stored as
+    /// one structure-per-agent (a Redis hash) so the cached `AgentStatusRecord` can be split into
+    /// independently written fields: a small fixed-size `core`, the `regions`, the `updates`, and
+    /// one field per idempotency key (`ir:{key}`). This keeps the per-commit write small and
+    /// decoupled from the unbounded parts of the status. The `agent_id` is part of the namespace so
+    /// each agent gets its own isolated key space (enabling per-agent `keys`/`del_many`).
+    AgentStatus {
+        agent_id: AgentId,
+    },
     Promise {
         agent_id: AgentId,
     },

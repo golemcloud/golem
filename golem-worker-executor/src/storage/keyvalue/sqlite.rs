@@ -64,6 +64,11 @@ impl SqliteKeyValueStorage {
     fn namespace(ns: KeyValueStorageNamespace) -> String {
         match ns {
             KeyValueStorageNamespace::Worker { .. } => "worker".to_string(),
+            // agent_id embedded so each agent's split status fields are an isolated key space
+            // (per-agent `keys`/`del_many` select only that agent's rows).
+            KeyValueStorageNamespace::AgentStatus { agent_id } => {
+                format!("agent-status:{}", agent_id.to_redis_key())
+            }
             KeyValueStorageNamespace::Promise { .. } => "promise".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {

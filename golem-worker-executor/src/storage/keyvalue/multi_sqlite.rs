@@ -101,6 +101,9 @@ impl MultiSqliteKeyValueStorage {
             KeyValueStorageNamespace::Worker { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
+            KeyValueStorageNamespace::AgentStatus { agent_id } => {
+                format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
+            }
             KeyValueStorageNamespace::Promise { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
