@@ -14,12 +14,12 @@
 
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::environment::EnvironmentId;
-use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription, UpdateDescription};
+use crate::model::oplog::OplogIndex;
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountId, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata, AgentMode,
-    AgentStatus, AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey,
-    StringFilterComparator, Timestamp, TimestampedAgentInvocation,
+    AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode, AgentStatus,
+    AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
 use golem_wasm::ValueAndType;
@@ -361,11 +361,11 @@ fn worker_filter_matches() {
 #[test]
 fn agent_status_record_has_pending_work_for_pending_invocations() {
     let mut status = AgentStatusRecord::default();
-    status.pending_invocations.push(TimestampedAgentInvocation {
+    status.pending_invocations.push(PendingInvocationRef {
         timestamp: Timestamp::now_utc(),
-        invocation: AgentInvocation::ManualUpdate {
-            target_revision: ComponentRevision::INITIAL,
-        },
+        oplog_index: OplogIndex::INITIAL,
+        idempotency_key: None,
+        manual_update_target_revision: Some(ComponentRevision::INITIAL),
     });
 
     assert!(status.has_pending_work());
@@ -374,15 +374,12 @@ fn agent_status_record_has_pending_work_for_pending_invocations() {
 #[test]
 fn agent_status_record_has_pending_work_for_pending_updates() {
     let mut status = AgentStatusRecord::default();
-    status
-        .pending_updates
-        .push_back(TimestampedUpdateDescription {
-            timestamp: Timestamp::now_utc(),
-            oplog_index: OplogIndex::INITIAL,
-            description: UpdateDescription::Automatic {
-                target_revision: ComponentRevision::INITIAL,
-            },
-        });
+    status.pending_updates.push_back(PendingUpdateRef {
+        timestamp: Timestamp::now_utc(),
+        oplog_index: OplogIndex::INITIAL,
+        target_revision: ComponentRevision::INITIAL,
+        kind: PendingUpdateKind::Automatic,
+    });
 
     assert!(status.has_pending_work());
 }
