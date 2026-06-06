@@ -318,14 +318,15 @@ impl DeploymentService {
                 environment_id.0,
                 deployment_revision.into(),
                 &agent_type_name.0,
-                environment.owner_account_id.0,
-                environment.owner_account_email.as_str(),
             )
             .await?
             .ok_or(DeploymentError::AgentTypeNotFound(
                 agent_type_name.0.clone(),
             ))?
-            .try_into()?;
+            .try_into_deployed(
+                environment.owner_account_id,
+                environment.owner_account_email,
+            )?;
 
         Ok(agent_types)
     }
@@ -344,15 +345,15 @@ impl DeploymentService {
 
         let agent_types = self
             .deployment_repo
-            .list_deployment_agent_types(
-                environment_id.0,
-                deployment_revision.into(),
-                environment.owner_account_id.0,
-                environment.owner_account_email.as_str(),
-            )
+            .list_deployment_agent_types(environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.try_into())
+            .map(|r| {
+                r.try_into_deployed(
+                    environment.owner_account_id,
+                    environment.owner_account_email.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(agent_types)
@@ -478,14 +479,15 @@ impl DeploymentService {
                 environment.id.0,
                 deployment_revision.into(),
                 &agent_type_name.0,
-                environment.owner_account_id.0,
-                environment.owner_account_email.as_str(),
             )
             .await?
             .ok_or(DeploymentError::AgentTypeNotFound(
                 agent_type_name.0.clone(),
             ))?
-            .try_into()?;
+            .try_into_deployed(
+                environment.owner_account_id,
+                environment.owner_account_email,
+            )?;
 
         Ok(agent_type)
     }

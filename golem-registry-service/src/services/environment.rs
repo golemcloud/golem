@@ -275,11 +275,7 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         let environment: Environment = self
             .environment_repo
-            .get_by_id(
-                environment_id.0,
-                auth.access_account_id().0,
-                include_deleted,
-            )
+            .get_by_id(environment_id.0, include_deleted)
             .await?
             .ok_or(EnvironmentError::EnvironmentNotFound(environment_id))?
             .try_into()?;
@@ -298,7 +294,7 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         let result: Environment = self
             .environment_repo
-            .get_by_name(application_id.0, &name.0, auth.access_account_id().0)
+            .get_by_name(application_id.0, &name.0)
             .await?
             .ok_or(EnvironmentError::EnvironmentByNameNotFound(name.clone()))?
             .try_into()?;
@@ -335,7 +331,7 @@ impl EnvironmentService {
 
         Ok(self
             .environment_repo
-            .list_by_app(application_id.0, auth.access_account_id().0)
+            .list_by_app(application_id.0)
             .await?
             .into_iter()
             .map(Environment::try_from)

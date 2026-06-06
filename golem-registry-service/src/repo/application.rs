@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::application::{ApplicationExtRevisionRecord, ApplicationRepoError};
+use super::model::application::{
+    ApplicationExtRevisionRecord, ApplicationRepoError, ApplicationScopedExtRevisionRecord,
+};
 use super::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
@@ -37,9 +39,8 @@ pub trait ApplicationRepo: Send + Sync {
     async fn get_by_name(
         &self,
         owner_account_id: Uuid,
-        owner_account_email: &str,
         name: &str,
-    ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError>;
+    ) -> Result<Option<ApplicationScopedExtRevisionRecord>, ApplicationRepoError>;
 
     async fn get_by_id(
         &self,
@@ -49,8 +50,7 @@ pub trait ApplicationRepo: Send + Sync {
     async fn list_by_owner(
         &self,
         owner_account_id: Uuid,
-        owner_account_email: &str,
-    ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError>;
+    ) -> Result<Vec<ApplicationScopedExtRevisionRecord>, ApplicationRepoError>;
 
     async fn create(
         &self,
@@ -98,11 +98,10 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn get_by_name(
         &self,
         owner_account_id: Uuid,
-        owner_account_email: &str,
         name: &str,
-    ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
+    ) -> Result<Option<ApplicationScopedExtRevisionRecord>, ApplicationRepoError> {
         self.repo
-            .get_by_name(owner_account_id, owner_account_email, name)
+            .get_by_name(owner_account_id, name)
             .instrument(Self::span_name(name))
             .await
     }
@@ -120,10 +119,9 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn list_by_owner(
         &self,
         owner_account_id: Uuid,
-        owner_account_email: &str,
-    ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError> {
+    ) -> Result<Vec<ApplicationScopedExtRevisionRecord>, ApplicationRepoError> {
         self.repo
-            .list_by_owner(owner_account_id, owner_account_email)
+            .list_by_owner(owner_account_id)
             .instrument(Self::span_owner_id(owner_account_id))
             .await
     }
@@ -200,16 +198,14 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn get_by_name(
         &self,
         owner_account_id: Uuid,
-        owner_account_email: &str,
         name: &str,
-    ) -> Result<Option<ApplicationExtRevisionRecord>, ApplicationRepoError> {
-        let result: Option<ApplicationExtRevisionRecord> = self
+    ) -> Result<Option<ApplicationScopedExtRevisionRecord>, ApplicationRepoError> {
+        let result: Option<ApplicationScopedExtRevisionRecord> = self
             .with_ro("get_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT
                         ap.account_id,
-                        $2 as account_email,
                         ap.created_at as entity_created_at,
                         r.application_id, r.revision_id, r.name,
                         r.created_at, r.created_by, r.deleted
@@ -219,11 +215,10 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         AND r.revision_id = ap.current_revision_id
                     WHERE
                         ap.account_id = $1
-                        AND ap.name = $3
+                        AND ap.name = $2
                         AND ap.deleted_at IS NULL
                 "#})
                 .bind(owner_account_id)
-                .bind(owner_account_email)
                 .bind(name),
             )
             .await?;
@@ -266,15 +261,13 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn list_by_owner(
         &self,
         owner_account_id: Uuid,
-        owner_account_email: &str,
-    ) -> Result<Vec<ApplicationExtRevisionRecord>, ApplicationRepoError> {
+    ) -> Result<Vec<ApplicationScopedExtRevisionRecord>, ApplicationRepoError> {
         let result = self
             .with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT
                         ap.account_id,
-                        $2 as account_email,
                         ap.created_at as entity_created_at,
                         r.application_id, r.revision_id, r.name,
                         r.created_at, r.created_by, r.deleted
@@ -287,8 +280,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         AND ap.deleted_at IS NULL
                     ORDER BY r.name
                 "#})
-                .bind(owner_account_id)
-                .bind(owner_account_email),
+                .bind(owner_account_id),
             )
             .await?;
 

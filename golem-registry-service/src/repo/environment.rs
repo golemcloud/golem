@@ -128,20 +128,17 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         application_id: Uuid,
         name: &str,
-        actor: Uuid,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn get_by_id(
         &self,
         environment_id: Uuid,
-        actor: Uuid,
         include_deleted: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn list_by_app(
         &self,
         application_id: Uuid,
-        actor: Uuid,
     ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn create(
@@ -207,10 +204,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         application_id: Uuid,
         name: &str,
-        actor: Uuid,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
-            .get_by_name(application_id, name, actor)
+            .get_by_name(application_id, name)
             .instrument(Self::span_name(application_id, name))
             .await
     }
@@ -218,11 +214,10 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn get_by_id(
         &self,
         environment_id: Uuid,
-        actor: Uuid,
         include_deleted: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
-            .get_by_id(environment_id, actor, include_deleted)
+            .get_by_id(environment_id, include_deleted)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -230,10 +225,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn list_by_app(
         &self,
         application_id: Uuid,
-        actor: Uuid,
     ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
-            .list_by_app(application_id, actor)
+            .list_by_app(application_id)
             .instrument(Self::span_env(application_id))
             .await
     }
@@ -351,7 +345,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         application_id: Uuid,
         name: &str,
-        _actor: Uuid,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("get_by_name")
@@ -406,7 +399,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_by_id(
         &self,
         environment_id: Uuid,
-        _actor: Uuid,
         include_deleted: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
@@ -461,7 +453,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn list_by_app(
         &self,
         application_id: Uuid,
-        _actor: Uuid,
     ) -> Result<Vec<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("list_by_owner")

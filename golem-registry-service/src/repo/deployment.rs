@@ -23,7 +23,7 @@ use super::model::deployment::{
 use super::model::deployment::{
     DeploymentCompiledRouteRecord, DeploymentComponentRevisionRecord,
     DeploymentHttpApiDeploymentRevisionRecord, DeploymentMcpDeploymentRevisionRecord,
-    DeploymentRegisteredAgentTypeRecord,
+    DeploymentRegisteredAgentTypeRecord, DeploymentRegisteredAgentTypeScopedRecord,
 };
 use super::model::resource_definition::ResourceDefinitionRepoError;
 use super::model::retry_policy::RetryPolicyRepoError;
@@ -124,17 +124,13 @@ pub trait DeploymentRepo: Send + Sync {
         environment_id: Uuid,
         deployment_revision_id: i64,
         agent_type_name: &str,
-        owner_account_id: Uuid,
-        owner_account_email: &str,
-    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>>;
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeScopedRecord>>;
 
     async fn list_deployment_agent_types(
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-        owner_account_id: Uuid,
-        owner_account_email: &str,
-    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeScopedRecord>>;
 
     async fn get_deployed_agent_type(
         &self,
@@ -368,17 +364,9 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         environment_id: Uuid,
         deployment_revision_id: i64,
         agent_type_name: &str,
-        owner_account_id: Uuid,
-        owner_account_email: &str,
-    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeScopedRecord>> {
         self.repo
-            .get_deployment_agent_type(
-                environment_id,
-                deployment_revision_id,
-                agent_type_name,
-                owner_account_id,
-                owner_account_email,
-            )
+            .get_deployment_agent_type(environment_id, deployment_revision_id, agent_type_name)
             .instrument(info_span!(
                 SPAN_NAME,
                 environment_id = %environment_id,
@@ -392,16 +380,9 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-        owner_account_id: Uuid,
-        owner_account_email: &str,
-    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeScopedRecord>> {
         self.repo
-            .list_deployment_agent_types(
-                environment_id,
-                deployment_revision_id,
-                owner_account_id,
-                owner_account_email,
-            )
+            .list_deployment_agent_types(environment_id, deployment_revision_id)
             .instrument(info_span!(
                 SPAN_NAME,
                 environment_id = %environment_id,
@@ -1112,9 +1093,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         environment_id: Uuid,
         deployment_revision_id: i64,
         agent_type_name: &str,
-        owner_account_id: Uuid,
-        owner_account_email: &str,
-    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeScopedRecord>> {
         self.with_ro("get_deployment_agent_type")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -1126,8 +1105,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.component_id,
                         c.name AS component_name,
                         r.component_revision_id,
-                        $4 AS owner_account_id,
-                        $5 AS owner_account_email,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
@@ -1139,9 +1116,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 "#})
                 .bind(environment_id)
                 .bind(deployment_revision_id)
-                .bind(agent_type_name)
-                .bind(owner_account_id)
-                .bind(owner_account_email),
+                .bind(agent_type_name),
             )
             .await
     }
@@ -1150,9 +1125,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-        owner_account_id: Uuid,
-        owner_account_email: &str,
-    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeScopedRecord>> {
         self.with_ro("list_deployment_agent_types")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
@@ -1164,8 +1137,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.component_id,
                         c.name AS component_name,
                         r.component_revision_id,
-                        $3 AS owner_account_id,
-                        $4 AS owner_account_email,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
@@ -1176,9 +1147,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     ORDER BY r.agent_type_name
                 "#})
                 .bind(environment_id)
-                .bind(deployment_revision_id)
-                .bind(owner_account_id)
-                .bind(owner_account_email),
+                .bind(deployment_revision_id),
             )
             .await
     }
