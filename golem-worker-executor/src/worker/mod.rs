@@ -2693,8 +2693,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 initial_status.write().await.oplog_idx = oplog.current_oplog_index().await;
 
+                // Cold path (worker creation): no previously cached status to diff against.
+                let initial_status_value = initial_status.read().await.clone();
                 this.worker_service()
-                    .update_cached_status(owned_agent_id, &*initial_status.read().await)
+                    .update_cached_status(owned_agent_id, None, initial_status_value)
                     .await;
 
                 Ok(GetOrCreateWorkerResult {
@@ -2852,13 +2854,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn update_last_known_status(&self, new_status: AgentStatusRecord) {
-        let previous_status = self.metrics_status.status();
-        *self.last_known_status.write().await = new_status.clone();
+        let previous_metrics_status = self.metrics_status.status();
+        // The in-memory `last_known_status` is kept in sync with what is cached in the KV store, so
+        // we can use the value we are about to replace as the "previously cached" status to compute
+        // a minimal delta write (only the changed parts are sent).
+        let previous_status = {
+            let mut guard = self.last_known_status.write().await;
+            std::mem::replace(&mut *guard, new_status.clone())
+        };
         self.metrics_status
-            .update(previous_status, new_status.status);
+            .update(previous_metrics_status, new_status.status);
         // TODO: We should do this in the background on a timer instead of on every commit.
         self.worker_service()
-            .update_cached_status(&self.owned_agent_id, &new_status)
+            .update_cached_status(&self.owned_agent_id, Some(&previous_status), new_status)
             .await;
     }
 }

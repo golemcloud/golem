@@ -665,7 +665,8 @@ mod tests {
         async fn update_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
-            _status_value: &AgentStatusRecord,
+            _previous_status: Option<&AgentStatusRecord>,
+            _status_value: AgentStatusRecord,
         ) {
         }
     }

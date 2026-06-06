@@ -34,6 +34,11 @@ impl RedisKeyValueStorage {
     fn use_hash(namespace: &KeyValueStorageNamespace) -> Option<String> {
         match namespace {
             KeyValueStorageNamespace::Worker { .. } => None,
+            // Per-agent hash: each agent's split status fields live in their own hash so that
+            // `hkeys`/`hdel` operate on a single agent's fields and multi-field writes are atomic.
+            KeyValueStorageNamespace::AgentStatus { agent_id } => {
+                Some(format!("agent-status:{}", agent_id.to_redis_key()))
+            }
             KeyValueStorageNamespace::RunningWorkers => None,
             KeyValueStorageNamespace::Promise { .. } => Some("promises".to_string()),
             KeyValueStorageNamespace::Schedule => None,
