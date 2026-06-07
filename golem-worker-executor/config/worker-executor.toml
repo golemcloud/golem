@@ -10,6 +10,15 @@ tracing_file_name_with_port = true
 drop_when_full = 0.25
 ttl = "8h"
 
+[agent_status_checkpoint]
+enabled = true
+min_oplog_delta = 1000
+
+[agent_status_flush]
+enabled = true
+interval = "1s"
+max_concurrency = 128
+
 [agent_types_service]
 type = "Grpc"
 
@@ -342,6 +351,15 @@ without_time = false
 # [active_workers]
 # drop_when_full = 0.25
 # ttl = "8h"
+# 
+# [agent_status_checkpoint]
+# enabled = true
+# min_oplog_delta = 1000
+# 
+# [agent_status_flush]
+# enabled = true
+# interval = "1s"
+# max_concurrency = 128
 # 
 # [agent_types_service]
 # type = "Grpc"
@@ -677,6 +695,15 @@ without_time = false
 # [active_workers]
 # drop_when_full = 0.25
 # ttl = "8h"
+# 
+# [agent_status_checkpoint]
+# enabled = true
+# min_oplog_delta = 1000
+# 
+# [agent_status_flush]
+# enabled = true
+# interval = "1s"
+# max_concurrency = 128
 # 
 # [agent_types_service]
 # type = "Grpc"
