@@ -506,6 +506,51 @@ async fn get_set_get_many(
 
 #[test]
 #[tracing::instrument]
+async fn get_all_returns_namespace_snapshot(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let kvs = kvs.get_key_value_storage().await;
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "test".to_string(),
+    };
+    let other_agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "other".to_string(),
+    };
+    let ns = KeyValueStorageNamespace::AgentStatus { agent_id };
+    let other_ns = KeyValueStorageNamespace::AgentStatus {
+        agent_id: other_agent_id,
+    };
+
+    kvs.set_many(
+        "test",
+        "api",
+        "entity",
+        ns.clone(),
+        &[("field1", b"value1"), ("field2", b"value2")],
+    )
+    .await
+    .unwrap();
+    kvs.set("test", "api", "entity", other_ns, "field3", b"value3")
+        .await
+        .unwrap();
+
+    let mut result = kvs.get_all("test", "api", "entity", ns).await.unwrap();
+    result.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    assert_eq!(
+        result,
+        vec![
+            ("field1".to_string(), bytes::Bytes::from_static(b"value1")),
+            ("field2".to_string(), bytes::Bytes::from_static(b"value2")),
+        ]
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn set_if_not_exists(
     _deps: &WorkerExecutorTestDependencies,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
