@@ -53,8 +53,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         key: &[String],
         key_str: &str,
         expected_type: &SchemaType,
+        declared_type: &SchemaType,
     ) -> anyhow::Result<WitValue> {
         let config_value = self.state.agent_config.get(key);
+
+        // Future automatic-update transforms belong here, where both
+        // the component-declared type and the guest-expected type are
+        // available together with the stored local config value.
+        if declared_type != expected_type {
+            return Err(anyhow!(
+                "declared and expected type for config key {key_str} are not compatible"
+            ));
+        }
 
         let result = match (expected_type, config_value) {
             (SchemaType::Option { .. }, None) => WitValue::builder().option_none(),
@@ -77,6 +87,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         path: Vec<String>,
         path_str: &str,
         expected_type: SchemaType,
+        declared_type: &SchemaType,
     ) -> anyhow::Result<WitValue> {
         let durability =
             Durability::<GolemAgentGetConfigValue>::new(self, DurableFunctionType::ReadRemote)
@@ -92,6 +103,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let canonical_agent_secret_path =
                 CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
             let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
+
+            // Future automatic-update transforms belong here, where both
+            // the component-declared type and the guest-expected type are
+            // available together with the resolved secret metadata/value.
+            if declared_type != &expected_type {
+                return Err(anyhow!(
+                    "declared and expected type for secret key {path_str} are not compatible"
+                ));
+            }
 
             let result_schema = match (&expected_type, agent_secret) {
                 // No secret stored; `Option<_>` resolves to `None`.
@@ -430,12 +450,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let declaration = agent_type.config.iter().find(|c| c.path == path);
 
-        // Deterministic check: the guest-supplied expected type must
-        // match the type declared on the component. Both are inline
-        // `SchemaType`s, so structural equality is sufficient. Run
-        // before dispatching to the local/secret resolver so a
-        // mismatch never opens a durable function (secret path) nor
-        // touches local state.
         let declaration_value_type = declaration
             .map(|d| {
                 analysed_type_to_schema_type_inline(&d.value_type).map_err(|e| {
@@ -445,13 +459,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 })
             })
             .transpose()?;
-        if let Some(declared) = declaration_value_type.as_ref()
-            && *declared != expected_type
-        {
-            return Err(anyhow!(
-                "declared and expected type for config key {path_str} are not compatible"
-            ));
-        }
 
         match declaration {
             // Allow reading undeclared optional config keys so that
@@ -463,13 +470,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Some(AgentConfigDeclaration {
                 source: AgentConfigSource::Local,
                 ..
-            }) => self.resolve_local_config(&path, &path_str, &expected_type),
+            }) => self.resolve_local_config(
+                &path,
+                &path_str,
+                &expected_type,
+                declaration_value_type
+                    .as_ref()
+                    .expect("existing config declaration must have converted value type"),
+            ),
             Some(AgentConfigDeclaration {
                 source: AgentConfigSource::Secret,
                 ..
             }) => {
-                self.resolve_secret_config(path, &path_str, expected_type)
-                    .await
+                self.resolve_secret_config(
+                    path,
+                    &path_str,
+                    expected_type,
+                    declaration_value_type
+                        .as_ref()
+                        .expect("existing config declaration must have converted value type"),
+                )
+                .await
             }
         }
     }
