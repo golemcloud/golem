@@ -1288,6 +1288,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }?;
 
+            // A `BeginRemoteWrite` region (remote write / HTTP request) is now open until the
+            // matching `end_function`; the tip is inside it, so block mid-invocation checkpoints.
+            self.state.open_rollback_regions.insert(result);
+
             // The current retry point will point to the BeginRemoteWrite entry
             self.state.current_retry_point = result;
             Ok(result)
@@ -1337,15 +1341,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .oplog
                     .add(OplogEntry::end_remote_write(begin_index))
                     .await;
-                Ok(())
             } else {
                 let (_, _) =
                     crate::get_oplog_entry!(self.state.replay_state, OplogEntry::EndRemoteWrite)?;
-                Ok(())
             }
+            // The `BeginRemoteWrite` region opened in `begin_function` is now closed.
+            self.state.open_rollback_regions.remove(&begin_index);
+            Ok(())
         } else {
             Ok(())
         }
+    }
+
+    /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
+    /// it commits, so the worker's `last_known_status` reflects the committed tip. Writes a
+    /// checkpoint only when we are at a structurally clean boundary (no open rollback region) and
+    /// the committed tip is at/below the `get_oplog_index` marker watermark; otherwise it is a
+    /// cheap no-op. The actual write is further throttled by the checkpointer.
+    async fn maybe_mid_invocation_checkpoint(&self) {
+        if !self.state.at_clean_checkpoint_boundary() {
+            return;
+        }
+        self.public_state
+            .worker()
+            .checkpoint_status_mid_invocation(self.state.min_exposed_marker)
+            .await;
     }
 
     pub async fn begin_transaction_function<Tx, Err>(
@@ -1363,6 +1383,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .add_and_commit_oplog(OplogEntry::begin_remote_transaction(tx_id, None))
                 .await;
 
+            // A remote transaction region is now open until commit/rollback; block checkpoints.
+            self.state.open_rollback_regions.insert(begin_index);
             self.state.current_retry_point = begin_index;
 
             Ok((begin_index, tx))
@@ -1508,6 +1530,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 Ok((original_begin_index, tx))
             }?;
 
+            // The (possibly re-begun) remote transaction region is open until commit/rollback.
+            self.state.open_rollback_regions.insert(result);
             self.state.current_retry_point = original_begin_index;
 
             Ok((result, tx))
@@ -1585,14 +1609,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
-            Ok(())
         } else {
             let (_, _) = crate::get_oplog_entry!(
                 self.state.replay_state,
                 OplogEntry::CommittedRemoteTransaction
             )?;
-            Ok(())
         }
+        // The remote transaction region opened in `begin_transaction_function` is now closed: the
+        // `CommittedRemoteTransaction` entry has been durably committed (live) or replayed, so the
+        // tip is no longer inside a jumpable region on its account.
+        self.state.open_rollback_regions.remove(&begin_index);
+        // The live branch above just committed/updated the status, so this is a clean boundary at
+        // the committed tip (the helper is a no-op during replay and while any other region is
+        // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
+        // invocations.
+        self.maybe_mid_invocation_checkpoint().await;
+        Ok(())
     }
 
     pub async fn rolled_back_transaction_function(
@@ -1612,14 +1644,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
-            Ok(())
         } else {
             let (_, _) = crate::get_oplog_entry!(
                 self.state.replay_state,
                 OplogEntry::RolledBackRemoteTransaction
             )?;
-            Ok(())
         }
+        // The remote transaction region opened in `begin_transaction_function` is now closed: the
+        // `RolledBackRemoteTransaction` entry has been durably committed (live) or replayed, so the
+        // tip is no longer inside a jumpable region on its account.
+        self.state.open_rollback_regions.remove(&begin_index);
+        // The live branch above just committed/updated the status, so this is a clean boundary at
+        // the committed tip (the helper is a no-op during replay and while any other region is
+        // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
+        // invocations.
+        self.maybe_mid_invocation_checkpoint().await;
+        Ok(())
     }
 }
 
@@ -4132,6 +4172,25 @@ struct PrivateDurableWorkerState {
     /// from scratch.
     active_atomic_regions: Vec<ActiveAtomicRegion>,
 
+    /// Begin indices of currently open rollback-capable regions other than atomic regions: remote
+    /// writes / HTTP requests (`BeginRemoteWrite`..`EndRemoteWrite`) and remote transactions
+    /// (`BeginRemoteTransaction`..`Committed`/`RolledBackRemoteTransaction`). Maintained by
+    /// `begin_function`/`end_function` and the transaction lifecycle functions. While any such
+    /// region is open, the current oplog tip sits inside it, so a later trap/replay can append a
+    /// jump that deletes the tip — making a mid-invocation status checkpoint at the tip unsafe (see
+    /// `at_clean_checkpoint_boundary`). Keyed by begin index so begin/end are self-balancing across
+    /// the messy replay/restart paths; a fresh state is built per worker incarnation, so a region
+    /// left open by a trap is cleared on restart.
+    open_rollback_regions: HashSet<OplogIndex>,
+
+    /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
+    /// invocation (the `NoOp` marker it plants). It is the only realistic `set_oplog_index` target,
+    /// which deletes `(M.next()..source]` and preserves `M`, so a checkpoint at an index `<= M`
+    /// survives such a jump. Mid-invocation checkpoints are not advanced past this watermark. Reset
+    /// at the start of every invocation (a marker held across invocations only costs graceful
+    /// fallback, never correctness).
+    min_exposed_marker: Option<OplogIndex>,
+
     // Update that is pending and should be applied at the end of replay.
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
     pending_update: tokio::sync::Mutex<Option<TimestampedUpdateDescription>>,
@@ -4276,6 +4335,8 @@ impl PrivateDurableWorkerState {
             pending_update: tokio::sync::Mutex::new(pending_update),
             current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
+            open_rollback_regions: HashSet::new(),
+            min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
             resource_limit_entry,
@@ -4491,11 +4552,27 @@ impl PrivateDurableWorkerState {
     pub fn reset_invocation_call_counts(&mut self) {
         self.http_call_count = 0;
         self.rpc_call_count = 0;
+        // The `get_oplog_index` marker watermark is per-invocation: a marker captured in a previous
+        // invocation only costs a graceful checkpoint fallback if jumped to, never correctness.
+        self.min_exposed_marker = None;
     }
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
         self.replay_state.is_live()
+    }
+
+    /// Whether the current oplog tip is a structurally clean boundary at which a mid-invocation
+    /// status checkpoint may be taken: we are live, no rollback-capable region is open (so no later
+    /// trap/replay can append a jump that deletes the tip), and we are not in a persistence regime
+    /// whose entries are not folded normally. The `get_oplog_index` marker watermark is checked
+    /// separately by the caller against the committed status tip.
+    pub fn at_clean_checkpoint_boundary(&self) -> bool {
+        self.is_live()
+            && self.active_atomic_regions.is_empty()
+            && self.open_rollback_regions.is_empty()
+            && self.persistence_level != PersistenceLevel::PersistNothing
+            && self.snapshotting_mode.is_none()
     }
 
     /// Returns whether we are in replay mode where we are replaying old calls.

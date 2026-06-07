@@ -47,6 +47,10 @@ pub enum CheckpointReason {
     Snapshot,
     /// Written when the worker goes idle. Throttled by the configured min oplog-index delta.
     Idle,
+    /// Written *during* a long-running invocation at a structurally clean boundary (no open
+    /// rollback region) and below the outstanding `get_oplog_index` marker watermark. Throttled
+    /// exactly like [`CheckpointReason::Idle`].
+    MidInvocation,
 }
 
 impl CheckpointReason {
@@ -54,6 +58,7 @@ impl CheckpointReason {
         match self {
             CheckpointReason::Snapshot => "snapshot",
             CheckpointReason::Idle => "idle",
+            CheckpointReason::MidInvocation => "mid_invocation",
         }
     }
 }
@@ -153,8 +158,8 @@ impl StatusCheckpointer {
 
         let should_write = match (reason, &state.last_written) {
             (CheckpointReason::Snapshot, _) => true,
-            (CheckpointReason::Idle, None) => true,
-            (CheckpointReason::Idle, Some(previous)) => {
+            (CheckpointReason::Idle | CheckpointReason::MidInvocation, None) => true,
+            (CheckpointReason::Idle | CheckpointReason::MidInvocation, Some(previous)) => {
                 let current_idx = status.oplog_idx.as_u64();
                 let previous_idx = previous.oplog_idx.as_u64();
                 // The previous checkpoint is unusable as a fold baseline once a region deletes its
@@ -339,6 +344,58 @@ mod tests {
         assert_eq!(
             *service.writes.lock().unwrap(),
             vec![OplogIndex::from_u64(10), OplogIndex::from_u64(110)]
+        );
+    }
+
+    #[test]
+    async fn mid_invocation_first_checkpoint_is_always_written() {
+        let service = Arc::new(RecordingWorkerService::default());
+        let cp = checkpointer(service.clone(), 100);
+
+        cp.maybe_checkpoint(&status_at(10), CheckpointReason::MidInvocation)
+            .await;
+
+        assert_eq!(
+            *service.writes.lock().unwrap(),
+            vec![OplogIndex::from_u64(10)]
+        );
+    }
+
+    #[test]
+    async fn mid_invocation_throttles_like_idle() {
+        let service = Arc::new(RecordingWorkerService::default());
+        let cp = checkpointer(service.clone(), 100);
+
+        cp.maybe_checkpoint(&status_at(10), CheckpointReason::MidInvocation)
+            .await; // first -> written (10)
+        cp.maybe_checkpoint(&status_at(50), CheckpointReason::MidInvocation)
+            .await; // +40 < 100 -> skipped
+        cp.maybe_checkpoint(&status_at(110), CheckpointReason::MidInvocation)
+            .await; // +100 >= 100 -> written (110)
+
+        assert_eq!(
+            *service.writes.lock().unwrap(),
+            vec![OplogIndex::from_u64(10), OplogIndex::from_u64(110)]
+        );
+    }
+
+    #[test]
+    async fn mid_invocation_and_idle_share_the_same_throttle_baseline() {
+        let service = Arc::new(RecordingWorkerService::default());
+        let cp = checkpointer(service.clone(), 100);
+
+        // A mid-invocation checkpoint and a subsequent idle checkpoint use the same persisted
+        // baseline, so the idle one is throttled relative to the mid-invocation write.
+        cp.maybe_checkpoint(&status_at(10), CheckpointReason::MidInvocation)
+            .await; // written (10)
+        cp.maybe_checkpoint(&status_at(40), CheckpointReason::Idle)
+            .await; // +30 < 100 -> skipped
+        cp.maybe_checkpoint(&status_at(150), CheckpointReason::Idle)
+            .await; // +140 >= 100 -> written (150)
+
+        assert_eq!(
+            *service.writes.lock().unwrap(),
+            vec![OplogIndex::from_u64(10), OplogIndex::from_u64(150)]
         );
     }
 

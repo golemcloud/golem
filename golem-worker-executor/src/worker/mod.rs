@@ -2935,6 +2935,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await;
     }
 
+    /// Writes a *clean* status checkpoint *during* a long-running invocation, taken from the current
+    /// committed in-memory status (the caller must only invoke this right after a durable commit, so
+    /// `last_known_status` reflects the committed oplog tip).
+    ///
+    /// In addition to the [`Self::checkpoint_status`] guards, this respects the per-invocation
+    /// `get_oplog_index` marker watermark: if the guest captured an oplog index `M` via
+    /// `get_oplog_index`, a later `set_oplog_index(M)` deletes `(M.next()..tip]` but preserves `M`,
+    /// so a checkpoint must not advance past `M` or it would be discarded after such a jump. When a
+    /// marker is present and the committed tip is already beyond it, we skip the checkpoint (a cheap
+    /// no-op) rather than write one that a later jump would invalidate.
+    pub(crate) async fn checkpoint_status_mid_invocation(
+        &self,
+        min_exposed_marker: Option<OplogIndex>,
+    ) {
+        if self.last_known_status_detached.load(Ordering::Acquire) {
+            return;
+        }
+        let status = self.last_known_status.read().await.clone();
+        if let Some(marker) = min_exposed_marker
+            && status.oplog_idx > marker
+        {
+            return;
+        }
+        self.status_checkpointer
+            .maybe_checkpoint(
+                &status,
+                status_checkpointer::CheckpointReason::MidInvocation,
+            )
+            .await;
+    }
+
     /// Synchronously persists any pending cached-status changes for this worker. Used at lifecycle
     /// boundaries (e.g. suspend) so the cached blob is up to date when the worker goes idle, rather
     /// than waiting for the next background sweep.

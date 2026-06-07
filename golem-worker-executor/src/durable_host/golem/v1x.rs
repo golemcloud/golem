@@ -256,9 +256,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api", "get_oplog_index");
         if self.state.is_live() {
             self.state.oplog.add(OplogEntry::no_op()).await;
-            Ok(self.state.current_oplog_index().await.into())
+            let marker = self.state.current_oplog_index().await;
+            // This `NoOp` index is the realistic `set_oplog_index` target; pin the mid-invocation
+            // checkpoint watermark to the earliest one so a checkpoint at `<= marker` survives a
+            // later jump back to it. (No checkpoint is taken here — there is no commit at this
+            // point; the next post-commit boundary at/below the marker takes it.)
+            self.state.min_exposed_marker = Some(match self.state.min_exposed_marker {
+                Some(existing) => existing.min(marker),
+                None => marker,
+            });
+            Ok(marker.into())
         } else {
             let (oplog_index, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::NoOp)?;
+            // The replayed `get_oplog_index` returns this same marker to the guest, which may feed
+            // it to `set_oplog_index` after switching to live. Pin the watermark here too (mirroring
+            // the live branch) so a post-replay mid-invocation checkpoint never advances past it.
+            self.state.min_exposed_marker = Some(match self.state.min_exposed_marker {
+                Some(existing) => existing.min(oplog_index),
+                None => oplog_index,
+            });
             Ok(oplog_index.into())
         }
     }
