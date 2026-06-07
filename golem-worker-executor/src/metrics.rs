@@ -518,7 +518,7 @@ pub mod wasm {
         .unwrap();
         static ref WORKER_RESIDENT_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
             "worker_resident_linear_memory_bytes",
-            "Per-worker cumulative linear memory size (total_linear_memory_size) observed when acquiring a memory permit",
+            "Per-worker cumulative linear-memory ceiling (total_linear_memory_size = sum of memory.grow deltas) sampled at permit acquire. This is the semaphore charge basis (x*ml), an upper bound on resident RSS, NOT measured resident memory (grown pages are largely demand-paged); compare to container_memory_working_set_bytes for the gap",
             crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
