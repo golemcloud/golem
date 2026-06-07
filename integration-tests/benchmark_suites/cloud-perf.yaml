@@ -36,10 +36,13 @@ benchmarks:
 
   # size   = number of workers per implementation
   # length = payload size in bytes sent to large_input
+  # NOTE: large payloads grow worker linear memory, so this is the throughput
+  # benchmark most relevant to the memory-admission investigation — sized to
+  # match throughput-echo so it exercises real density.
   - name: throughput-large-input
     iterations: 3
     clusterSize: [2]
-    size: [1, 10, 25, 50]
+    size: [1, 10, 50, 100, 250]
     length: [100, 10000]
 
   # size   = number of workers per implementation
@@ -47,13 +50,18 @@ benchmarks:
   - name: throughput-cpu-intensive
     iterations: 3
     clusterSize: [2]
-    size: [1, 10, 25, 50]
+    size: [1, 10, 50, 100, 250]
     length: [100]
 
   # Cold-start: compilation cache disabled — measures true cold-start latency
   # with no warm compiled artefact available.
   # size   = number of unique components created (each in its own env)
   # length = seconds to wait per component for pre-compilation warm-up
+  # NOTE: each unit here is a UNIQUE component, so size scales compilations
+  # (compilation-service + S3 cache load), not worker density. Kept at max 20:
+  # cold-start latency is already characterized there, and the cache-enabled
+  # warmup sleeps length*size seconds per run, so larger sizes mostly add idle
+  # wait rather than signal.
   - name: cold-start-unknown-small
     iterations: 3
     clusterSize: [2]
@@ -103,22 +111,25 @@ benchmarks:
     length: [5]
 
   # Sleep — measures worker suspension and resumption under real network
-  # conditions.
+  # conditions. High residency: all `size` workers held in memory sleeping at
+  # once, so this also probes how many resident workers fit (memory-admission
+  # relevant) — pushed past the ~2000 echo proved out.
   # size   = number of workers launched in parallel
   # length = sleep duration in milliseconds
   - name: sleep
     iterations: 3
     clusterSize: [2]
-    size: [10, 100, 500, 1000]
+    size: [10, 100, 500, 1000, 2000]
     length: [10000]
 
   # Durability overhead — measures the cost of durable vs ephemeral execution
   # across four variants (durable-persistent, durable-non-persistent,
-  # ephemeral, durable-persistent-commit).
+  # ephemeral, durable-persistent-commit). size workers concurrent per phase;
+  # sized up to put real load on the oplog/persistence/storage path.
   # size   = number of workers per variant
   # length = loop iteration count passed to oplog_heavy
   - name: durability-overhead
     iterations: 3
     clusterSize: [2]
-    size: [10, 50, 100, 200]
+    size: [10, 50, 100, 250]
     length: [5000]
