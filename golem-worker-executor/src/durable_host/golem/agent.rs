@@ -89,6 +89,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         expected_type: SchemaType,
         declared_type: &SchemaType,
     ) -> anyhow::Result<WitValue> {
+        // Future automatic-update transforms belong here, where both
+        // the component-declared type and the guest-expected type are
+        // available together with the resolved secret metadata/value.
+        // This deterministic validation must happen before opening the
+        // durable function; replay must not be able to skip it and return
+        // a previously persisted config value.
+        if declared_type != &expected_type {
+            return Err(anyhow!(
+                "declared and expected type for secret key {path_str} are not compatible"
+            ));
+        }
+
         let durability =
             Durability::<GolemAgentGetConfigValue>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
@@ -103,15 +115,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let canonical_agent_secret_path =
                 CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
             let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
-
-            // Future automatic-update transforms belong here, where both
-            // the component-declared type and the guest-expected type are
-            // available together with the resolved secret metadata/value.
-            if declared_type != &expected_type {
-                return Err(anyhow!(
-                    "declared and expected type for secret key {path_str} are not compatible"
-                ));
-            }
 
             let result_schema = match (&expected_type, agent_secret) {
                 // No secret stored; `Option<_>` resolves to `None`.
