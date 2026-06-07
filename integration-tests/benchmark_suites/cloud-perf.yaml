@@ -20,10 +20,6 @@
 # RPC worker pairs and HTTP deployments — the most complex setup. Running them
 # early surfaces infrastructure issues (stuck workers, port-forward drops)
 # before spending time on the simpler benchmarks.
-#
-# NOTE: All benchmarks except throughput-echo are temporarily commented out for
-# the memory-semaphore (component_size_coefficient) knob experiment. Restore
-# them to run the full suite.
 
 name: cloud-perf
 benchmarks:
@@ -38,95 +34,91 @@ benchmarks:
     size: [1, 10, 50, 100, 250]
     length: [1000]
 
-  # TEMPORARILY DISABLED: only throughput-echo runs for the memory-semaphore
-  # (component_size_coefficient) knob experiment, to get faster A/B results.
-  # Restore the entries below to run the full suite again.
-  #
-  # # size   = number of workers per implementation
-  # # length = payload size in bytes sent to large_input
-  # - name: throughput-large-input
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 10, 25, 50]
-  #   length: [100, 10000]
-  #
-  # # size   = number of workers per implementation
-  # # length = CPU work length passed to cpu_intensive
-  # - name: throughput-cpu-intensive
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 10, 25, 50]
-  #   length: [100]
-  #
-  # # Cold-start: compilation cache disabled — measures true cold-start latency
-  # # with no warm compiled artefact available.
-  # # size   = number of unique components created (each in its own env)
-  # # length = seconds to wait per component for pre-compilation warm-up
-  # - name: cold-start-unknown-small
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 5, 10, 20]
-  #   length: [2]
-  #   disableCompilationCache: true
-  #
-  # - name: cold-start-unknown-medium
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 5, 10, 20]
-  #   length: [5]
-  #   disableCompilationCache: true
-  #
-  # # Cold-start: compilation cache enabled — measures latency once the compiled
-  # # artefact is available in the cache.
-  # # size   = number of unique components created (each in its own env)
-  # # length = seconds to wait per component for pre-compilation warm-up
-  # # NOTE: if results here are close to the cache-disabled entries above, the
-  # # warm-up wait is too short and compilation hasn't finished — bump length.
-  # - name: cold-start-unknown-small
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 5, 10, 20]
-  #   length: [2]
-  #
-  # - name: cold-start-unknown-medium
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [1, 5, 10, 20]
-  #   length: [5]
-  #
-  # # Invocation latency — hot and cold paths through the Gateway NLB.
-  # # Large worker counts to stress the load balancer and connection pool.
-  # # size   = number of workers created
-  # # length = number of hot invocations per worker after the first cold one
-  # - name: latency-small
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [100, 500, 1000, 2000, 5000]
-  #   length: [2]
-  #
-  # - name: latency-medium
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [100, 500, 1000, 2000]
-  #   length: [5]
-  #
-  # # Sleep — measures worker suspension and resumption under real network
-  # # conditions.
-  # # size   = number of workers launched in parallel
-  # # length = sleep duration in milliseconds
-  # - name: sleep
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [10, 100, 500, 1000]
-  #   length: [10000]
-  #
-  # # Durability overhead — measures the cost of durable vs ephemeral execution
-  # # across four variants (durable-persistent, durable-non-persistent,
-  # # ephemeral, durable-persistent-commit).
-  # # size   = number of workers per variant
-  # # length = loop iteration count passed to oplog_heavy
-  # - name: durability-overhead
-  #   iterations: 3
-  #   clusterSize: [2]
-  #   size: [10, 50, 100, 200]
-  #   length: [5000]
+  # size   = number of workers per implementation
+  # length = payload size in bytes sent to large_input
+  - name: throughput-large-input
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 10, 25, 50]
+    length: [100, 10000]
+
+  # size   = number of workers per implementation
+  # length = CPU work length passed to cpu_intensive
+  - name: throughput-cpu-intensive
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 10, 25, 50]
+    length: [100]
+
+  # Cold-start: compilation cache disabled — measures true cold-start latency
+  # with no warm compiled artefact available.
+  # size   = number of unique components created (each in its own env)
+  # length = seconds to wait per component for pre-compilation warm-up
+  - name: cold-start-unknown-small
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 5, 10, 20]
+    length: [2]
+    disableCompilationCache: true
+
+  - name: cold-start-unknown-medium
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 5, 10, 20]
+    length: [5]
+    disableCompilationCache: true
+
+  # Cold-start: compilation cache enabled — measures latency once the compiled
+  # artefact is available in the cache.
+  # size   = number of unique components created (each in its own env)
+  # length = seconds to wait per component for pre-compilation warm-up
+  # NOTE: if results here are close to the cache-disabled entries above, the
+  # warm-up wait is too short and compilation hasn't finished — bump length.
+  - name: cold-start-unknown-small
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 5, 10, 20]
+    length: [2]
+
+  - name: cold-start-unknown-medium
+    iterations: 3
+    clusterSize: [2]
+    size: [1, 5, 10, 20]
+    length: [5]
+
+  # Invocation latency — hot and cold paths through the Gateway NLB.
+  # Large worker counts to stress the load balancer and connection pool.
+  # size   = number of workers created
+  # length = number of hot invocations per worker after the first cold one
+  - name: latency-small
+    iterations: 3
+    clusterSize: [2]
+    size: [100, 500, 1000, 2000, 5000]
+    length: [2]
+
+  - name: latency-medium
+    iterations: 3
+    clusterSize: [2]
+    size: [100, 500, 1000, 2000]
+    length: [5]
+
+  # Sleep — measures worker suspension and resumption under real network
+  # conditions.
+  # size   = number of workers launched in parallel
+  # length = sleep duration in milliseconds
+  - name: sleep
+    iterations: 3
+    clusterSize: [2]
+    size: [10, 100, 500, 1000]
+    length: [10000]
+
+  # Durability overhead — measures the cost of durable vs ephemeral execution
+  # across four variants (durable-persistent, durable-non-persistent,
+  # ephemeral, durable-persistent-commit).
+  # size   = number of workers per variant
+  # length = loop iteration count passed to oplog_heavy
+  - name: durability-overhead
+    iterations: 3
+    clusterSize: [2]
+    size: [10, 50, 100, 200]
+    length: [5000]
