@@ -227,30 +227,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
                     .map_err(|redis_err| redis_err.to_string())?;
                 map.into_iter().collect()
             }
-            // Non-hash namespaces map onto the whole keyspace; this path is not used for split
-            // agent status, but is provided for completeness (not atomic across the two commands).
-            None => {
-                let keys: Vec<String> = self
-                    .redis
-                    .with(svc_name, api_name)
-                    .keys("*".to_string())
-                    .await
-                    .map_err(|redis_err| redis_err.to_string())?;
-                if keys.is_empty() {
-                    Vec::new()
-                } else {
-                    let values: Vec<Option<Bytes>> = self
-                        .redis
-                        .with(svc_name, api_name)
-                        .mget(keys.clone())
-                        .await
-                        .map_err(|redis_err| redis_err.to_string())?;
-                    keys.into_iter()
-                        .zip(values)
-                        .filter_map(|(k, v)| v.map(|bytes| (k, bytes)))
-                        .collect()
-                }
-            }
+            None => return Err("get_all is only supported for Redis hash namespaces".to_string()),
         };
 
         for (_, value) in &pairs {
