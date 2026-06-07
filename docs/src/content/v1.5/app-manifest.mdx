@@ -1,0 +1,1543 @@
+import {
+  EnumValue,
+  EnumValues,
+  Example,
+  Field,
+  Fields,
+  FieldLink,
+  FieldReleases,
+  Release,
+} from "@/components/app-manifest-schema"
+import {MultiPlatformCommand} from "@/components/multi-platform-command"
+
+# Golem Application Manifest Reference
+
+## JSON schema
+
+For the application manifest format we also publish _JSON schemas_. The current version (1.5.0) is available [here](https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json).
+
+The _JSON schema_ is intended to be used with _editors_ and _IDEs_, to help with base _validation_ and _code completion_.
+
+Use the following _YAML comments_ at the start of your `golem.yaml` documents to enable _schema support_:
+
+<MultiPlatformCommand
+  commands={[
+    {
+      label: "IntelliJ IDEA based products",
+      command: "# $schema: https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json",
+    },
+    {
+      label: "VSCode with YAML Language Support plugin",
+      command:
+        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json",
+    },
+  ]}
+  language={"yaml"}
+/>
+
+Note that on top of the above schema there are other checks performed by `golem`, see the field reference below for details.
+
+## Loading of Application Manifest documents
+
+The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. Once the top level manifest document is found, more manifests are searched based on the <FieldLink path="includes"/> fields.
+
+After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by using `--component-name` CLI flags, or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
+
+Application Manifest documents can also be explicitly passed to the CLI, using the `--app` flag. Note that when using explicit documents the `includes` field is not used, it is expected that all relevant documents are provided for the CLI.
+
+## Template variables and functions
+
+The _Application Manifest_ has some fields which are used as templates, these fields are marked as **Templated** in the field reference below. The templates are using [minijinja](https://github.com/mitsuhiko/minijinja), which is a minimal templating engine based on _Jinja2_ syntax.
+
+Available template variables:
+
+- `component_name`: contains the current component name in which the template is used
+
+Available naming related string transforming functions:
+
+- `to_snake_case`
+- `to_kebab_case`
+- `to_lower_camel_case`
+- `to_pascal_case`
+- `to_shouty_kebab_case`
+- `to_shouty_snake_case`
+- `to_snake_case`
+- `to_title_case`
+- `to_train_case`
+- `to_upper_camel_case`
+
+<Example>
+  { /* @formatter:off */ }
+  ```yaml
+  build: tool-name build {{ component_name | to_snake_case }}.wasm
+  ```
+  { /* @formatter:on */}
+</Example>
+
+<Fields>
+  ## Field reference
+
+  <Field meta={{
+    path: "manifestVersion",
+  }}>
+    ***Optional manifest schema version*** string.
+  </Field>
+
+  <Field meta={{
+    path: "includes",
+  }}>
+    ***Optional list of glob patterns*** that are used for adding search patterns for other _Application Manifests_
+    when using auto discovery of them. The patterns are relative to the manifest document in which they are defined.
+
+    The default search pattern is `**/golem.yaml`, which searches for `golem.yaml` documents in every subdirectory
+    recursively. Templates and examples provided by Golem usually use more specific search patterns to make the lookups
+    more efficient.
+
+    The `includes` fields can be defined in _one manifest only_, usually in the project root directory.
+    Defining it multiple times results in validation error.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      includes:
+      - components-dir/*/golem.yaml
+      - custom-templates/golem-*.yaml
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "app",
+    since: Release.R_1_4_0
+  }}>
+    ***Required application name*** which will be used as the deployment name for the application.
+
+  </Field>
+
+  <Field meta={{
+    path: "httpApi",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional object*** for defining HTTP API deployments.
+    Deployments can be defined in multiple manifests, and they are merged during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of HTTP API deployments*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of HTTP API deployments*** for the environment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].domain",
+    since: Release.R_1_5_0
+  }}>
+    ***Required domain*** for the deployment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].webhookUrl",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional webhook URL*** for the deployment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].agents",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of HTTP API deployment options*** by **agent type name**.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].agents.<agent-type-name>.securityScheme",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional security scheme*** for the agent in this deployment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].agents.<agent-type-name>.testSessionHeaderName",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional test session header name*** for the agent in this deployment.
+  </Field>
+
+  <Field meta={{
+    path: "mcp",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional object*** for defining MCP deployments.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of MCP deployments*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of MCP deployments*** for the environment.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].domain",
+    since: Release.R_1_5_0
+  }}>
+    ***Required domain*** for the MCP deployment.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].agents",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of MCP deployment options*** by **agent type name**.
+  </Field>
+
+  <Field meta={{
+    path: "mcp.deployments.<environment-name>[*].agents.<agent-type-name>.securityScheme",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional security scheme*** for the agent in this MCP deployment.
+  </Field>
+
+  <Field meta={{
+    path: "environments",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional application environments*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.default",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set to true marks the environment as default. Only one environment can be marked as default. If missing, the first environment is used as default.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.account",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional account*** that owns the application environment. When not specified then the current user will be used.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional server configuration*** for the environment. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "local", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "cloud", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+
+    or a ***custom server object*** with the fields documented below.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server.url",
+    since: Release.R_1_4_0
+  }}>
+    ***Required URL*** for custom servers.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server.workerUrl",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional custom URL*** for golem worker service.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server.allowInsecure",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which defaults to false, when set to true it allows insecure connections to the server.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server.auth.oauth2",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set to true selects OAuth2 based authentication.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.server.auth.staticToken",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional string*** static token for authentication when using static token based authentication.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.componentPresets",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional preset name or list of preset names*** which will be used for the application in the given environment.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.cli.format",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional default format*** for the environment, accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "text", since: Release.R_1_4_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "json", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "pretty-json", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "pretty", since: Release.R_1_4_0}}>alias for `pretty-json`</EnumValue>
+      <EnumValue meta={{value: "yaml", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "pretty-yaml", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.cli.autoConfirm",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set enables the auto-confirm (*yes*) flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.cli.redeployAgents",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set enables *redeploy-agents* flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.cli.reset",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set enables *reset* flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.deployment.compatibilityCheck",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** to enable compatibility checks during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.deployment.versionCheck",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** to enable version checks during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.deployment.securityOverrides",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** to allow security overrides during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "components",
+  }}>
+    ***Optional map of Golem components indexed by `component-name`-s*** used for defining components.
+
+    The `components` field can be defined in multiple manifest documents, but the used `component-name`-s must be
+    _unique_ across all the used manifest documents. Using the same `component-name` more then once results in
+    validation error.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          componentWasm: # ...
+          # ...
+        pack:comp-b:
+          componentWasm: # ...
+          # ...
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.templates",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional template name or list of template names*** which will be used for creating the component fields.
+
+    The _template name_ must be one of that are defined in <FieldLink path="componentTemplates"/>.
+
+    See <FieldLink path="componentTemplates"/> and [Template variable and functions](#template-variables-and-functions)
+    for defining templates.
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.presets",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional map of presets*** used to define preset variations for a component.
+
+    A _preset_ contains the same fields as a component. Presets can also specify a <FieldLink path="components.<component-name>.presets.<preset-name>.default"/> flag to mark it as the default preset for selection.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.presets.<preset-name>.default",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional boolean*** which when set to true marks the preset as the default for selection.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.dir",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional base directory*** for resolving component paths. The path is relative to the manifest document.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.buildMergeMode",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.build"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "append", since: Release.R_1_4_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "prepend", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.files",
+  }}>
+    ***Optional list of files entries,*** which can be used for defining the _Initial File System_ for the component.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          # ...
+          files:
+          - sourcePath: ./files/foo.txt
+            targetPath: /files/foo.txt
+            permissions: read-only
+          - sourcePath: ./files/bar.txt
+            targetPath: /files/bar.txt
+            permissions: read-write
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.filesMergeMode",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.files"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "append", since: Release.R_1_4_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "prepend", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.files[*].sourcePath",
+    }}
+  >
+    ***Required source path*** of the file to be added to the _Initial File System_. The path can be a
+    _file path_ relative to the manifest document or an _URL_.
+  </Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.files[*].targetPath",
+    }}
+  >
+    ***Required target path*** of the file in the _Initial File System_. The path must be an absolute
+    path.
+  </Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.files[*].permissions",
+    }}
+  >
+    ***Optional string enum*** which controls file permissions. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "read-only", isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "read-write"}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins",
+    since: Release.R_1_2_2
+  }}>
+    ***Optional list of component plugin installation entries,***
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.pluginsMergeMode",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.plugins"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "append", since: Release.R_1_4_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "prepend", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].name",
+    since: Release.R_1_2_2
+  }}>
+    ***Required name*** of the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].version",
+    since: Release.R_1_2_2
+  }}>
+    ***Required version*** of the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].account",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional account*** used for installing the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].parameters",
+    since: Release.R_1_2_2
+  }}>
+    ***Optional string map*** of plugin parameters.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.config",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional configuration*** for the component.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.env",
+  }}>
+    ***Optional string map*** of environment variables for the component.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.envMergeMode",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.env"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", since: Release.R_1_4_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_4_0}}></EnumValue>
+      <EnumValue meta={{value: "remove", since: Release.R_1_4_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.wasiConfig",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of WASI configuration variables for the component.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.wasiConfigMergeMode",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.wasiConfig"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "remove", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.componentWasm",
+  }}>
+    ***Optional file path*** for the built _WASM_ component.
+
+    The path is relative to the manifest document in which the field is defined.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          # ...
+          componentWasm: build/component.wasm
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.outputWasm",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional file path*** for the output _WASM_ component which is ready to be uploaded to Golem.
+
+    The path is relative to the manifest document in which the field is defined.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          # ...
+          outputWasm: build/output.wasm
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build",
+  }}>
+    ***Optional list of build steps*** that creates <FieldLink path="components.<component-name>.componentWasm"/>.
+
+    Each build step can be one of:
+    - an **external command** (with `command` field)
+    - a **QuickJS crate generation** step (with `generateQuickjsCrate` field)
+    - a **QuickJS d.ts generation** step (with `generateQuickjsDts` field)
+    - an **inject to prebuilt QuickJS** step (with `injectToPrebuiltQuickjs` field)
+    - a **JS preinitialization** step (with `preinitializeJs` field)
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          build:
+          - command: bindgen-tool src component.wasm
+          - command: build-tool src component.wasm
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.build[*].command",
+    }}
+  >
+    ***Required external command*** that will be used as a build step for creating
+    <FieldLink path="components.<component-name>.componentWasm"/>.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].dir",
+  }}>
+    ***Optional directory path*** which will be used as working directory when executing
+    <FieldLink path="components.<component-name>.build[*].command"></FieldLink>.
+
+    The path is relative to the manifest document, and defaults to `.`.
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].env",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of environment variables for the build command.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].rmdirs",
+  }}>
+    ***Optional list of directory paths*** which will be deleted **before** executing the command.
+
+    The path is relative to <FieldLink path="components.<component-name>.build[*].dir"/>.
+
+    The `rmdirs` field is useful when a binding generator does not automatically clean stale bindings.
+
+    Directories are not removed if the command is _skipped_ because of _up-to-date_ checks, see
+    <FieldLink path="components.<component-name>.build[*].sources"/> and
+    <FieldLink path="components.<component-name>.build[*].targets"/>.
+
+    Directories are removed **before** executing <FieldLink path="components.<component-name>.build[*].mkdirs"/>.
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].mkdirs",
+  }}>
+    ***Optional list of directory paths*** which will be created **before** executing the command if they do not exists.
+
+    The path is relative to <FieldLink path="components.<component-name>.build[*].dir"/>.
+
+    The `mkdirs` field is useful when a build of binding generator tool does not automatically create
+    required nested folders.
+
+    Directories are not created if the command is _skipped_ because of _up-to-date_ checks, see
+    <FieldLink path="components.<component-name>.build[*].sources"/> and
+    <FieldLink path="components.<component-name>.build[*].targets"/>.
+
+    Directories are created **after** executing <FieldLink path="components.<component-name>.build[*].rmdirs"/>.
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].sources",
+  }}>
+    ***Optional list of paths and globs*** which are used as sources for performing _up-to-date checks_.
+
+    If defined then <FieldLink path="components.<component-name>.build[*].targets"/> also have to be used.
+
+    The up-to-date check
+    - _skips_ executing <FieldLink path="components.<component-name>.build[*].command"/>
+    - if all matching files defined by <FieldLink path="components.<component-name>.build[*].targets"/>
+    - are newer then the matched files defined by `sources`.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          # ...
+          build:
+          - command: build-tool src-dir out.wasm
+            sources:
+            - src-dir/*
+            targets:
+            - out.wasm
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.build[*].targets",
+  }}>
+    ***Optional list of paths and globs*** which are used as targets for performing _up-to-date checks_.
+
+    If defined then <FieldLink path="components.<component-name>.build[*].sources"/> also have to be used.
+
+    See <FieldLink path="components.<component-name>.build[*].sources"/> for _up-to-date_ check details.
+
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.customCommands",
+  }}>
+    ***Optional map of component specific external commands***, which are useful for defining e.g. one time
+    _installation_
+    or _update_ related commands for the component.
+
+    The commands can be executed using:
+    ```shell
+    golem exec command-name
+    ```
+
+    Multiple components can use the same `command-name`, the above command will execute _all matching_
+    commands in this case, both component specific and project ones.
+
+    For defining project level custom commands see <FieldLink path="customCommands"/>.
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      components:
+        pack-ns:component-name:
+          # ...
+          customCommands:
+            npm-install:
+            - command: npm install
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].dir",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].env",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].rmdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].mkdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].mkdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].sources",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.customCommands.<command-name>[*].targets",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "components.<component-name>.clean",
+    }}
+  ></Field>
+
+
+
+
+
+  <Field meta={{
+    path: "clean",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional list of paths*** which are added as targets to the `golem clean` command.
+
+    The paths are relative to the manifest document.
+
+    The `clean` command deletes the following paths:
+    - build and custom command `target`s
+    - the paths defined in common and component specific `clean` fields.
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional map of custom external commands***, which are useful for defining e.g. one time _installation_
+    or _update_ related project commands.
+
+    The commands can be executed using:
+    ```shell
+    golem exec command-name
+    ```
+
+    Components specific custom commands can use the same `command-name`, the above command will execute _all matching_
+    commands in this case, both component specific and project ones.
+
+    For defining component specific custom commands see <FieldLink path="components.<component-name>.customCommands"/>.
+
+
+    <Example>
+      { /* @formatter:off */ }
+      ```yaml
+      customCommands:
+        npm-install:
+        - command: npm install
+      ```
+      { /* @formatter:on */}
+    </Example>
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].dir",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional directory path*** which will be used as working directory when executing
+    <FieldLink path="customCommands.<command-name>[*].command"></FieldLink>.
+
+    The path is relative to the manifest document, and defaults to `.`.
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].env",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of environment variables for the command.
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].rmdirs",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional list of directory paths*** which will be deleted **before** executing the command.
+
+    The path is relative to <FieldLink path="customCommands.<command-name>[*].dir"/>.
+
+    The `rmdirs` field is useful when a binding generator does not automatically clean stale bindings.
+
+    Directories are not removed if the command is _skipped_ because of _up-to-date_ checks, see
+    <FieldLink path="customCommands.<command-name>[*].sources"/> and
+    <FieldLink path="customCommands.<command-name>[*].targets"/>.
+
+    Directories are removed **before** executing <FieldLink path="customCommands.<command-name>[*].mkdirs"/>.
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].mkdirs",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional list of directory paths*** which will be created **before** executing the command if they do not exists.
+
+    The path is relative to <FieldLink path="customCommands.<command-name>[*].dir"/>.
+
+    The `mkdirs` field is useful when a build of binding generator tool does not automatically create
+    required nested folders.
+
+    Directories are not created if the command is _skipped_ because of _up-to-date_ checks, see
+    <FieldLink path="customCommands.<command-name>[*].sources"/> and
+    <FieldLink path="customCommands.<command-name>[*].targets"/>.
+
+    Directories are created **after** executing <FieldLink path="customCommands.<command-name>[*].rmdirs"/>.
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].sources",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional list of paths and globs*** which are used as sources for performing _up-to-date checks_.
+
+    If defined then <FieldLink path="customCommands.<command-name>[*].targets"/> also have to be used.
+
+    The up-to-date check
+    - _skips_ executing <FieldLink path="customCommands.<command-name>[*].command"/>
+    - if all matching files defined by <FieldLink path="customCommands.<command-name>[*].targets"/>
+    - are newer then the matched files defined by `sources`.
+
+  </Field>
+
+  <Field meta={{
+    path: "customCommands.<command-name>[*].targets",
+    since: Release.R_1_1_1
+  }}>
+    ***Optional list of paths and globs*** which are used as targets for performing _up-to-date checks_.
+
+    If defined then <FieldLink path="customCommands.<command-name>[*].sources"/> also have to be used.
+
+    See <FieldLink path="customCommands.<command-name>[*].sources"/> for _up-to-date_ check details.
+
+  </Field>
+
+  <Field meta={{
+    path: "componentTemplates",
+    since: Release.R_1_4_0
+  }}>
+    ***Optional map of named templates***, which can be used in <FieldLink path="components.<component-name>.templates"/>.
+
+    Templates help in extracting common _build patterns_ and reuse them for multiple components.
+
+    The `templates` field can be defined in multiple application manifest documents, but the _template names_ must be
+    unique.
+
+    See [Template variable and functions](#template-variables-and-functions) for more information about templating.
+
+  </Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.componentWasm",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.outputWasm",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.buildMergeMode",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].command",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].dir",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].env",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].rmdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].mkdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].sources",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.build[*].targets",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].dir",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].env",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].rmdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].mkdirs",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].sources",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.customCommands.<command-name>[*].targets",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.clean",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.config",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.env",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.envMergeMode",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.wasiConfig",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.wasiConfigMergeMode",
+      since: Release.R_1_5_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.plugins",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.pluginsMergeMode",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.files",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.filesMergeMode",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.files[*].sourcePath",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.files[*].targetPath",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.files[*].permissions",
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.presets",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field
+    meta={{
+      path: "componentTemplates.<template-name>.presets.<preset-name>.default",
+      since: Release.R_1_4_0,
+    }}
+  ></Field>
+
+  <Field meta={{
+    path: "agents",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of agents*** by **agent type name**.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.templates",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional template name or list of template names*** which will be used for creating the agent fields.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.config",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional configuration*** for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.env",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of environment variables for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.envMergeMode",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.env"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "remove", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.wasiConfig",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of WASI configuration variables for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.wasiConfigMergeMode",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.wasiConfig"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "remove", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.plugins",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of plugin installations*** for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.pluginsMergeMode",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.plugins"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "append", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "prepend", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.plugins[*].name",
+    since: Release.R_1_5_0
+  }}>
+    ***Required name*** of the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.plugins[*].version",
+    since: Release.R_1_5_0
+  }}>
+    ***Required version*** of the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.plugins[*].account",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional account*** used for installing the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.plugins[*].parameters",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional string map*** of plugin parameters.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.files",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of files entries*** for defining the _Initial File System_ for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.filesMergeMode",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.files"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "append", since: Release.R_1_5_0, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "prepend", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "replace", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field
+    meta={{
+      path: "agents.<agent-type-name>.files[*].sourcePath",
+      since: Release.R_1_5_0,
+    }}
+  >
+    ***Required source path*** of the file. The path can be a _file path_ relative to the manifest document or an _URL_.
+  </Field>
+
+  <Field
+    meta={{
+      path: "agents.<agent-type-name>.files[*].targetPath",
+      since: Release.R_1_5_0,
+    }}
+  >
+    ***Required target path*** of the file. The path must be an absolute path.
+  </Field>
+
+  <Field
+    meta={{
+      path: "agents.<agent-type-name>.files[*].permissions",
+      since: Release.R_1_5_0,
+    }}
+  >
+    ***Optional string enum*** which controls file permissions. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "read-only", isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "read-write"}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.presets",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of presets*** for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.presets.<preset-name>.default",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional boolean*** which when set to true marks the preset as the default for selection.
+  </Field>
+
+  <Field meta={{
+    path: "bridge",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional object*** for configuring Bridge SDK generation.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.ts",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional TypeScript SDK configuration***.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.ts.agents",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of agent type names***, component names, or `"*"` for including all agents.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.ts.outputDir",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional custom output directory*** for the generated TypeScript SDK.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.rust",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional Rust SDK configuration***.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.rust.agents",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of agent type names***, component names, or `"*"` for including all agents.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.rust.outputDir",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional custom output directory*** for the generated Rust SDK.
+  </Field>
+
+  <Field meta={{
+    path: "secretDefaults",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of secret defaults*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "secretDefaults.<environment-name>",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of secret default entries*** for the environment.
+  </Field>
+
+  <Field meta={{
+    path: "secretDefaults.<environment-name>[*].path",
+    since: Release.R_1_5_0
+  }}>
+    ***Required array of strings*** defining the path to the secret.
+  </Field>
+
+  <Field meta={{
+    path: "secretDefaults.<environment-name>[*].value",
+    since: Release.R_1_5_0
+  }}>
+    ***Required value*** of the secret default.
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of retry policy defaults*** by **environment name**. Policies defined here are created in the environment during deployment if they don't already exist.
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults.<environment-name>",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of retry policy default entries*** for the environment.
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults.<environment-name>[*].name",
+    since: Release.R_1_5_0
+  }}>
+    ***Required unique name*** for this retry policy.
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults.<environment-name>[*].priority",
+    since: Release.R_1_5_0
+  }}>
+    ***Required integer*** defining selection priority — higher values are evaluated first.
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults.<environment-name>[*].predicate",
+    since: Release.R_1_5_0
+  }}>
+    ***Required predicate tree*** defining when this policy applies. Supports composable predicates including
+    property comparisons (`propEq`, `propNeq`, `propGt`, `propGte`, `propLt`, `propLte`),
+    property checks (`propExists`, `propIn`, `propMatches`, `propStartsWith`, `propContains`),
+    and logical combinators (`and`, `or`, `not`).
+  </Field>
+
+  <Field meta={{
+    path: "retryPolicyDefaults.<environment-name>[*].policy",
+    since: Release.R_1_5_0
+  }}>
+    ***Required retry policy tree*** defining the retry strategy. Supports base strategies
+    (`"immediate"`, `"never"`, `periodic`, `exponential`, `fibonacci`) and composable modifiers
+    (`countBox`, `timeBox`, `clamp`, `addDelay`, `jitter`, `filteredOn`, `andThen`, `union`, `intersect`).
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional map of quota resource defaults*** by **environment name**.
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>",
+    since: Release.R_1_5_0
+  }}>
+    ***Optional list of resource definition entries*** for the environment.
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>[*].name",
+    since: Release.R_1_5_0
+  }}>
+    ***Required name*** of the resource.
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>[*].limit",
+    since: Release.R_1_5_0
+  }}>
+    ***Required resource limit*** definition. Can be one of:
+    - **Rate** limit: `{"type": "Rate", "value": <int>, "period": <timePeriod>, "max": <int>}`
+    - **Capacity** limit: `{"type": "Capacity", "value": <int>}`
+    - **Concurrency** limit: `{"type": "Concurrency", "value": <int>}`
+
+    Where `timePeriod` is one of: `second`, `minute`, `hour`, `day`, `month`, `year`.
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>[*].enforcementAction",
+    since: Release.R_1_5_0
+  }}>
+    ***Required enforcement action*** for the resource, accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "reject", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "throttle", since: Release.R_1_5_0}}></EnumValue>
+      <EnumValue meta={{value: "terminate", since: Release.R_1_5_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>[*].unit",
+    since: Release.R_1_5_0
+  }}>
+    ***Required string*** for the single unit of measurement (e.g., `token`, `request`).
+  </Field>
+
+  <Field meta={{
+    path: "resourceDefaults.<environment-name>[*].units",
+    since: Release.R_1_5_0
+  }}>
+    ***Required string*** for the plural units of measurement (e.g., `tokens`, `requests`).
+  </Field>
+
+  ## Fields and changes by releases
+
+  <FieldReleases></FieldReleases>
+
+</Fields>

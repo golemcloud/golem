@@ -1,0 +1,955 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Using Relational Databases
+
+Golem provides an API to integrate with popular relational database systems from any of the supported languages.
+The currently supported databases are:
+
+- PostgreSQL
+- MySQL
+- Apache Ignite 2
+
+<details>
+    <summary>See the full API definition</summary>
+
+    <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+      ```ts
+      declare module 'golem:rdbms/types@1.5.0' {
+        export type Uuid = {
+          highBits: bigint;
+          lowBits: bigint;
+        };
+
+        export type Date = {
+          year: number;
+          month: number;
+          day: number;
+        };
+
+        export type Time = {
+          hour: number;
+          minute: number;
+          second: number;
+          nanosecond: number;
+        };
+
+        export type Timestamp = {
+          date: Date;
+          time: Time;
+        };
+
+        export type Timestamptz = {
+          timestamp: Timestamp;
+          offset: number;
+        };
+
+        export type Timetz = {
+          time: Time;
+          offset: number;
+        };
+      }
+
+      declare module 'golem:rdbms/postgres@1.5.0' {
+        import * as golemRdbms150Types from 'golem:rdbms/types@1.5.0';
+
+        export class LazyDbValue {
+          constructor(value: DbValue);
+          get(): DbValue;
+        }
+
+        export class LazyDbColumnType {
+          constructor(value: DbColumnType);
+          get(): DbColumnType;
+        }
+
+        export class DbResultStream {
+          getColumns(): DbColumn[];
+          getNext(): DbRow[] | undefined;
+        }
+
+        export class DbConnection {
+          /** @throws Error */
+          static open(address: string): DbConnection;
+          /** @throws Error */
+          query(statement: string, params: DbValue[]): DbResult;
+          /** @throws Error */
+          queryStream(statement: string, params: DbValue[]): DbResultStream;
+          /** @throws Error */
+          execute(statement: string, params: DbValue[]): bigint;
+          /** @throws Error */
+          beginTransaction(): DbTransaction;
+        }
+
+        export class DbTransaction {
+          /** @throws Error */
+          query(statement: string, params: DbValue[]): DbResult;
+          /** @throws Error */
+          queryStream(statement: string, params: DbValue[]): DbResultStream;
+          /** @throws Error */
+          execute(statement: string, params: DbValue[]): bigint;
+          /** @throws Error */
+          commit(): void;
+          /** @throws Error */
+          rollback(): void;
+        }
+
+        export type Timestamp = golemRdbms150Types.Timestamp;
+        export type Timestamptz = golemRdbms150Types.Timestamptz;
+        export type Date = golemRdbms150Types.Date;
+        export type Time = golemRdbms150Types.Time;
+        export type Timetz = golemRdbms150Types.Timetz;
+        export type Uuid = golemRdbms150Types.Uuid;
+
+        export type Error =
+          | { tag: 'connection-failure'; val: string }
+          | { tag: 'query-parameter-failure'; val: string }
+          | { tag: 'query-execution-failure'; val: string }
+          | { tag: 'query-response-failure'; val: string }
+          | { tag: 'other'; val: string };
+
+        export type SparseVec = {
+          dim: number;
+          indices: number[];
+          values: number[];
+        };
+
+        export type DbValue =
+          | { tag: 'text'; val: string }
+          | { tag: 'varchar'; val: string }
+          | { tag: 'timestamp'; val: Timestamp }
+          | { tag: 'timestamptz'; val: Timestamptz }
+          | { tag: 'json'; val: string }
+          | { tag: 'jsonb'; val: string }
+          | { tag: 'uuid'; val: Uuid }
+          | { tag: 'array'; val: LazyDbValue[] }
+          | { tag: 'vector'; val: number[] }
+          | { tag: 'halfvec'; val: number[] }
+          | { tag: 'sparsevec'; val: SparseVec }
+          | { tag: 'null' };
+
+        export type DbColumnType =
+          | { tag: 'text' }
+          | { tag: 'varchar' }
+          | { tag: 'timestamp' }
+          | { tag: 'timestamptz' }
+          | { tag: 'json' }
+          | { tag: 'jsonb' }
+          | { tag: 'uuid' }
+          | { tag: 'array'; val: LazyDbColumnType }
+          | { tag: 'vector' }
+          | { tag: 'halfvec' }
+          | { tag: 'sparsevec' };
+
+        export type DbColumn = {
+          ordinal: bigint;
+          name: string;
+          dbType: DbColumnType;
+          dbTypeName: string;
+        };
+
+        export type DbRow = {
+          values: DbValue[];
+        };
+
+        export type DbResult = {
+          columns: DbColumn[];
+          rows: DbRow[];
+        };
+      }
+
+      declare module 'golem:rdbms/mysql@1.5.0' {
+        import * as golemRdbms150Types from 'golem:rdbms/types@1.5.0';
+
+        export class DbResultStream {
+          getColumns(): DbColumn[];
+          getNext(): DbRow[] | undefined;
+        }
+
+        export class DbConnection {
+          /** @throws Error */
+          static open(address: string): DbConnection;
+          /** @throws Error */
+          query(statement: string, params: DbValue[]): DbResult;
+          /** @throws Error */
+          queryStream(statement: string, params: DbValue[]): DbResultStream;
+          /** @throws Error */
+          execute(statement: string, params: DbValue[]): bigint;
+          /** @throws Error */
+          beginTransaction(): DbTransaction;
+        }
+
+        export class DbTransaction {
+          /** @throws Error */
+          query(statement: string, params: DbValue[]): DbResult;
+          /** @throws Error */
+          queryStream(statement: string, params: DbValue[]): DbResultStream;
+          /** @throws Error */
+          execute(statement: string, params: DbValue[]): bigint;
+          /** @throws Error */
+          commit(): void;
+          /** @throws Error */
+          rollback(): void;
+        }
+
+        export type Date = golemRdbms150Types.Date;
+        export type Time = golemRdbms150Types.Time;
+        export type Timestamp = golemRdbms150Types.Timestamp;
+
+        export type Error =
+          | { tag: 'connection-failure'; val: string }
+          | { tag: 'query-parameter-failure'; val: string }
+          | { tag: 'query-execution-failure'; val: string }
+          | { tag: 'query-response-failure'; val: string }
+          | { tag: 'other'; val: string };
+
+        export type DbColumnType =
+          | { tag: 'varchar' }
+          | { tag: 'text' }
+          | { tag: 'timestamp' }
+          | { tag: 'json' };
+
+        export type DbColumn = {
+          ordinal: bigint;
+          name: string;
+          dbType: DbColumnType;
+          dbTypeName: string;
+        };
+
+        export type DbValue =
+          | { tag: 'varchar'; val: string }
+          | { tag: 'text'; val: string }
+          | { tag: 'timestamp'; val: Timestamp }
+          | { tag: 'json'; val: string }
+          | { tag: 'null' };
+
+        export type DbRow = {
+          values: DbValue[];
+        };
+
+        export type DbResult = {
+          columns: DbColumn[];
+          rows: DbRow[];
+        };
+      }
+      ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+
+    In generated bindings, find the following modules under `golem_rust::bindings::golem::rdbms`:
+
+    ```rust
+    pub mod types {
+        pub struct Date {
+            pub year: i32,
+            pub month: u8,
+            pub day: u8,
+        }
+
+        pub struct Time {
+            pub hour: u8,
+            pub minute: u8,
+            pub second: u8,
+            pub nanosecond: u32,
+        }
+
+        pub struct Timestamp {
+            pub date: Date,
+            pub time: Time,
+        }
+    }
+
+    pub mod postgres {
+        pub struct SparseVec {
+            pub dim: i32,
+            pub indices: Vec<i32>,
+            pub values: Vec<f32>,
+        }
+
+        pub enum DbValue {
+            Text(String),
+            Varchar(String),
+            Timestamp(types::Timestamp),
+            Timestamptz(types::Timestamptz),
+            Json(String),
+            Jsonb(String),
+            Uuid(types::Uuid),
+            Array(Vec<LazyDbValue>),
+            Vector(Vec<f32>),
+            Halfvec(Vec<f32>),
+            Sparsevec(SparseVec),
+            Null,
+            // ...
+        }
+
+        impl DbConnection {
+            pub fn open(address: &str) -> Result<DbConnection, Error>;
+            pub fn query(&self, statement: &str, params: Vec<DbValue>) -> Result<DbResult, Error>;
+            pub fn query_stream(
+                &self,
+                statement: &str,
+                params: Vec<DbValue>,
+            ) -> Result<DbResultStream, Error>;
+            pub fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error>;
+            pub fn begin_transaction(&self) -> Result<DbTransaction, Error>;
+        }
+
+        impl DbTransaction {
+            pub fn query(&self, statement: &str, params: Vec<DbValue>) -> Result<DbResult, Error>;
+            pub fn query_stream(
+                &self,
+                statement: &str,
+                params: Vec<DbValue>,
+            ) -> Result<DbResultStream, Error>;
+            pub fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error>;
+            pub fn commit(&self) -> Result<(), Error>;
+            pub fn rollback(&self) -> Result<(), Error>;
+        }
+    }
+
+    pub mod mysql {
+        pub enum DbValue {
+            Varchar(String),
+            Text(String),
+            Timestamp(types::Timestamp),
+            Json(String),
+            Null,
+            // ...
+        }
+
+        impl DbConnection {
+            pub fn open(address: &str) -> Result<DbConnection, Error>;
+            pub fn query(&self, statement: &str, params: &[DbValue]) -> Result<DbResult, Error>;
+            pub fn query_stream(
+                &self,
+                statement: &str,
+                params: &[DbValue],
+            ) -> Result<DbResultStream, Error>;
+            pub fn execute(&self, statement: &str, params: &[DbValue]) -> Result<u64, Error>;
+            pub fn begin_transaction(&self) -> Result<DbTransaction, Error>;
+        }
+
+        impl DbTransaction {
+            pub fn query(&self, statement: &str, params: &[DbValue]) -> Result<DbResult, Error>;
+            pub fn query_stream(
+                &self,
+                statement: &str,
+                params: &[DbValue],
+            ) -> Result<DbResultStream, Error>;
+            pub fn execute(&self, statement: &str, params: &[DbValue]) -> Result<u64, Error>;
+            pub fn commit(&self) -> Result<(), Error>;
+            pub fn rollback(&self) -> Result<(), Error>;
+        }
+    }
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+
+    In Scala, use the public wrappers in `golem.host.Rdbms`:
+
+    ```scala
+    import golem.host.Rdbms
+    import golem.host.Rdbms.{DbDate, DbTime, DbTimestamp, MysqlDbValue, PgSparseVec, PostgresDbValue}
+
+    sealed trait DbError extends Product with Serializable {
+      def message: String
+    }
+
+    object DbError {
+      final case class ConnectionFailure(message: String) extends DbError
+      final case class QueryParameterFailure(message: String) extends DbError
+      final case class QueryExecutionFailure(message: String) extends DbError
+      final case class QueryResponseFailure(message: String) extends DbError
+      final case class Other(message: String) extends DbError
+    }
+
+    final case class DbColumn(ordinal: Long, name: String, dbTypeName: String)
+    final case class PostgresDbRow(values: List[PostgresDbValue])
+    final case class PostgresDbResult(columns: List[DbColumn], rows: List[PostgresDbRow])
+    final case class MysqlDbRow(values: List[MysqlDbValue])
+    final case class MysqlDbResult(columns: List[DbColumn], rows: List[MysqlDbRow])
+    final case class PgSparseVec(dim: Int, indices: List[Int], values: List[Double])
+
+    sealed trait PostgresDbValue extends Product with Serializable
+    object PostgresDbValue {
+      final case class Text(value: String) extends PostgresDbValue
+      final case class VarChar(value: String) extends PostgresDbValue
+      final case class Timestamp(value: DbTimestamp) extends PostgresDbValue
+      final case class Json(value: String) extends PostgresDbValue
+      final case class Jsonb(value: String) extends PostgresDbValue
+      final case class Vector(value: List[Double]) extends PostgresDbValue
+      final case class HalfVec(value: List[Double]) extends PostgresDbValue
+      final case class SparseVec(value: PgSparseVec) extends PostgresDbValue
+      case object Null extends PostgresDbValue
+      // ...
+    }
+
+    sealed trait MysqlDbValue extends Product with Serializable
+    object MysqlDbValue {
+      final case class VarChar(value: String) extends MysqlDbValue
+      final case class Text(value: String) extends MysqlDbValue
+      final case class Timestamp(value: DbTimestamp) extends MysqlDbValue
+      final case class Json(value: String) extends MysqlDbValue
+      case object Null extends MysqlDbValue
+      // ...
+    }
+
+    final class PostgresConnection private[Rdbms] (private val underlying: Any) {
+      def query(statement: String, params: List[PostgresDbValue] = Nil): Either[DbError, PostgresDbResult]
+      def execute(statement: String, params: List[PostgresDbValue] = Nil): Either[DbError, Long]
+      def beginTransaction(): Either[DbError, PostgresTransaction]
+    }
+
+    final class PostgresTransaction private[Rdbms] (private val underlying: Any) {
+      def query(statement: String, params: List[PostgresDbValue] = Nil): Either[DbError, PostgresDbResult]
+      def execute(statement: String, params: List[PostgresDbValue] = Nil): Either[DbError, Long]
+      def commit(): Either[DbError, Unit]
+      def rollback(): Either[DbError, Unit]
+    }
+
+    object Postgres {
+      def open(address: String): Either[DbError, PostgresConnection]
+    }
+
+    final class MysqlConnection private[Rdbms] (private val underlying: Any) {
+      def query(statement: String, params: List[MysqlDbValue] = Nil): Either[DbError, MysqlDbResult]
+      def execute(statement: String, params: List[MysqlDbValue] = Nil): Either[DbError, Long]
+      def beginTransaction(): Either[DbError, MysqlTransaction]
+    }
+
+    final class MysqlTransaction private[Rdbms] (private val underlying: Any) {
+      def query(statement: String, params: List[MysqlDbValue] = Nil): Either[DbError, MysqlDbResult]
+      def execute(statement: String, params: List[MysqlDbValue] = Nil): Either[DbError, Long]
+      def commit(): Either[DbError, Unit]
+      def rollback(): Either[DbError, Unit]
+    }
+
+    object Mysql {
+      def open(address: String): Either[DbError, MysqlConnection]
+    }
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+
+    In MoonBit, import the generated packages from `golemcloud/golem_sdk/interface/golem/rdbms`:
+
+    ```moonbit
+    // Assuming `golemcloud/golem_sdk/interface/golem/rdbms/types` is imported as `@rdbmsTypes`,
+    // `golemcloud/golem_sdk/interface/golem/rdbms/postgres` as `@postgres`, and
+    // `golemcloud/golem_sdk/interface/golem/rdbms/mysql` as `@mysql`:
+
+    // In `@rdbmsTypes`:
+    pub(all) struct Date {
+      year : Int
+      month : Byte
+      day : Byte
+    } derive(Show, Eq)
+
+    pub(all) struct Time {
+      hour : Byte
+      minute : Byte
+      second : Byte
+      nanosecond : UInt
+    } derive(Show, Eq)
+
+    pub(all) struct Timestamp {
+      date : Date
+      time : Time
+    } derive(Show, Eq)
+
+    // In `@postgres`:
+    pub(all) suberror Error_ {
+      ConnectionFailure(String)
+      QueryParameterFailure(String)
+      QueryExecutionFailure(String)
+      QueryResponseFailure(String)
+      Other(String)
+    } derive(Show, Eq)
+
+    pub(all) struct SparseVec {
+      dim : Int
+      indices : FixedArray[Int]
+      values : FixedArray[Float]
+    } derive(Show, Eq)
+
+    pub(all) enum DbValue {
+      Text(String)
+      Varchar(String)
+      Timestamp(@rdbmsTypes.Timestamp)
+      Timestamptz(@rdbmsTypes.Timestamptz)
+      Json(String)
+      Jsonb(String)
+      Uuid(@rdbmsTypes.Uuid)
+      Array(Array[LazyDbValue])
+      Vector(FixedArray[Float])
+      Halfvec(FixedArray[Float])
+      Sparsevec(SparseVec)
+      Null
+      // ...
+    } derive(Show, Eq)
+
+    pub fn DbResultStream::get_columns(self : DbResultStream) -> Array[DbColumn]
+    pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]?
+
+    pub fn DbConnection::open(address : String) -> Result[DbConnection, Error_]
+    pub fn DbConnection::query(
+      self : DbConnection,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[DbResult, Error_]
+    pub fn DbConnection::query_stream(
+      self : DbConnection,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[DbResultStream, Error_]
+    pub fn DbConnection::execute(
+      self : DbConnection,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[UInt64, Error_]
+    pub fn DbConnection::begin_transaction(
+      self : DbConnection,
+    ) -> Result[DbTransaction, Error_]
+
+    pub fn DbTransaction::query(
+      self : DbTransaction,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[DbResult, Error_]
+    pub fn DbTransaction::query_stream(
+      self : DbTransaction,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[DbResultStream, Error_]
+    pub fn DbTransaction::execute(
+      self : DbTransaction,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[UInt64, Error_]
+    pub fn DbTransaction::commit(self : DbTransaction) -> Result[Unit, Error_]
+    pub fn DbTransaction::rollback(self : DbTransaction) -> Result[Unit, Error_]
+
+    // In `@mysql`:
+    pub(all) suberror Error_ {
+      ConnectionFailure(String)
+      QueryParameterFailure(String)
+      QueryExecutionFailure(String)
+      QueryResponseFailure(String)
+      Other(String)
+    } derive(Show, Eq)
+
+    pub(all) enum DbValue {
+      Varchar(String)
+      Text(String)
+      Timestamp(@rdbmsTypes.Timestamp)
+      Json(String)
+      Null
+      // ...
+    } derive(Show, Eq)
+
+    pub fn DbResultStream::get_columns(self : DbResultStream) -> Array[DbColumn]
+    pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]?
+
+    pub fn DbConnection::open(address : String) -> Result[DbConnection, Error_]
+    pub fn DbConnection::query(
+      self : DbConnection,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[DbResult, Error_]
+    pub fn DbConnection::query_stream(
+      self : DbConnection,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[DbResultStream, Error_]
+    pub fn DbConnection::execute(
+      self : DbConnection,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[UInt64, Error_]
+    pub fn DbConnection::begin_transaction(
+      self : DbConnection,
+    ) -> Result[DbTransaction, Error_]
+
+    pub fn DbTransaction::query(
+      self : DbTransaction,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[DbResult, Error_]
+    pub fn DbTransaction::query_stream(
+      self : DbTransaction,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[DbResultStream, Error_]
+    pub fn DbTransaction::execute(
+      self : DbTransaction,
+      statement : String,
+      params : Array[DbValue],
+    ) -> Result[UInt64, Error_]
+    pub fn DbTransaction::commit(self : DbTransaction) -> Result[Unit, Error_]
+    pub fn DbTransaction::rollback(self : DbTransaction) -> Result[Unit, Error_]
+    ```
+    </Tabs.Tab>
+
+    </Tabs>
+</details>
+
+### Executing SQL statements
+
+To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` resource and call `execute` on it:
+
+#### MySQL
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+  <Tabs.Tab>
+  ```typescript
+  import { DbConnection } from "golem:rdbms/mysql@1.5.0";
+
+  // Connecting to the database called 'test' with user 'root'
+  const conn = DbConnection.open("mysql://root@localhost:3306/test");
+  conn.execute(
+    `CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)   NOT NULL,
+          created_on          timestamp NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id)
+      );`,
+    []
+  )
+  ```
+
+  <Callout type="info">
+  The functions in the `golem:rdbms/mysql@1.5.0` module are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```rust
+  use golem_rust::bindings::golem::rdbms::mysql::*;
+
+  // Connecting to the database called 'test' with user 'root'
+  // Use appropriate error handling in real code
+  let conn = DbConnection::open("mysql://root@localhost:3306/test").expect("Failed to connect to database");
+
+  conn.execute(
+    "CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)   NOT NULL,
+          created_on          timestamp NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id)
+      );",
+    &[])
+    .expect("Failed to execute statement");
+  ```
+
+  <Callout type="info">
+  The functions in the `golem_rust::bindings::golem::rdbms::mysql` bindings are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```scala
+  import golem.host.Rdbms
+
+  // Connecting to the database called 'test' with user 'root'
+  // Use appropriate error handling in real code
+  val result =
+    Rdbms.Mysql.open("mysql://root@localhost:3306/test").flatMap { conn =>
+      conn.execute(
+        """CREATE TABLE IF NOT EXISTS test_users
+          |  (
+          |      user_id             varchar(25)    NOT NULL,
+          |      name                varchar(255)   NOT NULL,
+          |      created_on          timestamp NOT NULL DEFAULT NOW(),
+          |      PRIMARY KEY (user_id)
+          |  );""".stripMargin,
+        Nil
+      )
+    }
+  ```
+
+  <Callout type="info">
+  The functions in `golem.host.Rdbms.Mysql` are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```moonbit
+  // Assuming `golemcloud/golem_sdk/interface/golem/rdbms/mysql` is imported as `@mysql`:
+
+  // Connecting to the database called 'test' with user 'root'
+  // Use appropriate error handling in real code
+  let conn = @mysql.DbConnection::open("mysql://root@localhost:3306/test").unwrap()
+  let statement =
+    #|CREATE TABLE IF NOT EXISTS test_users
+    #|  (
+    #|      user_id             varchar(25)    NOT NULL,
+    #|      name                varchar(255)   NOT NULL,
+    #|      created_on          timestamp NOT NULL DEFAULT NOW(),
+    #|      PRIMARY KEY (user_id)
+    #|  );
+
+  @mysql.DbConnection::execute(conn, statement, []).unwrap()
+  ```
+
+  <Callout type="info">
+  The functions in `golemcloud/golem_sdk/interface/golem/rdbms/mysql` are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+</Tabs>
+
+#### PostgreSQL
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+  <Tabs.Tab>
+  ```typescript
+  import { DbConnection } from "golem:rdbms/postgres@1.5.0";
+
+  // Connecting to the database called 'test' with user 'user'
+  const conn = DbConnection.open("postgresql://user@localhost:5432/test");
+  conn.execute(
+    `CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)   NOT NULL,
+          created_on          timestamp NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id)
+      );`,
+    []
+  )
+  ```
+
+  <Callout type="info">
+    The functions in the `golem:rdbms/postgres@1.5.0` module are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```rust
+  use golem_rust::bindings::golem::rdbms::postgres::*;
+
+  // Connecting to the database called 'test' with user 'user'
+  // Use appropriate error handling in real code
+  let conn = DbConnection::open("postgresql://user@localhost:5432/test").expect("Failed to connect to database");
+
+  conn.execute(
+    "CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)   NOT NULL,
+          created_on          timestamp NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id)
+      );",
+    vec![]
+  )
+  .expect("Failed to execute statement");
+  ```
+
+  <Callout type="info">
+    The functions in the `golem_rust::bindings::golem::rdbms::postgres` bindings are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```scala
+  import golem.host.Rdbms
+
+  // Connecting to the database called 'test' with user 'user'
+  // Use appropriate error handling in real code
+  val result =
+    Rdbms.Postgres.open("postgresql://user@localhost:5432/test").flatMap { conn =>
+      conn.execute(
+        """CREATE TABLE IF NOT EXISTS test_users
+          |  (
+          |      user_id             varchar(25)    NOT NULL,
+          |      name                varchar(255)   NOT NULL,
+          |      created_on          timestamp NOT NULL DEFAULT NOW(),
+          |      PRIMARY KEY (user_id)
+          |  );""".stripMargin,
+        Nil
+      )
+    }
+  ```
+
+  <Callout type="info">
+    The functions in `golem.host.Rdbms.Postgres` are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```moonbit
+  // Assuming `golemcloud/golem_sdk/interface/golem/rdbms/postgres` is imported as `@postgres`:
+
+  // Connecting to the database called 'test' with user 'user'
+  // Use appropriate error handling in real code
+  let conn = @postgres.DbConnection::open("postgresql://user@localhost:5432/test").unwrap()
+  let statement =
+    #|CREATE TABLE IF NOT EXISTS test_users
+    #|  (
+    #|      user_id             varchar(25)    NOT NULL,
+    #|      name                varchar(255)   NOT NULL,
+    #|      created_on          timestamp NOT NULL DEFAULT NOW(),
+    #|      PRIMARY KEY (user_id)
+    #|  );
+
+  let _ = @postgres.DbConnection::execute(conn, statement, []).unwrap()
+  ```
+
+  <Callout type="info">
+  The functions in `golemcloud/golem_sdk/interface/golem/rdbms/postgres` are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+</Tabs>
+
+#### Apache Ignite
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+  <Tabs.Tab>
+  ```typescript
+  import { DbConnection } from "golem:rdbms/ignite2@1.5.0";
+
+  // Connecting to an Apache Ignite 2 instance
+  const conn = DbConnection.open("ignite://localhost:10800");
+  conn.execute(
+    `CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)   NOT NULL,
+          PRIMARY KEY (user_id)
+      ) WITH "CACHE_NAME=TestUsers";`,
+    []
+  )
+
+  // Querying data
+  const result = conn.query("SELECT user_id, name FROM test_users WHERE name = ?", [
+    { tag: "db-string", val: "hello" }
+  ]);
+
+  // Using transactions
+  const tx = conn.beginTransaction();
+  tx.execute("INSERT INTO test_users (user_id, name) VALUES (?, ?)", [
+    { tag: "db-string", val: "1" },
+    { tag: "db-string", val: "Alice" }
+  ]);
+  tx.commit();
+  ```
+
+  <Callout type="info">
+  The functions in the `golem:rdbms/ignite2@1.5.0` module are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```rust
+  use golem_rust::bindings::golem::rdbms::ignite2::*;
+
+  // Connecting to an Apache Ignite 2 instance
+  // Use appropriate error handling in real code
+  let conn = DbConnection::open("ignite://localhost:10800").expect("Failed to connect to database");
+
+  conn.execute(
+    "CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)   NOT NULL,
+          PRIMARY KEY (user_id)
+      ) WITH \"CACHE_NAME=TestUsers\";",
+    &[])
+    .expect("Failed to execute statement");
+
+  // Querying data
+  let result = conn.query(
+    "SELECT user_id, name FROM test_users WHERE name = ?",
+    &[DbValue::DbString("hello".to_string())]
+  ).expect("Failed to query");
+
+  // Using transactions
+  let tx = conn.begin_transaction().expect("Failed to begin transaction");
+  tx.execute(
+    "INSERT INTO test_users (user_id, name) VALUES (?, ?)",
+    &[DbValue::DbString("1".to_string()), DbValue::DbString("Alice".to_string())]
+  ).expect("Failed to execute");
+  tx.commit().expect("Failed to commit");
+  ```
+
+  <Callout type="info">
+  The functions in the `golem_rust::bindings::golem::rdbms::ignite2` bindings are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```scala
+  import golem.host.Rdbms
+
+  // Connecting to an Apache Ignite 2 instance
+  // Use appropriate error handling in real code
+  val result =
+    Rdbms.Ignite2.open("ignite://localhost:10800").flatMap { conn =>
+      conn.execute(
+        """CREATE TABLE IF NOT EXISTS test_users
+          |  (
+          |      user_id             varchar(25)    NOT NULL,
+          |      name                varchar(255)   NOT NULL,
+          |      PRIMARY KEY (user_id)
+          |  ) WITH "CACHE_NAME=TestUsers";""".stripMargin,
+        Nil
+      )
+    }
+  ```
+
+  <Callout type="info">
+  The functions in `golem.host.Rdbms.Ignite2` are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```moonbit
+  // Assuming `golemcloud/golem_sdk/interface/golem/rdbms/ignite2` is imported as `@ignite`:
+
+  // Connecting to an Apache Ignite 2 instance
+  // Use appropriate error handling in real code
+  let conn = @ignite.DbConnection::open("ignite://127.0.0.1:10800").unwrap()
+  let statement =
+    #|CREATE TABLE IF NOT EXISTS test_users
+    #|  (
+    #|      user_id             varchar(25)    NOT NULL,
+    #|      name                varchar(255)   NOT NULL,
+    #|      PRIMARY KEY (user_id)
+    #|  ) WITH "CACHE_NAME=TestUsers";
+
+  @ignite.DbConnection::execute(conn, statement, []).unwrap()
+
+  // Querying data
+  let result = @ignite.DbConnection::query(
+    conn,
+    "SELECT user_id, name FROM test_users WHERE name = ?",
+    [@ignite.DbValue::DbString("hello")]
+  ).unwrap()
+
+  // Using transactions
+  let tx = conn.begin_transaction().unwrap()
+  tx.execute(
+    "INSERT INTO test_users (user_id, name) VALUES (?, ?)",
+    [@ignite.DbValue::DbString("1"), @ignite.DbValue::DbString("Alice")]
+  ).unwrap()
+  tx.commit().unwrap()
+  ```
+
+  <Callout type="info">
+  The functions in `golemcloud/golem_sdk/interface/golem/rdbms/ignite2` are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+
+</Tabs>
+
+#### API
+
+Additionally you can:
+
+- `query` executes a SQL statement and returns a result
+- `query-stream` executs a SQL statement and returns a streaming result
+- `begin-transaction` creates a transaction resource on which, in addition to the `query` and `execute` functions, there is also a `commit` and a `rollback` method.

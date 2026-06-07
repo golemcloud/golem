@@ -49,10 +49,11 @@ cargo make worker-executor-tests-misc
 
 | What Changed | Regeneration Command |
 |---|---|
-| HTTP API endpoints | `cargo make generate-openapi` then `cargo clean -p golem-client && cargo build -p golem-client` |
+| HTTP API endpoints | `cargo make generate-openapi` then `cargo clean -p golem-client && cargo build -p golem-client` (also refreshes `docs/src/content/rest-api/*.mdx`) |
 | Service config structs/defaults | `cargo make generate-configs` |
 | WIT interfaces | `cargo make wit` |
 | TS SDK runtime code | `npx pnpm run build-agent-template` (in `sdks/ts/`) |
+| Skill catalog (`golem-skills/skills/**`) | `cargo make generate-docs-skills` (refreshes `docs/src/content/how-to-guides/*.mdx`) |
 
 ## Step 4: Verify Build
 
@@ -85,6 +86,6 @@ cargo make build         # Full build
 
 1. [ ] `cargo make fix` run — no remaining warnings
 2. [ ] Correct test suite(s) run — all pass
-3. [ ] Artifacts regenerated if applicable (OpenAPI, configs, WIT, agent template)
+3. [ ] Artifacts regenerated if applicable (OpenAPI + docs MDX, configs, WIT, agent template, How-To Guides)
 4. [ ] `cargo make build` succeeds
 5. [ ] Only relevant files staged for commit

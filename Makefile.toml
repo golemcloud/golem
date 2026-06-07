@@ -13,8 +13,12 @@
 # - `cargo make integration-tests`: runs integration tests only
 # - `cargo make sharding-tests-debug`: runs sharding integration tests with file logging enabled, also accepts test name filter arguments
 # - `cargo make test`: runs all unit tests, worker executor tests and integration tests
-# - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
-# - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
+# - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI). Also runs `check-docs-openapi`.
+# - `cargo make generate-openapi`: generates openapi spec from the code, saves it to the openapi directory, and regenerates docs/src/content/next/rest-api/ MDX from the new spec
+# - `cargo make generate-docs-openapi`: regenerates only docs/src/content/next/rest-api/ MDX from the current in-tree openapi/golem-service.yaml (no service rebuild)
+# - `cargo make check-docs-openapi`: regenerates the docs/src/content/next/rest-api/ MDX in place and fails if the checked-in version is stale (for CI)
+# - `cargo make generate-docs-skills`: regenerates docs/src/content/next/how-to-guides/ MDX from golem-skills/skills/
+# - `cargo make check-docs-skills`: regenerates the docs/src/content/next/how-to-guides/ MDX in place and fails if the checked-in version is stale (for CI)
 # - `cargo make check-diff-model-fingerprint`: verifies golem-common diff model fingerprint against goldenfile
 # - `cargo make update-diff-model-fingerprint`: updates golem-common diff model fingerprint goldenfile
 # - `cargo make publish`: publishes packages to crates.io
@@ -760,8 +764,8 @@ cargo tarpaulin \
 ## ** CHECK-OPENAPI **
 
 [tasks.check-openapi]
-description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
-dependencies = ["merge-openapi", "diff-openapi"]
+description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory; also checks docs MDX drift"
+dependencies = ["merge-openapi", "diff-openapi", "check-docs-openapi"]
 
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
@@ -798,8 +802,8 @@ script = '''
 ## ** GENERATE-OPENAPI **
 
 [tasks.generate-openapi]
-dependencies = ["merge-openapi", "store-openapi"]
-description = "Generates openapi spec from the code and saves it to the openapi directory"
+dependencies = ["merge-openapi", "store-openapi", "generate-docs-openapi"]
+description = "Generates openapi spec from the code, saves it to the openapi directory, and regenerates the REST API docs MDX from the new spec"
 
 [tasks.generate-registry-service-openapi]
 description = "Generates openapi spec for registry service"
@@ -847,6 +851,70 @@ script = [
     "cp -v ./target/golem-registry-service.yaml ./openapi/",
     "cp -v ./target/golem-worker-service.yaml ./openapi/",
 ]
+
+## ** DOCS-SYNC **
+##
+## Regenerates and drift-checks the user-facing learn.golem.cloud docs
+## (docs/src/content/next/rest-api/, docs/src/content/next/how-to-guides/) from
+## the in-tree sources of truth (openapi/golem-service.yaml, golem-skills/skills/).
+## The in-tree sources always describe the unreleased `next` version; older
+## versions under docs/src/content/<vX.Y>/ are frozen snapshots only updated
+## by hand for backports.
+## Requires `bun` to be installed (https://bun.sh).
+
+[tasks.docs-bun-install]
+description = "Installs docs/ dependencies with bun (no-op if up to date)"
+cwd = "./docs"
+command = "bun"
+args = ["install", "--frozen-lockfile"]
+
+[tasks.generate-docs-openapi]
+description = "Regenerates docs/src/content/next/rest-api/ MDX from the in-tree openapi/golem-service.yaml"
+dependencies = ["docs-bun-install"]
+cwd = "./docs"
+command = "bun"
+args = ["run", "generate-local"]
+
+[tasks.check-docs-openapi]
+description = "Fails if docs/src/content/next/rest-api/ is stale vs. the in-tree openapi/golem-service.yaml"
+dependencies = ["generate-docs-openapi"]
+script = '''
+  if git diff --quiet -- docs/src/content/next/rest-api/
+    then
+      echo "docs/src/content/next/rest-api/ is up to date with openapi/golem-service.yaml."
+    else
+      echo "docs/src/content/next/rest-api/ is out of date with openapi/golem-service.yaml." 1>&2
+      echo "Run 'cargo make generate-openapi' (or 'cargo make generate-docs-openapi' if the YAML is already current) and commit the result." 1>&2
+      echo "" 1>&2
+      git --no-pager diff -- docs/src/content/next/rest-api/ 1>&2
+      exit 1
+  fi
+'''
+
+[tasks.generate-docs-skills]
+description = "Regenerates docs/src/content/next/how-to-guides/ MDX from golem-skills/skills/"
+dependencies = ["docs-bun-install"]
+cwd = "./docs"
+script = '''
+  bun run update-skills-local
+  bun run fix
+'''
+
+[tasks.check-docs-skills]
+description = "Fails if docs/src/content/next/how-to-guides/ is stale vs. golem-skills/skills/"
+dependencies = ["generate-docs-skills"]
+script = '''
+  if git diff --quiet -- docs/src/content/next/how-to-guides/ docs/src/content/next/how-to-guides.mdx
+    then
+      echo "docs/src/content/next/how-to-guides/ is up to date with golem-skills/skills/."
+    else
+      echo "docs/src/content/next/how-to-guides/ is out of date with golem-skills/skills/." 1>&2
+      echo "Run 'cargo make generate-docs-skills' and commit the result." 1>&2
+      echo "" 1>&2
+      git --no-pager diff -- docs/src/content/next/how-to-guides/ docs/src/content/next/how-to-guides.mdx 1>&2
+      exit 1
+  fi
+'''
 
 ## ** PUBLISH **
 [tasks.publish]
