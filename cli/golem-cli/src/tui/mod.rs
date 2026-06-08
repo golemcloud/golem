@@ -27,4 +27,13 @@ enum TuiEvent {
     CommandOutputClosed(Option<String>),
     CommandExited(CommandExit),
     SpinnerTick(u64),
+    ServerOutput(Vec<u8>),
+    ServerOutputClosed(Option<String>),
+    ServerExited(CommandExit),
+    ServerSpinnerTick(u64),
+    AgentRefreshTick,
+    AgentRefreshFinished {
+        generation: u64,
+        result: Result<String, String>,
+    },
 }

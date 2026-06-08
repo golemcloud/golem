@@ -100,6 +100,24 @@ Build/deploy nested CLI feature:
 - Standardized a left `┃` rail across header, tabs, separator bar, surfaces, command status, output, input, and footer.
 - Replaced the horizontal dash separator with a full-width background bar row and a left rail.
 - Changed the spinner first frame from `-` to `|` to better match the rail-based visual language.
+- Added a Server tab backed by a separate PTY `golem server run` job.
+- Added server log capture with independent scrollback and autofollow.
+- Added server controls: `s` start/stop, `R` restart, `x` toggle clean, `C` clean restart.
+- Added server palette actions for start, stop, restart, clean restart, toggle clean, and go to Server.
+- Kept server logs separate from finite build/deploy/clean command output so both can coexist.
+- Added focused tests for server initial rendering, clean toggles, start/stop/restart state, server log separation, and mouse scrolling.
+- Made the command palette width content-driven, with terminal-margin clamping for narrow screens.
+- Kept command palette width stable while filtering by sizing it from the full action catalog, not the filtered result set.
+- Kept command palette height stable while filtering by sizing it from the maximum visible action count, not the filtered result set.
+- Removed placeholder Environments and Components tabs for now.
+- Replaced the Agents placeholder with a fuzzy-filtered agent list backed by `golem agent list --format json --mode <mode>`.
+- Added agent mode cycle: durable, ephemeral, all.
+- Added selected-agent details side panel with raw JSON fallback.
+- Added manual agent refresh (`u`) and auto-refresh toggle (`a`).
+- Added Agent filter mode entered with `/`, with editable query and Up/Down selection.
+- Added agent palette actions for refresh, auto-refresh, mode cycle, and details toggle.
+- Added robust JSON parsing for both array and `{ values: [...] }` agent list shapes.
+- Added focused tests for tab removal, agent filtering/selection, mode cycling, details panel, refresh result handling, and JSON parsing.
 - Hid the command input row when no command is running or when the current command was started with `yes:on`.
 - Preserved the command input row for the lifetime of commands started with `yes:off`, even if the future-run `yes` toggle changes during the run.
 - Added focused tests for hidden/visible command input row behavior.

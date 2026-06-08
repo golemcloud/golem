@@ -69,6 +69,11 @@ Rules:
 
 ## Phase 4: Data Providers
 
+- [x] Replace placeholder Agent tab with fuzzy-filtered agent list.
+- [x] Add agent mode toggle: durable / ephemeral / all.
+- [x] Add selected agent details side panel.
+- [x] Add manual and auto-refresh for agents.
+- [-] Remove placeholder Environment and Component tabs for now.
 - [ ] Read profiles from config.
 - [ ] Read manifest environments.
 - [ ] Resolve selected environment.
@@ -79,6 +84,10 @@ Rules:
 
 ## Phase 5: Nested CLI Jobs
 
+- [x] Add local server tab backed by `golem server run`.
+- [x] Capture local server logs with scrollback and autofollow.
+- [x] Add start/stop/restart/clean-restart server actions.
+- [x] Keep server logs separate from finite command output.
 - [x] Add subtle section backgrounds and prefix glyphs after minimal layout review.
 - [x] Modernize header/body/output borders.
 - [x] Hide command input row when it is not relevant.

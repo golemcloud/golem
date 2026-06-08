@@ -28,6 +28,12 @@ pub struct NestedCliSpec {
     pub env: HashMap<String, String>,
 }
 
+#[derive(Clone, Copy)]
+pub enum NestedCliTarget {
+    Command,
+    Server,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CommandExit {
     pub code: Option<i32>,
@@ -68,6 +74,7 @@ impl NestedCliRuntime {
 pub fn spawn_nested_cli(
     spec: NestedCliSpec,
     event_tx: Sender<TuiEvent>,
+    target: NestedCliTarget,
 ) -> anyhow::Result<NestedCliRuntime> {
     let pty_system = native_pty_system();
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -108,20 +115,36 @@ pub fn spawn_nested_cli(
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => {
-                        let _ = event_tx.send(TuiEvent::CommandOutputClosed(None));
+                        let _ = event_tx.send(match target {
+                            NestedCliTarget::Command => TuiEvent::CommandOutputClosed(None),
+                            NestedCliTarget::Server => TuiEvent::ServerOutputClosed(None),
+                        });
                         return;
                     }
                     Ok(n) => {
                         if event_tx
-                            .send(TuiEvent::CommandOutput(buffer[..n].to_vec()))
+                            .send(match target {
+                                NestedCliTarget::Command => {
+                                    TuiEvent::CommandOutput(buffer[..n].to_vec())
+                                }
+                                NestedCliTarget::Server => {
+                                    TuiEvent::ServerOutput(buffer[..n].to_vec())
+                                }
+                            })
                             .is_err()
                         {
                             return;
                         }
                     }
                     Err(error) => {
-                        let _ =
-                            event_tx.send(TuiEvent::CommandOutputClosed(Some(error.to_string())));
+                        let _ = event_tx.send(match target {
+                            NestedCliTarget::Command => {
+                                TuiEvent::CommandOutputClosed(Some(error.to_string()))
+                            }
+                            NestedCliTarget::Server => {
+                                TuiEvent::ServerOutputClosed(Some(error.to_string()))
+                            }
+                        });
                         return;
                     }
                 }
@@ -132,10 +155,14 @@ pub fn spawn_nested_cli(
     thread::spawn(move || {
         if let Ok(status) = child.wait() {
             let code = Some(status.exit_code() as i32);
-            let _ = event_tx.send(TuiEvent::CommandExited(CommandExit {
+            let exit = CommandExit {
                 code,
                 success: code == Some(0),
-            }));
+            };
+            let _ = event_tx.send(match target {
+                NestedCliTarget::Command => TuiEvent::CommandExited(exit),
+                NestedCliTarget::Server => TuiEvent::ServerExited(exit),
+            });
         }
     });
 
