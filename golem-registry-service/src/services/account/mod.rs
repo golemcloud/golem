@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod card;
+
+use self::card::account_root_card_record;
 use super::plan::{PlanError, PlanService};
 use crate::config::PrecreatedAccount;
 use crate::repo::account::AccountRepo;
@@ -21,11 +24,9 @@ use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
 use anyhow::anyhow;
-use golem_common::model::account::AccountSetRoles;
 use golem_common::model::account::{
     Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
-use golem_common::model::auth::AccountRole;
 use golem_common::model::plan::PlanId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, GlobalAction};
@@ -105,8 +106,8 @@ impl AccountService {
                     AccountCreation {
                         name: account.name.clone(),
                         email: account.email.clone(),
+                        roles: vec![account.role],
                     },
-                    vec![account.role],
                     account.plan_id,
                     &AuthCtx::System,
                 )
@@ -125,7 +126,7 @@ impl AccountService {
 
         let id = AccountId::new();
         info!("Creating account: {}", id);
-        self.create_internal(id, account, Vec::new(), self.default_plan_id, auth)
+        self.create_internal(id, account, self.default_plan_id, auth)
             .await
     }
 
@@ -152,27 +153,6 @@ impl AccountService {
         self.update_internal(account, auth).await
     }
 
-    pub async fn set_roles(
-        &self,
-        account_id: AccountId,
-        update: AccountSetRoles,
-        auth: &AuthCtx,
-    ) -> Result<Account, AccountError> {
-        let mut account: Account = self.get(account_id, auth).await?;
-
-        auth.authorize_account_action(account_id, AccountAction::SetRoles)?;
-
-        if update.current_revision != account.revision {
-            return Err(AccountError::ConcurrentUpdate);
-        };
-
-        info!("Updating account: {}", account_id);
-
-        account.roles = update.roles;
-
-        self.update_internal(account, auth).await
-    }
-
     pub async fn set_plan(
         &self,
         account_id: AccountId,
@@ -181,7 +161,7 @@ impl AccountService {
     ) -> Result<Account, AccountError> {
         let mut account: Account = self.get(account_id, auth).await?;
 
-        auth.authorize_account_action(account_id, AccountAction::SetRoles)?;
+        auth.authorize_account_action(account_id, AccountAction::SetPlan)?;
 
         if update.current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -292,7 +272,6 @@ impl AccountService {
         &self,
         id: AccountId,
         account: AccountCreation,
-        roles: Vec<AccountRole>,
         plan_id: PlanId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
@@ -302,16 +281,19 @@ impl AccountService {
             Err(anyhow!("Cannot create account with reserved account id"))?
         };
 
+        let email = account.email.into_inner();
+        let account_root_card = account_root_card_record(id, &account.roles);
+
         let record = AccountRevisionRecord::new(
             id,
             account.name,
-            account.email.into_inner(),
+            email,
             plan_id,
-            roles,
+            account.roles,
             auth.actor_account_id(),
         );
 
-        let result = self.account_repo.create(record).await;
+        let result = self.account_repo.create(record, account_root_card).await;
 
         match result {
             Ok(record) => Ok(record.try_into()?),

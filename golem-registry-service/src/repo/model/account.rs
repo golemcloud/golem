@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
+use crate::repo::model::card::CardRepoError;
 use golem_common::error_forwarding;
 use golem_common::model::account::{Account, AccountEmail, AccountId, AccountRevision};
 use golem_common::model::auth::AccountRole;
@@ -34,13 +35,14 @@ pub enum AccountRepoError {
     InternalError(#[from] anyhow::Error),
 }
 
-error_forwarding!(AccountRepoError, RepoError);
+error_forwarding!(AccountRepoError, RepoError, CardRepoError);
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountRecord {
     pub account_id: Uuid,
 
     pub email: String,
+    pub account_root_card_id: Option<Uuid>,
     pub token_root_card_id: Option<Uuid>,
     pub token_root_card_epoch: i64,
 
@@ -101,6 +103,7 @@ impl AccountRevisionRecord {
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountExtRevisionRecord {
     pub entity_created_at: SqlDateTime,
+    pub account_root_card_id: Option<Uuid>,
     pub token_root_card_id: Option<Uuid>,
     pub token_root_card_epoch: i64,
 
@@ -118,6 +121,12 @@ impl TryFrom<AccountExtRevisionRecord> for Account {
             email: AccountEmail::new(value.revision.email),
             plan_id: PlanId(value.revision.plan_id),
             roles: roles_from_bit_vector(value.revision.roles),
+            account_root_card_id: CardId(value.account_root_card_id.ok_or_else(|| {
+                AccountRepoError::InternalError(anyhow::anyhow!(
+                    "Live account {} has no account root card",
+                    value.revision.account_id
+                ))
+            })?),
             token_root_card_id: value.token_root_card_id.map(CardId),
             token_root_card_epoch: value.token_root_card_epoch.try_into()?,
         })

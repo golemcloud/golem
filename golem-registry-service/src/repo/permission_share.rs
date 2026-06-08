@@ -234,42 +234,6 @@ impl DbPermissionShareRepo<PostgresPool> {
         .to_error_on_unique_violation(PermissionShareRepoError::ConcurrentModification)
     }
 
-    async fn insert_card(
-        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        card: CardRecord,
-    ) -> Result<CardRecord, PermissionShareRepoError> {
-        let inserted: CardRecord = tx
-            .fetch_one_as(
-                sqlx::query_as(indoc! { r#"
-                    INSERT INTO cards
-                        (card_id, data, created_at, expires_at, system_card, managed_by)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    RETURNING card_id, data, created_at, expires_at, system_card, managed_by
-                "#})
-                .bind(card.card_id)
-                .bind(card.data)
-                .bind(card.created_at)
-                .bind(card.expires_at)
-                .bind(card.system_card)
-                .bind(card.managed_by),
-            )
-            .await?;
-
-        for parent_id in inserted.data.value().parent_ids.as_slice() {
-            tx.execute(
-                sqlx::query("INSERT INTO card_parents (card_id, parent_id) VALUES ($1, $2)")
-                    .bind(inserted.card_id)
-                    .bind(*parent_id),
-            )
-            .await
-            .to_error_on_foreign_key_violation(
-                PermissionShareRepoError::ParentCardNotFound(*parent_id),
-            )?;
-        }
-
-        Ok(inserted)
-    }
-
     async fn invalidate_token_root_card_and_bump_epoch_in_tx(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         account_id: Uuid,
@@ -375,7 +339,7 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
                 async move {
-                    let card = Self::insert_card(tx, card).await?;
+                    let card = DbCardRepo::<PostgresPool>::create_in_tx(tx, card).await?;
 
                     let share: PermissionShareRecord = tx
                         .fetch_one_as(
@@ -428,7 +392,8 @@ impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
             .with_tx_err(METRICS_SVC_NAME, "update", |tx| {
                 async move {
                     let old_card_id = revision.card_id;
-                    let replacement_card = Self::insert_card(tx, replacement_card).await?;
+                    let replacement_card =
+                        DbCardRepo::<PostgresPool>::create_in_tx(tx, replacement_card).await?;
                     let mut revision = revision;
                     revision.card_id = Some(replacement_card.card_id);
                     let revision = Self::insert_revision(tx, revision).await?;

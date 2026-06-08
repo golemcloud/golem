@@ -175,10 +175,6 @@ fn impersonated_cannot_modify_account() {
         ctx.authorize_account_action(account_id, AccountAction::SetPlan)
             .is_err()
     );
-    assert!(
-        ctx.authorize_account_action(account_id, AccountAction::SetRoles)
-            .is_err()
-    );
 }
 
 #[test]
