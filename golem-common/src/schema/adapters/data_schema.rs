@@ -24,8 +24,13 @@
 //!   - single → [`OutputSchema::Single`] with the element's schema inline
 //!   - many → error. Golem agent methods only ever return 0 or 1 element;
 //!     multi-element output tuples are not supported.
-//! - `DataSchema::Multimodal(elements)` as **input** → error
-//!   (multimodal is an output-only concern).
+//! - `DataSchema::Multimodal(elements)` as **input** →
+//!   [`InputSchema::Parameters`] with a single synthetic
+//!   [`MULTIMODAL_PARTS_FIELD_NAME`] field whose schema is the structural
+//!   multimodal form `list<union<… Role::Multimodal>>`. Multimodal is a
+//!   valid input at the model level; consumers that cannot represent it
+//!   (e.g. an agent constructor exposed over MCP) enforce that as a
+//!   separate, consumer-specific validation rather than failing here.
 //! - `DataSchema::Multimodal(elements)` as **output** →
 //!   [`OutputSchema::Single`] wrapping a `list<union<…>>` where the inner
 //!   union has one branch per named element and carries
@@ -35,9 +40,13 @@
 //!
 //! Reverse (`InputSchema` / `OutputSchema` → `DataSchema`) is partial:
 //!
-//! - [`InputSchema::Parameters`] only round-trips when every field's source
-//!   is [`FieldSource::UserSupplied`] (legacy `DataSchema` has no notion of
-//!   auto-injected fields).
+//! - [`InputSchema::Parameters`] with a single [`MULTIMODAL_PARTS_FIELD_NAME`]
+//!   field carrying the structural multimodal form
+//!   `list<union<… Role::Multimodal>>` round-trips back to
+//!   `DataSchema::Multimodal`.
+//! - Any other [`InputSchema::Parameters`] only round-trips when every
+//!   field's source is [`FieldSource::UserSupplied`] (legacy `DataSchema`
+//!   has no notion of auto-injected fields).
 //! - [`OutputSchema::Unit`] → empty tuple.
 //! - [`OutputSchema::Single`] wrapping a `list<union<…>>` where the union
 //!   carries `Role::Multimodal` → `DataSchema::Multimodal`.
@@ -57,9 +66,97 @@ use crate::schema::metadata::Role;
 use crate::schema::schema_type::{DiscriminatorRule, SchemaType, UnionBranch, UnionSpec};
 
 /// The synthetic name used when reverse-converting an
-/// [`OutputSchema::Single`] whose body is not a record back into a
-/// single-element [`DataSchema::Tuple`].
-const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
+/// [`OutputSchema::Single`] back into a single-element [`DataSchema::Tuple`].
+///
+/// The new schema model carries no output element name (an agent method
+/// returns 0 or 1 positional value, §4.7), so consumers that need a JSON
+/// object key for the single return value (e.g. the MCP exporter, which must
+/// advertise an `object` output schema) use this same name to stay in sync
+/// with the reverse adapter.
+pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
+
+/// The synthetic parameter name used to carry a multimodal input as a single
+/// field of the structural form `list<union<… Role::Multimodal>>` inside an
+/// [`InputSchema::Parameters`]. Shared with the consumers that render or
+/// extract multimodal inputs (e.g. the MCP exporter's `parts` array) so the
+/// name stays consistent across the forward conversion, the reverse
+/// conversion, and the protocol surface.
+pub const MULTIMODAL_PARTS_FIELD_NAME: &str = "parts";
+
+/// Build the structural form of a multimodal schema: a `list<union<…>>`
+/// whose inner [`SchemaType::Union`] carries [`Role::Multimodal`] on its
+/// metadata, with one branch per named element. Shared by the input and
+/// output multimodal conversions.
+fn multimodal_elements_to_list_union(
+    elements: &[NamedElementSchema],
+) -> Result<SchemaType, SchemaAdapterError> {
+    if elements.is_empty() {
+        return Err(SchemaAdapterError::LossySchemaType(
+            "multimodal DataSchema has no alternatives".into(),
+        ));
+    }
+    let branches = elements
+        .iter()
+        .map(|e| {
+            let body = element_schema_to_schema_type(&e.schema)?;
+            Ok(UnionBranch {
+                tag: e.name.clone(),
+                body,
+                // Multimodal unions are not resolved by the generic
+                // inferred-tag discriminator pipeline: the alternative is
+                // carried positionally inside the outer `list` envelope. The
+                // validator special-cases `Role::Multimodal` and skips
+                // per-branch structural discriminator checks, so this slot
+                // only needs to satisfy the type; pick the cheapest legal
+                // rule.
+                discriminator: DiscriminatorRule::FieldAbsent {
+                    field_name: String::new(),
+                },
+                metadata: Default::default(),
+            })
+        })
+        .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
+    let mut union = SchemaType::union(UnionSpec { branches });
+    union.metadata_mut().role = Some(Role::Multimodal);
+    Ok(SchemaType::list(union))
+}
+
+/// If `ty` (resolved against `graph`) is the structural multimodal form
+/// `list<union<… Role::Multimodal>>`, return the union's branches (one per
+/// named alternative, with the branch `tag` carrying the alternative name).
+///
+/// Public, graph-aware detector used by consumers (e.g. the MCP exporter)
+/// that need to special-case multimodal schemas.
+pub fn multimodal_union_branches<'a>(
+    graph: &'a SchemaGraph,
+    ty: &'a SchemaType,
+) -> Result<Option<&'a [UnionBranch]>, SchemaAdapterError> {
+    as_multimodal_list_union(graph, ty)
+}
+
+/// Whether `ty` (resolved against `graph`) is the structural multimodal form
+/// `list<union<… Role::Multimodal>>`.
+pub fn is_multimodal_schema_type(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+) -> Result<bool, SchemaAdapterError> {
+    Ok(as_multimodal_list_union(graph, ty)?.is_some())
+}
+
+/// If `ty` (resolved against `graph`) is the structural multimodal form
+/// `list<union<… Role::Multimodal>>`, return the union's branches.
+pub(crate) fn as_multimodal_list_union<'a>(
+    graph: &'a SchemaGraph,
+    ty: &'a SchemaType,
+) -> Result<Option<&'a [UnionBranch]>, SchemaAdapterError> {
+    if let SchemaType::List { element, .. } = resolve_ref(graph, ty)?
+        && let SchemaType::Union { spec, metadata } = resolve_ref(graph, element)?
+        && metadata.role == Some(Role::Multimodal)
+    {
+        return Ok(Some(&spec.branches));
+    }
+    Ok(None)
+}
 
 // --------------------------------------------------------------------------
 // Forward: DataSchema → InputSchema / OutputSchema
@@ -67,8 +164,11 @@ const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
 
 /// Convert a [`DataSchema`] in input position into an [`InputSchema`].
 ///
-/// Fails if `schema` is [`DataSchema::Multimodal`]; multimodal is an
-/// output-only concept.
+/// - `Tuple` → [`InputSchema::Parameters`] with one user-supplied field per
+///   named element.
+/// - `Multimodal` → [`InputSchema::Parameters`] carrying a single
+///   user-supplied [`MULTIMODAL_PARTS_FIELD_NAME`] field whose schema is the
+///   structural form `list<union<… Role::Multimodal>>`.
 pub fn data_schema_to_input_schema(schema: &DataSchema) -> Result<InputSchema, SchemaAdapterError> {
     match schema {
         DataSchema::Tuple(NamedElementSchemas { elements }) => {
@@ -83,9 +183,13 @@ pub fn data_schema_to_input_schema(schema: &DataSchema) -> Result<InputSchema, S
                 .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
             Ok(InputSchema::Parameters(fields))
         }
-        DataSchema::Multimodal(_) => Err(SchemaAdapterError::LossySchemaType(
-            "multimodal DataSchema is output-only and cannot become an InputSchema".into(),
-        )),
+        DataSchema::Multimodal(NamedElementSchemas { elements }) => {
+            let parts = multimodal_elements_to_list_union(elements)?;
+            Ok(InputSchema::Parameters(vec![NamedField::user_supplied(
+                MULTIMODAL_PARTS_FIELD_NAME,
+                parts,
+            )]))
+        }
     }
 }
 
@@ -114,37 +218,9 @@ pub fn data_schema_to_output_schema(
                 many.len()
             ))),
         },
-        DataSchema::Multimodal(NamedElementSchemas { elements }) => {
-            if elements.is_empty() {
-                return Err(SchemaAdapterError::LossySchemaType(
-                    "multimodal DataSchema has no alternatives".into(),
-                ));
-            }
-            let branches = elements
-                .iter()
-                .map(|e| {
-                    let body = element_schema_to_schema_type(&e.schema)?;
-                    Ok(UnionBranch {
-                        tag: e.name.clone(),
-                        body,
-                        // Multimodal unions are not resolved by the generic
-                        // inferred-tag discriminator pipeline: the
-                        // alternative is carried positionally inside the
-                        // outer `list` envelope. The validator special-cases
-                        // `Role::Multimodal` and skips per-branch structural
-                        // discriminator checks, so this slot only needs to
-                        // satisfy the type; pick the cheapest legal rule.
-                        discriminator: DiscriminatorRule::FieldAbsent {
-                            field_name: String::new(),
-                        },
-                        metadata: Default::default(),
-                    })
-                })
-                .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
-            let mut union = SchemaType::union(UnionSpec { branches });
-            union.metadata_mut().role = Some(Role::Multimodal);
-            Ok(OutputSchema::Single(Box::new(SchemaType::list(union))))
-        }
+        DataSchema::Multimodal(NamedElementSchemas { elements }) => Ok(OutputSchema::Single(
+            Box::new(multimodal_elements_to_list_union(elements)?),
+        )),
     }
 }
 
@@ -162,6 +238,24 @@ pub fn input_schema_to_data_schema(
 ) -> Result<DataSchema, SchemaAdapterError> {
     match input {
         InputSchema::Parameters(fields) => {
+            // Structural multimodal input: a single user-supplied field whose
+            // schema is `list<union<… Role::Multimodal>>` projects back to a
+            // legacy multimodal `DataSchema` (one alternative per branch).
+            if let [field] = fields.as_slice()
+                && matches!(field.source, FieldSource::UserSupplied)
+                && let Some(branches) = as_multimodal_list_union(graph, &field.schema)?
+            {
+                let elements = branches
+                    .iter()
+                    .map(|UnionBranch { tag, body, .. }| {
+                        Ok(NamedElementSchema {
+                            name: tag.clone(),
+                            schema: schema_type_to_element_schema(graph, body)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, SchemaAdapterError>>()?;
+                return Ok(DataSchema::Multimodal(NamedElementSchemas { elements }));
+            }
             let elements = fields
                 .iter()
                 .map(|f| {

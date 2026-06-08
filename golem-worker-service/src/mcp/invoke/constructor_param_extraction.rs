@@ -20,6 +20,43 @@ use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::model::JsonObject;
 
+/// Validate that a (legacy) constructor `DataSchema` can be supplied through
+/// MCP, without requiring actual argument values. This mirrors the structural
+/// rules enforced by [`extract_constructor_input_values`] and is used at export
+/// time so we never advertise a tool/resource whose constructor could never be
+/// satisfied via MCP (multimodal / unstructured constructor parameters).
+pub fn validate_constructor_schema_for_mcp(schema: &DataSchema) -> Result<(), String> {
+    match schema {
+        DataSchema::Tuple(named_schemas) => {
+            for NamedElementSchema {
+                name,
+                schema: elem_schema,
+            } in &named_schemas.elements
+            {
+                match elem_schema {
+                    ElementSchema::ComponentModel(_) => {}
+                    ElementSchema::UnstructuredText(_) => {
+                        return Err(format!(
+                            "MCP cannot support unstructured-text constructor parameters like '{}'",
+                            name
+                        ));
+                    }
+                    ElementSchema::UnstructuredBinary(_) => {
+                        return Err(format!(
+                            "MCP cannot support unstructured-binary constructor parameters like '{}'",
+                            name
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        }
+        DataSchema::Multimodal(_) => {
+            Err("MCP does not support multimodal constructor schemas".to_string())
+        }
+    }
+}
+
 pub fn extract_constructor_input_values(
     args_map: &JsonObject,
     schema: &DataSchema,

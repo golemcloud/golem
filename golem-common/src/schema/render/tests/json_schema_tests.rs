@@ -770,3 +770,260 @@ fn colliding_branch_tags_disambiguate_by_parent_field() {
         "colliding tags must be disambiguated by the parent record field, got {keys:?}"
     );
 }
+
+// --------------------------------------------------------------------------
+// Configurable renderer + agent-level (InputSchema/OutputSchema) entry points
+// --------------------------------------------------------------------------
+
+mod agent_entry_points {
+    use super::*;
+    use crate::schema::agent::{
+        AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
+    };
+    use crate::schema::metadata::Role;
+    use crate::schema::render::json_schema::{
+        JsonSchemaConfig, input_schema_to_json_schema, output_schema_to_json_schema,
+        to_json_schema_with_config,
+    };
+    use crate::schema::schema_type::UnionBranch;
+    use test_r::test;
+
+    #[test]
+    fn mcp_config_omits_draft_marker() {
+        let ty = SchemaType::record(vec![NamedFieldType {
+            name: "id".to_string(),
+            body: SchemaType::u32(),
+            metadata: Default::default(),
+        }]);
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let canonical = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::CANONICAL);
+        let mcp = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::MCP);
+        assert!(canonical.get("$schema").is_some());
+        assert!(
+            mcp.get("$schema").is_none(),
+            "MCP config must omit the $schema draft marker: {mcp}"
+        );
+    }
+
+    #[test]
+    fn input_schema_omits_auto_injected_and_marks_options_optional() {
+        let input = InputSchema::Parameters(vec![
+            NamedField::user_supplied("city", SchemaType::string()),
+            NamedField::user_supplied("hint", SchemaType::option(SchemaType::string())),
+            NamedField::auto_injected(
+                "principal",
+                AutoInjectedKind::Principal,
+                SchemaType::string(),
+            ),
+        ]);
+        let graph = SchemaGraph::empty();
+        let doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::MCP);
+        assert_eq!(doc["type"], json!("object"));
+        assert_eq!(doc["additionalProperties"], json!(false));
+        let props = doc["properties"].as_object().expect("properties object");
+        assert!(props.contains_key("city"));
+        assert!(props.contains_key("hint"));
+        assert!(
+            !props.contains_key("principal"),
+            "auto-injected fields must not be surfaced: {doc}"
+        );
+        let required = doc["required"].as_array().expect("required array");
+        assert!(required.contains(&Value::String("city".to_string())));
+        assert!(
+            !required.contains(&Value::String("hint".to_string())),
+            "option fields must not be required: {doc}"
+        );
+        assert!(
+            !required.contains(&Value::String("principal".to_string())),
+            "auto-injected fields must not be required: {doc}"
+        );
+        assert!(doc.get("$schema").is_none());
+    }
+
+    #[test]
+    fn input_schema_attaches_defs_at_root() {
+        // A record field type becomes a named def in the graph; the rendered
+        // input schema must carry the $defs at its root and reference it.
+        let user_ty = SchemaType::Ref {
+            id: crate::schema::metadata::TypeId("myapp.user".to_string()),
+            metadata: Default::default(),
+        };
+        let user_def_body = SchemaType::record(vec![NamedFieldType {
+            name: "name".to_string(),
+            body: SchemaType::string(),
+            metadata: Default::default(),
+        }]);
+        let mut graph = SchemaGraph::empty();
+        graph.defs.push(crate::schema::graph::SchemaTypeDef {
+            id: crate::schema::metadata::TypeId("myapp.user".to_string()),
+            name: Some("User".to_string()),
+            body: user_def_body,
+        });
+        let input = InputSchema::Parameters(vec![NamedField::user_supplied("user", user_ty)]);
+        let doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::MCP);
+        assert!(
+            doc.get("$defs").and_then(|d| d.get("myapp.user")).is_some(),
+            "named def must be attached at the document root: {doc}"
+        );
+        let user_prop = &doc["properties"]["user"];
+        assert!(
+            user_prop.get("$ref").is_some(),
+            "ref-typed field must render as a $ref: {user_prop}"
+        );
+    }
+
+    #[test]
+    fn input_schema_multimodal_renders_parts_array() {
+        // A multimodal input is a single user-supplied `parts` field of type
+        // list<union<… Role::Multimodal>>; it renders as a `parts` array.
+        let mut union = SchemaType::union(UnionSpec {
+            branches: vec![
+                UnionBranch {
+                    tag: "text".to_string(),
+                    body: SchemaType::string(),
+                    discriminator: DiscriminatorRule::FieldAbsent {
+                        field_name: String::new(),
+                    },
+                    metadata: Default::default(),
+                },
+                UnionBranch {
+                    tag: "image".to_string(),
+                    body: SchemaType::string(),
+                    discriminator: DiscriminatorRule::FieldAbsent {
+                        field_name: String::new(),
+                    },
+                    metadata: Default::default(),
+                },
+            ],
+        });
+        union.metadata_mut().role = Some(Role::Multimodal);
+        let input = InputSchema::Parameters(vec![NamedField {
+            name: "parts".to_string(),
+            source: FieldSource::UserSupplied,
+            schema: SchemaType::list(union),
+            metadata: Default::default(),
+        }]);
+        let graph = SchemaGraph::empty();
+        let doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::MCP);
+        let parts = &doc["properties"]["parts"];
+        assert_eq!(parts["type"], json!("array"));
+        assert!(
+            parts["items"].get("oneOf").is_some(),
+            "multimodal parts items must be a oneOf: {parts}"
+        );
+        let required = doc["required"].as_array().expect("required array");
+        assert!(required.contains(&Value::String("parts".to_string())));
+    }
+
+    #[test]
+    fn output_schema_unit_is_none_and_single_renders() {
+        let graph = SchemaGraph::empty();
+        assert!(
+            output_schema_to_json_schema(&graph, &OutputSchema::Unit, JsonSchemaConfig::MCP)
+                .is_none()
+        );
+        let out = OutputSchema::Single(Box::new(SchemaType::u32()));
+        let rendered =
+            output_schema_to_json_schema(&graph, &out, JsonSchemaConfig::MCP).expect("some schema");
+        assert_eq!(rendered["type"], json!("integer"));
+        assert!(rendered.get("$schema").is_none());
+    }
+
+    #[test]
+    fn mcp_text_renders_data_language_code_shape() {
+        use crate::schema::schema_type::TextRestrictions;
+        let ty = SchemaType::text(TextRestrictions {
+            languages: Some(vec!["en".to_string(), "fr".to_string()]),
+            min_length: None,
+            max_length: None,
+            regex: None,
+        });
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let doc = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::MCP);
+        assert_eq!(doc["type"], json!("object"));
+        let props = doc["properties"].as_object().expect("properties");
+        assert_eq!(props["data"]["type"], json!("string"));
+        assert_eq!(props["data"]["description"], json!("Text content"));
+        assert!(props.contains_key("languageCode"));
+        assert_eq!(
+            props["languageCode"]["description"],
+            json!("Language code. Must be one of: en, fr")
+        );
+        assert_eq!(doc["required"], json!(["data"]));
+        // Canonical mode renders the `{ text, language }` shape instead.
+        let canonical = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::CANONICAL);
+        assert!(canonical["properties"].get("text").is_some());
+    }
+
+    #[test]
+    fn mcp_binary_renders_data_mime_type_shape() {
+        use crate::schema::schema_type::BinaryRestrictions;
+        let ty = SchemaType::binary(BinaryRestrictions {
+            mime_types: Some(vec!["image/png".to_string()]),
+            min_bytes: None,
+            max_bytes: None,
+        });
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let doc = to_json_schema_with_config(&graph, &ty, JsonSchemaConfig::MCP);
+        let props = doc["properties"].as_object().expect("properties");
+        assert_eq!(
+            props["data"]["description"],
+            json!("Base64-encoded binary data")
+        );
+        assert_eq!(
+            props["mimeType"]["description"],
+            json!("MIME type. Must be one of: image/png")
+        );
+        assert_eq!(doc["required"], json!(["data", "mimeType"]));
+    }
+
+    #[test]
+    fn mcp_multimodal_parts_items_are_inline_name_value_objects() {
+        let mut union = SchemaType::union(UnionSpec {
+            branches: vec![
+                UnionBranch {
+                    tag: "description".to_string(),
+                    body: SchemaType::string(),
+                    discriminator: DiscriminatorRule::FieldAbsent {
+                        field_name: String::new(),
+                    },
+                    metadata: Default::default(),
+                },
+                UnionBranch {
+                    tag: "photo".to_string(),
+                    body: SchemaType::binary(Default::default()),
+                    discriminator: DiscriminatorRule::FieldAbsent {
+                        field_name: String::new(),
+                    },
+                    metadata: Default::default(),
+                },
+            ],
+        });
+        union.metadata_mut().role = Some(Role::Multimodal);
+        let input = InputSchema::Parameters(vec![NamedField::user_supplied(
+            "parts",
+            SchemaType::list(union),
+        )]);
+        let graph = SchemaGraph::empty();
+        let doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::MCP);
+        let items = &doc["properties"]["parts"]["items"];
+        let one_of = items["oneOf"].as_array().expect("oneOf array");
+        assert_eq!(one_of.len(), 2);
+        // Each branch is an inline `{ name: const, value: <schema> }` object,
+        // not a `$ref` — and no `$defs` indirection is created.
+        assert_eq!(
+            one_of[0]["properties"]["name"]["const"],
+            json!("description")
+        );
+        assert_eq!(one_of[0]["properties"]["value"]["type"], json!("string"));
+        // The binary branch value uses the MCP content-block shape.
+        assert_eq!(
+            one_of[1]["properties"]["value"]["required"],
+            json!(["data", "mimeType"])
+        );
+        assert!(
+            doc.get("$defs").is_none(),
+            "MCP multimodal must not synthesise per-branch $defs: {doc}"
+        );
+    }
+}

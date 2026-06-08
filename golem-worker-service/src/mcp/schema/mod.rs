@@ -14,5 +14,4 @@
 
 pub use mcp_tool_schema::*;
 
-pub(crate) mod mcp_schema;
 mod mcp_tool_schema;

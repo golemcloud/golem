@@ -33,7 +33,7 @@
 
 use crate::base_model::agent::{
     AgentConfigDeclaration, AgentMode, AgentTypeName, HttpEndpointDetails, HttpMountDetails,
-    ReadOnlyConfig, Snapshotting,
+    ReadOnlyConfig, RegisteredAgentTypeImplementer, Snapshotting,
 };
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::MetadataEnvelope;
@@ -284,6 +284,15 @@ pub struct AgentTypeSchema {
     pub snapshotting: Snapshotting,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<AgentConfigDeclaration>,
+}
+
+/// Schema-model form of a registered agent type. Mirrors the legacy
+/// `RegisteredAgentType`, with `agent_type` replaced by [`AgentTypeSchema`].
+/// Used by the MCP export path (`CompiledMcp`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RegisteredAgentTypeSchema {
+    pub agent_type: AgentTypeSchema,
+    pub implemented_by: RegisteredAgentTypeImplementer,
 }
 
 impl AgentDependencySchema {

@@ -33,7 +33,10 @@ mod tests;
 pub use cli_text::{type_to_cli_text, value_to_cli_text, value_to_cli_text_unredacted};
 pub use docs::graph_to_markdown;
 pub use error::RenderError;
-pub use json_schema::to_json_schema;
+pub use json_schema::{
+    JsonSchemaConfig, MultimodalShape, RichScalarShape, input_schema_to_json_schema,
+    output_schema_to_json_schema, to_json_schema, to_json_schema_with_config,
+};
 pub use json_value::{from_json_value, to_json_value};
 pub use openapi::to_openapi_components;
 pub use walker::{SchemaWalker, WalkerError, resolve_ref, walk};

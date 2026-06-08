@@ -2890,8 +2890,9 @@ fn parse_agent_id_params_legacy_shim(
     use golem_common::schema::graph::SchemaGraph;
     use golem_common::schema::schema_value::{BinaryValuePayload, SchemaValue, TextValuePayload};
 
-    // Multimodal inputs are rejected by data_schema_to_input_schema; only
-    // tuple inputs are accepted here, which mirrors the legacy parser path.
+    // Agent-id constructor parameters are always a tuple; multimodal inputs
+    // are not valid here, so this shim rejects them up front (mirroring the
+    // legacy parser path) even though the generic adapter now supports them.
     let DataSchema::Tuple(schema_elements) = schema else {
         return Err(crate::agent_id_display::ParseError {
             position: 0,

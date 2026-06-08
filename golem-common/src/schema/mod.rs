@@ -28,6 +28,8 @@ pub mod conversion;
 pub mod derive;
 pub mod graph;
 pub mod metadata;
+#[cfg(feature = "full")]
+pub mod protobuf;
 pub mod render;
 pub mod schema_type;
 pub mod schema_value;
@@ -41,6 +43,7 @@ mod tests;
 pub use agent::{
     AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
     AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema, ParsedAgentId,
+    RegisteredAgentTypeSchema,
 };
 pub use conversion::{
     DecodeError, FromSchema, FromSchemaError, IntoSchema, MergeError, SchemaBuilder,

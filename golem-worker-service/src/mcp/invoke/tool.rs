@@ -20,6 +20,9 @@ use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::*;
 use golem_common::model::agent::LegacyParsedAgentId;
+use golem_common::schema::adapters::{
+    schema_agent_constructor_to_legacy, schema_agent_method_to_legacy,
+};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
 use rmcp::model::{
@@ -34,8 +37,26 @@ pub async fn invoke_tool(
     mcp_tool: &AgentMcpTool,
     worker_service: &Arc<WorkerService>,
 ) -> Result<CallToolResult, ErrorData> {
+    // The MCP capability stores schema-layer constructor/method bodies. The
+    // invoke/runtime extraction code still operates on the legacy
+    // `DataSchema` / `DataValue` carriers, so convert at this boundary,
+    // resolving any `SchemaType::Ref` against the agent's schema graph.
+    let legacy_constructor = schema_agent_constructor_to_legacy(
+        &mcp_tool.schema_graph,
+        &mcp_tool.constructor,
+    )
+    .map_err(|e| {
+        tracing::error!("Failed to convert constructor schema: {}", e);
+        ErrorData::internal_error(format!("Failed to convert constructor schema: {}", e), None)
+    })?;
+    let legacy_method = schema_agent_method_to_legacy(&mcp_tool.schema_graph, &mcp_tool.method)
+        .map_err(|e| {
+            tracing::error!("Failed to convert method schema: {}", e);
+            ErrorData::internal_error(format!("Failed to convert method schema: {}", e), None)
+        })?;
+
     let constructor_params =
-        extract_constructor_input_values(&args_map, &mcp_tool.constructor.input_schema).map_err(
+        extract_constructor_input_values(&args_map, &legacy_constructor.input_schema).map_err(
             |e| {
                 tracing::error!("Failed to extract constructor parameters: {}", e);
                 ErrorData::invalid_params(
@@ -61,11 +82,11 @@ pub async fn invoke_tool(
         ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
     })?;
 
-    let method_params_data_value =
-        get_agent_method_input(&args_map, &mcp_tool.raw_method.input_schema).map_err(|e| {
-            tracing::error!("Failed to extract method parameters: {}", e);
-            ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
-        })?;
+    let method_params_data_value = get_agent_method_input(&args_map, &legacy_method.input_schema)
+        .map_err(|e| {
+        tracing::error!("Failed to extract method parameters: {}", e);
+        ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
+    })?;
 
     let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
         method_params_data_value.into();
@@ -83,7 +104,7 @@ pub async fn invoke_tool(
     let agent_output = worker_service
         .invoke_agent(
             &agent_id,
-            Some(mcp_tool.raw_method.name.clone()),
+            Some(legacy_method.name.clone()),
             Some(proto_method_parameters),
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             None,
@@ -105,10 +126,9 @@ pub async fn invoke_tool(
     };
 
     match agent_result {
-        Some(untyped_data_value) => map_agent_response_to_tool_result(
-            untyped_data_value,
-            &mcp_tool.raw_method.output_schema,
-        ),
+        Some(untyped_data_value) => {
+            map_agent_response_to_tool_result(untyped_data_value, &legacy_method.output_schema)
+        }
         None => Ok(CallToolResult::success(vec![])),
     }
 }
@@ -122,12 +142,12 @@ pub fn map_agent_response_to_tool_result(
             ErrorData::internal_error(format!("Agent response type mismatch: {error}"), None)
         })?;
 
-    // Note that, according to MCP specification, the output schema for a tool must be a JsonObject,
-    // And as part of tool result, we simply ensure to respond according to the advertised output schema.
-    // This is why even for multimodal response, we convert to structured format with "parts" array.
-    // See `element_value_to_mcp_json` for more info.
-    // We deal with actual content (text or binary) when it comes to "resource" results, where it doesn't
-    // need to adhere to `mcp-schema`
+    // According to the MCP specification, a tool's advertised output schema must
+    // be a JSON object, so structured (component-model) single outputs are
+    // wrapped under the synthetic output key and returned as `structured_content`.
+    // Unstructured (text/binary) and multimodal outputs have no advertised output
+    // schema (see `mcp_tool_schema`); they are returned as the MCP `content` array
+    // with `structured_content: None`. See `convert_elem_value_to_mcp_tool_response`.
     match typed_value {
         DataValue::Tuple(ElementValues { elements }) => match elements.len() {
             0 => Ok(CallToolResult::success(vec![])),
@@ -313,11 +333,14 @@ mod tests {
     use crate::mcp::agent_mcp_tool::AgentMcpTool;
     use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
     use golem_common::base_model::agent::{
-        AgentConstructor, AgentMethod, AgentMode, AgentTypeName, BinaryDescriptor,
-        ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
-        NamedElementSchemas, TextDescriptor, TextType, UntypedNamedElementValue, Url,
+        AgentMode, AgentTypeName, BinaryDescriptor, ComponentModelElementSchema, DataSchema,
+        ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor, TextType,
+        UntypedNamedElementValue, Url,
     };
     use golem_common::model::AgentInvocationOutput;
+    use golem_common::schema::InputSchema;
+    use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
+    use golem_common::schema::graph::SchemaGraph;
     use golem_wasm::Value;
     use golem_wasm::analysis::{AnalysedType, TypeStr};
     use rmcp::model::Tool;
@@ -508,18 +531,19 @@ mod tests {
             },
             environment_id: harness.environment_id,
             account_id: harness.account_id,
-            constructor: AgentConstructor {
+            schema_graph: Arc::new(SchemaGraph::empty()),
+            constructor: AgentConstructorSchema {
                 name: None,
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
             },
-            raw_method: AgentMethod {
+            method: AgentMethodSchema {
                 name: "run".to_string(),
                 description: String::new(),
                 prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
-                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
                 http_endpoint: vec![],
                 read_only: None,
             },

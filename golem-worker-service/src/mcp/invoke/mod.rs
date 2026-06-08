@@ -13,7 +13,7 @@
 // limitations under the License.
 
 mod agent_method_input;
-mod constructor_param_extraction;
+pub(crate) mod constructor_param_extraction;
 mod multimodal_params_extraction;
 pub mod resource;
 #[cfg(test)]
