@@ -969,6 +969,10 @@ pub struct MemoryConfig {
     /// so this term over-accounts per-worker memory for large components.
     /// Lower this (e.g. to 0.0) to size permits primarily off linear memory.
     pub component_size_coefficient: f64,
+    /// Bytes of measured headroom kept free below the usable ceiling as a margin
+    /// against concurrent admissions overshooting before becoming resident. Used
+    /// by the measured-headroom admission gate.
+    pub admission_reserve_bytes: u64,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
     pub oom_retry_config: RetryConfig,
@@ -992,6 +996,17 @@ impl MemoryConfig {
     pub fn worker_memory(&self) -> usize {
         (self.total_system_memory() as f64 * self.worker_memory_ratio) as usize
     }
+
+    /// The admission policy for the measured-headroom gate. Reuses
+    /// `worker_memory_ratio` as the usable fraction of the measured limit (the
+    /// host keeps the remainder) and `admission_reserve_bytes` as the concurrent
+    /// overshoot margin.
+    pub fn admission_policy(&self) -> crate::services::active_workers::admission::AdmissionPolicy {
+        crate::services::active_workers::admission::AdmissionPolicy {
+            usable_ratio: self.worker_memory_ratio,
+            reserve_bytes: self.admission_reserve_bytes,
+        }
+    }
 }
 
 impl SafeDisplay for MemoryConfig {
@@ -1014,6 +1029,11 @@ impl SafeDisplay for MemoryConfig {
             &mut result,
             "component size coefficient: {}",
             self.component_size_coefficient
+        );
+        let _ = writeln!(
+            &mut result,
+            "admission reserve bytes: {}",
+            self.admission_reserve_bytes
         );
         let _ = writeln!(
             &mut result,
@@ -1540,6 +1560,7 @@ impl Default for MemoryConfig {
             worker_memory_ratio: 0.8,
             worker_estimate_coefficient: 1.1,
             component_size_coefficient: 2.0,
+            admission_reserve_bytes: 256 * 1024 * 1024,
             acquire_retry_delay: Duration::from_millis(500),
             oom_retry_config: RetryConfig {
                 max_attempts: u32::MAX,

@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod admission;
 pub mod concurrent_agents_scheduler;
 pub mod concurrent_agents_semaphore;
 pub mod fs_semaphore;
+pub mod memory_probe;
 #[cfg(test)]
 mod tests;
 
@@ -26,6 +28,9 @@ pub use fs_semaphore::{
     filesystem_storage_permits_to_bytes, filesystem_storage_pool_bytes_to_permits,
 };
 
+use admission::{AdmissionController, AdmissionDecision, EvictionPriority, EvictionSource};
+use async_trait::async_trait;
+use memory_probe::default_probe;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
@@ -70,6 +75,11 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     concurrent_agents: Arc<ConcurrentAgentsScheduler>,
     priority_allocation_lock: Arc<Mutex<()>>,
     acquire_retry_delay: Duration,
+    /// Authoritative measured-headroom admission gate. Decides whether real
+    /// memory headroom permits a new acquisition, evicting via the worker set
+    /// when short. The estimate-based `worker_memory` semaphore is the cheap
+    /// pre-filter and atomic commit in front of it.
+    admission: AdmissionController,
 }
 
 #[derive(Debug)]
@@ -110,6 +120,10 @@ impl Drop for WorkerMemoryPermit {
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub fn new(memory_config: &MemoryConfig, storage_config: &FilesystemStorageConfig) -> Self {
         let worker_memory_size = memory_config.worker_memory();
+        let admission = AdmissionController::new(
+            default_probe(memory_config.total_system_memory()),
+            memory_config.admission_policy(),
+        );
         let active_workers = Self {
             workers: Cache::new(
                 None,
@@ -125,6 +139,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             concurrent_agents: Arc::new(ConcurrentAgentsScheduler::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
             priority_allocation_lock: Arc::new(Mutex::new(())),
+            admission,
         };
         active_workers.initialize_metrics(worker_memory_size);
         active_workers
@@ -208,6 +223,20 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             .expect("requested memory size is too large");
 
         loop {
+            // Authoritative measured-headroom gate. Evicts idle-then-warm when
+            // real headroom is short; rejects (and we back off) when it cannot
+            // make room rather than risking the limit.
+            if self
+                .admission
+                .try_admit(memory, &self.eviction_source())
+                .await
+                == AdmissionDecision::Reject
+            {
+                debug!("Measured headroom insufficient for {mem32}, backing off and retrying");
+                tokio::time::sleep(self.acquire_retry_delay).await;
+                continue;
+            }
+
             let available = self.worker_memory.available_permits();
             let lock = self.priority_allocation_lock.lock().await; // Block trying until a priority request is retrying once
             let result = self.worker_memory.clone().try_acquire_many_owned(mem32);
@@ -249,10 +278,32 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         }
     }
 
+    /// Builds an [`EvictionSource`] view over the live worker set for the
+    /// admission controller to reclaim memory through.
+    fn eviction_source(&self) -> WorkerEvictionSource<Ctx> {
+        WorkerEvictionSource {
+            workers: self.workers.clone(),
+        }
+    }
+
     pub async fn try_acquire(&self, memory: u64) -> Option<WorkerMemoryPermit> {
         let mem32: u32 = memory
             .try_into()
             .expect("requested memory size is too large");
+
+        // Authoritative measured-headroom gate. Single attempt (this is the
+        // non-blocking path): if real headroom is insufficient even after
+        // eviction, do not admit.
+        if self
+            .admission
+            .try_admit(memory, &self.eviction_source())
+            .await
+            == AdmissionDecision::Reject
+        {
+            debug!("Measured headroom insufficient for {mem32}, not admitting");
+            return None;
+        }
+
         let mut lock = None;
         loop {
             match self.worker_memory.clone().try_acquire_many_owned(mem32) {
@@ -289,73 +340,23 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let current_avail = self.worker_memory.available_permits();
         let needed = memory.saturating_sub(current_avail as u64);
 
-        if needed > 0 {
-            let mut idle_candidates = Vec::new();
-            let mut warm_candidates = Vec::new();
-
-            debug!("Collecting memory eviction candidates");
-            let pairs = self.workers.iter().await;
-            for (agent_id, worker) in pairs {
-                if let Some(class) = worker.eviction_class().await
-                    && let Ok(mem) = worker.memory_requirement().await
-                {
-                    let last_changed = worker.last_execution_state_change();
-                    let entry = (agent_id, worker, mem, last_changed);
-                    match class {
-                        crate::worker::EvictionClass::LoadedIdle => {
-                            idle_candidates.push(entry);
-                        }
-                        crate::worker::EvictionClass::WarmRunnable => {
-                            warm_candidates.push(entry);
-                        }
-                    }
-                }
-            }
-
-            // Sort each bucket by timestamp — newest first so we pop oldest
-            idle_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
-            idle_candidates.reverse();
-            warm_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
-            warm_candidates.reverse();
-
-            let mut freed = 0u64;
-
-            // First evict LoadedIdle workers (cheapest)
-            while freed < needed && !idle_candidates.is_empty() {
-                let (agent_id, worker, mem, _) = idle_candidates.pop().unwrap();
-                debug!("Trying to stop idle {agent_id} to free up memory");
-                if worker
-                    .stop_if_evictable(crate::worker::EvictionClass::LoadedIdle)
-                    .await
-                {
-                    debug!("Stopped idle {agent_id} to free up {mem} memory");
-                    crate::metrics::workers::record_worker_eviction("LoadedIdle");
-                    freed += mem;
-                }
-            }
-
-            // Then evict WarmRunnable workers if still under pressure
-            while freed < needed && !warm_candidates.is_empty() {
-                let (agent_id, worker, mem, _) = warm_candidates.pop().unwrap();
-                debug!("Trying to stop warm-runnable {agent_id} to free up memory");
-                if worker
-                    .stop_if_evictable(crate::worker::EvictionClass::WarmRunnable)
-                    .await
-                {
-                    debug!("Stopped warm-runnable {agent_id} to free up {mem} memory");
-                    crate::metrics::workers::record_worker_eviction("WarmRunnable");
-                    freed += mem;
-                }
-            }
-
-            if freed > 0 {
-                debug!("Freed up {freed}");
-            }
-            freed >= needed
-        } else {
+        if needed == 0 {
             debug!("Memory was freed up in the meantime");
-            true
+            return true;
         }
+
+        let mut freed = 0u64;
+        for priority in [EvictionPriority::Idle, EvictionPriority::Warm] {
+            if freed >= needed {
+                break;
+            }
+            freed += evict_at_most_memory(&self.workers, priority, needed - freed).await;
+        }
+
+        if freed > 0 {
+            debug!("Freed up {freed}");
+        }
+        freed >= needed
     }
 
     /// Blocking acquire of storage semaphore permits. Loops until the requested
@@ -477,5 +478,68 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             self.worker_filesystem_storage.available_bytes(),
         );
         crate::metrics::storage::record_worker_memory_pool_total(worker_memory_size as u64);
+    }
+}
+
+impl From<EvictionPriority> for crate::worker::EvictionClass {
+    fn from(priority: EvictionPriority) -> Self {
+        match priority {
+            EvictionPriority::Idle => crate::worker::EvictionClass::LoadedIdle,
+            EvictionPriority::Warm => crate::worker::EvictionClass::WarmRunnable,
+        }
+    }
+}
+
+/// Evicts resident workers at a single priority tier, oldest-first, stopping
+/// once at least `needed_bytes` have been freed or the tier is exhausted.
+/// Returns the bytes actually reclaimed.
+async fn evict_at_most_memory<Ctx: WorkerCtx>(
+    workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+    priority: EvictionPriority,
+    needed_bytes: u64,
+) -> u64 {
+    let target_class: crate::worker::EvictionClass = priority.into();
+
+    let mut candidates = Vec::new();
+    for (agent_id, worker) in workers.iter().await {
+        if let Some(class) = worker.eviction_class().await
+            && class == target_class
+            && let Ok(mem) = worker.memory_requirement().await
+        {
+            let last_changed = worker.last_execution_state_change();
+            candidates.push((agent_id, worker, mem, last_changed));
+        }
+    }
+
+    // Sort by timestamp newest-first so we pop the oldest first.
+    candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
+    candidates.reverse();
+
+    let mut freed = 0u64;
+    while freed < needed_bytes && !candidates.is_empty() {
+        let (agent_id, worker, mem, _) = candidates.pop().unwrap();
+        debug!("Trying to stop {target_class:?} {agent_id} to free up memory");
+        if worker.stop_if_evictable(target_class).await {
+            debug!("Stopped {target_class:?} {agent_id} to free up {mem} memory");
+            crate::metrics::workers::record_worker_eviction(match priority {
+                EvictionPriority::Idle => "LoadedIdle",
+                EvictionPriority::Warm => "WarmRunnable",
+            });
+            freed += mem;
+        }
+    }
+    freed
+}
+
+/// Adapts the live worker set to the [`EvictionSource`] the admission controller
+/// drives. Holds a cheap clone of the worker cache handle.
+struct WorkerEvictionSource<Ctx: WorkerCtx> {
+    workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
+    async fn evict_at_most(&self, priority: EvictionPriority, needed_bytes: u64) -> u64 {
+        evict_at_most_memory(&self.workers, priority, needed_bytes).await
     }
 }
