@@ -19,7 +19,7 @@ use crate::api::agents::{
     CreateAgentResponse,
 };
 use crate::service::agent_resolution_cache::AgentResolutionCache;
-use crate::service::auth::AuthService;
+use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::component::ComponentService;
 use crate::service::limit::LimitService;
 use bytes::Bytes;
@@ -30,6 +30,10 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, AgentTypeName, DataValue, GolemUserPrincipal, LegacyParsedAgentId, Principal,
     UntypedDataValue,
+};
+use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
+use golem_common::model::card::{
+    AgentMethodName, AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
 };
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -939,6 +943,9 @@ impl WorkerService {
             agent_type.mode,
         )?;
 
+        let component_name = registered_agent_type.implemented_by.component_name.clone();
+        let component_owner_account_id = registered_agent_type.implemented_by.account_id;
+
         let method = agent_type
             .methods
             .iter()
@@ -984,18 +991,33 @@ impl WorkerService {
         let method_name = request.method_name.clone();
         let agent_type_name = request.agent_type_name.clone();
 
+        auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::Agent {
+                account: component_owner_account_id.to_string(),
+                application: request.app_name.0,
+                environment: request.env_name.0,
+                component: component_name,
+                agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
+            },
+            verb: Some(AgentVerb::Invoke),
+            resource: AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
+        }))
+        .map_err(AuthServiceError::from)?;
+
         let output = self
+            .worker_client
             .invoke_agent(
                 &agent_id,
-                Some(request.method_name),
+                Some(method_name.clone()),
                 Some(proto_method_parameters),
                 proto_mode,
                 proto_schedule_at,
                 request.idempotency_key,
                 None,
+                environment_id,
+                component_owner_account_id,
                 auth,
                 principal,
-                Some(environment_id),
             )
             .await?;
 
@@ -1663,6 +1685,8 @@ mod tests {
                         implemented_by: RegisteredAgentTypeImplementer {
                             component_id,
                             component_revision,
+                            component_name: component.component_name.0.clone(),
+                            account_id: component.account_id,
                         },
                     },
                     environment_id,

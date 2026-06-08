@@ -19,7 +19,14 @@ use axum::http::header;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
-use golem_common::model::card::{CardAlgebraError, EffectiveSurface, PermissionTarget};
+use golem_common::model::card::owner::{
+    AgentOwnerPattern, ApplicationOwnerPattern, EnvironmentOwnerPattern,
+};
+use golem_common::model::card::{
+    AgentResourcePattern, AgentVerb, CardAlgebraError, ClassPermissionTarget,
+    ComponentResourcePattern, ComponentVerb, EffectiveSurface, EnvironmentResourcePattern,
+    EnvironmentVerb, GrantSurface, PermissionTarget,
+};
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
@@ -246,6 +253,8 @@ pub enum EnvironmentAction {
 pub enum AuthorizationError {
     #[error("The global action {0} is not allowed")]
     GlobalActionNotAllowed(GlobalAction),
+    #[error("The system-only action {0} is not allowed")]
+    SystemOnlyActionNotAllowed(String),
     #[error("The plan action {0} is not allowed")]
     PlanActionNotAllowed(PlanAction),
     #[error("The account action {0} is not allowed")]
@@ -366,6 +375,19 @@ impl AuthCtx {
         matches!(self, AuthCtx::System)
     }
 
+    pub fn authorize_system_only(
+        &self,
+        action: impl Into<String>,
+    ) -> Result<(), AuthorizationError> {
+        if self.is_system() {
+            Ok(())
+        } else {
+            Err(AuthorizationError::SystemOnlyActionNotAllowed(
+                action.into(),
+            ))
+        }
+    }
+
     /// The account ID recorded in audit fields (created_by).
     /// For admin impersonation this is the admin's account, not the target.
     pub fn actor_account_id(&self) -> AccountId {
@@ -421,14 +443,6 @@ impl AuthCtx {
         }
     }
 
-    /// Whether storage-level visibility rules (e.g. environment ownership and share checks)
-    /// should be bypassed. Only `System` (internal service calls) bypasses these rules.
-    /// Human accounts — including admins — are subject to normal ownership and share checks.
-    /// Admins who need to act on another account's resources must use an impersonation token.
-    pub fn should_override_storage_visibility_rules(&self) -> bool {
-        self.is_system()
-    }
-
     pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
         if self.is_system() {
             return Ok(());
@@ -462,9 +476,10 @@ impl AuthCtx {
             Self::AdminImpersonation(ctx) => {
                 authorize_effective_surface_permission(&ctx.effective_surface, target)
             }
-            Self::Agent(_) => Err(AuthorizationError::PermissionNotAllowed(Box::new(
-                target.clone(),
-            ))),
+            Self::Agent(agent) => {
+                let effective_surface = temporary_agent_effective_surface(agent.account_id);
+                authorize_effective_surface_permission(&effective_surface, target)
+            }
         }
     }
 
@@ -828,6 +843,46 @@ fn authorize_effective_surface_permission(
         Err(AuthorizationError::PermissionNotAllowed(Box::new(
             target.clone(),
         )))
+    }
+}
+
+fn temporary_agent_effective_surface(account_id: AccountId) -> EffectiveSurface {
+    let account = account_id.to_string();
+
+    EffectiveSurface {
+        source_card_ids: Vec::new(),
+        lower: vec![GrantSurface {
+            positive: vec![
+                PermissionTarget::Environment(ClassPermissionTarget {
+                    owner: ApplicationOwnerPattern::AccountApplications {
+                        account: account.clone(),
+                    },
+                    verb: Some(EnvironmentVerb::View),
+                    resource: EnvironmentResourcePattern::Any,
+                }),
+                PermissionTarget::Component(ClassPermissionTarget {
+                    owner: EnvironmentOwnerPattern::AccountEnvironments {
+                        account: account.clone(),
+                    },
+                    verb: Some(ComponentVerb::View),
+                    resource: ComponentResourcePattern::Any,
+                }),
+                PermissionTarget::Agent(ClassPermissionTarget {
+                    owner: AgentOwnerPattern::AccountAgents {
+                        account: account.clone(),
+                    },
+                    verb: Some(AgentVerb::View),
+                    resource: AgentResourcePattern::Any,
+                }),
+                PermissionTarget::Agent(ClassPermissionTarget {
+                    owner: AgentOwnerPattern::AccountAgents { account },
+                    verb: Some(AgentVerb::Invoke),
+                    resource: AgentResourcePattern::Any,
+                }),
+            ],
+            negative: Vec::new(),
+        }],
+        upper: Vec::new(),
     }
 }
 

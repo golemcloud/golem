@@ -16001,6 +16001,8 @@ components:
         applicationId:
           type: string
           format: uuid
+        applicationName:
+          type: string
         name:
           type: string
         diffModelVersion:
@@ -16028,6 +16030,7 @@ components:
       - id
       - revision
       - applicationId
+      - applicationName
       - name
       - diffModelVersion
       - compatibilityCheck
@@ -17527,9 +17530,16 @@ components:
         componentRevision:
           type: integer
           format: uint64
+        componentName:
+          type: string
+        accountId:
+          type: string
+          format: uuid
       required:
       - componentId
       - componentRevision
+      - componentName
+      - accountId
     ResourceCapacityLimit:
       title: ResourceCapacityLimit
       type: object

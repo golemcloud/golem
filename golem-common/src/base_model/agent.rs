@@ -108,6 +108,8 @@ pub struct JsonComponentModelValue {
 pub struct RegisteredAgentTypeImplementer {
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
+    pub component_name: String,
+    pub account_id: AccountId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

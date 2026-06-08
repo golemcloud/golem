@@ -18,11 +18,15 @@ use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::plugin::PluginRecord;
 use crate::repo::plugin::PluginRepo;
 use golem_common::model::account::AccountId;
+use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::{
+    AccountPluginName, AccountPluginResourcePattern, AccountPluginVerb, ClassPermissionTarget,
+    PermissionTarget,
+};
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginRegistrationId, PluginSpecDto,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::AccountAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::plugin_registration::{PluginRegistration, PluginSpec};
 use golem_service_base::repo::RepoError;
@@ -99,7 +103,12 @@ impl PluginRegistrationService {
                 other => other.into(),
             })?;
 
-        auth.authorize_account_action(account_id, AccountAction::RegisterPlugin)?;
+        authorize_account_plugin_permission(
+            auth,
+            account_id,
+            AccountPluginVerb::Register,
+            AccountPluginResourcePattern::Name(AccountPluginName(data.name.clone())),
+        )?;
 
         let spec = match data.spec {
             PluginSpecDto::OplogProcessor(inner) => {
@@ -142,7 +151,12 @@ impl PluginRegistrationService {
     ) -> Result<PluginRegistration, PluginRegistrationError> {
         let plugin = self.get_plugin(plugin_id, false, auth).await?;
 
-        auth.authorize_account_action(plugin.account_id, AccountAction::DeletePlugin)?;
+        authorize_account_plugin_permission(
+            auth,
+            plugin.account_id,
+            AccountPluginVerb::Delete,
+            AccountPluginResourcePattern::Name(AccountPluginName(plugin.name.clone())),
+        )?;
 
         let plugin = self
             .plugin_repo
@@ -171,8 +185,13 @@ impl PluginRegistrationService {
             ))?
             .try_into()?;
 
-        auth.authorize_account_action(plugin.account_id, AccountAction::ViewPlugin)
-            .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id))?;
+        authorize_account_plugin_permission(
+            auth,
+            plugin.account_id,
+            AccountPluginVerb::View,
+            AccountPluginResourcePattern::Name(AccountPluginName(plugin.name.clone())),
+        )
+        .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id))?;
 
         Ok(plugin)
     }
@@ -194,7 +213,12 @@ impl PluginRegistrationService {
                 other => other.into(),
             })?;
 
-        auth.authorize_account_action(account_id, AccountAction::ViewPlugin)?;
+        authorize_account_plugin_permission(
+            auth,
+            account_id,
+            AccountPluginVerb::View,
+            AccountPluginResourcePattern::Any,
+        )?;
 
         let plugins: Vec<PluginRegistration> = self
             .plugin_repo
@@ -238,4 +262,29 @@ impl PluginRegistrationService {
 
         Ok(())
     }
+}
+
+fn authorize_account_plugin_permission(
+    auth: &AuthCtx,
+    account_id: AccountId,
+    verb: AccountPluginVerb,
+    resource: AccountPluginResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&account_plugin_permission_target(
+        account_id, verb, resource,
+    ))
+}
+
+fn account_plugin_permission_target(
+    account_id: AccountId,
+    verb: AccountPluginVerb,
+    resource: AccountPluginResourcePattern,
+) -> PermissionTarget {
+    PermissionTarget::AccountPlugin(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: AccountOwnerPattern::Account {
+            account: account_id.to_string(),
+        },
+        resource,
+    })
 }

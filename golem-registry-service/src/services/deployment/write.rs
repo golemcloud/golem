@@ -30,6 +30,11 @@ use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
 use futures::TryFutureExt;
 use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::card::owner::ApplicationOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentName as CardEnvironmentName, EnvironmentResourcePattern,
+    EnvironmentVerb, PermissionTarget,
+};
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
 use golem_common::model::environment::Environment;
@@ -161,11 +166,7 @@ impl DeploymentWriteService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeployEnvironment,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
 
         if data.current_revision
             != environment
@@ -185,7 +186,7 @@ impl DeploymentWriteService {
             });
 
         let latest_deployment = self
-            .get_latest_deployment_for_environment(&environment, auth)
+            .get_latest_deployment_for_environment(&environment, &AuthCtx::System)
             .await?;
 
         let compatibility_check_enabled = environment.compatibility_check;
@@ -207,22 +208,22 @@ impl DeploymentWriteService {
             retry_policies_in_environment,
         ) = tokio::try_join!(
             self.component_service
-                .list_staged_components_for_environment(&environment, auth)
+                .list_staged_components_for_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
             self.http_api_deployment_service
-                .list_staged_for_environment(&environment, auth)
+                .list_staged_for_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
             self.mcp_deployment_service
-                .list_staged_for_environment(&environment, auth)
+                .list_staged_for_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
             self.agent_secrets_service
-                .list_in_fetched_environment(&environment, auth)
+                .list_in_fetched_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
             self.resource_definition_service
-                .list_in_fetched_environment(&environment, auth)
+                .list_in_fetched_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
             self.retry_policy_service
-                .list_in_fetched_environment(&environment, auth)
+                .list_in_fetched_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
         )?;
 
@@ -266,7 +267,7 @@ impl DeploymentWriteService {
 
         let security_schemes_list = self
             .security_scheme_service
-            .get_security_schemes_in_environment(environment_id, auth)
+            .get_security_schemes_in_environment(environment_id, &AuthCtx::System)
             .await
             .unwrap_or_default();
 
@@ -464,11 +465,7 @@ impl DeploymentWriteService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Option<Deployment>, DeploymentWriteError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeployment,
-        )?;
+        authorize_environment_permission(auth, environment, EnvironmentVerb::ViewDeployment)?;
 
         let deployment: Option<Deployment> = self
             .deployment_repo
@@ -479,4 +476,21 @@ impl DeploymentWriteService {
 
         Ok(deployment)
     }
+}
+
+fn authorize_environment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: ApplicationOwnerPattern::Application {
+            account: environment.owner_account_id.to_string(),
+            application: environment.application_name.0.clone(),
+        },
+        resource: EnvironmentResourcePattern::Environment(CardEnvironmentName(
+            environment.name.0.clone(),
+        )),
+    }))
 }

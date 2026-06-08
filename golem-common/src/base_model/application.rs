@@ -64,6 +64,14 @@ impl TryFrom<String> for ApplicationName {
     }
 }
 
+impl TryFrom<&str> for ApplicationName {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.to_string().try_into()
+    }
+}
+
 impl FromStr for ApplicationName {
     type Err = String;
 

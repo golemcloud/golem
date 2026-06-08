@@ -14,12 +14,16 @@
 
 use super::*;
 use assert2::assert;
-use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
+use golem_common::model::card::owner::{
+    AccountOwnerPattern, AgentOwnerPattern, ApplicationOwnerPattern, EmptyOwnerPattern,
+    EnvironmentOwnerPattern,
+};
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     AccountResourcePattern, AccountTokenResourcePattern, AccountTokenVerb, AccountVerb,
-    ClassPermissionPattern, ClassPermissionTarget, PermissionPattern, PermissionTarget,
-    SystemResourcePattern, SystemVerb,
+    AgentResourcePattern, AgentVerb, ClassPermissionPattern, ClassPermissionTarget,
+    ComponentResourcePattern, ComponentVerb, EnvironmentResourcePattern, EnvironmentVerb,
+    PermissionPattern, PermissionTarget, SystemResourcePattern, SystemVerb,
 };
 use test_r::test;
 
@@ -104,6 +108,36 @@ fn account_target(account_id: AccountId) -> PermissionTarget {
             account: account_id.to_string(),
         },
         resource: AccountResourcePattern,
+    })
+}
+
+fn environment_target(account_id: AccountId, verb: EnvironmentVerb) -> PermissionTarget {
+    PermissionTarget::Environment(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: ApplicationOwnerPattern::AccountApplications {
+            account: account_id.to_string(),
+        },
+        resource: EnvironmentResourcePattern::Any,
+    })
+}
+
+fn component_target(account_id: AccountId, verb: ComponentVerb) -> PermissionTarget {
+    PermissionTarget::Component(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EnvironmentOwnerPattern::AccountEnvironments {
+            account: account_id.to_string(),
+        },
+        resource: ComponentResourcePattern::Any,
+    })
+}
+
+fn agent_target(account_id: AccountId, verb: AgentVerb) -> PermissionTarget {
+    PermissionTarget::Agent(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: AgentOwnerPattern::AccountAgents {
+            account: account_id.to_string(),
+        },
+        resource: AgentResourcePattern::Any,
     })
 }
 
@@ -215,6 +249,49 @@ fn user_with_empty_effective_surface_cannot_authorize_permission() {
     let ctx = mk_user_ctx(&[], PlanId::new(), AccountId::new());
 
     assert!(ctx.authorize_permission(&permission).is_err());
+}
+
+#[test]
+fn agent_context_can_authorize_temporary_same_account_permissions() {
+    let account_id = AccountId::new();
+    let ctx = mk_impersonated(account_id);
+
+    assert!(
+        ctx.authorize_permission(&environment_target(account_id, EnvironmentVerb::View))
+            .is_ok()
+    );
+    assert!(
+        ctx.authorize_permission(&component_target(account_id, ComponentVerb::View))
+            .is_ok()
+    );
+    assert!(
+        ctx.authorize_permission(&agent_target(account_id, AgentVerb::View))
+            .is_ok()
+    );
+    assert!(
+        ctx.authorize_permission(&agent_target(account_id, AgentVerb::Invoke))
+            .is_ok()
+    );
+}
+
+#[test]
+fn agent_context_rejects_cross_account_and_non_whitelisted_permissions() {
+    let account_id = AccountId::new();
+    let ctx = mk_impersonated(account_id);
+
+    assert!(
+        ctx.authorize_permission(&environment_target(AccountId::new(), EnvironmentVerb::View))
+            .is_err()
+    );
+    assert!(
+        ctx.authorize_permission(&component_target(AccountId::new(), ComponentVerb::View))
+            .is_err()
+    );
+    assert!(
+        ctx.authorize_permission(&environment_target(account_id, EnvironmentVerb::Update))
+            .is_err()
+    );
+    assert!(ctx.authorize_permission(&report_target()).is_err());
 }
 
 #[test]
