@@ -911,8 +911,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             // survives the anyhow::Error chain — TrapType::from_error
             // classifies UnexpectedOplogEntry as non-retriable.
             //
-            // Phase 1 legacy adapter: a completed RPC durable call is persisted
-            // as a matched `Start` + `End` pair. Read both, validate that the
+            // The legacy adapter persists a completed RPC durable call as a
+            // matched `Start` + `End` pair. Read both, validate that the
             // `End`'s `start_index` references the `Start`, and extract the
             // response from `End`.
             let (start_idx, start_entry) =

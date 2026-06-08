@@ -1877,9 +1877,8 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
         })
         .collect();
     // Scope-`Start` entries (e.g. the batched-write scope opened around
-    // `atomically(...)`) now carry no `request` payload and a synthetic
-    // `<scope:batched-write>` function name in phase 1 of the concurrent
-    // durability refactor.
+    // `atomically(...)`) carry no `request` payload and a synthetic
+    // `<scope:batched-write>` function name.
     let begin_remote_write_indices: std::collections::HashSet<_> = oplog
         .iter()
         .filter_map(|e| match &e.entry {

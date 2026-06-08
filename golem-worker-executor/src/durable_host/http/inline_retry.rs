@@ -284,8 +284,8 @@ async fn reconstruct_outgoing_body_chunks_after(
     let write_zeroes_fn_name =
         golem_common::model::oplog::host_functions::HttpTypesOutgoingBodyStreamWriteZeroes::HOST_FUNCTION_NAME;
 
-    // Phase 1 legacy adapter: a completed durable host call is persisted as a
-    // matched `Start` + `End` pair. We index pending `Start` entries by their
+    // The legacy adapter persists a completed durable host call as a matched
+    // `Start` + `End` pair. We index pending `Start` entries by their
     // `OplogIndex` and, when we see a matching `End` (via `start_index`), decode
     // the response.
     use std::collections::HashMap;
@@ -380,8 +380,8 @@ pub async fn count_incoming_body_bytes(
     let blocking_read_fn_name =
         golem_common::model::oplog::host_functions::HttpTypesIncomingBodyStreamBlockingRead::HOST_FUNCTION_NAME;
 
-    // Phase 1 legacy adapter: a completed durable host call is persisted as a
-    // matched `Start` + `End` pair. Index pending `Start` entries by their
+    // The legacy adapter persists a completed durable host call as a matched
+    // `Start` + `End` pair. Index pending `Start` entries by their
     // `OplogIndex` and, when we see a matching `End` (via `start_index`), decode
     // the response.
     use std::collections::HashMap;

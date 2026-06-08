@@ -14,6 +14,7 @@
 
 use wasmtime::component::Resource;
 
+use crate::durable_host::concurrent::{CallHandle, Cancellable};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
@@ -27,26 +28,38 @@ use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::{Duration, Host, Insta
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> wasmtime::Result<Instant> {
-        let durability = Durability::<host_functions::MonotonicClockNow>::new(
+        // This single host function exercises the concurrent-replay path (eager `Start` +
+        // resolver-matched `End`). Every other call site still uses the legacy `Durability` path.
+        // `now()` is `ReadLocal` and never has external side effects, so it is `Cancellable`.
+        let handle = CallHandle::<host_functions::MonotonicClockNow, Cancellable>::start(
             self,
+            HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
         )
         .await?;
 
-        let result = if durability.is_live() {
+        let result = if handle.is_live() {
             let nanos = {
                 let mut view = self.as_wasi_view();
-                Host::now(&mut view.clocks()).await?
+                match Host::now(&mut view.clocks()).await {
+                    Ok(nanos) => nanos,
+                    Err(err) => {
+                        // Explicit error path (don't rely on Drop): record the cancellation and
+                        // surface the original host error, not the cancellation's outcome.
+                        if let Err(cancel_err) = handle.cancel(self, None).await {
+                            tracing::warn!(
+                                "failed to record cancellation for monotonic_clock::now: {cancel_err}"
+                            );
+                        }
+                        return Err(err);
+                    }
+                }
             };
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseMonotonicClockTimestamp { nanos },
-                )
+            handle
+                .complete(self, HostResponseMonotonicClockTimestamp { nanos })
                 .await
         } else {
-            durability.replay(self).await
+            handle.replay(self).await
         }?;
 
         Ok(result.nanos)

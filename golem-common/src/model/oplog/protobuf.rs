@@ -2216,10 +2216,9 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::End(end) => {
                 // The public type carries the response as a `ValueAndType`, but we cannot map it
                 // back to a typed `HostResponse` here without remembering the originating Start's
-                // function name. This converter is only used for snapshot import in tests; phase 1
-                // only needs it to compile. Reconstructing a typed inline response would require
-                // pairing this `End` with its `Start` in the same conversion pass, which is out of
-                // scope.
+                // function name. This converter is only used for snapshot import in tests.
+                // Reconstructing a typed inline response would require pairing this `End` with its
+                // `Start` in the same conversion pass, which is out of scope.
                 let response = end
                     .response
                     .map(|_| Err::<OplogPayload<_>, _>("Converting non-empty End response from public to raw oplog entry is not supported".to_string()))

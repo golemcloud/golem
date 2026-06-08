@@ -19,9 +19,8 @@ import "wasm/rpc/value_and_type.proto";
 // Public oplog entry.
 //
 // The variants `HostCall = 2`, `BeginRemoteWrite = 14`, `EndRemoteWrite = 15` were
-// removed in the concurrent-durability refactor (issue #3407). Their tag numbers are
-// reserved to prevent accidental reuse should we ever need rolling-version compatibility
-// in the future. Replaced by `Start`, `End`, `Cancelled`.
+// removed and replaced by `Start`, `End`, `Cancelled`. Their tag numbers are reserved to
+// prevent accidental reuse should we ever need rolling-version compatibility in the future.
 message OplogEntry {
   reserved 2, 14, 15;
   reserved "HostCall", "BeginRemoteWrite", "EndRemoteWrite";

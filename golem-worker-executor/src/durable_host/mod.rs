@@ -18,6 +18,7 @@
 pub mod blobstore;
 mod cli;
 mod clocks;
+mod concurrent;
 mod config;
 pub mod durability;
 mod filesystem;
@@ -3935,7 +3936,7 @@ pub(crate) enum PendingStatusRetryDecision {
 pub(crate) struct HttpRequestState {
     /// Who is responsible for calling end_function and removing entries from the table
     pub close_owner: HttpRequestCloseOwner,
-    /// The scope `Start` entry's index (phase 1 batched-write scope marker)
+    /// The scope `Start` entry's index (batched-write scope marker)
     pub begin_index: OplogIndex,
     /// Information about the request to be included in the oplog
     pub request: HostRequestHttpRequest,

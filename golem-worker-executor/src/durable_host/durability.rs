@@ -584,7 +584,7 @@ pub trait DurabilityHost: InFunctionRetryHost {
 /// Returns `true` when the given durable function type represents a write side-effect of any
 /// kind (local or remote, single, batched, or transactional). These are exactly the function
 /// types that must be refused when the current invocation is in read-only strictness mode.
-fn is_write_side_effect(function_type: &DurableFunctionType) -> bool {
+pub(crate) fn is_write_side_effect(function_type: &DurableFunctionType) -> bool {
     matches!(
         function_type,
         DurableFunctionType::WriteLocal
@@ -922,7 +922,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             // A completed legacy durable function invocation is persisted as a
             // matched `Start` + `End` pair. Read both and validate they pair up:
             // the `End`'s `start_index` must reference the `Start`'s `OplogIndex`.
-            // `Cancelled` is unexpected in phase 1.
+            // `Cancelled` is unexpected on the legacy path.
             let (start_idx, start_entry) =
                 crate::get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
             let (_, end_entry) = crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;

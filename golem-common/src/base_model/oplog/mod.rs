@@ -110,10 +110,9 @@ oplog_entry! {
     /// matching `End` (successful completion) or a matching `Cancelled` (the call was
     /// dropped before completion); both reference this `Start` via `start_index`.
     ///
-    /// `parent_start_index` is the `OplogIndex` of the enclosing scope's `Start`, if any
-    /// (always `None` in phase 1). `request` is `Some(...)` for real host calls and `None`
-    /// for scopes that have no host-level request payload (batched-write, future
-    /// transaction scopes).
+    /// `parent_start_index` is the `OplogIndex` of the enclosing scope's `Start`, if any.
+    /// `request` is `Some(...)` for real host calls and `None` for scopes that have no
+    /// host-level request payload (batched-write, future transaction scopes).
     Start {
         hint: false
         wit_raw_type: "raw-start-parameters"
@@ -157,8 +156,7 @@ oplog_entry! {
     /// cancelled (e.g. dropped from a `select!`) before producing a final response.
     ///
     /// `partial` optionally carries any partial response captured before cancellation
-    /// (e.g. partially read bytes from a stream). Not emitted by the legacy adapter in
-    /// phase 1; reserved for the concurrent recorder.
+    /// (e.g. partially read bytes from a stream).
     Cancelled {
         hint: false
         wit_raw_type: "raw-cancelled-parameters"

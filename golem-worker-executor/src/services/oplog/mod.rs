@@ -350,8 +350,8 @@ pub trait Oplog: Any + Debug + Send + Sync {
     ///
     /// `make_second` builds the second entry from the freshly assigned `Start`
     /// index (a durable call is identified by the `OplogIndex` of its `Start`).
-    /// Used by the legacy adapter in phase 1 to write a matched host-call
-    /// `Start`/`End` pair atomically. The default implementation just calls
+    /// Used by the legacy adapter to write a matched host-call `Start`/`End`
+    /// pair atomically. The default implementation just calls
     /// `add` twice; concrete implementations must override to ensure no other
     /// writer can interleave between the two appends and that no commit
     /// threshold check fires between them, so the pair is never split across a
@@ -429,17 +429,16 @@ pub trait OplogOps: Oplog {
         }
     }
 
-    /// Legacy adapter for the phase-1 schema swap.
-    ///
-    /// Persists a completed durable host call as a matched `Start`/`End` pair.
+    /// Legacy adapter that persists a completed durable host call as a matched
+    /// `Start`/`End` pair.
     /// Returns `(start_idx, end_idx)`. A durable call is identified by the
     /// `OplogIndex` of its `Start`, and the `End` references it via
     /// `start_index`. The two entries are appended atomically via
     /// [`Oplog::add_pair`] so no other writer can interleave between them and
     /// the pair is never split across a commit/crash boundary.
     ///
-    /// Phase 2 will replace this with a recorder/`CallHandle` based API that
-    /// captures `Start` eagerly (before the side effect) and `End` (or
+    /// This will eventually be replaced with a recorder/`CallHandle` based API
+    /// that captures `Start` eagerly (before the side effect) and `End` (or
     /// `Cancelled`) when the call completes.
     async fn add_completed_host_call(
         &self,
