@@ -119,12 +119,25 @@ interface oplog {
         instance-id: uuid
     }
 
-    record host-call-parameters {
+    record start-parameters {
         timestamp: datetime,
+        parent-start-index: option<oplog-index>,
         function-name: string,
-        request: value-and-type,
-        response: value-and-type,
+        request: option<value-and-type>,
         durable-function-type: wrapped-function-type,
+    }
+
+    record end-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        response: option<value-and-type>,
+        forced-commit: bool,
+    }
+
+    record cancelled-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        partial: option<value-and-type>,
     }
 
     record local-span-data {
@@ -190,11 +203,6 @@ interface oplog {
     }
 
     record end-atomic-region-parameters {
-        timestamp: datetime,
-        begin-index: oplog-index
-    }
-
-    record end-remote-write-parameters {
         timestamp: datetime,
         begin-index: oplog-index
     }
@@ -490,12 +498,25 @@ interface oplog {
         instance-id: uuid
     }
 
-    record raw-host-call-parameters {
+    record raw-start-parameters {
         timestamp: datetime,
+        parent-start-index: option<oplog-index>,
         function-name: string,
-        request: oplog-payload,
-        response: oplog-payload,
+        request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,
+    }
+
+    record raw-end-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        response: option<oplog-payload>,
+        forced-commit: bool,
+    }
+
+    record raw-cancelled-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        partial: option<oplog-payload>,
     }
 
     record raw-agent-invocation-started-parameters {
@@ -609,8 +630,13 @@ interface oplog {
     variant oplog-entry {
         /// The initial agent oplog entry
         create(raw-create-parameters),
-        /// The agent invoked a host function
-        host-call(raw-host-call-parameters),
+        /// Marks the start of a durable host call (or scope such as a batched-write).
+        start(raw-start-parameters),
+        /// Marks the successful completion of a durable host call (or scope) started by a matching `Start`.
+        end(raw-end-parameters),
+        /// Marks that a durable host call started by a matching `Start` was cancelled
+        /// (e.g. dropped from a `select!`) before producing a final response.
+        cancelled(raw-cancelled-parameters),
         /// The agent has been invoked
         agent-invocation-started(raw-agent-invocation-started-parameters),
         /// The agent has completed an invocation
@@ -639,12 +665,6 @@ interface oplog {
         /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
         /// compaction.
         end-atomic-region(end-atomic-region-parameters),
-        /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
-        /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-        /// unfinished remote writes cannot be recovered.
-        begin-remote-write(timestamp),
-        /// Marks the end of a remote write operation. Only used when idempotence mode is off.
-        end-remote-write(end-remote-write-parameters),
         /// An invocation request arrived while the agent was busy
         pending-agent-invocation(raw-pending-agent-invocation-parameters),
         /// An update request arrived and will be applied as soon the agent restarts
@@ -704,8 +724,13 @@ interface oplog {
     variant public-oplog-entry {
         /// The initial agent oplog entry
         create(create-parameters),
-        /// The agent invoked a host function
-        host-call(host-call-parameters),
+        /// Marks the start of a durable host call (or scope such as a batched-write).
+        start(start-parameters),
+        /// Marks the successful completion of a durable host call (or scope) started by a matching `Start`.
+        end(end-parameters),
+        /// Marks that a durable host call started by a matching `Start` was cancelled
+        /// (e.g. dropped from a `select!`) before producing a final response.
+        cancelled(cancelled-parameters),
         /// The agent has been invoked
         agent-invocation-started(agent-invocation-started-parameters),
         /// The agent has completed an invocation
@@ -734,12 +759,6 @@ interface oplog {
         /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
         /// compaction.
         end-atomic-region(end-atomic-region-parameters),
-        /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
-        /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-        /// unfinished remote writes cannot be recovered.
-        begin-remote-write(timestamp),
-        /// Marks the end of a remote write operation. Only used when idempotence mode is off.
-        end-remote-write(end-remote-write-parameters),
         /// An invocation request arrived while the agent was busy
         pending-agent-invocation(pending-agent-invocation-parameters),
         /// An update request arrived and will be applied as soon the agent restarts

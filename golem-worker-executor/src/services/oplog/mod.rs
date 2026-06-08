@@ -345,6 +345,28 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Switched to a different persistence level. This can be used as an optimization hint in the implementations.
     async fn switch_persistence_level(&self, mode: PersistenceLevel);
 
+    /// Atomically appends a `Start` entry and a second entry (its `End` or
+    /// `Cancelled`) that references the `Start`'s `OplogIndex`.
+    ///
+    /// `make_second` builds the second entry from the freshly assigned `Start`
+    /// index (a durable call is identified by the `OplogIndex` of its `Start`).
+    /// Used by the legacy adapter in phase 1 to write a matched host-call
+    /// `Start`/`End` pair atomically. The default implementation just calls
+    /// `add` twice; concrete implementations must override to ensure no other
+    /// writer can interleave between the two appends and that no commit
+    /// threshold check fires between them, so the pair is never split across a
+    /// crash boundary.
+    async fn add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> (OplogIndex, OplogIndex) {
+        let first_idx = self.add(start).await;
+        let second = make_second(first_idx);
+        let second_idx = self.add(second).await;
+        (first_idx, second_idx)
+    }
+
     /// Returns the inner oplog wrapped by this implementation, if any.
     /// Wrapper oplogs should override this to enable generic traversal of the
     /// oplog composition chain (used by `downcast_oplog`).
@@ -407,24 +429,47 @@ pub trait OplogOps: Oplog {
         }
     }
 
-    async fn add_host_call(
+    /// Legacy adapter for the phase-1 schema swap.
+    ///
+    /// Persists a completed durable host call as a matched `Start`/`End` pair.
+    /// Returns `(start_idx, end_idx)`. A durable call is identified by the
+    /// `OplogIndex` of its `Start`, and the `End` references it via
+    /// `start_index`. The two entries are appended atomically via
+    /// [`Oplog::add_pair`] so no other writer can interleave between them and
+    /// the pair is never split across a commit/crash boundary.
+    ///
+    /// Phase 2 will replace this with a recorder/`CallHandle` based API that
+    /// captures `Start` eagerly (before the side effect) and `End` (or
+    /// `Cancelled`) when the call completes.
+    async fn add_completed_host_call(
         &self,
         function_name: HostFunctionName,
         request: &HostRequest,
         response: &HostResponse,
         function_type: DurableFunctionType,
-    ) -> Result<OplogEntry, String> {
+    ) -> Result<(OplogIndex, OplogIndex), String> {
         let request_payload: OplogPayload<HostRequest> = self.upload_payload(request).await?;
         let response_payload: OplogPayload<HostResponse> = self.upload_payload(response).await?;
-        let entry = OplogEntry::HostCall {
-            timestamp: Timestamp::now_utc(),
+        let now = Timestamp::now_utc();
+        let start = OplogEntry::Start {
+            timestamp: now,
+            parent_start_index: None,
             function_name,
-            request: request_payload,
-            response: response_payload,
+            request: Some(request_payload),
             durable_function_type: function_type,
         };
-        self.add(entry.clone()).await;
-        Ok(entry)
+        let (start_idx, end_idx) = self
+            .add_pair(
+                start,
+                Box::new(move |start_index| OplogEntry::End {
+                    timestamp: now,
+                    start_index,
+                    response: Some(response_payload),
+                    forced_commit: false,
+                }),
+            )
+            .await;
+        Ok((start_idx, end_idx))
     }
 
     async fn add_agent_invocation_started(

@@ -1876,10 +1876,16 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
             _ => None,
         })
         .collect();
+    // Scope-`Start` entries (e.g. the batched-write scope opened around
+    // `atomically(...)`) now carry no `request` payload and a synthetic
+    // `<scope:batched-write>` function name in phase 1 of the concurrent
+    // durability refactor.
     let begin_remote_write_indices: std::collections::HashSet<_> = oplog
         .iter()
         .filter_map(|e| match &e.entry {
-            golem_common::model::oplog::PublicOplogEntry::BeginRemoteWrite(_) => {
+            golem_common::model::oplog::PublicOplogEntry::Start(params)
+                if params.request.is_none() && params.function_name == "<scope:batched-write>" =>
+            {
                 Some(e.oplog_index)
             }
             _ => None,

@@ -69,6 +69,13 @@ struct InternalReplayState {
     pub log_hashes: HashSet<(u64, u64)>,
     /// Updates that were encountered while reading the oplog
     pub pending_replay_events: Vec<ReplayEvent>,
+    /// `Start` entries for `GolemApiFork` whose matching `End` has not yet
+    /// been replayed. When the matching `End` is read, the response is
+    /// decoded and a `ForkReplayed` event is emitted. Phase 1 only ever has
+    /// at most one in flight at a time (the legacy adapter writes the matched
+    /// `End` immediately after the `Start`), but we use a set so that future
+    /// concurrent recorders cannot trip us up.
+    pub pending_fork_starts: HashSet<OplogIndex>,
 }
 
 impl ReplayState {
@@ -90,6 +97,7 @@ impl ReplayState {
                 next_skipped_region,
                 log_hashes: HashSet::new(),
                 pending_replay_events: Vec::new(),
+                pending_fork_starts: HashSet::new(),
             })),
             has_seen_logs: Arc::new(AtomicBool::new(false)),
         };
@@ -385,37 +393,55 @@ impl ReplayState {
             })
             .await
         }
-        if let OplogEntry::HostCall {
-            function_name,
-            response,
-            ..
-        } = &oplog_entry
-            && function_name == &HostFunctionName::GolemApiFork
-        {
-            let response = self
-                .oplog
-                .download_payload(response.clone())
-                .await
-                .map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "failed to download GolemApiFork oplog payload at index {read_idx}: {err}"
-                    ))
-                })?;
-            let result: HostResponseGolemApiFork =
-                if let HostResponse::GolemApiFork(result) = response {
-                    result
-                } else {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "HostResponse::GolemApiFork",
-                        format!("{response:?}"),
-                    ));
-                };
-            if result.result == Ok(ForkResult::Forked) {
-                self.record_replay_event(ReplayEvent::ForkReplayed {
-                    new_phantom_id: result.forked_phantom_id,
-                })
-                .await;
+        // Phase 1 legacy adapter: GolemApiFork is persisted as a matched
+        // `Start { function_name: GolemApiFork, .. }` + `End { response: Some(..), .. }`
+        // pair. On Start we remember the `Start`'s `OplogIndex`, on the matching
+        // End (via `start_index`) we decode the response and emit `ForkReplayed`
+        // if necessary.
+        match &oplog_entry {
+            OplogEntry::Start { function_name, .. }
+                if function_name == &HostFunctionName::GolemApiFork =>
+            {
+                let mut internal = self.internal.write().await;
+                internal.pending_fork_starts.insert(read_idx);
             }
+            OplogEntry::End {
+                start_index,
+                response: Some(response_payload),
+                ..
+            } => {
+                let is_pending = {
+                    let mut internal = self.internal.write().await;
+                    internal.pending_fork_starts.remove(start_index)
+                };
+                if is_pending {
+                    let response = self
+                        .oplog
+                        .download_payload(response_payload.clone())
+                        .await
+                        .map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "failed to download GolemApiFork oplog payload at index {read_idx}: {err}"
+                            ))
+                        })?;
+                    let result: HostResponseGolemApiFork =
+                        if let HostResponse::GolemApiFork(result) = response {
+                            result
+                        } else {
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                "HostResponse::GolemApiFork",
+                                format!("{response:?}"),
+                            ));
+                        };
+                    if result.result == Ok(ForkResult::Forked) {
+                        self.record_replay_event(ReplayEvent::ForkReplayed {
+                            new_phantom_id: result.forked_phantom_id,
+                        })
+                        .await;
+                    }
+                }
+            }
+            _ => {}
         }
 
         if read_idx == self.replay_target.get() {

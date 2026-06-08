@@ -904,7 +904,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .oplog()
-            .add_host_call(function_name, request, response, function_type)
+            .add_completed_host_call(function_name, request, response, function_type)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to serialize and store durable function invocation: {err}")
@@ -919,25 +919,50 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 "Trying to replay an durable invocation in a PersistNothing block",
             ))
         } else {
-            let (_, oplog_entry) =
-                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)?;
-            match oplog_entry {
-                OplogEntry::HostCall {
-                    timestamp,
-                    function_name,
-                    durable_function_type,
-                    response,
-                    ..
-                } => {
+            // A completed legacy durable function invocation is persisted as a
+            // matched `Start` + `End` pair. Read both and validate they pair up:
+            // the `End`'s `start_index` must reference the `Start`'s `OplogIndex`.
+            // `Cancelled` is unexpected in phase 1.
+            let (start_idx, start_entry) =
+                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
+            let (_, end_entry) = crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
+            match (start_entry, end_entry) {
+                (
+                    OplogEntry::Start {
+                        timestamp,
+                        function_name,
+                        durable_function_type,
+                        ..
+                    },
+                    OplogEntry::End {
+                        start_index: end_start_index,
+                        response,
+                        ..
+                    },
+                ) => {
+                    if end_start_index != start_idx {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "End { start_index matching Start }",
+                            format!(
+                                "End {{ start_index: {end_start_index} }} after Start at {start_idx}"
+                            ),
+                        ));
+                    }
+                    let response_payload = response.ok_or_else(|| {
+                        WorkerExecutorError::unexpected_oplog_entry(
+                            "End { response: Some(..) }",
+                            "End { response: None }".to_string(),
+                        )
+                    })?;
                     let response = self
                         .public_state
                         .worker()
                         .oplog()
-                        .download_payload(response)
+                        .download_payload(response_payload)
                         .await
                         .map_err(|err| {
                             WorkerExecutorError::runtime(format!(
-                                "HostCall payload cannot be downloaded: {err}"
+                                "End payload cannot be downloaded: {err}"
                             ))
                         })?;
                     Ok(PersistedDurableFunctionInvocation {
@@ -948,9 +973,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                         oplog_entry_version: OplogEntryVersion::V2,
                     })
                 }
-                _ => Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "HostCall",
-                    format!("{oplog_entry:?}"),
+                (other_start, other_end) => Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "Start + End",
+                    format!("Start={other_start:?}, End={other_end:?}"),
                 )),
             }
         }

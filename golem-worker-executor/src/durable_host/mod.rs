@@ -99,6 +99,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
     OplogIndex, PersistenceLevel, RawSnapshotData, TimestampedUpdateDescription, UpdateDescription,
@@ -1191,15 +1192,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
         {
             let result = if self.is_live() {
-                let begin_index = self
-                    .public_state
-                    .worker()
-                    .add_and_commit_oplog(OplogEntry::begin_remote_write())
-                    .await;
+                let entry = OplogEntry::Start {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
+                    request: None,
+                    durable_function_type: function_type.clone(),
+                };
+                let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
                 Ok(begin_index)
             } else {
                 let (begin_index, _) =
-                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::BeginRemoteWrite)?;
+                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
                 if !self.state.assume_idempotence
                     && !matches!(
                         *function_type,
@@ -1288,11 +1292,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }?;
 
-            // The current retry point will point to the BeginRemoteWrite entry
+            // The current retry point will point to the scope `Start` entry
             self.state.current_retry_point = result;
             Ok(result)
         } else {
-            // When there is no BeginRemoteWrite entry, the current retry point can only
+            // When there is no scope `Start` entry, the current retry point can only
             // point to the last written non-hint entry. Hint entries must be ignored
             // because they are nondeterministic.
             // If the entry belongs to an open batched write or transaction, we need to
@@ -1333,14 +1337,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
         {
             if self.is_live() {
-                self.state
-                    .oplog
-                    .add(OplogEntry::end_remote_write(begin_index))
-                    .await;
+                let entry = OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: begin_index,
+                    response: None,
+                    forced_commit: true,
+                };
+                self.state.oplog.add(entry).await;
                 Ok(())
             } else {
-                let (_, _) =
-                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::EndRemoteWrite)?;
+                let (_, end_entry) =
+                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
+                if let OplogEntry::End { start_index, .. } = end_entry
+                    && start_index != begin_index
+                {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        format!("End {{ start_index: {begin_index} }}"),
+                        format!("End {{ start_index: {start_index} }}"),
+                    ));
+                }
                 Ok(())
             }
         } else {
@@ -3920,7 +3935,7 @@ pub(crate) enum PendingStatusRetryDecision {
 pub(crate) struct HttpRequestState {
     /// Who is responsible for calling end_function and removing entries from the table
     pub close_owner: HttpRequestCloseOwner,
-    /// The BeginRemoteWrite entry's index
+    /// The scope `Start` entry's index (phase 1 batched-write scope marker)
     pub begin_index: OplogIndex,
     /// Information about the request to be included in the oplog
     pub request: HostRequestHttpRequest,

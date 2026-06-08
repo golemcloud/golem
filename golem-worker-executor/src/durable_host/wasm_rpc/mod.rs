@@ -868,7 +868,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
                 self.state
                     .oplog
-                    .add_host_call(
+                    .add_completed_host_call(
                         GolemRpcFutureInvokeResultGet::HOST_FUNCTION_NAME,
                         &HostRequest::GolemRpcInvoke(serializable_invoke_request),
                         &HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
@@ -910,20 +910,50 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             // Propagate WorkerExecutorError via `?` (From) so the downcast
             // survives the anyhow::Error chain — TrapType::from_error
             // classifies UnexpectedOplogEntry as non-retriable.
-            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)?;
+            //
+            // Phase 1 legacy adapter: a completed RPC durable call is persisted
+            // as a matched `Start` + `End` pair. Read both, validate that the
+            // `End`'s `start_index` references the `Start`, and extract the
+            // response from `End`.
+            let (start_idx, start_entry) =
+                get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
+            let (_, end_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
 
-            let serialized_invoke_result = match oplog_entry {
-                OplogEntry::HostCall { response, .. } => {
-                    let response =
-                        self.state
-                            .oplog
-                            .download_payload(response)
-                            .await
-                            .map_err(|err| {
-                                WorkerExecutorError::runtime(format!(
-                                    "Failed to download golem::rpc::future-invoke-result oplog payload: {err}"
-                                ))
-                            })?;
+            let serialized_invoke_result = match (start_entry, end_entry) {
+                (
+                    OplogEntry::Start { .. },
+                    OplogEntry::End {
+                        start_index: end_start_index,
+                        response,
+                        ..
+                    },
+                ) => {
+                    if end_start_index != start_idx {
+                        return Err(anyhow::Error::from(
+                            WorkerExecutorError::unexpected_oplog_entry(
+                                "End { start_index matching Start }",
+                                format!(
+                                    "End {{ start_index: {end_start_index} }} after Start at {start_idx}"
+                                ),
+                            ),
+                        ));
+                    }
+                    let response_payload = response.ok_or_else(|| {
+                        anyhow::Error::from(WorkerExecutorError::unexpected_oplog_entry(
+                            "End { response: Some(..) }",
+                            "End { response: None }".to_string(),
+                        ))
+                    })?;
+                    let response = self
+                        .state
+                        .oplog
+                        .download_payload(response_payload)
+                        .await
+                        .map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "Failed to download golem::rpc::future-invoke-result oplog payload: {err}"
+                            ))
+                        })?;
 
                     match response {
                         HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
@@ -939,14 +969,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         }
                     }
                 }
-                // The macro above already guarantees `OplogEntry::HostCall`, so
-                // this arm is structurally unreachable. We still return an
-                // error rather than panicking to keep the function panic-free.
-                other => {
+                (other_start, other_end) => {
                     return Err(anyhow::Error::from(
                         WorkerExecutorError::unexpected_oplog_entry(
-                            "OplogEntry::HostCall",
-                            format!("{other:?}"),
+                            "OplogEntry::Start + End",
+                            format!("Start={other_start:?}, End={other_end:?}"),
                         ),
                     ));
                 }

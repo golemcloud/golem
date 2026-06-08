@@ -267,7 +267,8 @@ async fn otlp_all_signals_export(
     );
 
     // Wait for metric records — the invocation produces many metrics from
-    // Create, AgentInvocationStarted/Finished, HostCall, GrowMemory, Log entries.
+    // Create, AgentInvocationStarted/Finished, Start/End (real host calls),
+    // GrowMemory, Log entries.
     info!("Waiting for OTLP metric records");
     let metrics = wait_for_otlp_metrics(output_dir, 5, Duration::from_secs(90)).await?;
     info!("Collected {} OTLP metric records", metrics.len());

@@ -199,6 +199,32 @@ impl Oplog for RateLimitedOplog {
         self.inner.switch_persistence_level(mode).await;
     }
 
+    async fn add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> (OplogIndex, OplogIndex) {
+        // Apply back-pressure once for the pair (same as `add`).
+        let rate = self.resource_entry.oplog_writes_per_second();
+        if rate > 0 && rate < AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND {
+            let current = self.state.load();
+            if current.rate != rate {
+                let updated = self.state.rcu(|current| {
+                    if current.rate == rate {
+                        Arc::clone(current)
+                    } else {
+                        Arc::new(RateLimiterState::new(rate))
+                    }
+                });
+                self.apply_back_pressure(&updated.limiter, rate).await;
+            } else {
+                self.apply_back_pressure(&current.limiter, rate).await;
+            }
+        }
+
+        self.inner.add_pair(start, make_second).await
+    }
+
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
         Some(self.inner.clone())
     }

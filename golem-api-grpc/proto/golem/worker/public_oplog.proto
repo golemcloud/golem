@@ -16,10 +16,18 @@ import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
 import "wasm/rpc/value_and_type.proto";
 
+// Public oplog entry.
+//
+// The variants `HostCall = 2`, `BeginRemoteWrite = 14`, `EndRemoteWrite = 15` were
+// removed in the concurrent-durability refactor (issue #3407). Their tag numbers are
+// reserved to prevent accidental reuse should we ever need rolling-version compatibility
+// in the future. Replaced by `Start`, `End`, `Cancelled`.
 message OplogEntry {
+  reserved 2, 14, 15;
+  reserved "HostCall", "BeginRemoteWrite", "EndRemoteWrite";
+
   oneof entry {
     CreateParameters Create = 1;
-    HostCallParameters HostCall = 2;
     AgentInvocationStartedParameters AgentInvocationStarted = 3;
     AgentInvocationFinishedParameters AgentInvocationFinished = 4;
     TimestampParameter Suspend = 5;
@@ -30,8 +38,6 @@ message OplogEntry {
     TimestampParameter Exited = 10;
     TimestampParameter BeginAtomicRegion = 12;
     EndAtomicRegionParameters EndAtomicRegion = 13;
-    TimestampParameter BeginRemoteWrite = 14;
-    EndRemoteWriteParameters EndRemoteWrite = 15;
     PendingAgentInvocationParameters PendingAgentInvocation = 16;
     PendingUpdateParameters PendingUpdate = 17;
     SuccessfulUpdateParameters SuccessfulUpdate = 18;
@@ -59,6 +65,9 @@ message OplogEntry {
     FilesystemStorageUsageUpdateParameters FilesystemStorageUsageUpdate = 41;
     SetRetryPolicyParameters SetRetryPolicy = 42;
     RemoveRetryPolicyParameters RemoveRetryPolicy = 43;
+    StartParameters Start = 44;
+    EndParameters End = 45;
+    CancelledParameters Cancelled = 46;
   }
 }
 
@@ -101,12 +110,25 @@ message CreateParameters {
   golem.component.AgentMode agent_mode = 15;
 }
 
-message HostCallParameters {
+message StartParameters {
   google.protobuf.Timestamp timestamp = 1;
-  string function_name = 2;
-  wasm.rpc.ValueAndType request = 3;
-  wasm.rpc.ValueAndType response = 4;
-  WrappedFunctionType wrapped_function_type = 5;
+  optional uint64 parent_start_index = 3;
+  string function_name = 4;
+  optional wasm.rpc.ValueAndType request = 5;
+  WrappedFunctionType durable_function_type = 6;
+}
+
+message EndParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 start_index = 2;
+  optional wasm.rpc.ValueAndType response = 3;
+  bool forced_commit = 4;
+}
+
+message CancelledParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 start_index = 2;
+  optional wasm.rpc.ValueAndType partial = 3;
 }
 
 message AgentInvocationStartedParameters {
@@ -249,11 +271,6 @@ message RemoveRetryPolicyParameters {
 }
 
 message EndAtomicRegionParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 begin_index = 2;
-}
-
-message EndRemoteWriteParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 begin_index = 2;
 }

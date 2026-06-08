@@ -751,12 +751,12 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             )
             .await?;
 
-        // durability.persist will write an HostCall entry persisting ForkResult::Original
-        // we write an alternative version of that entry to the new oplog, so it is going to return with
-        // ForkResult::Forked in the other worker
+        // durability.persist will write a Start/End pair persisting ForkResult::Original;
+        // we write an alternative pair with ForkResult::Forked into the new oplog so it
+        // is going to return with ForkResult::Forked in the other worker.
 
         let _ = new_oplog
-            .add_host_call(
+            .add_completed_host_call(
                 GolemApiFork::HOST_FUNCTION_NAME,
                 &HostRequest::NoInput(HostRequestNoInput {}),
                 &HostResponse::GolemApiFork(HostResponseGolemApiFork {

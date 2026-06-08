@@ -36,12 +36,18 @@ impl OplogEntry {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
 
+    /// True if `self` is the scope-`End` that closes the scope-`Start` at `idx`.
+    ///
+    /// Scope `End` entries reference their opening `Start` via `start_index`, so this is
+    /// a precise match (the exact equivalent of the old `EndRemoteWrite { begin_index }`
+    /// pairing). Nesting and interleaving are handled correctly because only the `End`
+    /// closing the `Start` at `idx` matches.
     pub fn is_end_remote_write(&self, idx: OplogIndex) -> bool {
-        matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
+        matches!(self, OplogEntry::End { start_index, .. } if *start_index == idx)
     }
 
     pub fn is_end_remote_write_s<S>(&self, idx: OplogIndex, _: &S) -> bool {
-        matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
+        self.is_end_remote_write(idx)
     }
 
     pub fn is_pre_commit_remote_transaction(&self, idx: OplogIndex) -> bool {
@@ -85,9 +91,9 @@ impl OplogEntry {
             || self.is_rolled_back_remote_transaction_s(idx, s)
     }
 
-    /// Checks that an "intermediate oplog entry" between a `BeginRemoteWrite` and an `EndRemoteWrite`
-    /// is not a RemoteWrite entry which does not belong to the batched remote write started at `idx`.
-    /// Side effects in a PersistenceLevel::PersistNothing region are ignored.
+    /// Checks that an "intermediate oplog entry" between a scope `Start` and its matching `End`
+    /// is not a side-effect entry which does not belong to the batched remote write started at `idx`.
+    /// Side effects in a `PersistenceLevel::PersistNothing` region are ignored.
     pub fn no_concurrent_side_effect(
         &self,
         idx: OplogIndex,
@@ -97,7 +103,7 @@ impl OplogEntry {
             true
         } else {
             match self {
-                OplogEntry::HostCall {
+                OplogEntry::Start {
                     durable_function_type,
                     ..
                 } => match durable_function_type {
@@ -116,6 +122,9 @@ impl OplogEntry {
                     DurableFunctionType::ReadRemote => true,
                     _ => false,
                 },
+                // `End` entries are pure markers and do not themselves cause a side effect.
+                OplogEntry::End { .. } => true,
+                OplogEntry::Cancelled { .. } => true,
                 OplogEntry::AgentInvocationFinished { .. } => false,
                 _ => true,
             }

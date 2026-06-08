@@ -18,15 +18,15 @@ use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
-    EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams, JumpParams, LogParams,
-    NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams,
+    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
+    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams,
+    InterruptedParams, JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams,
+    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
@@ -43,8 +43,8 @@ use crate::model::{
     AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
 };
 use golem_wasm::analysis::analysed_type::{
-    bool, r#enum, f64, field, handle, list, option, record, result_err, result_ok, s16, s32, str,
-    tuple, u64, variant,
+    bool, r#enum, f64, field, handle, list, option, record, result_ok, s16, s32, str, tuple, u64,
+    variant,
 };
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
@@ -102,18 +102,15 @@ fn create_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn host_call_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::HostCall(HostCallParams {
+fn start_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Start(StartParams {
         timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
         function_name: "test".to_string(),
-        request: ValueAndType {
+        request: Some(ValueAndType {
             value: Value::String("test".to_string()),
             typ: str(),
-        },
-        response: ValueAndType {
-            value: Value::List(vec![Value::U64(1)]),
-            typ: list(u64()),
-        },
+        }),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -122,21 +119,34 @@ fn host_call_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn host_call_with_handle_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::HostCall(HostCallParams {
+fn end_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::End(EndParams {
         timestamp: Timestamp::now_utc().rounded(),
+        start_index: crate::base_model::OplogIndex::from_u64(7),
+        response: Some(ValueAndType {
+            value: Value::List(vec![Value::U64(1)]),
+            typ: list(u64()),
+        }),
+        forced_commit: false,
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn start_with_handle_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: Some(crate::base_model::OplogIndex::from_u64(3)),
         function_name: "golem:rpc/wasm-rpc.{invoke-and-await}".to_string(),
-        request: ValueAndType {
+        request: Some(ValueAndType {
             value: Value::Handle {
                 uri: "urn:worker:component-id/worker-name".to_string(),
                 resource_id: 42,
             },
             typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
-        },
-        response: ValueAndType {
-            value: Value::Tuple(vec![Value::U64(5)]),
-            typ: tuple(vec![u64()]),
-        },
+        }),
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -145,11 +155,12 @@ fn host_call_with_handle_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn host_call_with_complex_values_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::HostCall(HostCallParams {
+fn start_with_complex_values_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Start(StartParams {
         timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
         function_name: "wasi:keyvalue/store.{get}".to_string(),
-        request: ValueAndType {
+        request: Some(ValueAndType {
             value: Value::Record(vec![
                 Value::String("key".to_string()),
                 Value::Option(Some(Box::new(Value::List(vec![
@@ -187,12 +198,20 @@ fn host_call_with_complex_values_serialization_poem_serde_equivalence() {
                 ),
                 field("color", r#enum(&["red", "green", "blue"])),
             ]),
-        },
-        response: ValueAndType {
-            value: Value::Result(Err(Some(Box::new(Value::String("not found".to_string()))))),
-            typ: result_err(str()),
-        },
+        }),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn cancelled_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Cancelled(CancelledParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        start_index: crate::base_model::OplogIndex::from_u64(7),
+        partial: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -349,27 +368,6 @@ fn begin_atomic_region_serialization_poem_serde_equivalence() {
 #[test]
 fn end_atomic_region_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        begin_index: OplogIndex::from_u64(1),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn begin_remote_write_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::BeginRemoteWrite(BeginRemoteWriteParams {
-        timestamp: Timestamp::now_utc().rounded(),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn end_remote_write_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
         timestamp: Timestamp::now_utc().rounded(),
         begin_index: OplogIndex::from_u64(1),
     });
