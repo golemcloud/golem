@@ -68,9 +68,7 @@ use crate::model::account::AccountId;
 use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::types::AgentMetadataForGuests;
-use crate::model::oplog::{
-    AgentResourceId, OplogEntry, RawSnapshotData, TimestampedUpdateDescription,
-};
+use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
 use crate::model::regions::DeletedRegions;
 use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
@@ -723,13 +721,13 @@ impl SafeDisplay for RetryConfig {
 /// By having an associated oplog_idx, the cached information can be used together with the
 /// tail of the oplog to determine the actual status of the worker.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
-#[desert(evolution(FieldAdded("agent_mode", AgentMode::Durable)))]
+#[desert(evolution())]
 pub struct AgentStatusRecord {
     pub status: AgentStatus,
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
-    pub pending_invocations: Vec<TimestampedAgentInvocation>,
-    pub pending_updates: VecDeque<TimestampedUpdateDescription>,
+    pub pending_invocations: Vec<PendingInvocationRef>,
+    pub pending_updates: VecDeque<PendingUpdateRef>,
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
@@ -759,9 +757,10 @@ pub struct AgentStatusRecord {
     /// Timestamp of the last automatic snapshot entry in the oplog.
     pub last_automatic_snapshot_timestamp: Option<Timestamp>,
     /// The agent mode the worker was created with. Decided at create time and persisted in the
-    /// `Create` oplog entry; immutable for the life of the worker. Recorded here so that out-of-band
-    /// callers (e.g. `WorkerService::get_agent_mode`) can resolve the worker's oplog namespace
-    /// directly from the cached status record without a separate KV lookup.
+    /// `Create` oplog entry; immutable for the life of the worker. `#[transient]`: it is not part
+    /// of the serialized record (it is persisted separately) and defaults to `Durable` on
+    /// deserialization, so readers must restore it from its own source.
+    #[transient(AgentMode::Durable)]
     pub agent_mode: AgentMode,
 }
 
@@ -1218,6 +1217,63 @@ impl AgentInvocation {
 pub struct TimestampedAgentInvocation {
     pub timestamp: Timestamp,
     pub invocation: AgentInvocation,
+}
+
+/// A lightweight reference to a pending agent invocation whose full payload is stored in the
+/// oplog.
+///
+/// The complete invocation (input parameters, snapshot data, oplog entry batches, ...) lives
+/// in the `PendingAgentInvocation` oplog entry at `oplog_index`. The status record only keeps
+/// the minimal routing metadata that consumers need without executing the invocation. Paths
+/// that actually run the invocation hydrate the full [`TimestampedAgentInvocation`] from the
+/// oplog on demand.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct PendingInvocationRef {
+    pub timestamp: Timestamp,
+    /// Index of the `PendingAgentInvocation` oplog entry holding the full payload.
+    pub oplog_index: OplogIndex,
+    /// Semantic idempotency key of the invocation. `None` for manual updates.
+    pub idempotency_key: Option<IdempotencyKey>,
+    /// Target revision of the manual update. `Some` only for manual update invocations.
+    pub manual_update_target_revision: Option<ComponentRevision>,
+}
+
+impl PendingInvocationRef {
+    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+        self.idempotency_key.as_ref()
+    }
+
+    pub fn has_idempotency_key(&self, key: &IdempotencyKey) -> bool {
+        self.idempotency_key.as_ref() == Some(key)
+    }
+
+    pub fn is_manual_update(&self) -> bool {
+        self.manual_update_target_revision.is_some()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum PendingUpdateKind {
+    Automatic,
+    SnapshotBased,
+}
+
+/// A lightweight reference to a pending update whose full description is stored in the oplog.
+///
+/// The complete [`UpdateDescription`](crate::model::oplog::UpdateDescription) (including any
+/// snapshot payload) lives in the `PendingUpdate` oplog entry at `oplog_index`. The status
+/// record only keeps the metadata needed to schedule the update; the snapshot payload is
+/// hydrated from the oplog on demand when the update is applied.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct PendingUpdateRef {
+    pub timestamp: Timestamp,
+    /// Index of the `PendingUpdate` oplog entry holding the full description.
+    pub oplog_index: OplogIndex,
+    pub target_revision: ComponentRevision,
+    pub kind: PendingUpdateKind,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, BinaryCodec, Serialize, Deserialize)]

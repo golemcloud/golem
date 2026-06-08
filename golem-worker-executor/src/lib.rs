@@ -772,6 +772,8 @@ pub async fn create_worker_executor_impl<
     let active_workers = Arc::new(ActiveWorkers::<Ctx>::new(
         &golem_config.memory,
         &golem_config.filesystem_storage,
+        &golem_config.agent_status_flush,
+        shutdown_token.clone(),
     ));
 
     let file_loader = Arc::new(FileLoader::new(

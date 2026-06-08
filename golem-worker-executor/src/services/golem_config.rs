@@ -54,6 +54,10 @@ pub struct GolemConfig {
     pub oplog: OplogConfig,
     pub suspend: SuspendConfig,
     pub active_workers: ActiveWorkersConfig,
+    #[serde(default)]
+    pub agent_status_flush: AgentStatusFlushConfig,
+    #[serde(default)]
+    pub agent_status_checkpoint: AgentStatusCheckpointConfig,
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
@@ -144,6 +148,18 @@ impl SafeDisplay for GolemConfig {
             &mut result,
             "{}",
             self.active_workers.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "agent_status_flush:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.agent_status_flush.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "agent_status_checkpoint:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.agent_status_checkpoint.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "scheduler:");
         let _ = writeln!(&mut result, "{}", self.scheduler.to_safe_string_indented());
@@ -266,6 +282,8 @@ impl Default for GolemConfig {
             suspend: SuspendConfig::default(),
             scheduler: SchedulerConfig::default(),
             active_workers: ActiveWorkersConfig::default(),
+            agent_status_flush: AgentStatusFlushConfig::default(),
+            agent_status_checkpoint: AgentStatusCheckpointConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
             filesystem_storage: FilesystemStorageConfig::default(),
@@ -507,6 +525,82 @@ impl SafeDisplay for ActiveWorkersConfig {
         let _ = writeln!(&mut result, "drop when full: {}", self.drop_when_full);
         let _ = writeln!(&mut result, "ttl: {:?}", self.ttl);
         result
+    }
+}
+
+/// Controls how the cached `AgentStatusRecord` blob is written back to the KV store.
+///
+/// When `enabled`, the blob is no longer written on every oplog commit; instead the worker is
+/// marked dirty and a single background sweeper coalesces the writes, flushing each dirty worker
+/// at most once per `interval`. The `RunningWorkers` recovery index is always updated
+/// synchronously (it is the authoritative resume index after a crash/reshard) regardless of this
+/// setting. When `enabled` is `false`, the blob is written synchronously on every status change
+/// (the historical behaviour), still going through the same flush code path.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentStatusFlushConfig {
+    /// Whether background-batched blob flushing is enabled.
+    pub enabled: bool,
+    /// How often the background sweeper runs (and therefore the maximum staleness of a dirty
+    /// worker's cached blob). Ignored when `enabled` is `false`.
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    /// Maximum number of workers flushed concurrently in a single sweeper tick.
+    pub max_concurrency: usize,
+}
+
+impl SafeDisplay for AgentStatusFlushConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "enabled: {}", self.enabled);
+        let _ = writeln!(&mut result, "interval: {:?}", self.interval);
+        let _ = writeln!(&mut result, "max concurrency: {}", self.max_concurrency);
+        result
+    }
+}
+
+impl Default for AgentStatusFlushConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval: Duration::from_secs(1),
+            max_concurrency: 128,
+        }
+    }
+}
+
+/// Controls the *clean* cached `AgentStatusRecord` checkpoint.
+///
+/// The checkpoint is a separate copy of the status written only at structurally clean boundaries
+/// (snapshot save, throttled idle) where no jumpable oplog region is open, and is never advanced by
+/// the background flusher. It lets a status recompute fold forward from a baseline that predates any
+/// later jump region instead of re-reading the whole oplog from index 1 (the previous behaviour on
+/// every jump-induced detach). When `enabled` is `false`, no checkpoint is written and recompute
+/// falls back to a full from-scratch fold.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentStatusCheckpointConfig {
+    /// Whether clean status checkpoints are written.
+    pub enabled: bool,
+    /// Minimum number of oplog entries that must have been appended since the last checkpoint before
+    /// a throttled (idle-boundary) checkpoint is written. Snapshot-aligned checkpoints bypass this
+    /// throttle. A worker that has never been checkpointed is always eligible.
+    pub min_oplog_delta: u64,
+}
+
+impl SafeDisplay for AgentStatusCheckpointConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "enabled: {}", self.enabled);
+        let _ = writeln!(&mut result, "min oplog delta: {}", self.min_oplog_delta);
+        result
+    }
+}
+
+impl Default for AgentStatusCheckpointConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_oplog_delta: 1000,
+        }
     }
 }
 

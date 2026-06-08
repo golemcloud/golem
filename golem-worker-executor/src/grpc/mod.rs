@@ -63,7 +63,7 @@ use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAg
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
-    OwnedAgentId, ScanCursor, ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation,
+    OwnedAgentId, PendingUpdateKind, ScanCursor, ScheduledAction, ShardId, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -621,7 +621,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .last_known_status
             .pending_invocations
             .iter()
-            .any(|invocation| invocation.invocation.idempotency_key() == Some(&idempotency_key))
+            .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
         {
             let worker = Worker::get_or_create_suspended(
                 self,
@@ -1177,7 +1177,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .last_known_status
                     .pending_updates
                     .iter()
-                    .any(|update| update.description == update_description)
+                    .any(|update| {
+                        update.kind == PendingUpdateKind::Automatic
+                            && update.target_revision == target_revision
+                    })
                 {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
@@ -1245,9 +1248,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
 
             UpdateMode::Manual => {
-                if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                    matches!(invocation, TimestampedAgentInvocation { invocation: AgentInvocation::ManualUpdate { target_revision: update_target_revision, .. }, ..} if *update_target_revision == target_revision)
-                ) {
+                if metadata
+                    .last_known_status
+                    .pending_invocations
+                    .iter()
+                    .any(|invocation| {
+                        invocation.manual_update_target_revision == Some(target_revision)
+                    })
+                {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
                     ));
@@ -2041,14 +2049,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let latest_status = metadata.last_known_status;
         for pending_invocation in &latest_status.pending_invocations {
-            if let TimestampedAgentInvocation {
-                timestamp,
-                invocation: AgentInvocation::ManualUpdate { target_revision },
-            } = pending_invocation
-            {
+            if let Some(target_revision) = pending_invocation.manual_update_target_revision {
                 updates.push(golem::worker::UpdateRecord {
-                    timestamp: Some((*timestamp).into()),
-                    target_revision: (*target_revision).into(),
+                    timestamp: Some(pending_invocation.timestamp.into()),
+                    target_revision: target_revision.into(),
                     update: Some(golem::worker::update_record::Update::Pending(
                         golem::worker::PendingUpdate {},
                     )),
@@ -2058,7 +2062,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for pending_update in &latest_status.pending_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(pending_update.timestamp.into()),
-                target_revision: (*pending_update.description.target_revision()).into(),
+                target_revision: pending_update.target_revision.into(),
                 update: Some(golem::worker::update_record::Update::Pending(
                     golem::worker::PendingUpdate {},
                 )),

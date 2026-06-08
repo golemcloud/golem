@@ -182,11 +182,69 @@ pub mod workers {
             crate::metrics::BLOB_SIZE_BUCKETS.to_vec()
         )
         .unwrap();
+        static ref AGENT_STATUS_FLUSH_TOTAL: CounterVec = register_counter_vec!(
+            "agent_status_flush_total",
+            "Number of cached agent status blob flushes by reason (background/forced)",
+            &["reason"]
+        )
+        .unwrap();
+        static ref AGENT_STATUS_FLUSH_FAILED_TOTAL: CounterVec = register_counter_vec!(
+            "agent_status_flush_failed_total",
+            "Number of cached agent status blob flushes that failed, by reason (background/forced)",
+            &["reason"]
+        )
+        .unwrap();
+        static ref AGENT_STATUS_RECOMPUTE_TOTAL: CounterVec = register_counter_vec!(
+            "agent_status_recompute_total",
+            "Number of agent status recomputes by the baseline used (cache/checkpoint/full)",
+            &["source"]
+        )
+        .unwrap();
+        static ref AGENT_STATUS_CHECKPOINT_WRITE_TOTAL: CounterVec = register_counter_vec!(
+            "agent_status_checkpoint_write_total",
+            "Number of clean agent status checkpoint writes by reason (snapshot/idle)",
+            &["reason"]
+        )
+        .unwrap();
+        static ref AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL: CounterVec = register_counter_vec!(
+            "agent_status_checkpoint_write_failed_total",
+            "Number of clean agent status checkpoint writes that failed, by reason (snapshot/idle)",
+            &["reason"]
+        )
+        .unwrap();
     }
 
     pub fn record_worker_call(api_name: &'static str) {
         WORKER_EXECUTOR_CALL_TOTAL
             .with_label_values(&[api_name])
+            .inc();
+    }
+
+    pub fn record_agent_status_flush(reason: &'static str) {
+        AGENT_STATUS_FLUSH_TOTAL.with_label_values(&[reason]).inc();
+    }
+
+    pub fn record_agent_status_flush_failed(reason: &'static str) {
+        AGENT_STATUS_FLUSH_FAILED_TOTAL
+            .with_label_values(&[reason])
+            .inc();
+    }
+
+    pub fn record_agent_status_recompute(source: &'static str) {
+        AGENT_STATUS_RECOMPUTE_TOTAL
+            .with_label_values(&[source])
+            .inc();
+    }
+
+    pub fn record_agent_status_checkpoint_write(reason: &'static str) {
+        AGENT_STATUS_CHECKPOINT_WRITE_TOTAL
+            .with_label_values(&[reason])
+            .inc();
+    }
+
+    pub fn record_agent_status_checkpoint_write_failed(reason: &'static str) {
+        AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL
+            .with_label_values(&[reason])
             .inc();
     }
 
