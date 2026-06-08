@@ -890,6 +890,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::DurableOnly)
                 .await;
+            // Just committed at a durable-op boundary: this is the single safe place to advance the
+            // mid-invocation clean status checkpoint (status now reflects the committed tip).
+            self.maybe_mid_invocation_checkpoint().await;
         }
         Ok(())
     }

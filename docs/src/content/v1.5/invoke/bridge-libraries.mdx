@@ -1,0 +1,76 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Bridge Libraries
+
+Bridge libraries let you invoke Golem agents from **non-Golem applications** in a type-safe way. Golem generates self-contained Rust crates or TypeScript npm packages that implement a fully typed client for specific agents, using Golem's REST API under the hood (`reqwest` for Rust, `fetch` for TypeScript).
+
+<Callout>
+Golem 1.5 only generates bridge libraries for **Rust** and **TypeScript** as target languages, but they can work with agents written in any language — including Scala and MoonBit.
+</Callout>
+
+## Configuring Bridge Generation in golem.yaml
+
+To generate bridge libraries, add a `bridge` section to your `golem.yaml`:
+
+```yaml
+bridge:
+  ts:
+    agents:
+      - InboxAgent
+      - EscalationAgent
+  rust:
+    agents: AuditAgent
+```
+
+This will generate a TypeScript package for `InboxAgent` and `EscalationAgent`, and a Rust crate for `AuditAgent`.
+
+## Using Bridge Libraries
+
+Once generated, you can use the bridge libraries like any other typed client. First configure the connection, then interact with agents:
+
+<Tabs items={["TypeScript", "Rust"]} storageKey="nextra-tabs-Rust|TypeScript">
+<Tabs.Tab>
+```typescript
+import { CounterAgent, configure } from 'counter-agent-client/counter-agent-client.js'
+
+configure({
+  server: { type: 'local' },
+  application: 'bridgetest',
+  environment: 'local'
+})
+
+const c1 = await CounterAgent.get('c1')
+const value = await c1.increment()
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+use counter_agent_client::CounterAgent;
+use golem_client::bridge::GolemServer;
+
+CounterAgent::configure(GolemServer::Local, "bridgetest", "local");
+let c1 = CounterAgent::get("c1").await?;
+let value = c1.increment().await?;
+```
+</Tabs.Tab>
+</Tabs>
+
+## Configuration Options
+
+Both the TypeScript and Rust bridge libraries require three configuration parameters:
+
+| Parameter | Description |
+|-----------|-------------|
+| **Server** | `Local` for the default local Golem server, `Cloud` for Golem Cloud, or a custom deployment URL |
+| **Application name** | The `app:` key from your `golem.yaml` |
+| **Environment** | The target environment (e.g., `local`, `staging`, `prod`) |
+
+## Type Safety
+
+The generated libraries define all custom data types used in parameters and return types of agent methods. This means you get full compile-time type checking and IDE autocompletion when interacting with agents from external applications.
+
+Bridge libraries follow the same conventions as agent-to-agent RPC, providing `get`, `getPhantom`, and `newPhantom` constructors for agent instances.
+
+<Callout>
+Scala and MoonBit bridge generators will be added in a future release.
+</Callout>

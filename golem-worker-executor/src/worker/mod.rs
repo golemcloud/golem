@@ -17,13 +17,13 @@ pub mod invocation;
 mod invocation_loop;
 pub mod read_only_cache;
 pub mod status;
+pub mod status_checkpointer;
+pub mod status_flusher;
 
 use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
-use self::status::{
-    calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
-};
+use self::status::update_status_with_new_entries;
 use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
@@ -46,7 +46,7 @@ use crate::services::{
     UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
-use crate::worker::status::calculate_last_known_status;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
@@ -63,13 +63,15 @@ use golem_common::model::agent::{
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
+};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
-    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
-    TimestampedAgentInvocation,
+    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, ScheduledAction, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -207,7 +209,9 @@ pub struct Worker<Ctx: WorkerCtx> {
     registered_concurrent_account: RegisteredConcurrentAccount,
     last_known_status: Arc<RwLock<AgentStatusRecord>>,
     metrics_status: WorkerStatusMetric,
-    last_known_status_detached: AtomicBool,
+    last_known_status_detached: Arc<AtomicBool>,
+    status_flusher: Arc<status_flusher::AgentStatusFlusher>,
+    status_checkpointer: status_checkpointer::StatusCheckpointer,
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     update_state_lock: Mutex<()>,
@@ -330,10 +334,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }) = deps.worker_service().get(owned_agent_id).await
         {
             // update with latest data from oplog
-            let last_known_status = calculate_last_known_status(
+            let agent_mode = initial_worker_metadata.agent_mode;
+            let last_known_status = calculate_last_known_status_with_checkpoint(
                 deps,
                 owned_agent_id,
-                initial_worker_metadata.agent_mode,
+                agent_mode,
                 last_known_status,
             )
             .await
@@ -392,7 +397,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut spans_map = HashMap::new();
         for inv in initial_pending_invocations {
-            if let Some(idempotency_key) = inv.invocation.idempotency_key() {
+            if let Some(idempotency_key) = inv.idempotency_key() {
                 spans_map.insert(idempotency_key.clone(), Span::current());
             }
         }
@@ -444,6 +449,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let current_component = Arc::new(arc_swap::ArcSwap::from(initial_component));
 
+        let last_known_status_detached = Arc::new(AtomicBool::new(false));
+        let status_flusher = status_flusher::AgentStatusFlusher::new(
+            owned_agent_id.clone(),
+            initial_worker_metadata.agent_mode == AgentMode::Ephemeral,
+            deps.config().agent_status_flush.enabled,
+            deps.worker_service(),
+            deps.active_workers().status_flush_queue(),
+            current_status.clone(),
+            last_known_status_detached.clone(),
+        );
+
+        let status_checkpointer = status_checkpointer::StatusCheckpointer::new(
+            owned_agent_id.clone(),
+            initial_worker_metadata.agent_mode == AgentMode::Ephemeral,
+            deps.config().agent_status_checkpoint.enabled,
+            deps.config().agent_status_checkpoint.min_oplog_delta,
+            deps.worker_service(),
+        );
+
         let worker = Worker {
             owned_agent_id,
             parsed_agent_id: agent_id.clone(),
@@ -466,7 +490,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
             update_state_lock: Mutex::new(()),
-            last_known_status_detached: AtomicBool::new(false),
+            last_known_status_detached,
+            status_flusher,
+            status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
             desired_extra_filesystem_storage: AtomicU64::new(0),
@@ -617,6 +643,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Transition the worker into a deleting state.
     /// Rejects all new invocations and stops any running execution.
     pub async fn start_deleting(&self) -> Result<(), WorkerExecutorError> {
+        // Stop any future background flush or clean-checkpoint write from resurrecting the cached
+        // status after the upcoming `WorkerService::remove`/`remove_cached_status` deletes it (the
+        // latter clears both the live cache and the checkpoint). Each awaits any in-flight write so
+        // none can land after the delete.
+        self.status_flusher.begin_delete().await;
+        self.status_checkpointer.begin_delete().await;
         let error = WorkerExecutorError::invalid_request("Worker is being deleted");
         self.stop_internal(false, Some(error), FinalWorkerState::Deleting)
             .await;
@@ -1174,12 +1206,80 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
     }
 
-    pub async fn pending_invocations(&self) -> Vec<TimestampedAgentInvocation> {
+    pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
         self.last_known_status
             .read()
             .await
             .pending_invocations
             .clone()
+    }
+
+    /// Reads the `PendingAgentInvocation` oplog entry referenced by `pending` and reconstructs the
+    /// full invocation, downloading its payload from external storage if needed. The status record
+    /// only keeps a lightweight reference, so callers that need to execute the invocation hydrate
+    /// it on demand.
+    async fn hydrate_pending_invocation(
+        &self,
+        pending: &PendingInvocationRef,
+    ) -> Result<TimestampedAgentInvocation, WorkerExecutorError> {
+        let entry = self.oplog.read(pending.oplog_index).await;
+        match entry {
+            OplogEntry::PendingAgentInvocation {
+                timestamp,
+                idempotency_key,
+                payload,
+                trace_id,
+                trace_states,
+                invocation_context,
+            } => {
+                let agent_payload = self.oplog.download_payload(payload).await.map_err(|e| {
+                    WorkerExecutorError::unknown(format!(
+                        "Failed to download pending agent invocation payload at oplog index {}: {e}",
+                        pending.oplog_index
+                    ))
+                })?;
+                let invocation_context = InvocationContextStack::from_oplog_data(
+                    trace_id,
+                    trace_states,
+                    invocation_context,
+                );
+                let invocation =
+                    AgentInvocation::from_parts(idempotency_key, agent_payload, invocation_context);
+                Ok(TimestampedAgentInvocation {
+                    timestamp,
+                    invocation,
+                })
+            }
+            other => Err(WorkerExecutorError::unknown(format!(
+                "Expected a PendingAgentInvocation oplog entry at index {}, but found {other:?}",
+                pending.oplog_index
+            ))),
+        }
+    }
+
+    /// Reads the `PendingUpdate` oplog entry referenced by `pending` and reconstructs the full
+    /// update description, including any snapshot payload reference. The status record only keeps
+    /// a lightweight reference, so callers that apply the update hydrate it on demand.
+    async fn hydrate_pending_update(
+        &self,
+        pending: &PendingUpdateRef,
+    ) -> Result<TimestampedUpdateDescription, WorkerExecutorError> {
+        let entry = self.oplog.read(pending.oplog_index).await;
+        match entry {
+            OplogEntry::PendingUpdate {
+                timestamp,
+                description,
+                ..
+            } => Ok(TimestampedUpdateDescription {
+                timestamp,
+                oplog_index: pending.oplog_index,
+                description,
+            }),
+            other => Err(WorkerExecutorError::unknown(format!(
+                "Expected a PendingUpdate oplog entry at index {}, but found {other:?}",
+                pending.oplog_index
+            ))),
+        }
     }
 
     pub async fn invocation_results(&self) -> HashMap<IdempotencyKey, OplogIndex> {
@@ -1218,7 +1318,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             vec![key],
             pending
                 .iter()
-                .filter_map(|entry| entry.invocation.idempotency_key())
+                .filter_map(|entry| entry.idempotency_key())
                 .collect(),
         ]
         .concat();
@@ -2084,7 +2184,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let is_pending = status
                 .pending_invocations
                 .iter()
-                .any(|entry| entry.invocation.has_idempotency_key(key));
+                .any(|entry| entry.has_idempotency_key(key));
             let is_current = status.current_idempotency_key.as_ref() == Some(key);
             if is_pending || is_current {
                 LookupResult::Pending
@@ -2186,6 +2286,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Make sure the oplog is committed
                 self.oplog.commit(CommitLevel::Always).await;
 
+                // Persist any pending cached-status changes synchronously before the worker leaves
+                // memory, so a subsequent cold load does not have to re-fold oplog entries that were
+                // only reflected in the (deferred) in-memory status. Best-effort: a failure is
+                // logged/metered inside `flush` and re-queued; the blob is reconstructable from the
+                // oplog, so it must not block the stop.
+                if let Err(err) = self
+                    .status_flusher
+                    .flush(status_flusher::FlushReason::Forced)
+                    .await
+                {
+                    debug!("Forced status flush on stop failed (will retry in background): {err}");
+                }
+
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
                     crate::metrics::workers::dec_worker_memory_resident();
@@ -2284,7 +2397,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut keys_to_fail: Vec<IdempotencyKey> = status
             .pending_invocations
             .iter()
-            .filter_map(|inv| inv.invocation.idempotency_key().cloned())
+            .filter_map(|inv| inv.idempotency_key().cloned())
             .collect();
         if let Some(current_key) = &status.current_idempotency_key
             && !keys_to_fail.contains(current_key)
@@ -2403,13 +2516,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status,
             }) => {
                 // make sure we are fully up to date on the oplog
-                let current_status = calculate_last_known_status_for_existing_worker(
+                let agent_mode = initial_worker_metadata.agent_mode;
+                let current_status = calculate_last_known_status_with_checkpoint(
                     this,
                     owned_agent_id,
-                    initial_worker_metadata.agent_mode,
+                    agent_mode,
                     last_known_status,
                 )
-                .await;
+                .await
+                .expect("Failed to calculate worker status for existing worker");
 
                 // Use the CREATE-time revision: `agent_id` parsing and
                 // `resolve_agent_properties` must stay tied to the metadata
@@ -2623,8 +2738,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 initial_status.write().await.oplog_idx = oplog.current_oplog_index().await;
 
+                // Cold path (worker creation): no previously cached status to diff against.
+                let initial_status_value = initial_status.read().await.clone();
                 this.worker_service()
-                    .update_cached_status(owned_agent_id, &*initial_status.read().await)
+                    .update_cached_status(owned_agent_id, None, initial_status_value)
                     .await;
 
                 Ok(GetOrCreateWorkerResult {
@@ -2646,22 +2763,38 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.commit_and_update_state_inner(&update_state_lock_guard, CommitLevel::Always)
             .await;
-        if self
-            .last_known_status_detached
-            .swap(false, Ordering::Relaxed)
-        {
-            debug!("Worker status was detached from oplog, reloading it from scratch");
+        if self.last_known_status_detached.load(Ordering::Relaxed) {
+            debug!("Worker status was detached from oplog, recomputing it");
 
-            // reload status from scratch
-            let worker_status = calculate_last_known_status_for_existing_worker(
-                self,
-                &self.owned_agent_id,
-                self.agent_mode(),
-                None,
-            )
-            .await;
+            // The in-memory status is no longer foldable (a jump deleted its index, or a revert
+            // moved the oplog behind it), so we recompute. Prefer folding forward from the clean
+            // checkpoint (which predates any jump region) over a full re-read of the oplog.
+            let agent_mode = self.agent_mode();
+            let owned_agent_id = &self.owned_agent_id;
+            let worker_status =
+                calculate_last_known_status_with_checkpoint(self, owned_agent_id, agent_mode, None)
+                    .await
+                    .expect("Failed to recompute worker status for existing worker");
 
+            // Install the recomputed status while still detached, so a concurrent background sweep
+            // keeps skipping (the in-memory status is not authoritative until it is installed).
             self.update_last_known_status(worker_status.clone()).await;
+
+            // Now the in-memory status is authoritative again; clear the flag and force a flush.
+            self.last_known_status_detached
+                .store(false, Ordering::Relaxed);
+
+            // The status was just recomputed from scratch; persist it synchronously (a full
+            // reconcile write, since the baseline was invalidated on detach) so the cache is
+            // immediately consistent rather than waiting for the next background sweep. Best-effort:
+            // a failure is logged/metered and re-queued inside `flush`.
+            if let Err(err) = self
+                .status_flusher
+                .flush(status_flusher::FlushReason::Forced)
+                .await
+            {
+                debug!("Forced status flush on reattach failed (will retry in background): {err}");
+            }
 
             // ensure we hold mutex for the full duration
             drop(update_state_lock_guard);
@@ -2680,14 +2813,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let old_status = self.last_known_status.read().await.clone();
 
             let updated_status = update_status_with_new_entries(
-                self,
-                &self.owned_agent_id,
                 self.agent_mode(),
                 old_status.clone(),
                 new_entries,
                 &self.config().retry,
-            )
-            .await;
+            );
 
             if let Some(updated_status) = updated_status {
                 if updated_status != old_status {
@@ -2706,6 +2836,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 tracing::debug!("Detaching worker_status from oplog");
                 self.last_known_status_detached
                     .store(true, Ordering::Release);
+                // The in-memory status is no longer authoritative, and after reattach it will be
+                // recomputed from scratch, so the persisted baseline can no longer be trusted: the
+                // next flush must be a full reconcile write.
+                self.status_flusher.invalidate_baseline().await;
                 true
             }
         } else {
@@ -2784,14 +2918,84 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    /// Writes a *clean* status checkpoint from the current in-memory status if eligible (see
+    /// [`status_checkpointer::StatusCheckpointer::maybe_checkpoint`]).
+    ///
+    /// Must only be called at structurally clean boundaries where no jumpable oplog region is open
+    /// (snapshot save, idle suspend). Skipped while the status is detached, because then the
+    /// in-memory status is not authoritative — checkpointing it could persist a baseline inside a
+    /// region. Best-effort and bounded by the throttle; never blocks meaningfully.
+    pub(crate) async fn checkpoint_status(&self, reason: status_checkpointer::CheckpointReason) {
+        if self.last_known_status_detached.load(Ordering::Acquire) {
+            return;
+        }
+        let status = self.last_known_status.read().await.clone();
+        self.status_checkpointer
+            .maybe_checkpoint(&status, reason)
+            .await;
+    }
+
+    /// Writes a *clean* status checkpoint *during* a long-running invocation, taken from the current
+    /// committed in-memory status (the caller must only invoke this right after a durable commit, so
+    /// `last_known_status` reflects the committed oplog tip).
+    ///
+    /// In addition to the [`Self::checkpoint_status`] guards, this respects the per-invocation
+    /// `get_oplog_index` marker watermark: if the guest captured an oplog index `M` via
+    /// `get_oplog_index`, a later `set_oplog_index(M)` deletes `(M.next()..tip]` but preserves `M`,
+    /// so a checkpoint must not advance past `M` or it would be discarded after such a jump. When a
+    /// marker is present and the committed tip is already beyond it, we skip the checkpoint (a cheap
+    /// no-op) rather than write one that a later jump would invalidate.
+    pub(crate) async fn checkpoint_status_mid_invocation(
+        &self,
+        min_exposed_marker: Option<OplogIndex>,
+    ) {
+        if self.last_known_status_detached.load(Ordering::Acquire) {
+            return;
+        }
+        let status = self.last_known_status.read().await.clone();
+        if let Some(marker) = min_exposed_marker
+            && status.oplog_idx > marker
+        {
+            return;
+        }
+        self.status_checkpointer
+            .maybe_checkpoint(
+                &status,
+                status_checkpointer::CheckpointReason::MidInvocation,
+            )
+            .await;
+    }
+
+    /// Synchronously persists any pending cached-status changes for this worker. Used at lifecycle
+    /// boundaries (e.g. suspend) so the cached blob is up to date when the worker goes idle, rather
+    /// than waiting for the next background sweep.
+    pub(crate) async fn force_flush_status(&self) {
+        // Best-effort: a failure is logged/metered and re-queued inside `flush`; the blob is
+        // reconstructable from the oplog so it must not block the caller (e.g. suspend).
+        if let Err(err) = self
+            .status_flusher
+            .flush(status_flusher::FlushReason::Forced)
+            .await
+        {
+            debug!("Forced status flush failed (will retry in background): {err}");
+        }
+    }
+
     async fn update_last_known_status(&self, new_status: AgentStatusRecord) {
-        let previous_status = self.metrics_status.status();
-        *self.last_known_status.write().await = new_status.clone();
+        let previous_metrics_status = self.metrics_status.status();
+        // The in-memory `last_known_status` is the authoritative live status; the flusher reads it
+        // when it persists the cached blob. We replace it here and hand the (previous, new) pair to
+        // the flusher, which updates the `RunningWorkers` recovery index synchronously and either
+        // marks the worker dirty for the background sweeper or writes the blob inline (when
+        // background flushing is disabled).
+        let previous_status = {
+            let mut guard = self.last_known_status.write().await;
+            std::mem::replace(&mut *guard, new_status.clone())
+        };
         self.metrics_status
-            .update(previous_status, new_status.status);
-        // TODO: We should do this in the background on a timer instead of on every commit.
-        self.worker_service()
-            .update_cached_status(&self.owned_agent_id, &new_status)
+            .update(previous_metrics_status, new_status.status);
+        self.status_flusher
+            .on_status_changed(&previous_status, &new_status)
             .await;
     }
 }
@@ -3130,21 +3334,21 @@ impl RunningWorker {
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
         let (pending_update, component, component_metadata) = {
-            let pending_update = worker_metadata
+            let pending_update_ref = worker_metadata
                 .last_known_status
                 .pending_updates
                 .front()
                 .cloned();
 
-            let component_revision = pending_update.as_ref().map_or(
+            let component_revision = pending_update_ref.as_ref().map_or(
                 worker_metadata.last_known_status.component_revision,
                 |update| {
-                    let target_revision = *update.description.target_revision();
+                    let target_revision = update.target_revision;
                     info!(
                         "Attempting {} update from {} to revision {target_revision}",
-                        match update.description {
-                            UpdateDescription::Automatic { .. } => "automatic",
-                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
+                        match update.kind {
+                            PendingUpdateKind::Automatic => "automatic",
+                            PendingUpdateKind::SnapshotBased => "snapshot based",
                         },
                         worker_metadata.last_known_status.component_revision
                     );
@@ -3158,6 +3362,15 @@ impl RunningWorker {
                 .await
             {
                 Ok((component, component_metadata)) => {
+                    // The status record only keeps a lightweight reference to the pending update;
+                    // hydrate the full description (including any snapshot payload) from the oplog
+                    // before handing it to the worker context.
+                    let pending_update = match &pending_update_ref {
+                        Some(pending_update_ref) => {
+                            Some(parent.hydrate_pending_update(pending_update_ref).await?)
+                        }
+                        None => None,
+                    };
                     Ok((pending_update, component, component_metadata))
                 }
                 Err(error) => {
@@ -3193,11 +3406,9 @@ impl RunningWorker {
             .last_known_status
             .pending_updates
             .front()
-            .and_then(|update| match update.description {
-                UpdateDescription::SnapshotBased {
-                    target_revision, ..
-                } => Some(target_revision),
-                _ => None,
+            .and_then(|update| match update.kind {
+                PendingUpdateKind::SnapshotBased => Some(update.target_revision),
+                PendingUpdateKind::Automatic => None,
             })
             .unwrap_or(
                 worker_metadata

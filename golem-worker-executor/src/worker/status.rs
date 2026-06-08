@@ -1,20 +1,17 @@
-use crate::services::{HasComponentService, HasConfig, HasOplogService};
-use async_recursion::async_recursion;
+use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, OplogEntry, OplogPayload, TimestampedUpdateDescription,
-    UpdateDescription,
+    AgentError, AgentResourceId, OplogEntry, OplogPayload, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentInvocation, AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
-    IdempotencyKey, OplogProcessorCheckpointState, OwnedAgentId, RetryConfig, RetryPolicyState,
-    SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation,
+    AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
+    OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -34,8 +31,15 @@ where
         .expect("Failed to calculate oplog index for existing worker")
 }
 
-/// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.
-#[async_recursion]
+/// Gets the last cached worker status record and the new oplog entries and calculates the new worker
+/// status, falling back to a full recompute from the start of the oplog when the cached baseline can
+/// no longer be folded forward (e.g. a jump deleted its index).
+///
+/// This is the no-checkpoint variant; callers that have a [`WorkerService`] should prefer
+/// [`calculate_last_known_status_with_checkpoint`] so a jump-induced full recompute can instead fold
+/// forward from the clean status checkpoint.
+///
+/// [`WorkerService`]: crate::services::worker::WorkerService
 pub async fn calculate_last_known_status<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
@@ -45,52 +49,166 @@ pub async fn calculate_last_known_status<T>(
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
-    let last_known = last_known.unwrap_or_default();
+    calculate_last_known_status_with_checkpoint_reader(
+        this,
+        owned_agent_id,
+        agent_mode,
+        last_known,
+        || async { None },
+    )
+    .await
+}
 
+/// Calculates the latest worker status, folding forward from the freshest usable baseline and, on a
+/// fold failure, from the *clean* status checkpoint read from `this`'s [`WorkerService`].
+///
+/// This is the variant production callers should use: the checkpoint is read from
+/// `this.worker_service()`, so callers no longer pass a checkpoint-read closure. The read still
+/// happens lazily (only when the live cache baseline cannot be folded), so the common path pays no
+/// extra read. See [`calculate_last_known_status_with_checkpoint_reader`] for the baseline order.
+///
+/// [`WorkerService`]: crate::services::worker::WorkerService
+pub async fn calculate_last_known_status_with_checkpoint<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    last_known: Option<AgentStatusRecord>,
+) -> Option<AgentStatusRecord>
+where
+    T: HasOplogService + HasConfig + HasComponentService + HasWorkerService + Sync,
+{
+    let worker_service = this.worker_service();
+    calculate_last_known_status_with_checkpoint_reader(
+        this,
+        owned_agent_id,
+        agent_mode,
+        last_known,
+        || async move {
+            worker_service
+                .read_status_checkpoint(owned_agent_id, agent_mode)
+                .await
+        },
+    )
+    .await
+}
+
+/// Calculates the latest worker status, trying baselines in order of decreasing freshness:
+///
+/// 1. the live cached status (`last_known`), folded forward — the common cold-load path;
+/// 2. on a fold failure (e.g. a jump deleted the cached index), the *clean* status checkpoint
+///    (read lazily via `read_checkpoint`), folded forward — this predates any later jump region and
+///    avoids re-reading the whole oplog;
+/// 3. a full recompute from the start of the oplog.
+///
+/// The checkpoint read happens only when the live cache baseline is absent or its fold is
+/// impossible, so the common path pays no extra read.
+///
+/// Most callers should use [`calculate_last_known_status_with_checkpoint`], which sources the
+/// checkpoint from `this.worker_service()`. This lower-level variant takes an explicit
+/// `read_checkpoint` closure for the few callers that cannot satisfy [`HasWorkerService`] for `this`
+/// — notably the `DefaultWorkerService` cold path, which reaches its own `read_status_checkpoint`
+/// through `&self` without an owning `Arc`.
+pub async fn calculate_last_known_status_with_checkpoint_reader<T, Fut>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    last_known: Option<AgentStatusRecord>,
+    read_checkpoint: impl FnOnce() -> Fut,
+) -> Option<AgentStatusRecord>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+    Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
+{
+    // 1. Try folding forward from the live cached status.
+    if let Some(last_known) = last_known
+        && let Some(status) =
+            try_fold_status_from(this, owned_agent_id, agent_mode, last_known).await
+    {
+        crate::metrics::workers::record_agent_status_recompute("cache");
+        return Some(status);
+    }
+
+    // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
+    //    index, or a revert moved the oplog behind it): try folding from the clean checkpoint.
+    if let Some(checkpoint) = read_checkpoint().await
+        && let Some(status) =
+            try_fold_status_from(this, owned_agent_id, agent_mode, checkpoint).await
+    {
+        crate::metrics::workers::record_agent_status_recompute("checkpoint");
+        return Some(status);
+    }
+
+    // 3. Fall back to a full recompute from the start of the oplog.
+    let status = try_fold_status_from(
+        this,
+        owned_agent_id,
+        agent_mode,
+        AgentStatusRecord::default(),
+    )
+    .await;
+    if status.is_some() {
+        crate::metrics::workers::record_agent_status_recompute("full");
+    }
+    status
+}
+
+/// Folds the oplog entries after `baseline.oplog_idx` onto `baseline`.
+///
+/// Returns `None` when the fold cannot produce a correct result from `baseline` alone:
+/// - the oplog does not exist (no `Create` entry);
+/// - `baseline` is ahead of the current last oplog index (e.g. a revert truncated the oplog below a
+///   stale checkpoint), so there is nothing to fold forward;
+/// - a newly added skipped/deleted region covers `baseline.oplog_idx` (see
+///   [`update_status_with_new_entries`]), making the baseline unusable.
+///
+/// On `None` the caller should retry from an earlier baseline (a checkpoint, or the start of the
+/// oplog). A `baseline` of [`AgentStatusRecord::default`] (oplog index 0) folds the whole oplog and
+/// never hits the region case, so it always succeeds when the oplog exists.
+pub async fn try_fold_status_from<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    baseline: AgentStatusRecord,
+) -> Option<AgentStatusRecord>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+{
     let last_oplog_index = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
         .await;
-    assert!(last_oplog_index >= last_known.oplog_idx);
 
     if last_oplog_index == OplogIndex::NONE {
-        // Worker status can only be recovered if we have at least the Create oplog entry, otherwise we cannot recover information like the component version
-        None
-    } else if last_known.oplog_idx == last_oplog_index {
-        Some(last_known)
-    } else {
-        let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
-            .oplog_service()
-            .read_range(
-                owned_agent_id,
-                agent_mode,
-                last_known.oplog_idx.next(),
-                last_oplog_index,
-            )
-            .await;
+        // Worker status can only be recovered if we have at least the Create oplog entry, otherwise
+        // we cannot recover information like the component version.
+        return None;
+    }
 
-        let final_status = update_status_with_new_entries(
-            this,
+    if last_oplog_index < baseline.oplog_idx {
+        // The baseline is ahead of the oplog (e.g. a revert truncated it below a stale checkpoint);
+        // we cannot fold forward, so the caller must retry from an earlier baseline.
+        return None;
+    }
+
+    if baseline.oplog_idx == last_oplog_index {
+        return Some(baseline);
+    }
+
+    let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
+        .oplog_service()
+        .read_range(
             owned_agent_id,
             agent_mode,
-            last_known,
-            new_entries,
-            &this.config().retry,
+            baseline.oplog_idx.next(),
+            last_oplog_index,
         )
         .await;
 
-        if let Some(final_status) = final_status {
-            Some(final_status)
-        } else {
-            calculate_last_known_status(this, owned_agent_id, agent_mode, None).await
-        }
-    }
+    update_status_with_new_entries(agent_mode, baseline, new_entries, &this.config().retry)
 }
 
 // update a worker status with new entries. Returns None if the status cannot be calculated from the new entries alone and needs to be recalculated from the beginning.
-pub async fn update_status_with_new_entries<T: HasOplogService + HasComponentService + Sync>(
-    this: &T,
-    owned_agent_id: &OwnedAgentId,
+pub fn update_status_with_new_entries(
     agent_mode: AgentMode,
     last_known: AgentStatusRecord,
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
@@ -150,14 +268,8 @@ pub async fn update_status_with_new_entries<T: HasOplogService + HasComponentSer
         &new_entries,
     );
 
-    let pending_invocations = calculate_pending_invocations(
-        this,
-        owned_agent_id,
-        agent_mode,
-        last_known.pending_invocations,
-        &new_entries,
-    )
-    .await;
+    let pending_invocations =
+        calculate_pending_invocations(last_known.pending_invocations, &new_entries);
     let (
         pending_updates,
         failed_updates,
@@ -493,15 +605,49 @@ fn calculate_skipped_regions(
     new_skipped
 }
 
-async fn calculate_pending_invocations<T: HasOplogService + HasComponentService + Sync>(
-    this: &T,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
-    initial: Vec<TimestampedAgentInvocation>,
+/// Determines whether a pending agent invocation payload is a manual update and, if so, returns
+/// its target revision.
+///
+/// Manual update payloads are tiny and always stored inline, so this never needs to download an
+/// external payload: an `External` payload is by definition not a manual update.
+fn manual_update_target_revision_of(
+    payload: &OplogPayload<AgentInvocationPayload>,
+) -> Option<ComponentRevision> {
+    fn target_revision(payload: &AgentInvocationPayload) -> Option<ComponentRevision> {
+        match payload {
+            AgentInvocationPayload::ManualUpdate { target_revision } => Some(*target_revision),
+            _ => None,
+        }
+    }
+
+    match payload {
+        OplogPayload::Inline(p) => target_revision(p),
+        OplogPayload::SerializedInline {
+            cached: Some(v), ..
+        } => target_revision(v),
+        OplogPayload::SerializedInline { bytes, .. } => {
+            deserialize::<AgentInvocationPayload>(bytes)
+                .map_err(|e| {
+                    tracing::warn!("Failed to deserialize pending agent invocation payload: {e}");
+                    e
+                })
+                .ok()
+                .as_ref()
+                .and_then(target_revision)
+        }
+        OplogPayload::External {
+            cached: Some(v), ..
+        } => target_revision(v),
+        OplogPayload::External { .. } => None,
+    }
+}
+
+fn calculate_pending_invocations(
+    initial: Vec<PendingInvocationRef>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> Vec<TimestampedAgentInvocation> {
+) -> Vec<PendingInvocationRef> {
     let mut result = initial;
-    for entry in entries.values() {
+    for (oplog_idx, entry) in entries {
         // Here we are handling two categories of oplog entries:
         // - "input" entries adding items to pending queues (PendingAgentInvocation, PendingUpdate)
         // - "output" entries removing items from pending queues when they got processed (AgentInvocationStarted, SuccessfulUpdate, FailedUpdate)
@@ -515,89 +661,38 @@ async fn calculate_pending_invocations<T: HasOplogService + HasComponentService 
         // - Incoming pending invocation or update that has not been processed yet is NOT affected by revert - they remain pending
         // - If a pending invocation or update was attempted (no matter if succeeded or not) in the reverted region, we remove it from
         //   the pending queue, so the revert will not make them retried.
+        //
+        // We only store a lightweight reference to the originating oplog entry; the full invocation
+        // payload (input parameters, snapshot data, oplog entry batches, ...) stays in the oplog and
+        // is hydrated on demand by the paths that actually execute the invocation.
 
         match entry {
             OplogEntry::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,
                 payload,
-                trace_id,
-                trace_states,
-                invocation_context,
+                ..
             } => {
-                let agent_payload: Option<AgentInvocationPayload> = match payload {
-                    OplogPayload::Inline(p) => Some(*p.clone()),
-                    OplogPayload::SerializedInline {
-                        cached: Some(v), ..
-                    } => Some((**v).clone()),
-                    OplogPayload::SerializedInline { bytes, .. } => {
-                        deserialize::<AgentInvocationPayload>(bytes)
-                            .map_err(|e| {
-                                tracing::warn!(
-                                    "Failed to deserialize pending agent invocation payload: {e}"
-                                );
-                                e
-                            })
-                            .ok()
-                    }
-                    OplogPayload::External {
-                        cached: Some(v), ..
-                    } => Some((**v).clone()),
-                    OplogPayload::External {
-                        payload_id,
-                        md5_hash,
-                        ..
-                    } => {
-                        match this
-                            .oplog_service()
-                            .download_raw_payload(
-                                owned_agent_id,
-                                agent_mode,
-                                payload_id.clone(),
-                                md5_hash.clone(),
-                            )
-                            .await
-                        {
-                            Ok(bytes) => deserialize::<AgentInvocationPayload>(&bytes)
-                                .map_err(|e| {
-                                    tracing::warn!(
-                                        "Failed to deserialize external pending agent invocation payload: {e}"
-                                    );
-                                    e
-                                })
-                                .ok(),
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to download external pending agent invocation payload: {e}"
-                                );
-                                None
-                            }
-                        }
-                    }
+                // A manual update is the only invocation variant without a semantic idempotency
+                // key, so we capture its target revision and drop the (freshly generated, unused)
+                // idempotency key for it.
+                let manual_update_target_revision = manual_update_target_revision_of(payload);
+                let idempotency_key = if manual_update_target_revision.is_some() {
+                    None
+                } else {
+                    Some(idempotency_key.clone())
                 };
-                if let Some(agent_payload) = agent_payload {
-                    let invocation_context_stack = InvocationContextStack::from_oplog_data(
-                        trace_id.clone(),
-                        trace_states.clone(),
-                        invocation_context.clone(),
-                    );
-                    let invocation = AgentInvocation::from_parts(
-                        idempotency_key.clone(),
-                        agent_payload,
-                        invocation_context_stack,
-                    );
-                    result.push(TimestampedAgentInvocation {
-                        timestamp: *timestamp,
-                        invocation,
-                    });
-                }
+                result.push(PendingInvocationRef {
+                    timestamp: *timestamp,
+                    oplog_index: *oplog_idx,
+                    idempotency_key,
+                    manual_update_target_revision,
+                });
             }
             OplogEntry::AgentInvocationStarted {
                 idempotency_key, ..
             } => {
-                result.retain(|invocation| {
-                    !invocation.invocation.has_idempotency_key(idempotency_key)
-                });
+                result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
             }
             OplogEntry::PendingUpdate {
                 description:
@@ -605,36 +700,18 @@ async fn calculate_pending_invocations<T: HasOplogService + HasComponentService 
                         target_revision, ..
                     },
                 ..
-            } => result.retain(|invocation| match invocation {
-                TimestampedAgentInvocation {
-                    invocation:
-                        AgentInvocation::ManualUpdate {
-                            target_revision: revision,
-                            ..
-                        },
-                    ..
-                } => revision != target_revision,
-                _ => true,
+            } => result.retain(|invocation| {
+                invocation.manual_update_target_revision.as_ref() != Some(target_revision)
             }),
             OplogEntry::FailedUpdate {
                 target_revision, ..
-            } => result.retain(|invocation| match invocation {
-                TimestampedAgentInvocation {
-                    invocation:
-                        AgentInvocation::ManualUpdate {
-                            target_revision: revision,
-                            ..
-                        },
-                    ..
-                } => revision != target_revision,
-                _ => true,
+            } => result.retain(|invocation| {
+                invocation.manual_update_target_revision.as_ref() != Some(target_revision)
             }),
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
-                result.retain(|invocation| {
-                    !invocation.invocation.has_idempotency_key(idempotency_key)
-                });
+                result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
             }
             _ => {}
         }
@@ -644,7 +721,7 @@ async fn calculate_pending_invocations<T: HasOplogService + HasComponentService 
 
 #[allow(clippy::type_complexity)]
 fn calculate_update_fields(
-    initial_pending_updates: VecDeque<TimestampedUpdateDescription>,
+    initial_pending_updates: VecDeque<PendingUpdateRef>,
     initial_failed_updates: Vec<FailedUpdateRecord>,
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
     initial_revision: ComponentRevision,
@@ -656,7 +733,7 @@ fn calculate_update_fields(
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
-    VecDeque<TimestampedUpdateDescription>,
+    VecDeque<PendingUpdateRef>,
     Vec<FailedUpdateRecord>,
     Vec<SuccessfulUpdateRecord>,
     ComponentRevision,
@@ -697,10 +774,15 @@ fn calculate_update_fields(
                 description,
                 ..
             } => {
-                pending_updates.push_back(TimestampedUpdateDescription {
+                let kind = match description {
+                    UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
+                    UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
+                };
+                pending_updates.push_back(PendingUpdateRef {
                     timestamp: *timestamp,
                     oplog_index: *oplog_idx,
-                    description: description.clone(),
+                    target_revision: *description.target_revision(),
+                    kind,
                 });
             }
             OplogEntry::FailedUpdate {
@@ -728,8 +810,8 @@ fn calculate_update_fields(
                 revision = *target_revision;
                 size = *new_component_size;
 
-                if let Some(TimestampedUpdateDescription {
-                    description: UpdateDescription::SnapshotBased { .. },
+                if let Some(PendingUpdateRef {
+                    kind: PendingUpdateKind::SnapshotBased,
                     oplog_index: applied_update_oplog_index,
                     ..
                 }) = pending_updates.pop_front()
@@ -1071,7 +1153,8 @@ mod test {
     use crate::services::{HasComponentService, HasConfig, HasOplogService};
     use crate::worker::status::{
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
-        calculate_oplog_processor_checkpoints,
+        calculate_last_known_status_with_checkpoint_reader, calculate_oplog_processor_checkpoints,
+        try_fold_status_from,
     };
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
@@ -1085,14 +1168,15 @@ mod test {
     use golem_common::model::oplog::host_functions::HostFunctionName;
     use golem_common::model::oplog::{
         AgentError, DurableFunctionType, HostRequest, HostRequestNoInput, HostResponse, OplogEntry,
-        OplogPayload, PayloadId, RawOplogPayload, TimestampedUpdateDescription, UpdateDescription,
+        OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
         AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
-        OplogProcessorCheckpointState, OwnedAgentId, RetryConfig, RetryPolicyState, ScanCursor,
-        SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation,
+        OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
+        PendingUpdateRef, RetryConfig, RetryPolicyState, ScanCursor, SuccessfulUpdateRecord,
+        Timestamp,
     };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -1755,12 +1839,140 @@ mod test {
         let test_case = TestCase {
             owned_agent_id: owned_agent_id.clone(),
             entries: vec![],
+            read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
         let result =
             calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
                 .await;
         assert2::assert!(let None = result);
+    }
+
+    /// Builds an oplog where a clean idle boundary (idx 3) precedes an invocation that later jumps,
+    /// deleting the region [4, 7]. Returns the test case plus the clean-checkpoint baseline (idx 3),
+    /// a stale live baseline inside the deleted region (idx 6), and the expected final status.
+    fn jump_repair_fixture() -> (
+        TestCase,
+        AgentStatusRecord,
+        AgentStatusRecord,
+        AgentStatusRecord,
+    ) {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+
+        let test_case = TestCase::builder(0)
+            .agent_invocation_started("a", vec![], k1.clone()) // idx 2
+            .agent_invocation_finished(
+                AgentInvocationResult::AgentInitialization,
+                k1,
+                ComponentRevision::INITIAL,
+            ) // idx 3 (clean idle boundary)
+            .agent_invocation_started("b", vec![], k2.clone()) // idx 4
+            .grow_memory(10) // idx 5
+            .grow_memory(100) // idx 6
+            .jump(OplogIndex::from_u64(4)) // idx 7, deletes region [4, 7]
+            .agent_invocation_finished(
+                AgentInvocationResult::AgentInitialization,
+                k2,
+                ComponentRevision::INITIAL,
+            ) // idx 8
+            .build();
+
+        let final_expected = test_case.entries.last().unwrap().expected_status.clone();
+        let checkpoint = test_case.entries[2].expected_status.clone(); // idx 3, before the deleted region
+        let stale_live = test_case.entries[5].expected_status.clone(); // idx 6, inside the deleted region
+
+        (test_case, checkpoint, stale_live, final_expected)
+    }
+
+    #[test]
+    async fn checkpoint_repair_folds_from_checkpoint_after_jump() {
+        let (test_case, checkpoint, stale_live, final_expected) = jump_repair_fixture();
+
+        // The stale live baseline is inside the deleted region, so it cannot be folded forward.
+        let direct = try_fold_status_from(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            stale_live.clone(),
+        )
+        .await;
+        assert2::assert!(let None = direct);
+
+        test_case.read_starts.lock().unwrap().clear();
+
+        let repaired = calculate_last_known_status_with_checkpoint_reader(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(stale_live),
+            || async { Some(checkpoint) },
+        )
+        .await;
+
+        assert_eq!(repaired, Some(final_expected));
+
+        let read_starts = test_case.read_starts.lock().unwrap().clone();
+        assert!(
+            read_starts.contains(&4),
+            "expected a fold from the checkpoint baseline (read starting at idx 4), got {read_starts:?}"
+        );
+        assert!(
+            !read_starts.contains(&1),
+            "expected no full recompute from idx 1, got {read_starts:?}"
+        );
+    }
+
+    #[test]
+    async fn checkpoint_repair_falls_back_to_full_recompute_without_checkpoint() {
+        let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
+
+        test_case.read_starts.lock().unwrap().clear();
+
+        let result = calculate_last_known_status_with_checkpoint_reader(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(stale_live),
+            || async { None },
+        )
+        .await;
+
+        assert_eq!(result, Some(final_expected));
+
+        let read_starts = test_case.read_starts.lock().unwrap().clone();
+        assert!(
+            read_starts.contains(&1),
+            "expected a full recompute from idx 1, got {read_starts:?}"
+        );
+    }
+
+    #[test]
+    async fn checkpoint_repair_falls_back_to_full_recompute_when_checkpoint_unusable() {
+        let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
+
+        // A checkpoint that itself falls inside the deleted region (idx 5) cannot be folded forward
+        // either, so we must fall back to a full recompute.
+        let unusable_checkpoint = test_case.entries[4].expected_status.clone(); // idx 5
+
+        test_case.read_starts.lock().unwrap().clear();
+
+        let result = calculate_last_known_status_with_checkpoint_reader(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(stale_live),
+            || async { Some(unusable_checkpoint) },
+        )
+        .await;
+
+        assert_eq!(result, Some(final_expected));
+
+        let read_starts = test_case.read_starts.lock().unwrap().clone();
+        assert!(
+            read_starts.contains(&1),
+            "expected a full recompute from idx 1, got {read_starts:?}"
+        );
     }
 
     struct TestCaseBuilder {
@@ -2025,10 +2237,18 @@ mod test {
                 invocation_context.to_oplog_data(),
             )
             .rounded();
+            let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
+            let ref_idempotency_key = invocation.idempotency_key().cloned();
+            let manual_update_target_revision = match &invocation {
+                AgentInvocation::ManualUpdate { target_revision } => Some(*target_revision),
+                _ => None,
+            };
             self.add(entry.clone(), move |mut status| {
-                status.pending_invocations.push(TimestampedAgentInvocation {
+                status.pending_invocations.push(PendingInvocationRef {
                     timestamp: entry.timestamp(),
-                    invocation,
+                    oplog_index: oplog_idx,
+                    idempotency_key: ref_idempotency_key.clone(),
+                    manual_update_target_revision,
                 });
                 status
             })
@@ -2039,7 +2259,7 @@ mod test {
             self.add(entry.clone(), move |mut status| {
                 status
                     .pending_invocations
-                    .retain(|ti| ti.invocation.idempotency_key() != Some(&idempotency_key));
+                    .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
                 status
             })
         }
@@ -2052,13 +2272,16 @@ mod test {
             let entry = OplogEntry::pending_update(update_description.clone()).rounded();
             let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             self.add(entry.clone(), move |mut status| {
-                status
-                    .pending_updates
-                    .push_back(TimestampedUpdateDescription {
-                        timestamp: entry.timestamp(),
-                        oplog_index: oplog_idx,
-                        description: update_description.clone(),
-                    });
+                let kind = match update_description {
+                    UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
+                    UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
+                };
+                status.pending_updates.push_back(PendingUpdateRef {
+                    timestamp: entry.timestamp(),
+                    oplog_index: oplog_idx,
+                    target_revision: *update_description.target_revision(),
+                    kind,
+                });
 
                 if !status.pending_invocations.is_empty() {
                     status.pending_invocations.pop();
@@ -2144,19 +2367,9 @@ mod test {
                     target_revision, ..
                 } = update_description
                 {
-                    status
-                        .pending_invocations
-                        .retain(|invocation| match invocation {
-                            TimestampedAgentInvocation {
-                                invocation:
-                                    AgentInvocation::ManualUpdate {
-                                        target_revision: revision,
-                                        ..
-                                    },
-                                ..
-                            } => *revision != target_revision,
-                            _ => true,
-                        });
+                    status.pending_invocations.retain(|invocation| {
+                        invocation.manual_update_target_revision != Some(target_revision)
+                    });
                 };
 
                 status
@@ -2171,6 +2384,7 @@ mod test {
                     .into_iter()
                     .map(|entry| entry.rounded())
                     .collect(),
+                read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
     }
@@ -2194,6 +2408,9 @@ mod test {
     struct TestCase {
         owned_agent_id: OwnedAgentId,
         entries: Vec<TestEntry>,
+        /// Records the `start_idx` of every `read`/`read_range` so tests can assert which baseline
+        /// a recompute folded from. Shared across `self.clone()`s handed out by `oplog_service()`.
+        read_starts: Arc<std::sync::Mutex<Vec<u64>>>,
     }
 
     impl TestCase {
@@ -2268,6 +2485,7 @@ mod test {
         ) -> BTreeMap<OplogIndex, OplogEntry> {
             let mut result = BTreeMap::new();
             let idx_u64: u64 = idx.into();
+            self.read_starts.lock().unwrap().push(idx_u64);
             for i in idx_u64..(idx_u64 + n) {
                 if let Some(entry) = self.entries.get((i - 1) as usize) {
                     result.insert(OplogIndex::from_u64(i), entry.oplog_entry.clone());

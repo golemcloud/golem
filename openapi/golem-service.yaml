@@ -2408,81 +2408,6 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/accounts/{account_id}/roles:
-    put:
-      tags:
-      - RegistryService
-      - Account
-      summary: Set the roles of an account
-      operationId: set_account_roles
-      parameters:
-      - in: path
-        name: account_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/AccountSetRoles'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Account'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
   /v1/accounts/{account_id}/tokens:
     get:
       tags:
@@ -15013,6 +14938,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountRole'
+        accountRootCardId:
+          type: string
+          format: uuid
         tokenRootCardId:
           type: string
           format: uuid
@@ -15026,6 +14954,7 @@ components:
       - email
       - planId
       - roles
+      - accountRootCardId
       - tokenRootCardEpoch
     AccountCountsReport:
       title: AccountCountsReport
@@ -15052,9 +14981,14 @@ components:
           type: string
         email:
           type: string
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountRole'
       required:
       - name
       - email
+      - roles
     AccountRole:
       type: string
       enum:
@@ -15074,20 +15008,6 @@ components:
       required:
       - currentRevision
       - plan
-    AccountSetRoles:
-      title: AccountSetRoles
-      type: object
-      properties:
-        currentRevision:
-          type: integer
-          format: uint64
-        roles:
-          type: array
-          items:
-            $ref: '#/components/schemas/AccountRole'
-      required:
-      - currentRevision
-      - roles
     AccountSummary:
       title: AccountSummary
       type: object

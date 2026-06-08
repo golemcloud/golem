@@ -14,7 +14,7 @@
 
 mod algebra;
 mod class;
-mod owner;
+pub mod owner;
 mod parsing;
 mod pattern;
 pub mod recipient;
