@@ -15,27 +15,22 @@
 use crate::repo::account::AccountRepo;
 use crate::repo::card::CardRepo;
 use crate::repo::model::account::AccountRepoError;
-use crate::repo::model::card::{CardRecord, CardRepoError};
+use crate::repo::model::card::CardRepoError;
 use crate::services::account::{AccountError, AccountService};
 use crate::services::permission_share::{PermissionShareError, PermissionShareService};
 use chrono::Utc;
-use golem_common::model::account::{Account, AccountId, TokenRootCardEpoch};
+use golem_common::model::account::{Account, AccountId};
 use golem_common::model::auth::{TokenId, TokenSecret};
 use golem_common::model::card::recipient::RecipientPattern;
-use golem_common::model::card::{
-    Card, CardAlgebraError, CardId, CardManagedBy, EffectiveSurface, PermissionPattern,
-};
+use golem_common::model::card::{Card, EffectiveSurface};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{
-    AdminImpersonationAuthCtx, AuthCard, AuthCtx, GlobalAction, UserAuthCtx,
+    AdminImpersonationAuthCtx, AuthCtx, GlobalAction, UserAuthCtx,
 };
 use golem_service_base::repo::RepoError;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tracing::warn;
-use uuid::Uuid;
-
-const MAX_REDERIVE_ATTEMPTS: usize = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -108,24 +103,13 @@ impl AuthService {
             // Normal login flow
             None => {
                 let account_roles = BTreeSet::from_iter(target_account.roles.clone());
-                let account_holder = target_account.email.as_str().to_string();
-                let token_root_card = self
-                    .ensure_token_root_card(
-                        target_account.id,
-                        account_holder.clone(),
-                        target_account.account_root_card_id,
-                        target_account.token_root_card_id,
-                        target_account.token_root_card_epoch,
-                    )
-                    .await?;
+                let effective_surface = self.materialize_effective_surface(&target_account).await?;
 
                 Ok(AuthCtx::User(UserAuthCtx {
                     account_id: target_account.id,
                     account_roles,
                     account_plan_id: target_account.plan_id,
-                    token_root_card_id: Some(token_root_card.card_id),
-                    account_holder,
-                    auth_card: Some(AuthCard::from(token_root_card)),
+                    effective_surface,
                 }))
             }
             // Impersonation flow
@@ -139,13 +123,13 @@ impl AuthService {
 
                 {
                     let account_roles = BTreeSet::from_iter(admin_account.roles.clone());
+                    let effective_surface =
+                        self.materialize_effective_surface(&admin_account).await?;
                     let admin_auth_ctx = AuthCtx::User(UserAuthCtx {
                         account_id: admin_account.id,
                         account_roles,
                         account_plan_id: admin_account.plan_id,
-                        token_root_card_id: None,
-                        account_holder: admin_account.email.as_str().to_string(),
-                        auth_card: None,
+                        effective_surface,
                     });
 
                     if admin_auth_ctx
@@ -161,235 +145,56 @@ impl AuthService {
                 }
 
                 let target_account_roles = BTreeSet::from_iter(target_account.roles.clone());
-                let target_account_holder = target_account.email.as_str().to_string();
-                let token_root_card = self
-                    .ensure_token_root_card(
-                        target_account.id,
-                        target_account_holder.clone(),
-                        target_account.account_root_card_id,
-                        target_account.token_root_card_id,
-                        target_account.token_root_card_epoch,
-                    )
-                    .await?;
+                let effective_surface = self.materialize_effective_surface(&target_account).await?;
 
                 Ok(AuthCtx::AdminImpersonation(AdminImpersonationAuthCtx {
                     admin_account_id,
                     target_account_id: target_account.id,
                     target_account_roles,
                     target_account_plan_id: target_account.plan_id,
-                    token_root_card_id: Some(token_root_card.card_id),
-                    target_account_holder,
-                    auth_card: Some(AuthCard::from(token_root_card)),
+                    effective_surface,
                 }))
             }
         }
     }
 
-    async fn ensure_token_root_card(
+    async fn materialize_effective_surface(
         &self,
-        account_id: AccountId,
-        mut account_holder: String,
-        mut account_root_card_id: CardId,
-        snapshot_card_id: Option<CardId>,
-        snapshot_epoch: TokenRootCardEpoch,
-    ) -> Result<Card, AuthError> {
-        let mut expected_epoch = snapshot_epoch;
-
-        if let Some(card_id) = snapshot_card_id {
-            if let Some(card) = self.load_card(card_id).await? {
-                return Ok(card);
-            }
-
-            let account = self
-                .account_service
-                .get(account_id, &AuthCtx::System)
-                .await
-                .map_err(|e| match e {
-                    AccountError::AccountNotFound(_) => AuthError::CouldNotAuthenticate,
-                    other => other.into(),
-                })?;
-
-            if let Some(refreshed_card_id) = account.token_root_card_id {
-                return self
-                    .load_card(refreshed_card_id)
-                    .await?
-                    .ok_or_else(|| missing_token_root_card(account_id, refreshed_card_id));
-            }
-
-            account_holder = account.email.as_str().to_string();
-            account_root_card_id = account.account_root_card_id;
-            expected_epoch = account.token_root_card_epoch;
-        }
-
-        for _ in 0..MAX_REDERIVE_ATTEMPTS {
-            let account_root_card: Card = self
-                .card_repo
-                .get(account_root_card_id)
-                .await?
-                .ok_or_else(|| {
-                    tracing::warn!(
-                        "Account root card {} for account {} does not exist",
-                        account_root_card_id,
-                        account_id
-                    );
-                    AuthError::CouldNotAuthenticate
-                })?
-                .try_into()?;
-
-            let share_cards = self
-                .permission_share_service
-                .active_share_cards_for_target(account_id)
-                .await?;
-
-            let mut parent_ids = Vec::with_capacity(1 + share_cards.len());
-            parent_ids.push(account_root_card_id);
-            parent_ids.extend(share_cards.iter().map(|card| card.card_id));
-
-            let mut parent_cards = Vec::with_capacity(1 + share_cards.len());
-            parent_cards.push(account_root_card);
-            parent_cards.extend(share_cards);
-
-            let mut lower_positive = Vec::new();
-            let mut lower_negative = Vec::new();
-            let mut upper_positive = Vec::new();
-            let mut upper_negative = Vec::new();
-            for card in &parent_cards {
-                add_card_grants(
-                    &mut lower_positive,
-                    &mut lower_negative,
-                    &mut upper_positive,
-                    &mut upper_negative,
-                    card,
-                );
-            }
-
-            let account_recipient = RecipientPattern::Account {
-                account: account_holder.clone(),
-            };
-
-            EffectiveSurface::from_cards(&parent_cards, &account_recipient)
-                .and_then(|surface| surface.validates_derivation(&lower_positive, &upper_positive))
-                .map_err(|err| invalid_token_root_derivation(account_id, err))?;
-
-            if let Some(card) = self
-                .insert_token_root_card(
-                    account_id,
-                    expected_epoch,
-                    parent_ids,
-                    lower_positive,
-                    lower_negative,
-                    upper_positive,
-                    upper_negative,
-                )
-                .await?
-            {
-                return Ok(card);
-            }
-
-            // Creating the card failed, refetch account to ensure we are working with up-to-date data on next loop.
-            // This will happen if a new permission share is concurrently created or invalidated
-
-            let account = self
-                .account_service
-                .get(account_id, &AuthCtx::System)
-                .await
-                .map_err(|e| match e {
-                    // Account was deleted while we were looping
-                    AccountError::AccountNotFound(_) => AuthError::CouldNotAuthenticate,
-                    other => other.into(),
-                })?;
-
-            if let Some(card_id) = account.token_root_card_id {
-                return self
-                    .load_card(card_id)
-                    .await?
-                    .ok_or_else(|| missing_token_root_card(account_id, card_id));
-            }
-
-            account_holder = account.email.as_str().to_string();
-            account_root_card_id = account.account_root_card_id;
-            expected_epoch = account.token_root_card_epoch;
-        }
-
-        Err(AuthError::InternalError(anyhow::anyhow!(
-            "Failed to rederive token root card for account {} after {} attempts",
-            account_id,
-            MAX_REDERIVE_ATTEMPTS
-        )))
-    }
-
-    async fn insert_token_root_card(
-        &self,
-        account_id: AccountId,
-        expected_epoch: TokenRootCardEpoch,
-        parent_ids: Vec<CardId>,
-        lower_positive: Vec<PermissionPattern>,
-        lower_negative: Vec<PermissionPattern>,
-        upper_positive: Vec<PermissionPattern>,
-        upper_negative: Vec<PermissionPattern>,
-    ) -> Result<Option<Card>, AuthError> {
-        let card_id = CardId(Uuid::now_v7());
-        let card = CardRecord::creation(
-            card_id,
-            parent_ids,
-            lower_positive,
-            lower_negative,
-            upper_positive,
-            upper_negative,
-            None,
-            true,
-            Some(CardManagedBy::TokenRoot { account_id }),
-        );
-
-        match self
+        account: &Account,
+    ) -> Result<EffectiveSurface, AuthError> {
+        let account_root_card: Card = self
             .card_repo
-            .insert_token_root_card(account_id.0, expected_epoch.into(), card)
-            .await
-        {
-            Ok(record) => Ok(Some(record.try_into()?)),
-            Err(CardRepoError::ConcurrentModification | CardRepoError::ParentNotFound(_)) => {
-                Ok(None)
-            }
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    async fn load_card(&self, card_id: CardId) -> Result<Option<Card>, AuthError> {
-        self.card_repo
-            .get(card_id)
+            .get(account.account_root_card_id)
             .await?
-            .map(Card::try_from)
-            .transpose()
-            .map_err(Into::into)
+            .ok_or_else(|| {
+                tracing::warn!(
+                    "Account root card {} for account {} does not exist",
+                    account.account_root_card_id,
+                    account.id
+                );
+                AuthError::CouldNotAuthenticate
+            })?
+            .try_into()?;
+
+        let share_cards = self
+            .permission_share_service
+            .active_share_cards_for_target(account.id)
+            .await?;
+
+        let mut cards = Vec::with_capacity(1 + share_cards.len());
+        cards.push(account_root_card);
+        cards.extend(share_cards);
+
+        let account_recipient = RecipientPattern::Account {
+            account: account.email.as_str().to_string(),
+        };
+
+        EffectiveSurface::from_cards(&cards, &account_recipient).map_err(|err| {
+            AuthError::InternalError(anyhow::anyhow!(
+                "Failed to materialize effective surface for account {}: {:?}",
+                account.id,
+                err
+            ))
+        })
     }
-}
-
-fn add_card_grants(
-    lower_positive: &mut Vec<PermissionPattern>,
-    lower_negative: &mut Vec<PermissionPattern>,
-    upper_positive: &mut Vec<PermissionPattern>,
-    upper_negative: &mut Vec<PermissionPattern>,
-    card: &Card,
-) {
-    lower_positive.extend(card.lower_positive.clone());
-    lower_negative.extend(card.lower_negative.clone());
-    upper_positive.extend(card.upper_positive.clone());
-    upper_negative.extend(card.upper_negative.clone());
-}
-
-fn invalid_token_root_derivation(account_id: AccountId, err: CardAlgebraError) -> AuthError {
-    AuthError::InternalError(anyhow::anyhow!(
-        "Failed to validate token root card derivation for account {}: {:?}",
-        account_id,
-        err
-    ))
-}
-
-fn missing_token_root_card(account_id: AccountId, card_id: CardId) -> AuthError {
-    tracing::warn!(
-        "Token root card {} for account {} does not exist",
-        card_id,
-        account_id
-    );
-    AuthError::CouldNotAuthenticate
 }

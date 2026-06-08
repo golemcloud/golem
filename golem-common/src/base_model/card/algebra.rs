@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::card::recipient::RecipientPattern;
-use crate::base_model::card::{Card, PermissionPattern, PermissionTarget};
+use crate::base_model::card::{Card, CardId, PermissionPattern, PermissionTarget};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -24,47 +24,15 @@ pub enum CardAlgebraError {
     DerivationNotSubsumed { grant: Box<PermissionPattern> },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct GrantSurface {
-    pub positive: Vec<PermissionPattern>,
-    pub negative: Vec<PermissionPattern>,
+    pub positive: Vec<PermissionTarget>,
+    pub negative: Vec<PermissionTarget>,
 }
 
 impl GrantSurface {
     pub fn allows(&self, request: &PermissionTarget) -> Result<bool, CardAlgebraError> {
-        let granted = self
-            .positive
-            .iter()
-            .any(|grant| grant.subsumes_target(request));
-        if !granted {
-            return Ok(false);
-        }
-
-        let denied = self
-            .negative
-            .iter()
-            .any(|grant| grant.subsumes_target(request));
-        Ok(!denied)
-    }
-
-    pub fn allows_ceiling(&self, request: &PermissionTarget) -> Result<bool, CardAlgebraError> {
-        let granted = self.positive.is_empty()
-            || self
-                .positive
-                .iter()
-                .any(|grant| grant.subsumes_target(request));
-        if !granted {
-            return Ok(false);
-        }
-
-        let denied = self
-            .negative
-            .iter()
-            .any(|grant| grant.subsumes_target(request));
-        Ok(!denied)
-    }
-
-    pub fn allows_grant(&self, request: &PermissionPattern) -> Result<bool, CardAlgebraError> {
         let granted = self.positive.iter().any(|grant| grant.subsumes(request));
         if !granted {
             return Ok(false);
@@ -74,10 +42,7 @@ impl GrantSurface {
         Ok(!denied)
     }
 
-    pub fn allows_grant_ceiling(
-        &self,
-        request: &PermissionPattern,
-    ) -> Result<bool, CardAlgebraError> {
+    pub fn allows_ceiling(&self, request: &PermissionTarget) -> Result<bool, CardAlgebraError> {
         let granted =
             self.positive.is_empty() || self.positive.iter().any(|grant| grant.subsumes(request));
         if !granted {
@@ -89,16 +54,19 @@ impl GrantSurface {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct EffectiveSurface {
-    lower: Vec<GrantSurface>,
-    upper: Vec<GrantSurface>,
+    pub source_card_ids: Vec<CardId>,
+    pub lower: Vec<GrantSurface>,
+    pub upper: Vec<GrantSurface>,
 }
 
 impl EffectiveSurface {
     pub fn from_cards(cards: &[Card], holder: &RecipientPattern) -> Result<Self, CardAlgebraError> {
         let mut lower = Vec::new();
         let mut upper = Vec::new();
+        let source_card_ids = cards.iter().map(|card| card.card_id).collect();
 
         for card in cards {
             let lower_positive = filter_by_recipient(&card.lower_positive, holder)?;
@@ -120,7 +88,11 @@ impl EffectiveSurface {
             }
         }
 
-        Ok(Self { lower, upper })
+        Ok(Self {
+            source_card_ids,
+            lower,
+            upper,
+        })
     }
 
     pub fn from_grants(
@@ -150,7 +122,11 @@ impl EffectiveSurface {
             });
         }
 
-        Ok(Self { lower, upper })
+        Ok(Self {
+            source_card_ids: Vec::new(),
+            lower,
+            upper,
+        })
     }
 
     pub fn authorize(&self, request: &PermissionTarget) -> Result<bool, CardAlgebraError> {
@@ -167,7 +143,7 @@ impl EffectiveSurface {
         child_upper_positive: &[PermissionPattern],
     ) -> Result<(), CardAlgebraError> {
         for grant in child_lower_positive {
-            if !self.allows_lower_grant(grant)? {
+            if !self.allows_lower(&grant.to_target())? {
                 return Err(CardAlgebraError::DerivationNotSubsumed {
                     grant: Box::new(grant.clone()),
                 });
@@ -175,7 +151,7 @@ impl EffectiveSurface {
         }
 
         for grant in child_upper_positive {
-            if !self.allows_upper_grant(grant)? {
+            if !self.allows_upper(&grant.to_target())? {
                 return Err(CardAlgebraError::DerivationNotSubsumed {
                     grant: Box::new(grant.clone()),
                 });
@@ -204,35 +180,15 @@ impl EffectiveSurface {
 
         Ok(true)
     }
-
-    fn allows_lower_grant(&self, request: &PermissionPattern) -> Result<bool, CardAlgebraError> {
-        for surface in &self.lower {
-            if surface.allows_grant(request)? {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
-
-    fn allows_upper_grant(&self, request: &PermissionPattern) -> Result<bool, CardAlgebraError> {
-        for surface in &self.upper {
-            if !surface.allows_grant_ceiling(request)? {
-                return Ok(false);
-            }
-        }
-
-        Ok(true)
-    }
 }
 
 fn filter_by_recipient(
     grants: &[PermissionPattern],
     holder: &RecipientPattern,
-) -> Result<Vec<PermissionPattern>, CardAlgebraError> {
+) -> Result<Vec<PermissionTarget>, CardAlgebraError> {
     Ok(grants
         .iter()
         .filter(|grant| grant.recipient().subsumes(holder))
-        .cloned()
+        .map(PermissionPattern::to_target)
         .collect())
 }

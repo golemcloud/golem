@@ -213,6 +213,14 @@ pub struct ClassPermissionTarget<C: PermissionClass> {
     pub resource: C::Resource,
 }
 
+impl<C: PermissionClass> ClassPermissionTarget<C> {
+    pub fn subsumes(&self, other: &Self) -> bool {
+        self.owner.subsumes(&other.owner)
+            && (self.verb.is_none() || self.verb == other.verb)
+            && self.resource.subsumes(&other.resource)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct ClassPermissionPattern<C: PermissionClass> {

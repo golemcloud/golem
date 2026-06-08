@@ -19,10 +19,7 @@ use axum::http::header;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
-use golem_common::model::card::recipient::RecipientPattern;
-use golem_common::model::card::{
-    Card, CardAlgebraError, CardId, EffectiveSurface, PermissionPattern, PermissionTarget,
-};
+use golem_common::model::card::{CardAlgebraError, EffectiveSurface, PermissionTarget};
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
@@ -279,34 +276,11 @@ pub struct AuthDetailsForEnvironment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AuthCard {
-    pub card_id: CardId,
-    pub lower_positive: Vec<PermissionPattern>,
-    pub lower_negative: Vec<PermissionPattern>,
-    pub upper_positive: Vec<PermissionPattern>,
-    pub upper_negative: Vec<PermissionPattern>,
-}
-
-impl From<Card> for AuthCard {
-    fn from(value: Card) -> Self {
-        Self {
-            card_id: value.card_id,
-            lower_positive: value.lower_positive,
-            lower_negative: value.lower_negative,
-            upper_positive: value.upper_positive,
-            upper_negative: value.upper_negative,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserAuthCtx {
     pub account_id: AccountId,
     pub account_plan_id: PlanId,
     pub account_roles: BTreeSet<AccountRole>,
-    pub token_root_card_id: Option<CardId>,
-    pub account_holder: String,
-    pub auth_card: Option<AuthCard>,
+    pub effective_surface: EffectiveSurface,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -326,9 +300,7 @@ pub struct AdminImpersonationAuthCtx {
     pub target_account_id: AccountId,
     pub target_account_roles: BTreeSet<AccountRole>,
     pub target_account_plan_id: PlanId,
-    pub token_root_card_id: Option<CardId>,
-    pub target_account_holder: String,
-    pub auth_card: Option<AuthCard>,
+    pub effective_surface: EffectiveSurface,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -362,15 +334,14 @@ impl AuthCtx {
         target_account_id: AccountId,
         target_account_roles: BTreeSet<AccountRole>,
         target_account_plan_id: PlanId,
+        effective_surface: EffectiveSurface,
     ) -> AuthCtx {
         AuthCtx::AdminImpersonation(AdminImpersonationAuthCtx {
             admin_account_id,
             target_account_id,
             target_account_roles,
             target_account_plan_id,
-            token_root_card_id: None,
-            target_account_holder: target_account_id.to_string(),
-            auth_card: None,
+            effective_surface,
         })
     }
 
@@ -388,14 +359,6 @@ impl AuthCtx {
             Self::System => Self::System,
             // Down't downgrade impersonation auth contexts for better logging
             Self::AdminImpersonation(inner) => Self::AdminImpersonation(inner.clone()),
-        }
-    }
-
-    pub fn token_root_card_id(&self) -> Option<CardId> {
-        match self {
-            Self::User(user) => user.token_root_card_id,
-            Self::AdminImpersonation(ctx) => ctx.token_root_card_id,
-            Self::System | Self::Agent(_) => None,
         }
     }
 
@@ -494,16 +457,10 @@ impl AuthCtx {
         match self {
             Self::System => Ok(()),
             Self::User(user) => {
-                let recipient = RecipientPattern::Account {
-                    account: user.account_holder.clone(),
-                };
-                authorize_auth_card_permission(user.auth_card.as_ref(), &recipient, target)
+                authorize_effective_surface_permission(&user.effective_surface, target)
             }
             Self::AdminImpersonation(ctx) => {
-                let recipient = RecipientPattern::Account {
-                    account: ctx.target_account_holder.clone(),
-                };
-                authorize_auth_card_permission(ctx.auth_card.as_ref(), &recipient, target)
+                authorize_effective_surface_permission(&ctx.effective_surface, target)
             }
             Self::Agent(_) => Err(AuthorizationError::PermissionNotAllowed(Box::new(
                 target.clone(),
@@ -856,30 +813,11 @@ fn has_any_role<T: Eq + Hash + Ord>(roles: &BTreeSet<T>, allowed: &[T]) -> bool 
     allowed.iter().any(|r| roles.contains(r))
 }
 
-fn authorize_auth_card_permission(
-    auth_card: Option<&AuthCard>,
-    recipient: &RecipientPattern,
+fn authorize_effective_surface_permission(
+    effective_surface: &EffectiveSurface,
     target: &PermissionTarget,
 ) -> Result<(), AuthorizationError> {
-    let Some(auth_card) = auth_card else {
-        return Err(AuthorizationError::PermissionNotAllowed(Box::new(
-            target.clone(),
-        )));
-    };
-
-    let surface = EffectiveSurface::from_grants(
-        &auth_card.lower_positive,
-        &auth_card.lower_negative,
-        &auth_card.upper_positive,
-        &auth_card.upper_negative,
-        recipient,
-    )
-    .map_err(|error| AuthorizationError::PermissionEvaluationFailed {
-        target: Box::new(target.clone()),
-        error,
-    })?;
-
-    if surface.authorize(target).map_err(|error| {
+    if effective_surface.authorize(target).map_err(|error| {
         AuthorizationError::PermissionEvaluationFailed {
             target: Box::new(target.clone()),
             error,
@@ -1118,57 +1056,85 @@ mod test {
 mod protobuf {
     use super::AuthDetailsForEnvironment;
     use super::{
-        AdminImpersonationAuthCtx, AgentAuthCtx, AuthCard, AuthCtx, AuthorizationError, UserAuthCtx,
+        AdminImpersonationAuthCtx, AgentAuthCtx, AuthCtx, AuthorizationError, UserAuthCtx,
     };
     use golem_common::model::auth::{AccountRole, EnvironmentRole};
-    use golem_common::model::card::{CardId, PermissionPattern};
+    use golem_common::model::card::{CardId, EffectiveSurface, GrantSurface, PermissionTarget};
 
-    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthCard> for AuthCard {
-        type Error = String;
+    fn deserialize_effective_surface(
+        value: golem_api_grpc::proto::golem::auth::AuthEffectiveSurface,
+    ) -> Result<EffectiveSurface, String> {
+        Ok(EffectiveSurface {
+            source_card_ids: value
+                .source_card_ids
+                .into_iter()
+                .map(|id| CardId(id.into()))
+                .collect(),
+            lower: deserialize_grant_surfaces(value.lower)?,
+            upper: deserialize_grant_surfaces(value.upper)?,
+        })
+    }
 
-        fn try_from(
-            value: golem_api_grpc::proto::golem::auth::AuthCard,
-        ) -> Result<Self, Self::Error> {
-            Ok(Self {
-                card_id: CardId(value.card_id.ok_or("missing card_id")?.into()),
-                lower_positive: deserialize_permission_patterns(value.lower_positive)?,
-                lower_negative: deserialize_permission_patterns(value.lower_negative)?,
-                upper_positive: deserialize_permission_patterns(value.upper_positive)?,
-                upper_negative: deserialize_permission_patterns(value.upper_negative)?,
-            })
+    fn serialize_effective_surface(
+        value: EffectiveSurface,
+    ) -> golem_api_grpc::proto::golem::auth::AuthEffectiveSurface {
+        golem_api_grpc::proto::golem::auth::AuthEffectiveSurface {
+            source_card_ids: value
+                .source_card_ids
+                .into_iter()
+                .map(|id| id.0.into())
+                .collect(),
+            lower: serialize_grant_surfaces(value.lower),
+            upper: serialize_grant_surfaces(value.upper),
         }
     }
 
-    impl From<AuthCard> for golem_api_grpc::proto::golem::auth::AuthCard {
-        fn from(value: AuthCard) -> Self {
-            Self {
-                card_id: Some(value.card_id.0.into()),
-                lower_positive: serialize_permission_patterns(value.lower_positive),
-                lower_negative: serialize_permission_patterns(value.lower_negative),
-                upper_positive: serialize_permission_patterns(value.upper_positive),
-                upper_negative: serialize_permission_patterns(value.upper_negative),
-            }
-        }
-    }
-
-    fn serialize_permission_patterns(patterns: Vec<PermissionPattern>) -> Vec<Vec<u8>> {
-        patterns
+    fn serialize_grant_surfaces(
+        surfaces: Vec<GrantSurface>,
+    ) -> Vec<golem_api_grpc::proto::golem::auth::AuthGrantSurface> {
+        surfaces
             .into_iter()
-            .map(|pattern| {
-                desert_rust::serialize_to_byte_vec(&pattern)
-                    .expect("PermissionPattern Desert serialization failed")
+            .map(
+                |surface| golem_api_grpc::proto::golem::auth::AuthGrantSurface {
+                    positive: serialize_permission_targets(surface.positive),
+                    negative: serialize_permission_targets(surface.negative),
+                },
+            )
+            .collect()
+    }
+
+    fn deserialize_grant_surfaces(
+        values: Vec<golem_api_grpc::proto::golem::auth::AuthGrantSurface>,
+    ) -> Result<Vec<GrantSurface>, String> {
+        values
+            .into_iter()
+            .map(|surface| {
+                Ok(GrantSurface {
+                    positive: deserialize_permission_targets(surface.positive)?,
+                    negative: deserialize_permission_targets(surface.negative)?,
+                })
             })
             .collect()
     }
 
-    fn deserialize_permission_patterns(
+    fn serialize_permission_targets(patterns: Vec<PermissionTarget>) -> Vec<Vec<u8>> {
+        patterns
+            .into_iter()
+            .map(|pattern| {
+                desert_rust::serialize_to_byte_vec(&pattern)
+                    .expect("PermissionTarget Desert serialization failed")
+            })
+            .collect()
+    }
+
+    fn deserialize_permission_targets(
         values: Vec<Vec<u8>>,
-    ) -> Result<Vec<PermissionPattern>, String> {
+    ) -> Result<Vec<PermissionTarget>, String> {
         values
             .into_iter()
             .map(|value| {
                 desert_rust::deserialize(&value)
-                    .map_err(|err| format!("invalid permission pattern: {err}"))
+                    .map_err(|err| format!("invalid permission target: {err}"))
             })
             .collect()
     }
@@ -1221,16 +1187,16 @@ mod protobuf {
                 .account_roles()
                 .map(AccountRole::try_from)
                 .collect::<Result<_, _>>()?;
-            let auth_card = value.auth_card.map(AuthCard::try_from).transpose()?;
-            let token_root_card_id = auth_card.as_ref().map(|card| card.card_id);
+            let effective_surface = value
+                .effective_surface
+                .ok_or_else(|| "missing effective_surface".to_string())
+                .and_then(deserialize_effective_surface)?;
 
             Ok(Self {
                 account_roles,
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
                 account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
-                token_root_card_id,
-                account_holder: value.account_holder,
-                auth_card,
+                effective_surface,
             })
         }
     }
@@ -1245,8 +1211,7 @@ mod protobuf {
                     .into_iter()
                     .map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::from(ar).into())
                     .collect(),
-                account_holder: value.account_holder,
-                auth_card: value.auth_card.map(Into::into),
+                effective_surface: Some(serialize_effective_surface(value.effective_surface)),
             }
         }
     }
@@ -1286,8 +1251,10 @@ mod protobuf {
                         .and_then(AccountRole::try_from)
                 })
                 .collect::<Result<_, _>>()?;
-            let auth_card = value.auth_card.map(AuthCard::try_from).transpose()?;
-            let token_root_card_id = auth_card.as_ref().map(|card| card.card_id);
+            let effective_surface = value
+                .effective_surface
+                .ok_or_else(|| "missing effective_surface".to_string())
+                .and_then(deserialize_effective_surface)?;
 
             Ok(Self {
                 admin_account_id: value
@@ -1303,9 +1270,7 @@ mod protobuf {
                     .target_account_plan_id
                     .ok_or("missing target_account_plan_id")?
                     .try_into()?,
-                token_root_card_id,
-                target_account_holder: value.target_account_holder,
-                auth_card,
+                effective_surface,
             })
         }
     }
@@ -1323,8 +1288,7 @@ mod protobuf {
                     .map(|r| golem_api_grpc::proto::golem::auth::AccountRole::from(r).into())
                     .collect(),
                 target_account_plan_id: Some(value.target_account_plan_id.into()),
-                target_account_holder: value.target_account_holder,
-                auth_card: value.auth_card.map(Into::into),
+                effective_surface: Some(serialize_effective_surface(value.effective_surface)),
             }
         }
     }

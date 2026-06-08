@@ -109,6 +109,23 @@ macro_rules! define_same_variant_subsumes_target_match {
 
 card_permission_classes!(define_same_variant_subsumes_target_match);
 
+macro_rules! define_same_variant_target_subsumes_match {
+    ($($variant:ident: $class:ty,)+) => {
+        macro_rules! same_variant_target_subsumes_match {
+            ($left:expr, $right:expr) => {
+                match ($left, $right) {
+                    $(
+                        (Self::$variant(a), Self::$variant(b)) => a.subsumes(b),
+                    )+
+                    _ => false,
+                }
+            };
+        }
+    };
+}
+
+card_permission_classes!(define_same_variant_target_subsumes_match);
+
 macro_rules! define_recipient_match {
     ($($variant:ident: $class:ty,)+) => {
         macro_rules! recipient_match {
@@ -124,6 +141,26 @@ macro_rules! define_recipient_match {
 }
 
 card_permission_classes!(define_recipient_match);
+
+macro_rules! define_permission_pattern_to_target_match {
+    ($($variant:ident: $class:ty,)+) => {
+        macro_rules! permission_pattern_to_target_match {
+            ($self:expr) => {
+                match $self {
+                    $(
+                        PermissionPattern::$variant(pattern) => PermissionTarget::$variant(ClassPermissionTarget::<$class> {
+                            verb: pattern.verb,
+                            owner: pattern.owner.clone(),
+                            resource: pattern.resource.clone(),
+                        }),
+                    )+
+                }
+            };
+        }
+    };
+}
+
+card_permission_classes!(define_permission_pattern_to_target_match);
 
 impl PermissionPattern {
     pub fn class_name(&self) -> &'static str {
@@ -141,11 +178,19 @@ impl PermissionPattern {
     pub fn recipient(&self) -> &crate::model::card::recipient::RecipientPattern {
         recipient_match!(self)
     }
+
+    pub(crate) fn to_target(&self) -> PermissionTarget {
+        permission_pattern_to_target_match!(self)
+    }
 }
 
 impl PermissionTarget {
     pub fn class_name(&self) -> &'static str {
         class_name_match!(self)
+    }
+
+    pub fn subsumes(&self, other: &Self) -> bool {
+        same_variant_target_subsumes_match!(self, other)
     }
 }
 

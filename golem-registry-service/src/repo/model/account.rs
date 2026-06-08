@@ -43,8 +43,6 @@ pub struct AccountRecord {
 
     pub email: String,
     pub account_root_card_id: Option<Uuid>,
-    pub token_root_card_id: Option<Uuid>,
-    pub token_root_card_epoch: i64,
 
     #[sqlx(flatten)]
     pub audit: AuditFields,
@@ -104,8 +102,6 @@ impl AccountRevisionRecord {
 pub struct AccountExtRevisionRecord {
     pub entity_created_at: SqlDateTime,
     pub account_root_card_id: Option<Uuid>,
-    pub token_root_card_id: Option<Uuid>,
-    pub token_root_card_epoch: i64,
 
     #[sqlx(flatten)]
     pub revision: AccountRevisionRecord,
@@ -127,8 +123,6 @@ impl TryFrom<AccountExtRevisionRecord> for Account {
                     value.revision.account_id
                 ))
             })?),
-            token_root_card_id: value.token_root_card_id.map(CardId),
-            token_root_card_epoch: value.token_root_card_epoch.try_into()?,
         })
     }
 }
