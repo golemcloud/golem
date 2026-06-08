@@ -166,7 +166,7 @@ impl Drop for WorkerDir {
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use tokio_util::codec::{BytesCodec, FramedRead};
-use tracing::{Instrument, Level, debug, info, span, warn};
+use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
@@ -3408,18 +3408,30 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
             let agent_mode = worker.initial_worker_metadata.agent_mode;
-            let latest_worker_status = calculate_last_known_status_with_checkpoint(
+            // A running worker should always have a recoverable oplog (a `Create` entry), so a
+            // `None` here is an unexpected invariant violation (e.g. a corrupt/partially-deleted
+            // oplog). Isolate the failure to this one agent instead of aborting recovery of every
+            // other worker on this executor (which propagating would do — and would also fail
+            // executor startup or the shard-assignment RPC, since one poison worker could
+            // permanently block this executor from serving its shards).
+            let Some(latest_worker_status) = calculate_last_known_status_with_checkpoint(
                 this,
                 &owned_agent_id,
                 agent_mode,
                 worker.last_known_status,
             )
             .await
-            .expect("Failed to calculate worker status for existing worker");
+            else {
+                error!(
+                    agent_id = %owned_agent_id,
+                    "Failed to calculate worker status during shard-assignment recovery; skipping agent"
+                );
+                continue;
+            };
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
-            if should_restart_after_shard_assignment_change(&latest_worker_status) {
-                let _ = Worker::get_or_create_running(
+            if should_restart_after_shard_assignment_change(&latest_worker_status)
+                && let Err(err) = Worker::get_or_create_running(
                     this,
                     &owned_agent_id,
                     None,
@@ -3429,7 +3441,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     &InvocationContextStack::fresh(),
                     Principal::anonymous(),
                 )
-                .await?;
+                .await
+            {
+                // Same isolation rationale: don't let one worker that fails to restart abort
+                // recovery of the rest. It will be retried on demand on its next invocation.
+                error!(
+                    agent_id = %owned_agent_id,
+                    error = %err,
+                    "Failed to restart worker during shard-assignment recovery; skipping agent"
+                );
             }
         }
 
