@@ -10,29 +10,40 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use crate::custom_api::openapi::schema_mapping::create_schema_from_analysed_type;
-use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
-use golem_common::base_model::agent::{ElementSchema, HttpMethod};
-use golem_common::model::agent::DataSchema;
-use golem_service_base::custom_api::OpenApiSpecFormat;
-use golem_wasm::analysis::AnalysedType;
-use indexmap::IndexMap;
-use openapiv3::{
-    AdditionalProperties, ObjectType, Schema, SchemaData, SchemaKind, StringFormat, StringType,
-    Type, VariantOrUnknownOrEmpty,
+//! HTTP response protocol policy for the OpenAPI emitter.
+//!
+//! The status-code / content-type policy lives here (not in `SchemaType`):
+//! `unit` → 204, `option<T>` → 200 + 404, `result<ok, err>` → 200 / 500,
+//! `Text` → `text/plain` + `Content-Language`, `Binary` → selected media type,
+//! everything else → `application/json`. Schema bodies are rendered from the
+//! schema model via [`render_schema`]; CORS / webhook / OpenAPI-spec / OIDC
+//! routes carry no agent schema and produce fixed responses/headers.
+
+use super::route_schema::{ResponseModel, RouteSchema};
+use super::schema_mapping::{
+    arbitrary_binary_schema, render_schema, string_enum_schema, string_schema,
 };
+use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
+use golem_common::base_model::agent::HttpMethod;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::SchemaType;
+use golem_service_base::custom_api::OpenApiSpecFormat;
+use indexmap::IndexMap;
+use serde_json::{Map, Value};
+use std::collections::HashSet;
 
 pub enum ResponseBodyOpenApiSchema {
+    /// Opaque body rendered as `*/*` arbitrary binary.
     Unknown,
     Known {
-        schema: Box<Schema>,
+        schema: Value,
         content_type: String,
     },
     NoBody,
 }
 
 pub struct ResponseHeaderSchema {
-    pub schema: Schema,
+    pub schema: Value,
     pub required: bool,
 }
 
@@ -41,154 +52,35 @@ pub struct RouteResponseOpenApiSchema {
     pub headers: IndexMap<String, ResponseHeaderSchema>,
 }
 
-pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpenApiSchema {
+/// Compute the OpenAPI responses (and response headers) for a route.
+///
+/// `route_schema` carries the schema-model view of the route (produced by the
+/// boundary adapter); `graph` is the document-wide schema graph and
+/// `components` accumulates any `components/schemas` referenced by rendered
+/// response bodies.
+pub fn get_route_response_schema(
+    route: &RichCompiledRoute,
+    route_schema: &RouteSchema,
+    graph: &SchemaGraph,
+    components: &mut Map<String, Value>,
+) -> Result<RouteResponseOpenApiSchema, String> {
     let mut responses = IndexMap::new();
     let mut headers = IndexMap::new();
 
     match &route.behavior {
-        RichRouteBehaviour::CallAgent(call_agent_behaviour) => {
-            match &call_agent_behaviour.expected_agent_response {
-                DataSchema::Tuple(named_elements) => match named_elements.elements.len() {
-                    0 => {
-                        responses.insert(204, ResponseBodyOpenApiSchema::NoBody);
-                    }
-                    1 => {
-                        let element_schema = &named_elements.elements[0].schema;
-
-                        match element_schema {
-                            // based on response_mapping logic in the actual request_handler
-                            ElementSchema::ComponentModel(typ) => {
-                                if let AnalysedType::Option(opt) = &typ.element_type {
-                                    let inner_schema = create_schema_from_analysed_type(&opt.inner);
-                                    responses.insert(
-                                        200,
-                                        ResponseBodyOpenApiSchema::Known {
-                                            schema: Box::new(inner_schema),
-                                            content_type: "application/json".to_string(),
-                                        },
-                                    );
-                                    responses.insert(404, ResponseBodyOpenApiSchema::NoBody);
-                                } else if let AnalysedType::Result(res) = &typ.element_type {
-                                    if let Some(ok_type) = &res.ok {
-                                        let ok_schema = create_schema_from_analysed_type(ok_type);
-                                        responses.insert(
-                                            200,
-                                            ResponseBodyOpenApiSchema::Known {
-                                                schema: Box::new(ok_schema),
-                                                content_type: "application/json".to_string(),
-                                            },
-                                        );
-                                    } else {
-                                        responses.insert(204, ResponseBodyOpenApiSchema::Unknown);
-                                    }
-
-                                    if let Some(err_type) = &res.err {
-                                        let err_schema = create_schema_from_analysed_type(err_type);
-                                        responses.insert(
-                                            500,
-                                            ResponseBodyOpenApiSchema::Known {
-                                                schema: Box::new(err_schema),
-                                                content_type: "application/json".to_string(),
-                                            },
-                                        );
-                                    } else {
-                                        responses.insert(500, ResponseBodyOpenApiSchema::Unknown);
-                                    }
-                                } else {
-                                    let schema =
-                                        create_schema_from_analysed_type(&typ.element_type);
-                                    responses.insert(
-                                        200,
-                                        ResponseBodyOpenApiSchema::Known {
-                                            schema: Box::new(schema),
-                                            content_type: "application/json".to_string(),
-                                        },
-                                    );
-                                }
-                            }
-                            ElementSchema::UnstructuredBinary(binary_descriptor) => {
-                                let content_type = binary_descriptor
-                                    .restrictions
-                                    .as_ref()
-                                    .and_then(|types| types.first())
-                                    .map(|bt| bt.mime_type.clone())
-                                    .unwrap_or_else(|| "application/octet-stream".to_string());
-
-                                let schema = Schema {
-                                    schema_data: SchemaData::default(),
-                                    schema_kind: SchemaKind::Type(Type::String(StringType {
-                                        format: VariantOrUnknownOrEmpty::Item(StringFormat::Binary),
-                                        pattern: None,
-                                        enumeration: Vec::new(),
-                                        min_length: None,
-                                        max_length: None,
-                                    })),
-                                };
-                                responses.insert(
-                                    200,
-                                    ResponseBodyOpenApiSchema::Known {
-                                        schema: Box::new(schema),
-                                        content_type,
-                                    },
-                                );
-                            }
-                            ElementSchema::UnstructuredText(text_descriptor) => {
-                                let schema = Schema {
-                                    schema_data: SchemaData::default(),
-                                    schema_kind: SchemaKind::Type(Type::String(StringType {
-                                        format: VariantOrUnknownOrEmpty::Empty,
-                                        pattern: None,
-                                        enumeration: Vec::new(),
-                                        min_length: None,
-                                        max_length: None,
-                                    })),
-                                };
-                                responses.insert(
-                                    200,
-                                    ResponseBodyOpenApiSchema::Known {
-                                        schema: Box::new(schema),
-                                        content_type: "text/plain".to_string(),
-                                    },
-                                );
-
-                                // Optional Content-Language response header
-                                let allowed_languages: Vec<Option<String>> = text_descriptor
-                                    .restrictions
-                                    .as_ref()
-                                    .map(|types| {
-                                        types
-                                            .iter()
-                                            .map(|tt| Some(tt.language_code.clone()))
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
-
-                                let lang_schema = Schema {
-                                    schema_data: SchemaData::default(),
-                                    schema_kind: SchemaKind::Type(Type::String(StringType {
-                                        format: VariantOrUnknownOrEmpty::Empty,
-                                        pattern: None,
-                                        enumeration: allowed_languages,
-                                        min_length: None,
-                                        max_length: None,
-                                    })),
-                                };
-
-                                headers.insert(
-                                    "Content-Language".to_string(),
-                                    ResponseHeaderSchema {
-                                        schema: lang_schema,
-                                        required: false,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    _ => {
-                        responses.insert(200, ResponseBodyOpenApiSchema::Unknown);
-                    }
-                },
-                DataSchema::Multimodal(_) => {
+        RichRouteBehaviour::CallAgent(_) => {
+            let response = route_schema.call_agent.as_ref().map(|ca| &ca.response);
+            match response {
+                Some(ResponseModel::Unit) => {
+                    responses.insert(204, ResponseBodyOpenApiSchema::NoBody);
+                }
+                Some(ResponseModel::Single(ty)) => {
+                    classify_single_response(ty, graph, components, &mut responses, &mut headers)?;
+                }
+                // `Unknown` (multimodal / unexpected multi-element tuple) or a
+                // missing CallAgent model both map to an opaque 200 body, as in
+                // the legacy emitter.
+                Some(ResponseModel::Unknown) | None => {
                     responses.insert(200, ResponseBodyOpenApiSchema::Unknown);
                 }
             }
@@ -196,84 +88,35 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
         RichRouteBehaviour::CorsPreflight(cors_preflight_behaviour) => {
             responses.insert(204, ResponseBodyOpenApiSchema::NoBody);
 
-            let string_schema = Schema {
-                schema_data: Default::default(),
-                schema_kind: SchemaKind::Type(Type::String(StringType {
-                    format: VariantOrUnknownOrEmpty::Empty,
-                    pattern: None,
-                    enumeration: vec![],
-                    min_length: None,
-                    max_length: None,
-                })),
-            };
+            for name in [
+                "Access-Control-Allow-Origin",
+                "Access-Control-Allow-Headers",
+                "Access-Control-Allow-Credentials",
+            ] {
+                headers.insert(
+                    name.to_string(),
+                    ResponseHeaderSchema {
+                        schema: string_schema(),
+                        required: true,
+                    },
+                );
+            }
 
-            headers.insert(
-                "Access-Control-Allow-Origin".to_string(),
-                ResponseHeaderSchema {
-                    schema: string_schema.clone(),
-                    required: true,
-                },
-            );
-
-            headers.insert(
-                "Access-Control-Allow-Headers".to_string(),
-                ResponseHeaderSchema {
-                    schema: string_schema.clone(),
-                    required: true,
-                },
-            );
-
-            headers.insert(
-                "Access-Control-Allow-Credentials".to_string(),
-                ResponseHeaderSchema {
-                    schema: string_schema.clone(),
-                    required: true,
-                },
-            );
-
-            let allowed_methods: Vec<_> = cors_preflight_behaviour
+            let allowed_methods: Vec<String> = cors_preflight_behaviour
                 .method_policies
                 .iter()
-                .map(|policy| &policy.method)
-                .collect();
-
-            let allowed_methods_enum: Vec<Option<String>> = allowed_methods
-                .into_iter()
-                .map(|m| {
-                    Some(match m {
-                        HttpMethod::Get(_) => "GET".to_string(),
-                        HttpMethod::Head(_) => "HEAD".to_string(),
-                        HttpMethod::Post(_) => "POST".to_string(),
-                        HttpMethod::Put(_) => "PUT".to_string(),
-                        HttpMethod::Delete(_) => "DELETE".to_string(),
-                        HttpMethod::Connect(_) => "CONNECT".to_string(),
-                        HttpMethod::Options(_) => "OPTIONS".to_string(),
-                        HttpMethod::Trace(_) => "TRACE".to_string(),
-                        HttpMethod::Patch(_) => "PATCH".to_string(),
-                        HttpMethod::Custom(custom) => custom.value.to_uppercase(),
-                    })
-                })
+                .map(|policy| http_method_name(&policy.method))
                 .collect();
 
             headers.insert(
                 "Access-Control-Allow-Methods".to_string(),
                 ResponseHeaderSchema {
-                    schema: Schema {
-                        schema_data: Default::default(),
-                        schema_kind: SchemaKind::Type(Type::String(StringType {
-                            format: VariantOrUnknownOrEmpty::Empty,
-                            pattern: None,
-                            enumeration: allowed_methods_enum,
-                            min_length: None,
-                            max_length: None,
-                        })),
-                    },
+                    schema: string_enum_schema(&allowed_methods),
                     required: true,
                 },
             );
         }
         RichRouteBehaviour::WebhookCallback(_) => {
-            // based on runtime behaviour of webhook
             responses.insert(204, ResponseBodyOpenApiSchema::NoBody);
             responses.insert(404, ResponseBodyOpenApiSchema::NoBody);
         }
@@ -282,57 +125,176 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                 OpenApiSpecFormat::Json => "application/json".to_string(),
                 OpenApiSpecFormat::Yaml => "application/yaml".to_string(),
             };
-
-            let schema = openapiv3::Schema {
-                schema_data: Default::default(),
-                schema_kind: SchemaKind::Type(Type::Object(ObjectType {
-                    properties: Default::default(),
-                    required: Default::default(),
-                    additional_properties: Some(AdditionalProperties::Any(true)),
-                    min_properties: None,
-                    max_properties: None,
-                })),
-            };
-
             responses.insert(
                 200,
                 ResponseBodyOpenApiSchema::Known {
-                    schema: Box::new(schema),
+                    schema: serde_json::json!({
+                        "type": "object",
+                        "additionalProperties": true,
+                    }),
                     content_type,
                 },
             );
         }
         RichRouteBehaviour::OidcCallback(_) => {
-            let string_schema = Schema {
-                schema_data: Default::default(),
-                schema_kind: SchemaKind::Type(Type::String(StringType {
-                    format: VariantOrUnknownOrEmpty::Empty,
-                    pattern: None,
-                    enumeration: vec![],
-                    min_length: None,
-                    max_length: None,
-                })),
-            };
-
+            // Preserves the legacy emitter behaviour: only response headers are
+            // described and no status code is registered, so the rendered
+            // operation ends up with an empty `responses` object (the headers
+            // are attached per status code and there are none). This is an
+            // existing quirk kept intact by the schema-model migration.
             headers.insert(
                 "Set-Cookie".to_string(),
                 ResponseHeaderSchema {
-                    schema: string_schema.clone(),
+                    schema: string_schema(),
                     required: true,
                 },
             );
             headers.insert(
                 "Location".to_string(),
                 ResponseHeaderSchema {
-                    schema: string_schema,
+                    schema: string_schema(),
                     required: true,
                 },
             );
         }
     }
 
-    RouteResponseOpenApiSchema {
+    Ok(RouteResponseOpenApiSchema {
         body_and_status_codes: responses,
         headers,
+    })
+}
+
+/// Apply the response protocol policy to a single typed output.
+fn classify_single_response(
+    ty: &SchemaType,
+    graph: &SchemaGraph,
+    components: &mut Map<String, Value>,
+    responses: &mut IndexMap<u16, ResponseBodyOpenApiSchema>,
+    headers: &mut IndexMap<String, ResponseHeaderSchema>,
+) -> Result<(), String> {
+    match resolve_top_ref(graph, ty) {
+        SchemaType::Option { inner, .. } => {
+            let schema = render_schema(graph, inner, components)?;
+            responses.insert(
+                200,
+                ResponseBodyOpenApiSchema::Known {
+                    schema,
+                    content_type: "application/json".to_string(),
+                },
+            );
+            responses.insert(404, ResponseBodyOpenApiSchema::NoBody);
+        }
+        SchemaType::Result { spec, .. } => {
+            match &spec.ok {
+                Some(ok) => {
+                    let schema = render_schema(graph, ok, components)?;
+                    responses.insert(
+                        200,
+                        ResponseBodyOpenApiSchema::Known {
+                            schema,
+                            content_type: "application/json".to_string(),
+                        },
+                    );
+                }
+                None => {
+                    responses.insert(204, ResponseBodyOpenApiSchema::Unknown);
+                }
+            }
+            match &spec.err {
+                Some(err) => {
+                    let schema = render_schema(graph, err, components)?;
+                    responses.insert(
+                        500,
+                        ResponseBodyOpenApiSchema::Known {
+                            schema,
+                            content_type: "application/json".to_string(),
+                        },
+                    );
+                }
+                None => {
+                    responses.insert(500, ResponseBodyOpenApiSchema::Unknown);
+                }
+            }
+        }
+        SchemaType::Binary { restrictions, .. } => {
+            let content_type = restrictions
+                .mime_types
+                .as_ref()
+                .and_then(|types| types.first())
+                .cloned()
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            responses.insert(
+                200,
+                ResponseBodyOpenApiSchema::Known {
+                    schema: arbitrary_binary_schema(),
+                    content_type,
+                },
+            );
+        }
+        SchemaType::Text { restrictions, .. } => {
+            responses.insert(
+                200,
+                ResponseBodyOpenApiSchema::Known {
+                    schema: string_schema(),
+                    content_type: "text/plain".to_string(),
+                },
+            );
+            let languages = restrictions.languages.clone().unwrap_or_default();
+            headers.insert(
+                "Content-Language".to_string(),
+                ResponseHeaderSchema {
+                    schema: string_enum_schema(&languages),
+                    required: false,
+                },
+            );
+        }
+        _ => {
+            // Render the original `ty` (not the ref-resolved body) so a named
+            // type keeps its `$ref` and is emitted once into components.
+            let schema = render_schema(graph, ty, components)?;
+            responses.insert(
+                200,
+                ResponseBodyOpenApiSchema::Known {
+                    schema,
+                    content_type: "application/json".to_string(),
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Follow a chain of `Ref`s against `graph` and return the first non-`Ref`
+/// type (or the last `Ref` if it dangles / cycles). Top-level `option` /
+/// `result` / `text` / `binary` outputs are anonymous in practice, but
+/// resolving keeps the classifier robust to named aliases.
+fn resolve_top_ref<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> &'a SchemaType {
+    let mut current = ty;
+    let mut visited: HashSet<_> = HashSet::new();
+    while let SchemaType::Ref { id, .. } = current {
+        if !visited.insert(id.clone()) {
+            break;
+        }
+        match graph.lookup(id) {
+            Some(def) => current = &def.body,
+            None => break,
+        }
+    }
+    current
+}
+
+fn http_method_name(method: &HttpMethod) -> String {
+    match method {
+        HttpMethod::Get(_) => "GET".to_string(),
+        HttpMethod::Head(_) => "HEAD".to_string(),
+        HttpMethod::Post(_) => "POST".to_string(),
+        HttpMethod::Put(_) => "PUT".to_string(),
+        HttpMethod::Delete(_) => "DELETE".to_string(),
+        HttpMethod::Connect(_) => "CONNECT".to_string(),
+        HttpMethod::Options(_) => "OPTIONS".to_string(),
+        HttpMethod::Trace(_) => "TRACE".to_string(),
+        HttpMethod::Patch(_) => "PATCH".to_string(),
+        HttpMethod::Custom(custom) => custom.value.to_uppercase(),
     }
 }
