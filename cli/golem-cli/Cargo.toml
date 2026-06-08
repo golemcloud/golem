@@ -34,6 +34,7 @@ golem-common = { workspace = true, default-features = true }
 golem-wasm = { workspace = true, default-features = true }
 
 # External deps
+ansi-to-tui = { workspace = true }
 anyhow = { workspace = true }
 applying = { workspace = true }
 async-trait = { workspace = true }

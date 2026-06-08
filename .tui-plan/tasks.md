@@ -54,7 +54,7 @@ Rules:
 - [x] Define focus model.
 - [ ] Define notification/status model.
 - [x] Implement tab strip.
-- [ ] Implement current-view help/shortcut overlay.
+- [x] Implement current-view help/shortcut overlay.
 - [x] Define `TuiAction` registry.
 - [ ] Add command availability reasons.
 - [x] Add direct internal action execution mode.
@@ -79,12 +79,30 @@ Rules:
 
 ## Phase 5: Nested CLI Jobs
 
-- [ ] Implement nested process model.
-- [ ] Implement piped command output capture.
-- [ ] Implement PTY command output capture.
-- [ ] Route input to focused PTY job.
-- [ ] Preserve per-job environment flags.
-- [ ] Redraw from nested CLI output events, not polling.
+- [x] Modernize header/body/output borders.
+- [x] Hide command input row when it is not relevant.
+- [x] Stabilize Output view layout and reduce command/footer reflow.
+- [x] Add command status spinner while nested commands are running.
+- [x] Run build/deploy through PTY-backed nested CLI commands.
+- [x] Add command interaction mode.
+- [x] Implement nested process model.
+- [-] Implement piped command output capture.
+- [x] Implement PTY command output capture.
+- [x] Route input to focused PTY job.
+- [x] Preserve per-job command options and environment overrides.
+- [x] Redraw from nested CLI output events, not polling.
+- [x] Preserve colored output in Output view.
+- [x] Auto-follow output and allow scrollback.
+- [x] Add key and mouse output scrolling with scrollbar.
+- [x] Add native cursor placement for command interaction input.
+- [x] Compact command status to one line.
+- [x] Keep yes/reset flag state visible in the footer.
+- [x] Support Ctrl-C/Esc cancel and force-kill escalation.
+- [x] Add build/deploy option toggles.
+- [x] Add clean nested CLI command.
+- [x] Improve command shortcut and flag hints.
+- [x] Fix output scroll-top viewport behavior.
+- [ ] Replace line-oriented PTY output with terminal-screen emulation for inline cursor rendering.
 
 ## Phase 6: REPL
 

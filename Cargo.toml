@@ -51,6 +51,7 @@ golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-ex
 golem-worker-service = { path = "golem-worker-service" }
 
 
+ansi-to-tui = "8.0.1"
 anyhow = "1.0.97"
 applying = "1.0.1"
 arc-swap = "1.9.1"

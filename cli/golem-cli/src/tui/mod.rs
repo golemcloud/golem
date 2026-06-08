@@ -13,6 +13,18 @@
 // limitations under the License.
 
 mod app;
+mod nested_cli;
 mod terminal;
 
+use crossterm::event::Event;
+use nested_cli::CommandExit;
+
 pub use app::run;
+
+enum TuiEvent {
+    Terminal(Event),
+    CommandOutput(Vec<u8>),
+    CommandOutputClosed(Option<String>),
+    CommandExited(CommandExit),
+    SpinnerTick(u64),
+}

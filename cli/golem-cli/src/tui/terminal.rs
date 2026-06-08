@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crossterm::cursor::{Hide, Show};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -29,7 +30,7 @@ impl TerminalGuard {
     pub fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, Hide) {
+        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture, Hide) {
             let _ = disable_raw_mode();
             return Err(error.into());
         }
@@ -39,13 +40,23 @@ impl TerminalGuard {
             Ok(terminal) => terminal,
             Err(error) => {
                 let _ = disable_raw_mode();
-                let _ = execute!(std::io::stdout(), Show, LeaveAlternateScreen);
+                let _ = execute!(
+                    std::io::stdout(),
+                    Show,
+                    DisableMouseCapture,
+                    LeaveAlternateScreen
+                );
                 return Err(error.into());
             }
         };
         if let Err(error) = terminal.clear() {
             let _ = disable_raw_mode();
-            let _ = execute!(terminal.backend_mut(), Show, LeaveAlternateScreen);
+            let _ = execute!(
+                terminal.backend_mut(),
+                Show,
+                DisableMouseCapture,
+                LeaveAlternateScreen
+            );
             return Err(error.into());
         }
 
@@ -64,6 +75,11 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), Show, LeaveAlternateScreen);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            Show,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
     }
 }
