@@ -14,6 +14,8 @@
 
 use crate::Tracing;
 use futures::FutureExt;
+use golem_common::model::account::AccountId;
+use golem_common::model::card::{CardId, CardManagedBy};
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
@@ -30,6 +32,7 @@ use golem_registry_service::repo::model::application::{
     ApplicationExtRevisionRecord, ApplicationRevisionRecord,
 };
 use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
+use golem_registry_service::repo::model::card::CardRecord;
 use golem_registry_service::repo::model::environment::{
     EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
 };
@@ -188,15 +191,30 @@ impl Deps {
     pub async fn create_account_with_email(&self, email: &str) -> AccountExtRevisionRecord {
         let account_id = new_repo_uuid();
         self.account_repo
-            .create(AccountRevisionRecord {
-                account_id,
-                revision_id: 0,
-                email: email.to_string(),
-                audit: DeletableRevisionAuditFields::new(account_id),
-                name: format!("Test Account {account_id}"),
-                plan_id: self.test_plan_id(),
-                roles: 0,
-            })
+            .create(
+                AccountRevisionRecord {
+                    account_id,
+                    revision_id: 0,
+                    email: email.to_string(),
+                    audit: DeletableRevisionAuditFields::new(account_id),
+                    name: format!("Test Account {account_id}"),
+                    plan_id: self.test_plan_id(),
+                    roles: 0,
+                },
+                CardRecord::creation(
+                    CardId(new_repo_uuid()),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    true,
+                    Some(CardManagedBy::AccountRoot {
+                        account_id: AccountId(account_id),
+                    }),
+                ),
+            )
             .await
             .unwrap()
     }

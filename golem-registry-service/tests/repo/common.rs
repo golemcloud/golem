@@ -23,6 +23,7 @@ use golem_common::model::agent::{
     Snapshotting,
 };
 use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::card::{CardId, CardManagedBy};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment_share::EnvironmentShareId;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
@@ -37,6 +38,7 @@ use golem_registry_service::repo::model::application::{
 use golem_registry_service::repo::model::audit::{
     DeletableRevisionAuditFields, ImmutableAuditFields,
 };
+use golem_registry_service::repo::model::card::CardRecord;
 use golem_registry_service::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use golem_registry_service::repo::model::deployment::{
     DeploymentRegisteredAgentTypeRecord, DeploymentRevisionCreationRecord,
@@ -79,20 +81,27 @@ pub async fn test_create_and_get_account(deps: &Deps) {
         plan_id: deps.test_plan_id(),
     };
 
-    let created_account = deps.account_repo.create(account.clone()).await.unwrap();
+    let created_account = deps
+        .account_repo
+        .create(account.clone(), test_account_root_card(account.account_id))
+        .await
+        .unwrap();
     compare_created_to_requested_account(&account, &created_account);
 
     let result_for_same_email = deps
         .account_repo
-        .create(AccountRevisionRecord {
-            account_id: new_repo_uuid(),
-            revision_id: 0,
-            email: account.email.clone(),
-            audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
-            name: new_repo_uuid().to_string(),
-            roles: 0,
-            plan_id: deps.test_plan_id(),
-        })
+        .create(
+            AccountRevisionRecord {
+                account_id: new_repo_uuid(),
+                revision_id: 0,
+                email: account.email.clone(),
+                audit: DeletableRevisionAuditFields::new(new_repo_uuid()),
+                name: new_repo_uuid().to_string(),
+                roles: 0,
+                plan_id: deps.test_plan_id(),
+            },
+            test_account_root_card(new_repo_uuid()),
+        )
         .await;
     let_assert!(Err(AccountRepoError::AccountViolatesUniqueness) = result_for_same_email);
 
@@ -124,7 +133,11 @@ pub async fn test_update(deps: &Deps) {
         plan_id: deps.test_plan_id(),
     };
 
-    let created_account = deps.account_repo.create(account.clone()).await.unwrap();
+    let created_account = deps
+        .account_repo
+        .create(account.clone(), test_account_root_card(account.account_id))
+        .await
+        .unwrap();
     compare_created_to_requested_account(&account, &created_account);
 
     let updated_account = AccountRevisionRecord {
@@ -1124,6 +1137,22 @@ fn compare_created_to_requested_account(
     assert!(created.revision.name == requested.name);
     assert!(created.revision.email == requested.email);
     assert!(created.revision.roles == requested.roles)
+}
+
+fn test_account_root_card(account_id: Uuid) -> CardRecord {
+    CardRecord::creation(
+        CardId(new_repo_uuid()),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        true,
+        Some(CardManagedBy::AccountRoot {
+            account_id: golem_common::model::account::AccountId(account_id),
+        }),
+    )
 }
 
 // resolve_agent_type_by_names tests ---------------------------------------------------------------

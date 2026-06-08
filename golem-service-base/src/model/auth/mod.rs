@@ -179,7 +179,6 @@ pub enum AccountAction {
     DeleteToken,
     ListAllApplicationEnvironments,
     RegisterPlugin,
-    SetRoles,
     SetPlan,
     UpdateAccount,
     UpdateApplication,
@@ -488,9 +487,7 @@ impl AuthCtx {
         action: AccountAction,
     ) -> Result<(), AuthorizationError> {
         let is_allowed = match action {
-            AccountAction::SetPlan | AccountAction::SetRoles => {
-                self.has_any_account_role(&[AccountRole::Admin])
-            }
+            AccountAction::SetPlan => self.has_any_account_role(&[AccountRole::Admin]),
             _ => {
                 (self.access_account_id() == target_account_id)
                     || self.has_any_account_role(&[AccountRole::Admin])
