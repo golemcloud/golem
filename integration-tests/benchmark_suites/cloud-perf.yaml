@@ -57,22 +57,17 @@ benchmarks:
   # with no warm compiled artefact available.
   # size   = number of unique components created (each in its own env)
   # length = seconds to wait per component for pre-compilation warm-up
-  # NOTE: each unit here is a UNIQUE component, so size scales compilations
-  # (compilation-service + S3 cache load), not worker density. Kept at max 20:
-  # cold-start latency is already characterized there, and the cache-enabled
-  # warmup sleeps length*size seconds per run, so larger sizes mostly add idle
-  # wait rather than signal.
   - name: cold-start-unknown-small
     iterations: 3
     clusterSize: [2]
-    size: [1, 5, 10, 20]
+    size: [1, 5, 10, 25, 50]
     length: [2]
     disableCompilationCache: true
 
   - name: cold-start-unknown-medium
     iterations: 3
     clusterSize: [2]
-    size: [1, 5, 10, 20]
+    size: [1, 5, 10, 25, 50]
     length: [5]
     disableCompilationCache: true
 
@@ -85,13 +80,13 @@ benchmarks:
   - name: cold-start-unknown-small
     iterations: 3
     clusterSize: [2]
-    size: [1, 5, 10, 20]
+    size: [1, 5, 10, 25, 50]
     length: [2]
 
   - name: cold-start-unknown-medium
     iterations: 3
     clusterSize: [2]
-    size: [1, 5, 10, 20]
+    size: [1, 5, 10, 25, 50]
     length: [5]
 
   # Invocation latency — hot and cold paths through the Gateway NLB.
