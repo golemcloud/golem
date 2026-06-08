@@ -161,13 +161,6 @@ impl TokenService {
                 other => other.into(),
             })?;
 
-        authorize_account_token_permission(
-            auth,
-            &account.email,
-            AccountTokenVerb::View,
-            AccountTokenResourcePattern::Any,
-        )?;
-
         let tokens: Vec<TokenWithSecret> = self
             .token_repo
             .get_by_account(account_id.0)
@@ -176,7 +169,18 @@ impl TokenService {
             .map(|r| r.into())
             .collect();
 
-        Ok(tokens)
+        Ok(tokens
+            .into_iter()
+            .filter(|token| {
+                authorize_account_token_permission(
+                    auth,
+                    &account.email,
+                    AccountTokenVerb::View,
+                    AccountTokenResourcePattern::Token(token.id),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn create(

@@ -204,13 +204,6 @@ impl EnvironmentPluginGrantService {
                 other => other.into(),
             })?;
 
-        authorize_environment_plugin_grant_permission(
-            auth,
-            &environment,
-            EnvironmentPluginGrantVerb::View,
-            EnvironmentPluginGrantResourcePattern::Any,
-        )?;
-
         let grants: Vec<EnvironmentPluginGrantWithDetails> = self
             .environment_plugin_grant_repo
             .list_by_environment(environment_id.0)
@@ -219,7 +212,20 @@ impl EnvironmentPluginGrantService {
             .map(|r| r.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(grants)
+        Ok(grants
+            .into_iter()
+            .filter(|grant| {
+                authorize_environment_plugin_grant_permission(
+                    auth,
+                    &environment,
+                    EnvironmentPluginGrantVerb::View,
+                    EnvironmentPluginGrantResourcePattern::Name(EnvironmentPluginGrantName(
+                        grant.plugin.name.clone(),
+                    )),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn get_by_id(

@@ -228,13 +228,6 @@ impl PluginRegistrationService {
                     other => other.into(),
                 })?;
 
-        authorize_account_plugin_permission(
-            auth,
-            &account.email,
-            AccountPluginVerb::View,
-            AccountPluginResourcePattern::Any,
-        )?;
-
         let plugins: Vec<PluginRegistration> = self
             .plugin_repo
             .list_by_account(account_id.0)
@@ -243,7 +236,18 @@ impl PluginRegistrationService {
             .map(|r| r.try_into())
             .collect::<Result<_, _>>()?;
 
-        Ok(plugins)
+        Ok(plugins
+            .into_iter()
+            .filter(|plugin| {
+                authorize_account_plugin_permission(
+                    auth,
+                    &account.email,
+                    AccountPluginVerb::View,
+                    AccountPluginResourcePattern::Name(AccountPluginName(plugin.name.clone())),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     async fn validate_oplog_processor_plugin(

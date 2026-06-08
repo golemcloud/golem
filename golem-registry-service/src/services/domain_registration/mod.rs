@@ -212,13 +212,6 @@ impl DomainRegistrationService {
                 other => other.into(),
             })?;
 
-        authorize_domain_registration_permission(
-            auth,
-            &environment,
-            None,
-            EnvironmentDomainRegistrationVerb::View,
-        )?;
-
         let domain_registrations: Vec<DomainRegistration> = self
             .domain_registration_repo
             .list_by_environment(environment_id.0)
@@ -227,7 +220,18 @@ impl DomainRegistrationService {
             .map(|r| r.into())
             .collect();
 
-        Ok(domain_registrations)
+        Ok(domain_registrations
+            .into_iter()
+            .filter(|domain_registration| {
+                authorize_domain_registration_permission(
+                    auth,
+                    &environment,
+                    Some(&domain_registration.domain),
+                    EnvironmentDomainRegistrationVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     async fn get_by_id_with_environment(

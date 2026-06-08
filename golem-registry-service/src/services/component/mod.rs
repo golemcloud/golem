@@ -213,14 +213,7 @@ impl ComponentService {
     ) -> Result<Vec<Component>, ComponentError> {
         info!(environment_id = %environment.id, "Get staged components");
 
-        authorize_component_permission(
-            auth,
-            environment,
-            ComponentVerb::View,
-            ComponentResourcePattern::Any,
-        )?;
-
-        let result = self
+        let result: Vec<Component> = self
             .component_repo
             .list_staged(environment.id.0)
             .await?
@@ -236,7 +229,20 @@ impl ComponentService {
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(result)
+        Ok(result
+            .into_iter()
+            .filter(|component: &Component| {
+                authorize_component_permission(
+                    auth,
+                    environment,
+                    ComponentVerb::View,
+                    ComponentResourcePattern::Component(CardComponentName(
+                        component.component_name.0.clone(),
+                    )),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn get_staged_component_by_name(
@@ -363,14 +369,7 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        authorize_component_permission(
-            auth,
-            &environment,
-            ComponentVerb::View,
-            ComponentResourcePattern::Any,
-        )?;
-
-        let result = self
+        let result: Vec<Component> = self
             .component_repo
             .list_by_deployment(environment_id.0, deployment_revision.into())
             .await?
@@ -386,7 +385,20 @@ impl ComponentService {
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(result)
+        Ok(result
+            .into_iter()
+            .filter(|component: &Component| {
+                authorize_component_permission(
+                    auth,
+                    &environment,
+                    ComponentVerb::View,
+                    ComponentResourcePattern::Component(CardComponentName(
+                        component.component_name.0.clone(),
+                    )),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn get_deployment_component_by_name(

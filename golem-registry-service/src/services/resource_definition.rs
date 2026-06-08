@@ -415,13 +415,6 @@ impl ResourceDefinitionService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<ResourceDefinition>, ResourceDefinitionError> {
-        authorize_resource_definition_permission(
-            auth,
-            environment,
-            None,
-            EnvironmentResourceDefinitionVerb::View,
-        )?;
-
         let resource_definitions: Vec<ResourceDefinition> = self
             .resource_definition_repo
             .list_in_environment(environment.id.0)
@@ -430,7 +423,18 @@ impl ResourceDefinitionService {
             .map(TryInto::try_into)
             .collect::<Result<_, _>>()?;
 
-        Ok(resource_definitions)
+        Ok(resource_definitions
+            .into_iter()
+            .filter(|resource_definition| {
+                authorize_resource_definition_permission(
+                    auth,
+                    environment,
+                    Some(&resource_definition.name),
+                    EnvironmentResourceDefinitionVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     async fn get_with_environment(

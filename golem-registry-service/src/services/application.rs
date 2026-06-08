@@ -320,13 +320,6 @@ impl ApplicationService {
                 )))
             })?;
 
-        authorize_application_permission(
-            auth,
-            &account.email,
-            ApplicationVerb::View,
-            ApplicationResourcePattern::Any,
-        )?;
-
         let result = self
             .application_repo
             .list_by_owner(account_id.0)
@@ -335,7 +328,20 @@ impl ApplicationService {
             .map(|r| r.try_into_model(account.email.clone()))
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(result)
+        Ok(result
+            .into_iter()
+            .filter(|application| {
+                authorize_application_permission(
+                    auth,
+                    &account.email,
+                    ApplicationVerb::View,
+                    ApplicationResourcePattern::Application(CardApplicationName(
+                        application.name.0.clone(),
+                    )),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 }
 

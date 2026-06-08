@@ -357,14 +357,7 @@ impl SecuritySchemeService {
                 other => other.into(),
             })?;
 
-        authorize_security_scheme_permission(
-            auth,
-            &environment,
-            None,
-            EnvironmentSecuritySchemeVerb::View,
-        )?;
-
-        let result = self
+        let security_schemes: Vec<SecurityScheme> = self
             .security_scheme_repo
             .get_for_environment(environment_id.0)
             .await?
@@ -372,7 +365,18 @@ impl SecuritySchemeService {
             .map(|r| r.try_into())
             .collect::<Result<_, _>>()?;
 
-        Ok(result)
+        Ok(security_schemes
+            .into_iter()
+            .filter(|security_scheme: &SecurityScheme| {
+                authorize_security_scheme_permission(
+                    auth,
+                    &environment,
+                    Some(&security_scheme.name),
+                    EnvironmentSecuritySchemeVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn get_security_scheme_for_environment_and_name(

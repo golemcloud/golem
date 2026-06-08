@@ -266,16 +266,20 @@ impl RetryPolicyService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<StoredRetryPolicy>, RetryPolicyError> {
-        authorize_retry_policy_permission(
-            auth,
-            environment,
-            None,
-            EnvironmentRetryPolicyVerb::View,
-        )?;
-
         let result = self.list_in_environment_unchecked(environment.id).await?;
 
-        Ok(result)
+        Ok(result
+            .into_iter()
+            .filter(|retry_policy| {
+                authorize_retry_policy_permission(
+                    auth,
+                    environment,
+                    Some(&retry_policy.name),
+                    EnvironmentRetryPolicyVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn list_in_environment_unchecked(

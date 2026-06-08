@@ -400,13 +400,6 @@ impl McpDeploymentService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<McpDeployment>, McpDeploymentError> {
-        authorize_mcp_deployment_permission(
-            auth,
-            environment,
-            None,
-            EnvironmentMcpDeploymentVerb::View,
-        )?;
-
         let mcp_deployments: Vec<McpDeployment> = self
             .mcp_deployment_repo
             .list_staged(environment.id.0)
@@ -415,7 +408,18 @@ impl McpDeploymentService {
             .map(|r| r.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(mcp_deployments)
+        Ok(mcp_deployments
+            .into_iter()
+            .filter(|mcp_deployment| {
+                authorize_mcp_deployment_permission(
+                    auth,
+                    environment,
+                    Some(&mcp_deployment.domain),
+                    EnvironmentMcpDeploymentVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn get_staged_by_domain(
@@ -543,13 +547,6 @@ impl McpDeploymentService {
                 other => other.into(),
             })?;
 
-        authorize_mcp_deployment_permission(
-            auth,
-            &environment,
-            None,
-            EnvironmentMcpDeploymentVerb::View,
-        )?;
-
         let mcp_deployments: Vec<McpDeployment> = self
             .mcp_deployment_repo
             .list_by_deployment(environment_id.0, deployment_revision.into())
@@ -558,6 +555,17 @@ impl McpDeploymentService {
             .map(|r| r.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(mcp_deployments)
+        Ok(mcp_deployments
+            .into_iter()
+            .filter(|mcp_deployment| {
+                authorize_mcp_deployment_permission(
+                    auth,
+                    &environment,
+                    Some(&mcp_deployment.domain),
+                    EnvironmentMcpDeploymentVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 }

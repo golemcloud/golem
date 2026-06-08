@@ -376,16 +376,20 @@ impl AgentSecretService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<AgentSecret>, AgentSecretError> {
-        authorize_agent_secret_permission(
-            auth,
-            environment,
-            None,
-            EnvironmentAgentSecretVerb::View,
-        )?;
-
         let result = self.list_in_environment_unchecked(environment.id).await?;
 
-        Ok(result)
+        Ok(result
+            .into_iter()
+            .filter(|agent_secret| {
+                authorize_agent_secret_permission(
+                    auth,
+                    environment,
+                    Some(&agent_secret.path.0),
+                    EnvironmentAgentSecretVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     // list in environment without checking auth / confirming the environment is not deleted.

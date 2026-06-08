@@ -349,15 +349,7 @@ impl EnvironmentService {
                 other => other.into(),
             })?;
 
-        authorize_environment_permission(
-            auth,
-            &application.account_email,
-            &application.name,
-            EnvironmentVerb::View,
-            EnvironmentResourcePattern::Any,
-        )?;
-
-        Ok(self
+        let environments = self
             .environment_repo
             .list_by_app(application_id.0)
             .await?
@@ -369,7 +361,14 @@ impl EnvironmentService {
                     application.account_email.clone(),
                 )
             })
-            .collect::<Result<Vec<_>, _>>()?)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(environments
+            .into_iter()
+            .filter(|environment| {
+                authorize_environment_model(auth, environment, EnvironmentVerb::View).is_ok()
+            })
+            .collect())
     }
 
     pub async fn list_visible_environments(

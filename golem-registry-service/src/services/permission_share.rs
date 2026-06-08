@@ -339,19 +339,27 @@ impl PermissionShareService {
         auth: &AuthCtx,
     ) -> Result<Vec<PermissionShare>, PermissionShareError> {
         let owner_account = self.get_account(owner_account_id).await?;
-        authorize_permission_share_permission(
-            auth,
-            &owner_account.email,
-            AccountPermissionShareVerb::View,
-            AccountPermissionShareResourcePattern::Any,
-        )?;
 
-        self.permission_share_repo
+        let shares = self
+            .permission_share_repo
             .get_for_owner(owner_account_id.0)
             .await?
             .into_iter()
             .map(|record| record.try_into().map_err(Into::into))
-            .collect()
+            .collect::<Result<Vec<_>, PermissionShareError>>()?;
+
+        Ok(shares
+            .into_iter()
+            .filter(|share: &PermissionShare| {
+                authorize_permission_share_permission(
+                    auth,
+                    &owner_account.email,
+                    AccountPermissionShareVerb::View,
+                    AccountPermissionShareResourcePattern::Name(share.name.clone()),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn get_for_target(
@@ -360,19 +368,27 @@ impl PermissionShareService {
         auth: &AuthCtx,
     ) -> Result<Vec<PermissionShare>, PermissionShareError> {
         let target_account = self.get_account(target_account_id).await?;
-        authorize_permission_share_permission(
-            auth,
-            &target_account.email,
-            AccountPermissionShareVerb::View,
-            AccountPermissionShareResourcePattern::Any,
-        )?;
 
-        self.permission_share_repo
+        let shares = self
+            .permission_share_repo
             .get_for_target(target_account_id.0)
             .await?
             .into_iter()
             .map(|record| record.try_into().map_err(Into::into))
-            .collect()
+            .collect::<Result<Vec<_>, PermissionShareError>>()?;
+
+        Ok(shares
+            .into_iter()
+            .filter(|share: &PermissionShare| {
+                authorize_permission_share_permission(
+                    auth,
+                    &target_account.email,
+                    AccountPermissionShareVerb::View,
+                    AccountPermissionShareResourcePattern::Name(share.name.clone()),
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn active_share_cards_for_target(

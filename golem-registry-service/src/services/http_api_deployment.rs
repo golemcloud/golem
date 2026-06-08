@@ -424,13 +424,6 @@ impl HttpApiDeploymentService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<HttpApiDeployment>, HttpApiDeploymentError> {
-        authorize_http_api_deployment_permission(
-            auth,
-            environment,
-            None,
-            EnvironmentHttpApiDeploymentVerb::View,
-        )?;
-
         let http_api_deployments: Vec<HttpApiDeployment> = self
             .http_api_deployment_repo
             .list_staged(environment.id.0)
@@ -439,7 +432,18 @@ impl HttpApiDeploymentService {
             .map(|r| r.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(http_api_deployments)
+        Ok(http_api_deployments
+            .into_iter()
+            .filter(|http_api_deployment| {
+                authorize_http_api_deployment_permission(
+                    auth,
+                    environment,
+                    Some(&http_api_deployment.domain),
+                    EnvironmentHttpApiDeploymentVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn list_in_deployment(
@@ -462,13 +466,6 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
-        authorize_http_api_deployment_permission(
-            auth,
-            &environment,
-            None,
-            EnvironmentHttpApiDeploymentVerb::View,
-        )?;
-
         let http_api_deployments: Vec<HttpApiDeployment> = self
             .http_api_deployment_repo
             .list_by_deployment(environment_id.0, deployment_revision.into())
@@ -477,7 +474,18 @@ impl HttpApiDeploymentService {
             .map(|r| r.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(http_api_deployments)
+        Ok(http_api_deployments
+            .into_iter()
+            .filter(|http_api_deployment| {
+                authorize_http_api_deployment_permission(
+                    auth,
+                    &environment,
+                    Some(&http_api_deployment.domain),
+                    EnvironmentHttpApiDeploymentVerb::View,
+                )
+                .is_ok()
+            })
+            .collect())
     }
 
     pub async fn get_staged(
