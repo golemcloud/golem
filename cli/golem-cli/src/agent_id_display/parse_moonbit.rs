@@ -13,26 +13,15 @@
 // limitations under the License.
 
 use super::lexer::{Lexer, Token};
-use super::parse_common::{self, Dialect, ParseError, parse_cm_value, parse_uint, perr};
-use golem_common::model::agent::{
-    BinaryReference, BinarySource, BinaryType, DataSchema, DataValue, TextReference, TextSource,
-    TextType, Url,
-};
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{Value, ValueAndType};
+use super::parse_common::{Dialect, ParseError, parse_cm_value, perr};
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
+use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
 use heck::{ToSnakeCase, ToUpperCamelCase};
-
-pub fn parse_data_value_moonbit(input: &str, schema: &DataSchema) -> Result<DataValue, ParseError> {
-    parse_common::parse_data_value::<MoonBitDialect>(input, schema)
-}
 
 pub(super) struct MoonBitDialect;
 
 impl Dialect for MoonBitDialect {
-    fn normalize_field_name(name: &str) -> String {
-        name.to_snake_case()
-    }
-
     fn parse_char(lexer: &mut Lexer) -> Result<char, ParseError> {
         let (tok, pos, _) = lexer.next_token()?;
         match tok {
@@ -43,28 +32,28 @@ impl Dialect for MoonBitDialect {
 
     fn parse_tuple(
         lexer: &mut Lexer,
-        tt: &golem_wasm::analysis::TypeTuple,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
+        graph: &SchemaGraph,
+        elements: &[SchemaType],
+    ) -> Result<SchemaValue, ParseError> {
         lexer.expect(&Token::LParen)?;
         let mut items = Vec::new();
-        for (i, item_typ) in tt.items.iter().enumerate() {
+        for (i, ty) in elements.iter().enumerate() {
             if i > 0 {
                 lexer.expect(&Token::Comma)?;
             }
-            items.push(parse_cm_value::<Self>(lexer, item_typ)?.value);
+            items.push(parse_cm_value::<Self>(lexer, graph, ty)?);
         }
         lexer.expect(&Token::RParen)?;
-        Ok(ValueAndType::new(Value::Tuple(items), typ.clone()))
+        Ok(SchemaValue::Tuple { elements: items })
     }
 
     fn parse_record(
         lexer: &mut Lexer,
-        tr: &golem_wasm::analysis::TypeRecord,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
-        // Accept optional TypeName:: prefix before the opening brace
-        if let Some(name) = &tr.name {
+        graph: &SchemaGraph,
+        def_name: Option<&str>,
+        fields: &[NamedFieldType],
+    ) -> Result<SchemaValue, ParseError> {
+        if let Some(name) = def_name {
             let camel = name.to_upper_camel_case();
             if let Token::Ident(id) = lexer.peek()?
                 && id == &camel
@@ -74,13 +63,12 @@ impl Dialect for MoonBitDialect {
             }
         }
         lexer.expect(&Token::LBrace)?;
-        let field_map: Vec<(String, usize)> = tr
-            .fields
+        let field_map: Vec<(String, usize)> = fields
             .iter()
             .enumerate()
             .map(|(i, f)| (f.name.to_snake_case(), i))
             .collect();
-        let mut values: Vec<Option<Value>> = vec![None; tr.fields.len()];
+        let mut values: Vec<Option<SchemaValue>> = (0..fields.len()).map(|_| None).collect();
         if *lexer.peek()? != Token::RBrace {
             loop {
                 let (fname, fp, _) = lexer.expect_ident()?;
@@ -90,7 +78,7 @@ impl Dialect for MoonBitDialect {
                     .find(|(n, _)| *n == fname)
                     .map(|(_, i)| *i)
                     .ok_or_else(|| perr(fp, &format!("unknown field '{fname}'")))?;
-                values[idx] = Some(parse_cm_value::<Self>(lexer, &tr.fields[idx].typ)?.value);
+                values[idx] = Some(parse_cm_value::<Self>(lexer, graph, &fields[idx].body)?);
                 if *lexer.peek()? == Token::Comma {
                     lexer.next_token()?;
                     if *lexer.peek()? == Token::RBrace {
@@ -103,22 +91,23 @@ impl Dialect for MoonBitDialect {
         }
         lexer.expect(&Token::RBrace)?;
         let pos = lexer.position();
-        let fields: Result<Vec<Value>, ParseError> = values
+        let out: Result<Vec<SchemaValue>, ParseError> = values
             .into_iter()
             .enumerate()
             .map(|(i, v)| {
-                v.ok_or_else(|| perr(pos, &format!("missing field '{}'", tr.fields[i].name)))
+                v.ok_or_else(|| perr(pos, &format!("missing field '{}'", fields[i].name)))
             })
             .collect();
-        Ok(ValueAndType::new(Value::Record(fields?), typ.clone()))
+        Ok(SchemaValue::Record { fields: out? })
     }
 
     fn parse_variant(
         lexer: &mut Lexer,
-        tv: &golem_wasm::analysis::TypeVariant,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
-        if let Some(name) = &tv.name {
+        graph: &SchemaGraph,
+        def_name: Option<&str>,
+        cases: &[VariantCaseType],
+    ) -> Result<SchemaValue, ParseError> {
+        if let Some(name) = def_name {
             let camel = name.to_upper_camel_case();
             if let Token::Ident(id) = lexer.peek()?
                 && id == &camel
@@ -128,35 +117,31 @@ impl Dialect for MoonBitDialect {
             }
         }
         let (case_name, cp, _) = lexer.expect_ident()?;
-        let (case_idx, case_def) = tv
-            .cases
+        let (case_idx, case_def) = cases
             .iter()
             .enumerate()
             .find(|(_, c)| c.name.to_upper_camel_case() == case_name)
             .ok_or_else(|| perr(cp, &format!("unknown variant case '{case_name}'")))?;
-        let case_value = if let Some(case_typ) = &case_def.typ {
+        let payload = if let Some(case_ty) = &case_def.payload {
             lexer.expect(&Token::LParen)?;
-            let v = parse_cm_value::<Self>(lexer, case_typ)?.value;
+            let v = parse_cm_value::<Self>(lexer, graph, case_ty)?;
             lexer.expect(&Token::RParen)?;
             Some(Box::new(v))
         } else {
             None
         };
-        Ok(ValueAndType::new(
-            Value::Variant {
-                case_idx: case_idx as u32,
-                case_value,
-            },
-            typ.clone(),
-        ))
+        Ok(SchemaValue::Variant(VariantValuePayload {
+            case: case_idx as u32,
+            payload,
+        }))
     }
 
     fn parse_enum(
         lexer: &mut Lexer,
-        te: &golem_wasm::analysis::TypeEnum,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
-        if let Some(name) = &te.name {
+        def_name: Option<&str>,
+        cases: &[String],
+    ) -> Result<SchemaValue, ParseError> {
+        if let Some(name) = def_name {
             let camel = name.to_upper_camel_case();
             if let Token::Ident(id) = lexer.peek()?
                 && id == &camel
@@ -166,30 +151,30 @@ impl Dialect for MoonBitDialect {
             }
         }
         let (case_name, cp, _) = lexer.expect_ident()?;
-        let case_idx = te
-            .cases
+        let case_idx = cases
             .iter()
             .position(|c| c.to_upper_camel_case() == case_name)
             .ok_or_else(|| perr(cp, &format!("unknown enum case '{case_name}'")))?;
-        Ok(ValueAndType::new(Value::Enum(case_idx as u32), typ.clone()))
+        Ok(SchemaValue::Enum {
+            case: case_idx as u32,
+        })
     }
 
     fn parse_option(
         lexer: &mut Lexer,
-        to: &golem_wasm::analysis::TypeOption,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
+        graph: &SchemaGraph,
+        inner: &SchemaType,
+    ) -> Result<SchemaValue, ParseError> {
         let (ident, p, _) = lexer.expect_ident()?;
         match ident.as_str() {
-            "None" => Ok(ValueAndType::new(Value::Option(None), typ.clone())),
+            "None" => Ok(SchemaValue::Option { inner: None }),
             "Some" => {
                 lexer.expect(&Token::LParen)?;
-                let v = parse_cm_value::<Self>(lexer, &to.inner)?.value;
+                let v = parse_cm_value::<Self>(lexer, graph, inner)?;
                 lexer.expect(&Token::RParen)?;
-                Ok(ValueAndType::new(
-                    Value::Option(Some(Box::new(v))),
-                    typ.clone(),
-                ))
+                Ok(SchemaValue::Option {
+                    inner: Some(Box::new(v)),
+                })
             }
             _ => Err(perr(p, &format!("expected Some or None, got '{ident}'"))),
         }
@@ -197,15 +182,15 @@ impl Dialect for MoonBitDialect {
 
     fn parse_result(
         lexer: &mut Lexer,
-        tr: &golem_wasm::analysis::TypeResult,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
+        graph: &SchemaGraph,
+        spec: &ResultSpec,
+    ) -> Result<SchemaValue, ParseError> {
         let (ident, p, _) = lexer.expect_ident()?;
         match ident.as_str() {
             "Ok" => {
                 lexer.expect(&Token::LParen)?;
-                let v = if let Some(ok_typ) = &tr.ok {
-                    Some(Box::new(parse_cm_value::<Self>(lexer, ok_typ)?.value))
+                let v = if let Some(ok_ty) = &spec.ok {
+                    Some(Box::new(parse_cm_value::<Self>(lexer, graph, ok_ty)?))
                 } else {
                     if *lexer.peek()? == Token::LParen {
                         lexer.next_token()?;
@@ -214,12 +199,12 @@ impl Dialect for MoonBitDialect {
                     None
                 };
                 lexer.expect(&Token::RParen)?;
-                Ok(ValueAndType::new(Value::Result(Ok(v)), typ.clone()))
+                Ok(SchemaValue::Result(ResultValuePayload::Ok { value: v }))
             }
             "Err" => {
                 lexer.expect(&Token::LParen)?;
-                let v = if let Some(err_typ) = &tr.err {
-                    Some(Box::new(parse_cm_value::<Self>(lexer, err_typ)?.value))
+                let v = if let Some(err_ty) = &spec.err {
+                    Some(Box::new(parse_cm_value::<Self>(lexer, graph, err_ty)?))
                 } else {
                     if *lexer.peek()? == Token::LParen {
                         lexer.next_token()?;
@@ -228,7 +213,7 @@ impl Dialect for MoonBitDialect {
                     None
                 };
                 lexer.expect(&Token::RParen)?;
-                Ok(ValueAndType::new(Value::Result(Err(v)), typ.clone()))
+                Ok(SchemaValue::Result(ResultValuePayload::Err { value: v }))
             }
             _ => Err(perr(p, &format!("expected Ok or Err, got '{ident}'"))),
         }
@@ -236,11 +221,10 @@ impl Dialect for MoonBitDialect {
 
     fn parse_flags(
         lexer: &mut Lexer,
-        tf: &golem_wasm::analysis::TypeFlags,
-        typ: &AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
-        // Accept optional TypeName:: prefix before the opening brace
-        if let Some(name) = &tf.name {
+        def_name: Option<&str>,
+        flags: &[String],
+    ) -> Result<SchemaValue, ParseError> {
+        if let Some(name) = def_name {
             let camel = name.to_upper_camel_case();
             if let Token::Ident(id) = lexer.peek()?
                 && id == &camel
@@ -250,13 +234,12 @@ impl Dialect for MoonBitDialect {
             }
         }
         lexer.expect(&Token::LBrace)?;
-        let name_map: Vec<(String, usize)> = tf
-            .names
+        let name_map: Vec<(String, usize)> = flags
             .iter()
             .enumerate()
             .map(|(i, n)| (n.to_snake_case(), i))
             .collect();
-        let mut flags = vec![false; tf.names.len()];
+        let mut bits = vec![false; flags.len()];
         if *lexer.peek()? != Token::RBrace {
             loop {
                 let (fname, fp, _) = lexer.expect_ident()?;
@@ -265,7 +248,7 @@ impl Dialect for MoonBitDialect {
                     .find(|(n, _)| *n == fname)
                     .map(|(_, i)| *i)
                     .ok_or_else(|| perr(fp, &format!("unknown flag '{fname}'")))?;
-                flags[idx] = true;
+                bits[idx] = true;
                 if *lexer.peek()? == Token::Comma {
                     lexer.next_token()?;
                     if *lexer.peek()? == Token::RBrace {
@@ -277,127 +260,6 @@ impl Dialect for MoonBitDialect {
             }
         }
         lexer.expect(&Token::RBrace)?;
-        Ok(ValueAndType::new(Value::Flags(flags), typ.clone()))
-    }
-
-    fn parse_unstructured_text(lexer: &mut Lexer) -> Result<TextReference, ParseError> {
-        let (ident, p, _) = lexer.expect_ident()?;
-        if ident != "UnstructuredText" {
-            return Err(perr(
-                p,
-                &format!("expected 'UnstructuredText', got '{ident}'"),
-            ));
-        }
-        lexer.expect(&Token::DoubleColon)?;
-        let (method, mp, _) = lexer.expect_ident()?;
-        match method.as_str() {
-            "Url" => {
-                lexer.expect(&Token::LParen)?;
-                let (url, _, _) = lexer.expect_string()?;
-                lexer.expect(&Token::RParen)?;
-                Ok(TextReference::Url(Url { value: url }))
-            }
-            "from_inline_any" => {
-                lexer.expect(&Token::LParen)?;
-                let (data, _, _) = lexer.expect_string()?;
-                lexer.expect(&Token::RParen)?;
-                Ok(TextReference::Inline(TextSource {
-                    data,
-                    text_type: None,
-                }))
-            }
-            "from_inline" => {
-                lexer.expect(&Token::LParen)?;
-                let (data, _, _) = lexer.expect_string()?;
-                lexer.expect(&Token::Comma)?;
-                let (lang_ns, lp, _) = lexer.expect_ident()?;
-                if lang_ns != "Languages" {
-                    return Err(perr(lp, &format!("expected 'Languages', got '{lang_ns}'")));
-                }
-                lexer.expect(&Token::DoubleColon)?;
-                let (lang, _, _) = lexer.expect_ident()?;
-                lexer.expect(&Token::RParen)?;
-                Ok(TextReference::Inline(TextSource {
-                    data,
-                    text_type: Some(TextType {
-                        language_code: lang,
-                    }),
-                }))
-            }
-            _ => Err(perr(
-                mp,
-                &format!("unknown UnstructuredText method '{method}'"),
-            )),
-        }
-    }
-
-    fn parse_unstructured_binary(lexer: &mut Lexer) -> Result<BinaryReference, ParseError> {
-        let (ident, p, _) = lexer.expect_ident()?;
-        if ident != "UnstructuredBinary" {
-            return Err(perr(
-                p,
-                &format!("expected 'UnstructuredBinary', got '{ident}'"),
-            ));
-        }
-        lexer.expect(&Token::DoubleColon)?;
-        let (method, mp, _) = lexer.expect_ident()?;
-        match method.as_str() {
-            "from_url" => {
-                lexer.expect(&Token::LParen)?;
-                let (url, _, _) = lexer.expect_string()?;
-                lexer.expect(&Token::RParen)?;
-                Ok(BinaryReference::Url(Url { value: url }))
-            }
-            "from_inline" => {
-                lexer.expect(&Token::LParen)?;
-                let (bytes_ident, bp, _) = lexer.expect_ident()?;
-                if bytes_ident != "Bytes" {
-                    return Err(perr(bp, &format!("expected 'Bytes', got '{bytes_ident}'")));
-                }
-                lexer.expect(&Token::DoubleColon)?;
-                let (from_ident, fp, _) = lexer.expect_ident()?;
-                if from_ident != "from_array" {
-                    return Err(perr(
-                        fp,
-                        &format!("expected 'from_array', got '{from_ident}'"),
-                    ));
-                }
-                lexer.expect(&Token::LParen)?;
-                lexer.expect(&Token::LBrack)?;
-                let mut data = Vec::new();
-                if *lexer.peek()? != Token::RBrack {
-                    loop {
-                        let b = parse_uint(lexer)? as u8;
-                        data.push(b);
-                        if *lexer.peek()? == Token::Comma {
-                            lexer.next_token()?;
-                            if *lexer.peek()? == Token::RBrack {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                lexer.expect(&Token::RBrack)?;
-                lexer.expect(&Token::RParen)?;
-                lexer.expect(&Token::Comma)?;
-                let (mime_ns, mnp, _) = lexer.expect_ident()?;
-                if mime_ns != "MimeTypes" {
-                    return Err(perr(mnp, &format!("expected 'MimeTypes', got '{mime_ns}'")));
-                }
-                lexer.expect(&Token::DoubleColon)?;
-                let (mime, _, _) = lexer.expect_ident()?;
-                lexer.expect(&Token::RParen)?;
-                Ok(BinaryReference::Inline(BinarySource {
-                    data,
-                    binary_type: BinaryType { mime_type: mime },
-                }))
-            }
-            _ => Err(perr(
-                mp,
-                &format!("unknown UnstructuredBinary method '{method}'"),
-            )),
-        }
+        Ok(SchemaValue::Flags { bits })
     }
 }

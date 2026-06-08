@@ -676,3 +676,35 @@ export function decodeOption<T>(
     return decode(value);
   }
 }
+
+/**
+ * Decodes a flags value (an array of the set flags' wire names) into a record
+ * of booleans keyed by the JS-cased field names.
+ *
+ * `initial` provides the exact result shape (every field initialised to
+ * `false`) so the inferred return type stays precise. `flagPairs` maps each
+ * wire name to its JS-cased field name; flags present in `value` are set to
+ * `true`.
+ */
+export function decodeFlags<T extends Record<string, boolean>>(
+  value: unknown,
+  initial: T,
+  flagPairs: [string, string][],
+): T {
+  if (!Array.isArray(value)) {
+    throw new Error(`Expected array of flag names, got ${value}`);
+  }
+  const result = { ...initial } as T;
+  const flagMap: Record<string, string> = Object.fromEntries(flagPairs);
+  for (const flag of value) {
+    if (typeof flag !== 'string') {
+      throw new Error(`Expected string flag name, got ${flag}`);
+    }
+    const jsName = flagMap[flag];
+    if (jsName === undefined) {
+      throw new Error(`Unknown flag name ${flag}`);
+    }
+    (result as Record<string, boolean>)[jsName] = true;
+  }
+  return result;
+}

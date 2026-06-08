@@ -38,15 +38,17 @@ pub mod analysed_type;
 pub mod data_schema;
 pub mod element_schema;
 pub mod error;
+pub mod untyped;
 pub mod value;
 
 pub use agent::{
     agent_constructor_to_schema, agent_dependency_to_schema, agent_method_to_schema,
-    agent_type_to_schema, schema_agent_constructor_to_legacy, schema_agent_dependency_to_legacy,
-    schema_agent_method_to_legacy, schema_agent_type_to_legacy,
+    agent_type_to_schema, legacy_data_value_to_typed_schema_value,
+    legacy_parsed_agent_id_to_schema, schema_agent_constructor_to_legacy,
+    schema_agent_dependency_to_legacy, schema_agent_method_to_legacy, schema_agent_type_to_legacy,
 };
 pub use analysed_type::{
-    analysed_type_to_schema_graph, analysed_type_to_schema_type_inline,
+    SchemaGraphBuilder, analysed_type_to_schema_graph, analysed_type_to_schema_type_inline,
     schema_graph_to_analysed_type, schema_type_to_analysed_type,
 };
 pub use data_schema::{
@@ -55,6 +57,10 @@ pub use data_schema::{
 };
 pub use element_schema::{element_schema_to_schema_type, schema_type_to_element_schema};
 pub use error::{SchemaAdapterError, legacy_type_id};
+pub use untyped::{
+    typed_input_to_untyped_data_value, typed_schema_value_to_untyped_data_value,
+    untyped_data_value_to_typed_input, untyped_data_value_to_typed_schema_output,
+};
 pub use value::{
     schema_value_to_value, typed_schema_value_to_value_and_type,
     value_and_type_to_typed_schema_value, value_to_schema_value,

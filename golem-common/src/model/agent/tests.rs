@@ -1629,3 +1629,184 @@ mod read_only_config_roundtrip {
         assert!(result.is_err());
     }
 }
+
+mod agent_error_tests {
+    use crate::model::agent::AgentError;
+    use crate::schema::adapters::value::{
+        typed_schema_value_to_value_and_type, value_and_type_to_typed_schema_value,
+    };
+    use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
+    use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, TextRestrictions};
+    use crate::schema::schema_value::{SchemaValue, SecretValuePayload, TextValuePayload};
+    use golem_wasm::analysis::AnalysedType;
+    use golem_wasm::analysis::analysed_type::{case, str, variant};
+    use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Value, ValueAndType};
+    use pretty_assertions::assert_eq;
+    use test_r::test;
+
+    fn agent_error_legacy_get_type() -> AnalysedType {
+        variant(vec![
+            case("InvalidInput", str()),
+            case("InvalidMethod", str()),
+            case("InvalidType", str()),
+            case("InvalidAgentId", str()),
+            case("CustomError", ValueAndType::get_type()),
+        ])
+    }
+
+    #[test]
+    fn get_type_matches_legacy_variant_shape() {
+        assert_eq!(AgentError::get_type(), agent_error_legacy_get_type());
+    }
+
+    #[test]
+    fn round_trip_invalid_input() {
+        let err = AgentError::InvalidInput("bad thing".to_string());
+        let v = err.clone().into_value();
+        let back = AgentError::from_value(v).expect("decode");
+        match (err, back) {
+            (AgentError::InvalidInput(a), AgentError::InvalidInput(b)) => assert_eq!(a, b),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn round_trip_custom_error_preserves_payload() {
+        // Build a custom error from a legacy `ValueAndType` so we can compare
+        // pre- and post-roundtrip in the legacy shape.
+        let original_vat = "boom".to_string().into_value_and_type();
+        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
+
+        let err = AgentError::CustomError(typed);
+        let encoded = err.into_value();
+        let decoded = AgentError::from_value(encoded).expect("decode");
+
+        match decoded {
+            AgentError::CustomError(t) => {
+                let round_trip_vat = typed_schema_value_to_value_and_type(&t).expect("lower");
+                assert_eq!(round_trip_vat.value, original_vat.value);
+                assert_eq!(round_trip_vat.typ, original_vat.typ);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encoded_custom_error_wire_shape_matches_value_and_type() {
+        // The wire shape for `CustomError(TypedSchemaValue)` must remain the
+        // same legacy `value-and-type` record as before the variant flip so
+        // that producers and consumers on the WIT boundary keep working.
+        let original_vat = 42u64.into_value_and_type();
+        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
+        let err = AgentError::CustomError(typed);
+
+        let encoded = err.into_value();
+        match encoded {
+            Value::Variant {
+                case_idx,
+                case_value: Some(inner),
+            } => {
+                assert_eq!(case_idx, 4);
+                let decoded_vat = ValueAndType::from_value(*inner).expect("decode VAT");
+                assert_eq!(decoded_vat.value, original_vat.value);
+                assert_eq!(decoded_vat.typ, original_vat.typ);
+            }
+            other => panic!("expected Variant with payload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn display_renders_primitive_payload_exact() {
+        let original_vat = 7u32.into_value_and_type();
+        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
+        let err = AgentError::CustomError(typed);
+        assert_eq!(err.to_string(), "7");
+    }
+
+    #[test]
+    fn display_renders_record_payload_exact() {
+        let original_vat = ValueAndType {
+            value: Value::Record(vec![Value::U32(7), Value::String("Ada".to_string())]),
+            typ: golem_wasm::analysis::analysed_type::record(vec![
+                golem_wasm::analysis::analysed_type::field(
+                    "id",
+                    golem_wasm::analysis::analysed_type::u32(),
+                ),
+                golem_wasm::analysis::analysed_type::field(
+                    "name",
+                    golem_wasm::analysis::analysed_type::str(),
+                ),
+            ]),
+        };
+        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
+        let err = AgentError::CustomError(typed);
+        assert_eq!(err.to_string(), "{ id: 7, name: \"Ada\" }");
+    }
+
+    #[test]
+    fn display_redacts_secret_payload() {
+        // `Display` is user-facing/loggable; the renderer must redact
+        // capability nodes such as `Secret` so accidental embedding of a
+        // secret in a custom error doesn't leak it into logs.
+        let graph = SchemaGraph::anonymous(SchemaType::record(vec![
+            NamedFieldType {
+                name: "label".to_string(),
+                body: SchemaType::text(TextRestrictions::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "token".to_string(),
+                body: SchemaType::secret(SecretSpec::default()),
+                metadata: Default::default(),
+            },
+        ]));
+        let value = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Text(TextValuePayload {
+                    text: "auth".to_string(),
+                    language: None,
+                }),
+                SchemaValue::Secret(SecretValuePayload {
+                    secret_ref: "shhh".to_string(),
+                }),
+            ],
+        };
+        let typed = TypedSchemaValue::new(graph, value);
+        let err = AgentError::CustomError(typed);
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("<redacted>"),
+            "expected secret to be redacted, got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("shhh"),
+            "secret ref must not leak into Display, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn into_value_falls_back_for_non_legacy_payload() {
+        // `TypedSchemaValue` can carry capability nodes (e.g. `Secret`) that
+        // have no legacy `ValueAndType` counterpart. `IntoValue` is used as
+        // a boundary encoder by oplog and gRPC paths, so it must collapse
+        // such payloads into an `InvalidType` variant rather than panic.
+        let graph = SchemaGraph::anonymous(SchemaType::secret(SecretSpec::default()));
+        let value = SchemaValue::Secret(SecretValuePayload {
+            secret_ref: "shhh".to_string(),
+        });
+        let typed = TypedSchemaValue::new(graph, value);
+        let err = AgentError::CustomError(typed);
+
+        let encoded = err.into_value();
+        let decoded = AgentError::from_value(encoded).expect("decode");
+        match decoded {
+            AgentError::InvalidType(msg) => {
+                assert!(
+                    msg.starts_with("Invalid custom error payload:"),
+                    "expected diagnostic prefix, got: {msg:?}"
+                );
+            }
+            other => panic!("expected InvalidType fallback, got: {other:?}"),
+        }
+    }
+}

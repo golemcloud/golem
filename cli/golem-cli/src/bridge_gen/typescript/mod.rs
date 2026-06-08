@@ -34,6 +34,8 @@ use golem_common::model::agent::{
     AgentConfigDeclaration, AgentConfigSource, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
     DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
+use golem_common::schema::graph::SchemaTypeDef;
+use golem_common::schema::schema_type::SchemaType;
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use indoc::formatdoc;
@@ -94,6 +96,43 @@ impl TypeScriptBridgeGenerator {
             testing,
             same_language,
         })
+    }
+
+    /// Resolve a legacy [`AnalysedType`] from the agent declaration to the
+    /// [`SchemaType`] that was lowered for it during `TypeNaming::new`.
+    /// Returning the memoised result is critical: a fresh
+    /// `analysed_type_to_schema_graph(typ)` here would only see the type
+    /// in isolation and emit the base `TypeId`, which would silently
+    /// collide with the disambiguated id in `type_naming.graph()` and
+    /// cause two distinct same-name composites to be rendered as the
+    /// first one's body.
+    fn import_analysed_type(&self, typ: &AnalysedType) -> anyhow::Result<SchemaType> {
+        self.type_naming
+            .imported_schema_type(typ)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "Legacy AnalysedType was not collected during TypeNaming::new — \
+                     bridge_gen lost track of an emit-time type. typ = {typ:?}"
+                )
+            })
+    }
+
+    /// Resolve a [`SchemaType::Ref`] against [`TypeNaming::graph`] and return
+    /// the def body. For inline schema types this returns the input
+    /// unchanged.
+    fn resolve_ref<'a>(&'a self, typ: &'a SchemaType) -> &'a SchemaType {
+        match typ {
+            SchemaType::Ref { id, .. } => {
+                let def: &SchemaTypeDef = self
+                    .type_naming
+                    .graph()
+                    .lookup(id)
+                    .expect("Ref points to a def in the shared graph");
+                &def.body
+            }
+            other => other,
+        }
     }
 
     fn bridge_package_dep(testing: bool) -> anyhow::Result<String> {
@@ -471,9 +510,9 @@ impl TypeScriptBridgeGenerator {
     /// by the agent.
     fn generate_ts_type_definitions(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
         for (typ, name) in self.type_naming.types() {
-            self.generate_ts_wit_type_def(writer, name, typ)?;
-            self.generate_ts_wit_type_encode(writer, name, typ)?;
-            self.generate_ts_wit_type_decode(writer, name, typ)?;
+            self.generate_ts_schema_type_def(writer, name, typ)?;
+            self.generate_ts_schema_type_encode(writer, name, typ)?;
+            self.generate_ts_schema_type_decode(writer, name, typ)?;
         }
         Ok(())
     }
@@ -706,7 +745,7 @@ impl TypeScriptBridgeGenerator {
             MULTIMODAL_INPUT_NAME,
         )?;
         method.write_line("const phantomId = undefined;");
-        self.write_config_encoding(&mut method, local_configs);
+        self.write_config_encoding(&mut method, local_configs)?;
         self.write_create_agent_call(&mut method, config_var, "agentConfig");
         method.write_line(format!(
             "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
@@ -739,7 +778,7 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        self.write_config_encoding(&mut method, local_configs);
+        self.write_config_encoding(&mut method, local_configs)?;
         self.write_create_agent_call(&mut method, config_var, "agentConfig");
         method.write_line(format!(
             "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
@@ -772,7 +811,7 @@ impl TypeScriptBridgeGenerator {
             MULTIMODAL_INPUT_NAME,
         )?;
         method.write_line("const phantomId = uuidv4();");
-        self.write_config_encoding(&mut method, local_configs);
+        self.write_config_encoding(&mut method, local_configs)?;
         self.write_create_agent_call(&mut method, config_var, "agentConfig");
         method.write_line(format!(
             "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
@@ -796,7 +835,8 @@ impl TypeScriptBridgeGenerator {
                     .map(|s| s.to_upper_camel_case())
                     .collect::<String>()
             );
-            let param_type = self.type_reference(&config.value_type)?;
+            let config_schema_type = self.import_analysed_type(&config.value_type)?;
+            let param_type = self.type_reference(&config_schema_type)?;
             writer.param(&param_name, &param_type);
         }
         Ok(())
@@ -807,7 +847,7 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsFunctionWriter<'_>,
         local_configs: &[&AgentConfigDeclaration],
-    ) {
+    ) -> anyhow::Result<()> {
         writer.write_line("const agentConfig: base.AgentConfigEntry[] = [];");
         for config in local_configs {
             let param_name = format!(
@@ -824,7 +864,8 @@ impl TypeScriptBridgeGenerator {
                 .map(|s| format!("\"{}\"", s))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let encoded_value = self.encode_wit_value(&param_name, &config.value_type);
+            let config_schema_type = self.import_analysed_type(&config.value_type)?;
+            let encoded_value = self.encode_schema_value(&param_name, &config_schema_type)?;
             writer.write_line(format!("if ({param_name} !== undefined) {{"));
             writer.indent();
             writer.write_line(format!(
@@ -833,6 +874,7 @@ impl TypeScriptBridgeGenerator {
             writer.unindent();
             writer.write_line("}");
         }
+        Ok(())
     }
 
     /// Generates a private helper method for getting the global configuration and failing if it is missing
@@ -1027,11 +1069,11 @@ impl TypeScriptBridgeGenerator {
 
     /// Generates an encode function that takes a TypeScript value and encodes it in the
     /// JSON WitValue representation format expected by the invocation API
-    fn generate_ts_wit_type_encode(
+    fn generate_ts_schema_type_encode(
         &self,
         writer: &mut TsWriter,
         ts_name: &TypeScriptTypeName,
-        typ: &AnalysedType,
+        typ: &SchemaType,
     ) -> anyhow::Result<()> {
         let encode_fn_name = format!("encode{ts_name}");
 
@@ -1039,42 +1081,44 @@ impl TypeScriptBridgeGenerator {
         func.param("value", ts_name.as_str());
         func.result("unknown");
 
-        // For the function body, we need to encode the actual structure, not delegate to itself
-        // So we strip the name and encode the inner type directly
-        let inner_typ = typ.clone().with_optional_name(None);
+        // We need to encode the actual structure, not delegate to itself.
+        // Resolve through `Ref` so the body shape is what drives the encode
+        // logic, not the named-type reference that already maps back to
+        // this function.
+        let inner_typ = self.resolve_ref(typ);
 
-        self.write_encode_body(&mut func, "value", &inner_typ)?;
+        self.write_encode_body(&mut func, "value", inner_typ)?;
 
         Ok(())
     }
 
-    /// Writes the body of the encode function (`generate_ts_wit_type_encode`)
+    /// Writes the body of the encode function (`generate_ts_schema_type_encode`)
     fn write_encode_body(
         &self,
         writer: &mut TsFunctionWriter<'_>,
         value: &str,
-        typ: &AnalysedType,
+        typ: &SchemaType,
     ) -> anyhow::Result<()> {
         match typ {
-            AnalysedType::Record(_)
-            | AnalysedType::Variant(_)
-            | AnalysedType::Result(_)
-            | AnalysedType::Flags(_) => {
+            SchemaType::Record { .. }
+            | SchemaType::Variant { .. }
+            | SchemaType::Result { .. }
+            | SchemaType::Flags { .. } => {
                 // For complex types, write multi-line encode logic
                 self.write_encode_logic(writer, value, typ)?;
             }
-            AnalysedType::Enum(_) => {
+            SchemaType::Enum { .. } => {
                 // Enums are just returned as-is (they're already strings)
                 writer.write_line(format!("return {};", value));
             }
-            AnalysedType::Tuple(tuple) => {
+            SchemaType::Tuple { elements, .. } => {
                 // For tuples, write readable array construction
                 writer.write_line("return [");
                 writer.indent();
-                for (idx, item_type) in tuple.items.iter().enumerate() {
+                for (idx, item_type) in elements.iter().enumerate() {
                     let item_encode =
-                        self.encode_wit_value(&format!("{}[{}]", value, idx), item_type);
-                    let comma = if idx < tuple.items.len() - 1 { "," } else { "" };
+                        self.encode_schema_value(&format!("{}[{}]", value, idx), item_type)?;
+                    let comma = if idx < elements.len() - 1 { "," } else { "" };
                     writer.write_line(format!("{}{}", item_encode, comma));
                 }
                 writer.unindent();
@@ -1082,7 +1126,7 @@ impl TypeScriptBridgeGenerator {
             }
             _ => {
                 // For simpler primitive types, just return the encoded value
-                let encode_expr = self.encode_wit_value(value, typ);
+                let encode_expr = self.encode_schema_value(value, typ)?;
                 writer.write_line(format!("return {};", encode_expr));
             }
         }
@@ -1094,37 +1138,35 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsFunctionWriter<'_>,
         value: &str,
-        typ: &AnalysedType,
+        typ: &SchemaType,
     ) -> anyhow::Result<()> {
         match typ {
-            AnalysedType::Record(record) => {
+            SchemaType::Record { fields, .. } => {
                 writer.write_line("return {");
                 writer.indent();
-                for (idx, field) in record.fields.iter().enumerate() {
+                for (idx, field) in fields.iter().enumerate() {
                     let js_field_name = self.to_js_ident(&field.name);
                     let wit_field_name = &field.name;
-                    let field_encode =
-                        self.encode_wit_value(&format!("{}.{}", value, js_field_name), &field.typ);
-                    let comma = if idx < record.fields.len() - 1 {
-                        ","
-                    } else {
-                        ""
-                    };
+                    let field_encode = self.encode_schema_value(
+                        &format!("{}.{}", value, js_field_name),
+                        &field.body,
+                    )?;
+                    let comma = if idx < fields.len() - 1 { "," } else { "" };
                     writer.write_line(format!("\"{}\": {}{}", wit_field_name, field_encode, comma));
                 }
                 writer.unindent();
                 writer.write_line("};");
             }
-            AnalysedType::Variant(variant) => {
+            SchemaType::Variant { cases, .. } => {
                 // Use nested ternary operators for conciseness, but split across lines
                 writer.write_line("return (");
                 writer.indent();
-                for (idx, case) in variant.cases.iter().enumerate() {
+                for (idx, case) in cases.iter().enumerate() {
                     let condition = format!("{}.tag === '{}'", value, case.name);
-                    let value_expr = match &case.typ {
+                    let value_expr = match &case.payload {
                         Some(case_type) => {
                             let encoded =
-                                self.encode_wit_value(&format!("{}.val", value), case_type);
+                                self.encode_schema_value(&format!("{}.val", value), case_type)?;
                             format!("{{ \"{}\": {} }}", case.name, encoded)
                         }
                         None => {
@@ -1132,7 +1174,7 @@ impl TypeScriptBridgeGenerator {
                         }
                     };
                     let connector = if idx == 0 { "" } else { ":" };
-                    if idx == variant.cases.len() - 1 {
+                    if idx == cases.len() - 1 {
                         writer.write_line(format!(
                             "{} {} ? {} : null",
                             connector, condition, value_expr
@@ -1144,23 +1186,33 @@ impl TypeScriptBridgeGenerator {
                 writer.unindent();
                 writer.write_line(");");
             }
-            AnalysedType::Result(result) => {
+            SchemaType::Result { spec, .. } => {
                 writer.write_line("return (");
                 writer.indent();
-                writer.write_line(format!("{}.ok !== undefined ?", value));
+                // Discriminator MUST be `'ok' in value`. Using
+                // `value.ok !== undefined` would route `{ ok: undefined }`
+                // (a valid `Ok(())` or `Ok(None)` payload) to the err
+                // branch. The TS `JsonResult<Ok, Err>` alias keeps `ok`
+                // in both arms (the inactive one is `ok?: undefined`),
+                // so the TS compiler does not narrow on `'ok' in value`;
+                // cast the value at the access point to keep the
+                // generated TS type-correct.
+                writer.write_line(format!("'ok' in {} ?", value));
                 writer.indent();
-                let ok_expr = match &result.ok {
+                let ok_expr = match spec.ok.as_deref() {
                     Some(ok_type) => {
-                        let encoded = self.encode_wit_value(&format!("{}.ok", value), ok_type);
+                        let encoded =
+                            self.encode_schema_value(&format!("({} as any).ok", value), ok_type)?;
                         format!("{{ ok: {} }}", encoded)
                     }
                     None => "{ ok: undefined }".to_string(),
                 };
                 writer.write_line(format!("{} :", ok_expr));
                 writer.unindent();
-                let err_expr = match &result.err {
+                let err_expr = match spec.err.as_deref() {
                     Some(err_type) => {
-                        let encoded = self.encode_wit_value(&format!("{}.err", value), err_type);
+                        let encoded =
+                            self.encode_schema_value(&format!("({} as any).err", value), err_type)?;
                         format!("{{ err: {} }}", encoded)
                     }
                     None => "{ err: undefined }".to_string(),
@@ -1169,10 +1221,13 @@ impl TypeScriptBridgeGenerator {
                 writer.unindent();
                 writer.write_line(");");
             }
-            AnalysedType::Flags(flags) => {
+            SchemaType::Flags { flags, .. } => {
+                // Wire form is the raw schema-level flag name
+                // (typically kebab-case); the TS field name is the
+                // JS-cased identifier derived from it.
                 writer.write_line("return [");
                 writer.indent();
-                for flag in &flags.names {
+                for flag in flags {
                     let flag_name = self.to_js_ident(flag);
                     writer.write_line(format!(
                         "({}[\"{}\"] ? \"{}\" : undefined),",
@@ -1190,13 +1245,15 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
-    /// Generates a decode function that takes a JSON WIT value representation and returns a TS
-    /// type corresponding to the WIT type.
-    fn generate_ts_wit_type_decode(
+    /// Generates a decode function that takes the JSON wire value
+    /// representation used by the bridge SDK (the legacy
+    /// `DataValue`-style shape) and returns a TS value corresponding to
+    /// the given [`SchemaType`].
+    fn generate_ts_schema_type_decode(
         &self,
         writer: &mut TsWriter,
         ts_name: &TypeScriptTypeName,
-        typ: &AnalysedType,
+        typ: &SchemaType,
     ) -> anyhow::Result<()> {
         let decode_fn_name = format!("decode{ts_name}");
 
@@ -1204,32 +1261,33 @@ impl TypeScriptBridgeGenerator {
         func.param("value", "unknown");
         func.result(ts_name.as_str());
 
-        // For the function body, we need to decode the actual structure, not delegate to itself
-        // So we strip the name and decode the inner type directly
-        let inner_typ = typ.clone().with_optional_name(None);
+        // We need to decode the actual structure, not delegate to itself.
+        // Resolve through `Ref` so the body shape drives the decode logic
+        // (the named-type reference would resolve back to this function).
+        let inner_typ = self.resolve_ref(typ);
 
-        self.write_decode_body(&mut func, "value", &inner_typ)?;
+        self.write_decode_body(&mut func, "value", inner_typ)?;
 
         Ok(())
     }
 
-    /// Writes the body of the decode function (`generate_ts_wit_type_decode`)
+    /// Writes the body of the decode function (`generate_ts_schema_type_decode`)
     fn write_decode_body(
         &self,
         writer: &mut TsFunctionWriter<'_>,
         value: &str,
-        typ: &AnalysedType,
+        typ: &SchemaType,
     ) -> anyhow::Result<()> {
         match typ {
-            AnalysedType::Record(_)
-            | AnalysedType::Variant(_)
-            | AnalysedType::Result(_)
-            | AnalysedType::Flags(_) => {
+            SchemaType::Record { .. }
+            | SchemaType::Variant { .. }
+            | SchemaType::Result { .. }
+            | SchemaType::Flags { .. } => {
                 // For complex types, write multi-line decode logic
                 writer.write_line(format!("const obj = {} as any;", value));
                 self.write_decode_logic(writer, typ)?;
             }
-            AnalysedType::Enum(enum_type) => {
+            SchemaType::Enum { cases, .. } => {
                 // For enums, write a readable multi-line check
                 writer.write_line(format!("if (typeof {} !== 'string') {{", value));
                 writer.indent();
@@ -1239,8 +1297,7 @@ impl TypeScriptBridgeGenerator {
                 ));
                 writer.unindent();
                 writer.write_line("}");
-                let cases = enum_type
-                    .cases
+                let cases = cases
                     .iter()
                     .map(|case| format!("\"{}\"", case))
                     .collect::<Vec<_>>();
@@ -1252,7 +1309,7 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("}");
                 writer.write_line(format!("return {} as any;", value));
             }
-            AnalysedType::Tuple(tuple) => {
+            SchemaType::Tuple { elements, .. } => {
                 // For tuples, write readable validation
                 writer.write_line(format!("if (!Array.isArray({})) {{", value));
                 writer.indent();
@@ -1262,25 +1319,21 @@ impl TypeScriptBridgeGenerator {
                 ));
                 writer.unindent();
                 writer.write_line("}");
-                writer.write_line(format!(
-                    "if ({}.length !== {}) {{",
-                    value,
-                    tuple.items.len()
-                ));
+                writer.write_line(format!("if ({}.length !== {}) {{", value, elements.len()));
                 writer.indent();
                 writer.write_line(format!(
                     "throw new Error(`Expected tuple of length {}, got length ${{{}}}.length`);",
-                    tuple.items.len(),
+                    elements.len(),
                     value
                 ));
                 writer.unindent();
                 writer.write_line("}");
                 writer.write_line("return [");
                 writer.indent();
-                for (idx, item_type) in tuple.items.iter().enumerate() {
+                for (idx, item_type) in elements.iter().enumerate() {
                     let item_decode =
-                        self.decode_wit_value(&format!("{}[{}]", value, idx), item_type);
-                    let comma = if idx < tuple.items.len() - 1 { "," } else { "" };
+                        self.decode_schema_value(&format!("{}[{}]", value, idx), item_type)?;
+                    let comma = if idx < elements.len() - 1 { "," } else { "" };
                     writer.write_line(format!("{}{}", item_decode, comma));
                 }
                 writer.unindent();
@@ -1288,7 +1341,7 @@ impl TypeScriptBridgeGenerator {
             }
             _ => {
                 // For simpler primitive types, just return the decoded value
-                let decode_expr = self.decode_wit_value(value, typ);
+                let decode_expr = self.decode_schema_value(value, typ)?;
                 writer.write_line(format!("return {};", decode_expr));
             }
         }
@@ -1299,36 +1352,36 @@ impl TypeScriptBridgeGenerator {
     fn write_decode_logic(
         &self,
         writer: &mut TsFunctionWriter<'_>,
-        typ: &AnalysedType,
+        typ: &SchemaType,
     ) -> anyhow::Result<()> {
         match typ {
-            AnalysedType::Record(record) => {
+            SchemaType::Record { fields, .. } => {
                 writer.write_line("return {");
                 writer.indent();
-                for (idx, field) in record.fields.iter().enumerate() {
+                for (idx, field) in fields.iter().enumerate() {
                     let js_field_name = self.to_js_ident(&field.name);
                     let wit_field_name = &field.name;
-                    let field_decode =
-                        self.decode_wit_value(&format!("obj[\"{}\"]", wit_field_name), &field.typ);
-                    let comma = if idx < record.fields.len() - 1 {
-                        ","
-                    } else {
-                        ""
-                    };
+                    let field_decode = self.decode_schema_value(
+                        &format!("obj[\"{}\"]", wit_field_name),
+                        &field.body,
+                    )?;
+                    let comma = if idx < fields.len() - 1 { "," } else { "" };
                     writer.write_line(format!("{}: {}{}", js_field_name, field_decode, comma));
                 }
                 writer.unindent();
                 writer.write_line("};");
             }
-            AnalysedType::Variant(variant) => {
-                for (idx, case) in variant.cases.iter().enumerate() {
+            SchemaType::Variant { cases, .. } => {
+                for (idx, case) in cases.iter().enumerate() {
                     let if_or_else = if idx == 0 { "if" } else { "else if" };
                     writer.write_line(format!("{}(\"{}\" in obj) {{", if_or_else, case.name));
                     writer.indent();
-                    match &case.typ {
+                    match &case.payload {
                         Some(case_type) => {
-                            let value_decode = self
-                                .decode_wit_value(&format!("obj[\"{}\"]", case.name), case_type);
+                            let value_decode = self.decode_schema_value(
+                                &format!("obj[\"{}\"]", case.name),
+                                case_type,
+                            )?;
                             writer.write_line(format!(
                                 "return {{ tag: '{}', val: {} }};",
                                 case.name, value_decode
@@ -1343,19 +1396,19 @@ impl TypeScriptBridgeGenerator {
                 }
                 writer.write_line("throw new Error(`Unknown variant case in ${obj}`);");
             }
-            AnalysedType::Result(result) => {
+            SchemaType::Result { spec, .. } => {
                 writer.write_line("if ('ok' in obj) {");
                 writer.indent();
-                let ok_value = match &result.ok {
-                    Some(ok_type) => self.decode_wit_value("obj.ok", ok_type),
+                let ok_value = match spec.ok.as_deref() {
+                    Some(ok_type) => self.decode_schema_value("obj.ok", ok_type)?,
                     None => "undefined".to_string(),
                 };
                 writer.write_line(format!("return {{ ok: {} }};", ok_value));
                 writer.unindent();
                 writer.write_line("} else if ('err' in obj) {");
                 writer.indent();
-                let err_value = match &result.err {
-                    Some(err_type) => self.decode_wit_value("obj.err", err_type),
+                let err_value = match spec.err.as_deref() {
+                    Some(err_type) => self.decode_schema_value("obj.err", err_type)?,
                     None => "undefined".to_string(),
                 };
                 writer.write_line(format!("return {{ err: {} }};", err_value));
@@ -1368,7 +1421,10 @@ impl TypeScriptBridgeGenerator {
                 writer.unindent();
                 writer.write_line("}");
             }
-            AnalysedType::Flags(flags) => {
+            SchemaType::Flags { flags, .. } => {
+                // Wire form is the raw schema-level flag name. Validate
+                // against the raw set, then map each accepted name to
+                // its JS-cased field on the result object.
                 writer.write_line("if (!Array.isArray(obj)) {");
                 writer.indent();
                 writer.write_line("throw new Error(`Expected array of flag names, got ${obj}`);");
@@ -1376,12 +1432,21 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("}");
                 writer.write_line("const result = {");
                 writer.indent();
-                for flag in &flags.names {
+                for flag in flags {
                     let flag_name = self.to_js_ident(flag);
                     writer.write_line(format!("{}: false,", flag_name));
                 }
                 writer.unindent();
                 writer.write_line("};");
+                let raw_to_js_pairs = flags
+                    .iter()
+                    .map(|name| format!("[\"{}\", \"{}\"]", name, self.to_js_ident(name)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writer.write_line(format!(
+                    "const __flagMap: Record<string, string> = Object.fromEntries([{}]);",
+                    raw_to_js_pairs
+                ));
                 writer.write_line("for (const flag of obj) {");
                 writer.indent();
                 writer.write_line("if (typeof flag !== 'string') {");
@@ -1389,18 +1454,13 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("throw new Error(`Expected string flag name, got ${flag}`);");
                 writer.unindent();
                 writer.write_line("}");
-                let flag_names_str = flags
-                    .names
-                    .iter()
-                    .map(|name| format!("'{}'", self.to_js_ident(name)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                writer.write_line(format!("if (![{}].includes(flag)) {{", flag_names_str));
+                writer.write_line("const __js = __flagMap[flag];");
+                writer.write_line("if (__js === undefined) {");
                 writer.indent();
                 writer.write_line("throw new Error(`Unknown flag name ${flag}`);");
                 writer.unindent();
                 writer.write_line("}");
-                writer.write_line("result[flag as keyof typeof result] = true;");
+                writer.write_line("(result as Record<string, boolean>)[__js] = true;");
                 writer.unindent();
                 writer.write_line("}");
                 writer.write_line("return result;");
@@ -1414,11 +1474,11 @@ impl TypeScriptBridgeGenerator {
     }
 
     /// Writes an exported type definition
-    fn generate_ts_wit_type_def(
+    fn generate_ts_schema_type_def(
         &self,
         writer: &mut TsWriter,
         ts_name: &TypeScriptTypeName,
-        typ: &AnalysedType,
+        typ: &SchemaType,
     ) -> anyhow::Result<()> {
         let def = self.type_definition(typ)?;
         writer.export_type(ts_name, &def);
@@ -1442,14 +1502,16 @@ impl TypeScriptBridgeGenerator {
                     let element_schema = &params.elements[0].schema;
                     match element_schema {
                         ElementSchema::ComponentModel(component_model) => {
+                            let element_schema_type =
+                                self.import_analysed_type(&component_model.element_type)?;
                             writer.write_line("if (result.result && result.result.type === \"Tuple\" && result.result.elements.length === 1) {");
                             writer.indent();
                             writer.write_line(format!(
                                 "return {};",
-                                self.decode_wit_value(
+                                self.decode_schema_value(
                                     "result.result.elements[0].value",
-                                    &component_model.element_type
-                                )
+                                    &element_schema_type,
+                                )?
                             ));
                             writer.unindent();
                             writer.write_line("} else {");
@@ -1515,11 +1577,14 @@ impl TypeScriptBridgeGenerator {
                     for (idx, param) in params.elements.iter().enumerate() {
                         let element_schema = &param.schema;
                         let decode_expr = match element_schema {
-                            ElementSchema::ComponentModel(component_model) => self
-                                .decode_wit_value(
+                            ElementSchema::ComponentModel(component_model) => {
+                                let element_schema_type =
+                                    self.import_analysed_type(&component_model.element_type)?;
+                                self.decode_schema_value(
                                     &format!("result.result.elements[{}].value", idx),
-                                    &component_model.element_type,
-                                ),
+                                    &element_schema_type,
+                                )?
+                            }
                             ElementSchema::UnstructuredText(descriptor) => {
                                 format!(
                                     "base.UnstructuredText.fromUntypedElementValue(\"{}\", result.result.elements[{}], [{}])",
@@ -1592,10 +1657,10 @@ impl TypeScriptBridgeGenerator {
                     writer.indent();
                     match &element.schema {
                         ElementSchema::ComponentModel(component_model) => {
-                            let decoded = self.decode_wit_value(
-                                "item.value.value",
-                                &component_model.element_type,
-                            );
+                            let element_schema_type =
+                                self.import_analysed_type(&component_model.element_type)?;
+                            let decoded =
+                                self.decode_schema_value("item.value.value", &element_schema_type)?;
                             writer.write_line(format!(
                                 "return {{ type: '{}', value: {} }};",
                                 element.name, decoded
@@ -1687,9 +1752,11 @@ impl TypeScriptBridgeGenerator {
                     let param_name = self.to_js_ident(&param.name);
                     match &param.schema {
                         ElementSchema::ComponentModel(component_model) => {
+                            let element_schema_type =
+                                self.import_analysed_type(&component_model.element_type)?;
                             writer.write_line(format!(
                                 "{{ type: 'ComponentModel', value: {} }},",
-                                self.encode_wit_value(&param_name, &component_model.element_type)
+                                self.encode_schema_value(&param_name, &element_schema_type)?
                             ));
                         }
                         ElementSchema::UnstructuredText(_) => {
@@ -1734,9 +1801,11 @@ impl TypeScriptBridgeGenerator {
 
                     match &element.schema {
                         ElementSchema::ComponentModel(component_model) => {
+                            let element_schema_type =
+                                self.import_analysed_type(&component_model.element_type)?;
                             writer.write_line(format!(
                                 "{{ type: 'ComponentModel', value: {} }}",
-                                self.encode_wit_value("item.value", &component_model.element_type)
+                                self.encode_schema_value("item.value", &element_schema_type)?
                             ));
                         }
                         ElementSchema::UnstructuredText(_) => {
@@ -1761,326 +1830,372 @@ impl TypeScriptBridgeGenerator {
         }
     }
 
-    fn decode_wit_value(&self, value: &str, typ: &AnalysedType) -> String {
+    fn decode_schema_value(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
         if let Some(name) = self.type_naming.type_name_for_type(typ) {
-            format!("decode{}({})", name, value)
-        } else {
-            match typ {
-                AnalysedType::Str(_) | AnalysedType::Chr(_) => {
+            return Ok(format!("decode{}({})", name, value));
+        }
+        let rendered = match typ {
+            SchemaType::String { .. } | SchemaType::Char { .. } => {
+                format!(
+                    "((v: unknown) => {{ if (typeof v === 'string') {{ return v; }} else {{ throw new Error(`Expected string, got ${{v}}`); }} }})({value})"
+                )
+            }
+            SchemaType::F64 { .. }
+            | SchemaType::F32 { .. }
+            | SchemaType::U64 { .. }
+            | SchemaType::S64 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::S8 { .. } => {
+                format!(
+                    "((v: unknown) => {{ if (typeof v === 'number') {{ return v; }} else {{ throw new Error(`Expected number, got ${{v}}`); }} }})({value})"
+                )
+            }
+            SchemaType::Bool { .. } => {
+                format!(
+                    "((v: unknown) => {{ if (typeof v === 'boolean') {{ return v; }} else {{ throw new Error(`Expected boolean, got ${{v}}`); }} }})({value})"
+                )
+            }
+            SchemaType::Option { inner, .. } => {
+                let inner_decode = self.decode_schema_value("item", inner)?;
+                format!("base.decodeOption({value}, (item) => {})", inner_decode)
+            }
+            SchemaType::List { element, .. } => {
+                // Special handling for lists of u8 which are Uint8Array
+                if matches!(**element, SchemaType::U8 { .. }) {
                     format!(
-                        "((v: unknown) => {{ if (typeof v === 'string') {{ return v; }} else {{ throw new Error(`Expected string, got ${{v}}`); }} }})({value})"
+                        "((v: unknown) => {{ if (v instanceof Uint8Array) {{ return v; }} else if (Array.isArray(v)) {{ return new Uint8Array(v); }} else {{ throw new Error(`Expected Uint8Array or array, got ${{v}}`); }} }})({value})"
                     )
-                }
-                AnalysedType::F64(_)
-                | AnalysedType::F32(_)
-                | AnalysedType::U64(_)
-                | AnalysedType::S64(_)
-                | AnalysedType::U32(_)
-                | AnalysedType::S32(_)
-                | AnalysedType::U16(_)
-                | AnalysedType::S16(_)
-                | AnalysedType::U8(_)
-                | AnalysedType::S8(_) => {
+                } else {
+                    let inner_decode = self.decode_schema_value("item", element)?;
                     format!(
-                        "((v: unknown) => {{ if (typeof v === 'number') {{ return v; }} else {{ throw new Error(`Expected number, got ${{v}}`); }} }})({value})"
+                        "((v: unknown) => {{ if (!Array.isArray(v)) {{ throw new Error(`Expected array, got ${{v}}`); }} return v.map((item) => {}); }})({value})",
+                        inner_decode
                     )
-                }
-                AnalysedType::Bool(_) => {
-                    format!(
-                        "((v: unknown) => {{ if (typeof v === 'boolean') {{ return v; }} else {{ throw new Error(`Expected boolean, got ${{v}}`); }} }})({value})"
-                    )
-                }
-                AnalysedType::Option(inner) => {
-                    let inner_decode = self.decode_wit_value("item", &inner.inner);
-                    format!("base.decodeOption({value}, (item) => {})", inner_decode)
-                }
-                AnalysedType::List(inner) => {
-                    // Special handling for lists of u8 which are Uint8Array
-                    if matches!(*inner.inner, AnalysedType::U8(_)) {
-                        format!(
-                            "((v: unknown) => {{ if (v instanceof Uint8Array) {{ return v; }} else if (Array.isArray(v)) {{ return new Uint8Array(v); }} else {{ throw new Error(`Expected Uint8Array or array, got ${{v}}`); }} }})({value})"
-                        )
-                    } else {
-                        let inner_decode = self.decode_wit_value("item", &inner.inner);
-                        format!(
-                            "((v: unknown) => {{ if (!Array.isArray(v)) {{ throw new Error(`Expected array, got ${{v}}`); }} return v.map((item) => {}); }})({value})",
-                            inner_decode
-                        )
-                    }
-                }
-                AnalysedType::Enum(enum_type) => {
-                    // Enum: decoded as a string, validate it's a known case
-                    let cases_array = enum_type
-                        .cases
-                        .iter()
-                        .map(|case| format!("\"{}\"", case))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let cases_union = enum_type
-                        .cases
-                        .iter()
-                        .map(|case| format!("\"{}\"", case))
-                        .collect::<Vec<_>>()
-                        .join(" | ");
-                    format!(
-                        "((v: unknown) => {{ if (typeof v === 'string' && [{cases_array}].includes(v)) {{ return v as {cases_union}; }} else {{ throw new Error(`Expected one of [{cases_array}], got ${{v}}`); }} }})({value})"
-                    )
-                }
-                AnalysedType::Flags(flags) => {
-                    // Flags: decoded as an array of flag names, convert to boolean object
-                    let flag_names = flags
-                        .names
-                        .iter()
-                        .map(|name| {
-                            let flag_name = self.to_js_ident(name);
-                            format!("'{}'", flag_name)
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let flag_initializers = flags
-                        .names
-                        .iter()
-                        .map(|name| {
-                            let flag_name = self.to_js_ident(name);
-                            format!("{flag_name}: false")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!(
-                        "((v: unknown) => {{ if (!Array.isArray(v)) {{ throw new Error(`Expected array of flag names, got ${{v}}`); }} const result = {{ {flag_initializers} }}; for (const flag of v) {{ if (typeof flag !== 'string') {{ throw new Error(`Expected string flag name, got ${{flag}}`); }} if (![{flag_names}].includes(flag)) {{ throw new Error(`Unknown flag name ${{flag}}`); }} result[flag as keyof typeof result] = true; }} return result; }})({value})"
-                    )
-                }
-                AnalysedType::Tuple(tuple) => {
-                    // Tuple: decoded from an array
-                    let items: Vec<String> = tuple
-                        .items
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, item_type)| {
-                            self.decode_wit_value(&format!("v[{}]", idx), item_type)
-                        })
-                        .collect();
-                    format!(
-                        "((v: unknown) => {{ if (!Array.isArray(v) || v.length !== {}) {{ throw new Error(`Expected array of length {}, got ${{v}}`); }} return [{}]; }})({value})",
-                        tuple.items.len(),
-                        tuple.items.len(),
-                        items.join(", ")
-                    )
-                }
-                AnalysedType::Record(record) => {
-                    // Record: decoded from an object
-                    let field_decoders: Vec<String> = record
-                        .fields
-                        .iter()
-                        .map(|field| {
-                            let js_field_name = self.to_js_ident(&field.name);
-                            let wit_field_name = &field.name;
-                            let field_decode = self.decode_wit_value(
-                                &format!("(v as any)[\"{}\"]", wit_field_name),
-                                &field.typ,
-                            );
-                            format!("{js_field_name}: {field_decode}")
-                        })
-                        .collect();
-                    format!(
-                        "((v: unknown) => {{ if (typeof v !== 'object' || v === null) {{ throw new Error(`Expected object, got ${{v}}`); }} return {{ {} }}; }})({value})",
-                        field_decoders.join(", ")
-                    )
-                }
-                AnalysedType::Variant(variant) => {
-                    // Variant: decoded from an object with a single key (case name)
-                    // Create a series of checks: if 'case1' in v { ... } else if 'case2' in v { ... }
-                    let cases = variant
-                        .cases
-                        .iter()
-                        .map(|case| match &case.typ {
-                            Some(case_type) => {
-                                let value_decode = self.decode_wit_value(
-                                    &format!("(obj as any)[\"{}\"]", case.name),
-                                    case_type,
-                                );
-                                format!(
-                                    "if (\"{}\" in obj) {{ return {{ tag: '{}', val: {} }}; }}",
-                                    case.name, case.name, value_decode
-                                )
-                            }
-                            None => {
-                                format!(
-                                    "if (\"{}\" in obj) {{ return {{ tag: '{}' }}; }}",
-                                    case.name, case.name
-                                )
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" else ");
-                    format!(
-                        "((v: unknown) => {{ if (typeof v !== 'object' || v === null || Array.isArray(v)) {{ throw new Error(`Expected variant object, got ${{v}}`); }} const obj = v as Record<string, any>; {} else {{ throw new Error(`Unknown variant case in ${{v}}`); }} }})({value})",
-                        cases
-                    )
-                }
-                AnalysedType::Result(result) => {
-                    // Result: decoded from an object with either 'ok' or 'err' key
-                    let ok_expr = match &result.ok {
-                        Some(ok_type) => {
-                            let decoded = self.decode_wit_value("(obj as any).ok", ok_type);
-                            format!("{{ ok: {} }}", decoded)
-                        }
-                        None => "{ ok: undefined }".to_string(),
-                    };
-                    let err_expr = match &result.err {
-                        Some(err_type) => {
-                            let decoded = self.decode_wit_value("(obj as any).err", err_type);
-                            format!("{{ err: {} }}", decoded)
-                        }
-                        None => "{ err: undefined }".to_string(),
-                    };
-                    format!(
-                        "((v: unknown) => {{ if (typeof v !== 'object' || v === null || Array.isArray(v)) {{ throw new Error(`Expected result object, got ${{v}}`); }} const obj = v as Record<string, any>; if ('ok' in obj) {{ return {}; }} else if ('err' in obj) {{ return {}; }} else {{ throw new Error(`Expected result object with 'ok' or 'err' key, got ${{v}}`); }} }})({value})",
-                        ok_expr, err_expr
-                    )
-                }
-                AnalysedType::Handle(_) => {
-                    // Handles are not supported in decoding
-                    "undefined".to_string()
                 }
             }
-        }
+            SchemaType::Enum { cases, .. } => {
+                // Enum: decoded as a string, validate it's a known case
+                let cases_array = cases
+                    .iter()
+                    .map(|case| format!("\"{}\"", case))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let cases_union = cases
+                    .iter()
+                    .map(|case| format!("\"{}\"", case))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                format!(
+                    "((v: unknown) => {{ if (typeof v === 'string' && [{cases_array}].includes(v)) {{ return v as {cases_union}; }} else {{ throw new Error(`Expected one of [{cases_array}], got ${{v}}`); }} }})({value})"
+                )
+            }
+            SchemaType::Flags { flags, .. } => {
+                // Wire form is the raw schema-level flag name; the TS
+                // field name is the JS-cased identifier. `base.decodeFlags`
+                // validates the wire names and maps them onto the JS-cased
+                // fields of the `initial` shape (every field starts `false`).
+                let flag_initializers = flags
+                    .iter()
+                    .map(|name| format!("{}: false", self.to_js_ident(name)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let flag_pairs = flags
+                    .iter()
+                    .map(|name| format!("['{}', '{}']", name, self.to_js_ident(name)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("base.decodeFlags({value}, {{ {flag_initializers} }}, [{flag_pairs}])")
+            }
+            SchemaType::Tuple { elements, .. } => {
+                // Tuple: decoded from an array
+                let items: Vec<String> = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, item_type)| {
+                        self.decode_schema_value(&format!("v[{}]", idx), item_type)
+                    })
+                    .collect::<anyhow::Result<_>>()?;
+                format!(
+                    "((v: unknown) => {{ if (!Array.isArray(v) || v.length !== {}) {{ throw new Error(`Expected array of length {}, got ${{v}}`); }} return [{}]; }})({value})",
+                    elements.len(),
+                    elements.len(),
+                    items.join(", ")
+                )
+            }
+            SchemaType::Record { fields, .. } => {
+                // Record: decoded from an object
+                let field_decoders: Vec<String> = fields
+                    .iter()
+                    .map(|field| {
+                        let js_field_name = self.to_js_ident(&field.name);
+                        let wit_field_name = &field.name;
+                        let field_decode = self.decode_schema_value(
+                            &format!("(v as any)[\"{}\"]", wit_field_name),
+                            &field.body,
+                        )?;
+                        Ok::<_, anyhow::Error>(format!("{js_field_name}: {field_decode}"))
+                    })
+                    .collect::<anyhow::Result<_>>()?;
+                format!(
+                    "((v: unknown) => {{ if (typeof v !== 'object' || v === null) {{ throw new Error(`Expected object, got ${{v}}`); }} return {{ {} }}; }})({value})",
+                    field_decoders.join(", ")
+                )
+            }
+            SchemaType::Variant { cases, .. } => {
+                // Variant: decoded from an object with a single key (case name)
+                // Create a series of checks: if 'case1' in v { ... } else if 'case2' in v { ... }
+                let cases = cases
+                    .iter()
+                    .map(|case| match &case.payload {
+                        Some(case_type) => {
+                            let value_decode = self.decode_schema_value(
+                                &format!("(obj as any)[\"{}\"]", case.name),
+                                case_type,
+                            )?;
+                            Ok::<_, anyhow::Error>(format!(
+                                "if (\"{}\" in obj) {{ return {{ tag: '{}', val: {} }}; }}",
+                                case.name, case.name, value_decode
+                            ))
+                        }
+                        None => Ok(format!(
+                            "if (\"{}\" in obj) {{ return {{ tag: '{}' }}; }}",
+                            case.name, case.name
+                        )),
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(" else ");
+                format!(
+                    "((v: unknown) => {{ if (typeof v !== 'object' || v === null || Array.isArray(v)) {{ throw new Error(`Expected variant object, got ${{v}}`); }} const obj = v as Record<string, any>; {} else {{ throw new Error(`Unknown variant case in ${{v}}`); }} }})({value})",
+                    cases
+                )
+            }
+            SchemaType::Result { spec, .. } => {
+                // Result: decoded from an object with either 'ok' or 'err' key
+                let ok_expr = match spec.ok.as_deref() {
+                    Some(ok_type) => {
+                        let decoded = self.decode_schema_value("(obj as any).ok", ok_type)?;
+                        format!("{{ ok: {} }}", decoded)
+                    }
+                    None => "{ ok: undefined }".to_string(),
+                };
+                let err_expr = match spec.err.as_deref() {
+                    Some(err_type) => {
+                        let decoded = self.decode_schema_value("(obj as any).err", err_type)?;
+                        format!("{{ err: {} }}", decoded)
+                    }
+                    None => "{ err: undefined }".to_string(),
+                };
+                format!(
+                    "((v: unknown) => {{ if (typeof v !== 'object' || v === null || Array.isArray(v)) {{ throw new Error(`Expected result object, got ${{v}}`); }} const obj = v as Record<string, any>; if ('ok' in obj) {{ return {}; }} else if ('err' in obj) {{ return {}; }} else {{ throw new Error(`Expected result object with 'ok' or 'err' key, got ${{v}}`); }} }})({value})",
+                    ok_expr, err_expr
+                )
+            }
+            SchemaType::Ref { .. } => {
+                // The named-type ref should have already been resolved
+                // via `type_name_for_type` above; reaching here means a
+                // Ref slipped through without a registered name. Fail
+                // generation rather than silently emit `undefined`.
+                anyhow::bail!(
+                    "Unresolved SchemaType::Ref reached decode_schema_value; \
+                         missing name in type_naming. value expr = {value}"
+                );
+            }
+            // Rich schema variants without a legacy AnalysedType
+            // counterpart cannot round-trip through the current
+            // `IntoValue` / `FromValue` SDK contract.
+            SchemaType::FixedList { .. }
+            | SchemaType::Map { .. }
+            | SchemaType::Text { .. }
+            | SchemaType::Binary { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. }
+            | SchemaType::Duration { .. }
+            | SchemaType::Quantity { .. }
+            | SchemaType::Union { .. }
+            | SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { .. } => {
+                anyhow::bail!(
+                    "Rich SchemaType variant has no legacy AnalysedType \
+                         encoding for the TypeScript bridge; type = {typ:?}"
+                );
+            }
+        };
+        Ok(rendered)
     }
 
-    fn encode_wit_value(&self, value: &str, typ: &AnalysedType) -> String {
+    fn encode_schema_value(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
         if let Some(name) = self.type_naming.type_name_for_type(typ) {
-            format!("encode{}({})", name, value)
-        } else {
-            match typ {
-                AnalysedType::Str(_) => value.to_string(),
-                AnalysedType::Chr(_) => value.to_string(),
-                AnalysedType::F64(_) => value.to_string(),
-                AnalysedType::F32(_) => value.to_string(),
-                AnalysedType::U64(_) => value.to_string(),
-                AnalysedType::S64(_) => value.to_string(),
-                AnalysedType::U32(_) => value.to_string(),
-                AnalysedType::S32(_) => value.to_string(),
-                AnalysedType::U16(_) => value.to_string(),
-                AnalysedType::S16(_) => value.to_string(),
-                AnalysedType::U8(_) => value.to_string(),
-                AnalysedType::S8(_) => value.to_string(),
-                AnalysedType::Bool(_) => value.to_string(),
-                AnalysedType::Option(inner) => {
-                    let inner_encode = self.encode_wit_value("item", &inner.inner);
-                    format!("base.encodeOption({value}, (item) => ({}))", inner_encode)
-                }
-                AnalysedType::List(inner) => {
-                    let inner_encode = self.encode_wit_value("item", &inner.inner);
-                    // For primitives, just return the value as-is since no transformation is needed
-                    if inner_encode == "item" {
-                        value.to_string()
-                    } else {
-                        format!("{}.map((item: any) => ({}))", value, inner_encode)
-                    }
-                }
-                AnalysedType::Enum(_) => {
-                    // Enum: encoded as a string
+            return Ok(format!("encode{}({})", name, value));
+        }
+        let rendered = match typ {
+            SchemaType::String { .. } => value.to_string(),
+            SchemaType::Char { .. } => value.to_string(),
+            SchemaType::F64 { .. } => value.to_string(),
+            SchemaType::F32 { .. } => value.to_string(),
+            SchemaType::U64 { .. } => value.to_string(),
+            SchemaType::S64 { .. } => value.to_string(),
+            SchemaType::U32 { .. } => value.to_string(),
+            SchemaType::S32 { .. } => value.to_string(),
+            SchemaType::U16 { .. } => value.to_string(),
+            SchemaType::S16 { .. } => value.to_string(),
+            SchemaType::U8 { .. } => value.to_string(),
+            SchemaType::S8 { .. } => value.to_string(),
+            SchemaType::Bool { .. } => value.to_string(),
+            SchemaType::Option { inner, .. } => {
+                let inner_encode = self.encode_schema_value("item", inner)?;
+                format!("base.encodeOption({value}, (item) => ({}))", inner_encode)
+            }
+            SchemaType::List { element, .. } => {
+                let inner_encode = self.encode_schema_value("item", element)?;
+                // For primitives, just return the value as-is since no transformation is needed
+                if inner_encode == "item" {
                     value.to_string()
-                }
-                AnalysedType::Flags(flags) => {
-                    // Flags: encoded as an array of flag names that are true
-                    let flag_names: Vec<String> = flags
-                        .names
-                        .iter()
-                        .map(|name| {
-                            let flag_name = self.to_js_ident(name);
-                            format!("({}[\"{}\"]) ? \"{}\" : undefined", value, flag_name, name)
-                        })
-                        .collect();
-                    format!("[{}].filter((f) => f !== undefined)", flag_names.join(", "))
-                }
-                AnalysedType::Tuple(tuple) => {
-                    // Tuple: encoded as an array
-                    let items: Vec<String> = tuple
-                        .items
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, item_type)| {
-                            self.encode_wit_value(&format!("{}[{}]", value, idx), item_type)
-                        })
-                        .collect();
-                    format!("[{}]", items.join(", "))
-                }
-                AnalysedType::Record(record) => {
-                    // Record: encoded as an object
-                    let fields: Vec<String> = record
-                        .fields
-                        .iter()
-                        .map(|field| {
-                            let js_field_name = self.to_js_ident(&field.name);
-                            let field_encode = self.encode_wit_value(
-                                &format!("{}.{}", value, js_field_name),
-                                &field.typ,
-                            );
-                            format!("\"{}\": {}", field.name, field_encode)
-                        })
-                        .collect();
-                    format!("{{ {} }}", fields.join(", "))
-                }
-                AnalysedType::Variant(variant) => {
-                    // Variant: encoded as an object with a single key (case name)
-                    // Generate nested ternary: case1 ? obj1 : (case2 ? obj2 : (case3 ? obj3 : null))
-                    let cases: Vec<(String, String)> = variant
-                        .cases
-                        .iter()
-                        .map(|case| {
-                            let condition = format!("{}.tag === '{}'", value, case.name);
-                            let value_expr = match &case.typ {
-                                Some(case_type) => {
-                                    let encoded =
-                                        self.encode_wit_value(&format!("{}.val", value), case_type);
-                                    format!("{{ \"{}\": {} }}", case.name, encoded)
-                                }
-                                None => {
-                                    format!("{{ \"{}\": null }}", case.name)
-                                }
-                            };
-                            (condition, value_expr)
-                        })
-                        .collect();
-
-                    // Nest the ternary operators properly from right to left
-                    if cases.is_empty() {
-                        "null".to_string()
-                    } else {
-                        let mut result = "null".to_string();
-                        for (cond, expr) in cases.iter().rev() {
-                            result = format!("({} ? {} : {})", cond, expr, result);
-                        }
-                        result
-                    }
-                }
-                AnalysedType::Result(result) => {
-                    // Result: encoded as { ok: value } or { err: error }
-                    // value has structure: { ok: T } | { err: E }
-                    let ok_expr = match &result.ok {
-                        Some(ok_type) => {
-                            let encoded = self.encode_wit_value(&format!("{}.ok", value), ok_type);
-                            format!("{{ ok: {} }}", encoded)
-                        }
-                        None => "{ ok: undefined }".to_string(),
-                    };
-                    let err_expr = match &result.err {
-                        Some(err_type) => {
-                            let encoded =
-                                self.encode_wit_value(&format!("{}.err", value), err_type);
-                            format!("{{ err: {} }}", encoded)
-                        }
-                        None => "{ err: undefined }".to_string(),
-                    };
-                    format!("({}.ok !== undefined ? {} : {})", value, ok_expr, err_expr)
-                }
-                AnalysedType::Handle(_) => {
-                    // Handles are not supported in encoding
-                    "undefined".to_string()
+                } else {
+                    format!("{}.map((item: any) => ({}))", value, inner_encode)
                 }
             }
-        }
+            SchemaType::Enum { .. } => {
+                // Enum: encoded as a string
+                value.to_string()
+            }
+            SchemaType::Flags { flags, .. } => {
+                // Wire form uses the raw schema-level flag name; the TS
+                // field name is the JS-cased identifier.
+                let flag_names: Vec<String> = flags
+                    .iter()
+                    .map(|name| {
+                        let flag_name = self.to_js_ident(name);
+                        format!("({}[\"{}\"]) ? \"{}\" : undefined", value, flag_name, name)
+                    })
+                    .collect();
+                format!("[{}].filter((f) => f !== undefined)", flag_names.join(", "))
+            }
+            SchemaType::Tuple { elements, .. } => {
+                // Tuple: encoded as an array
+                let items: Vec<String> = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, item_type)| {
+                        self.encode_schema_value(&format!("{}[{}]", value, idx), item_type)
+                    })
+                    .collect::<anyhow::Result<_>>()?;
+                format!("[{}]", items.join(", "))
+            }
+            SchemaType::Record { fields, .. } => {
+                // Record: encoded as an object
+                let fields: Vec<String> = fields
+                    .iter()
+                    .map(|field| {
+                        let js_field_name = self.to_js_ident(&field.name);
+                        let field_encode = self.encode_schema_value(
+                            &format!("{}.{}", value, js_field_name),
+                            &field.body,
+                        )?;
+                        Ok::<_, anyhow::Error>(format!("\"{}\": {}", field.name, field_encode))
+                    })
+                    .collect::<anyhow::Result<_>>()?;
+                format!("{{ {} }}", fields.join(", "))
+            }
+            SchemaType::Variant { cases, .. } => {
+                // Variant: encoded as an object with a single key (case name)
+                // Generate nested ternary: case1 ? obj1 : (case2 ? obj2 : (case3 ? obj3 : null))
+                let cases: Vec<(String, String)> = cases
+                    .iter()
+                    .map(|case| {
+                        let condition = format!("{}.tag === '{}'", value, case.name);
+                        let value_expr = match &case.payload {
+                            Some(case_type) => {
+                                let encoded =
+                                    self.encode_schema_value(&format!("{}.val", value), case_type)?;
+                                format!("{{ \"{}\": {} }}", case.name, encoded)
+                            }
+                            None => {
+                                format!("{{ \"{}\": null }}", case.name)
+                            }
+                        };
+                        Ok::<_, anyhow::Error>((condition, value_expr))
+                    })
+                    .collect::<anyhow::Result<_>>()?;
+
+                // Nest the ternary operators properly from right to left
+                if cases.is_empty() {
+                    "null".to_string()
+                } else {
+                    let mut result = "null".to_string();
+                    for (cond, expr) in cases.iter().rev() {
+                        result = format!("({} ? {} : {})", cond, expr, result);
+                    }
+                    result
+                }
+            }
+            SchemaType::Result { spec, .. } => {
+                // Result: encoded as { ok: value } or { err: error }
+                // value has structure: { ok: T } | { err: E }.
+                // Discriminator MUST be `'ok' in value`. `value.ok !== undefined`
+                // would route `{ ok: undefined }` (a valid `Ok(())` or
+                // `Ok(None)` payload) to the err branch. The TS
+                // `JsonResult<Ok, Err>` alias keeps `ok` in both arms,
+                // so `'ok' in value` doesn't narrow; cast at the
+                // access point to keep the generated TS type-correct.
+                let ok_expr = match spec.ok.as_deref() {
+                    Some(ok_type) => {
+                        let encoded =
+                            self.encode_schema_value(&format!("({} as any).ok", value), ok_type)?;
+                        format!("{{ ok: {} }}", encoded)
+                    }
+                    None => "{ ok: undefined }".to_string(),
+                };
+                let err_expr = match spec.err.as_deref() {
+                    Some(err_type) => {
+                        let encoded =
+                            self.encode_schema_value(&format!("({} as any).err", value), err_type)?;
+                        format!("{{ err: {} }}", encoded)
+                    }
+                    None => "{ err: undefined }".to_string(),
+                };
+                format!("('ok' in {} ? {} : {})", value, ok_expr, err_expr)
+            }
+            SchemaType::Ref { .. } => {
+                // Refs are resolved via the type_naming lookup above;
+                // reaching here means a Ref slipped through without a
+                // registered name. Fail generation rather than silently
+                // emit `undefined`.
+                anyhow::bail!(
+                    "Unresolved SchemaType::Ref reached encode_schema_value; \
+                         missing name in type_naming. value expr = {value}"
+                );
+            }
+            // Rich schema variants without a legacy AnalysedType
+            // counterpart cannot round-trip through the current
+            // `IntoValue` / `FromValue` SDK contract.
+            SchemaType::FixedList { .. }
+            | SchemaType::Map { .. }
+            | SchemaType::Text { .. }
+            | SchemaType::Binary { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. }
+            | SchemaType::Duration { .. }
+            | SchemaType::Quantity { .. }
+            | SchemaType::Union { .. }
+            | SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { .. } => {
+                anyhow::bail!(
+                    "Rich SchemaType variant has no legacy AnalysedType \
+                         encoding for the TypeScript bridge; type = {typ:?}"
+                );
+            }
+        };
+        Ok(rendered)
     }
 
     fn unstructured_text_type(descriptor: &TextDescriptor) -> String {
@@ -2158,7 +2273,9 @@ impl TypeScriptBridgeGenerator {
     fn element_schema_as_type(&self, schema: &ElementSchema) -> anyhow::Result<String> {
         Ok(match schema {
             ElementSchema::ComponentModel(component_model) => {
-                self.type_reference(&component_model.element_type)?
+                let element_schema_type =
+                    self.import_analysed_type(&component_model.element_type)?;
+                self.type_reference(&element_schema_type)?
             }
             ElementSchema::UnstructuredText(descriptor) => Self::unstructured_text_type(descriptor),
             ElementSchema::UnstructuredBinary(descriptor) => {
@@ -2193,10 +2310,11 @@ impl TypeScriptBridgeGenerator {
                 for param in &params.elements {
                     let param_name = self.to_js_ident(&param.name);
                     match &param.schema {
-                        ElementSchema::ComponentModel(component_model) => writer.param(
-                            &param_name,
-                            &self.type_reference(&component_model.element_type)?,
-                        ),
+                        ElementSchema::ComponentModel(component_model) => {
+                            let element_schema_type =
+                                self.import_analysed_type(&component_model.element_type)?;
+                            writer.param(&param_name, &self.type_reference(&element_schema_type)?)
+                        }
                         ElementSchema::UnstructuredText(descriptor) => {
                             writer.param(&param_name, &Self::unstructured_text_type(descriptor));
                         }
@@ -2240,82 +2358,100 @@ impl TypeScriptBridgeGenerator {
         })
     }
 
-    fn type_reference(&self, typ: &AnalysedType) -> anyhow::Result<String> {
+    fn type_reference(&self, typ: &SchemaType) -> anyhow::Result<String> {
         match self.type_naming.type_name_for_type(typ) {
             Some(name) => Ok(name.to_string()),
             None => {
                 match typ {
-                    AnalysedType::Str(_) => Ok("string".to_string()),
-                    AnalysedType::Chr(_) => Ok("string".to_string()),
-                    AnalysedType::F64(_) => Ok("number".to_string()),
-                    AnalysedType::F32(_) => Ok("number".to_string()),
-                    AnalysedType::U64(_) => Ok("number".to_string()),
-                    AnalysedType::S64(_) => Ok("number".to_string()),
-                    AnalysedType::U32(_) => Ok("number".to_string()),
-                    AnalysedType::S32(_) => Ok("number".to_string()),
-                    AnalysedType::U16(_) => Ok("number".to_string()),
-                    AnalysedType::S16(_) => Ok("number".to_string()),
-                    AnalysedType::U8(_) => Ok("number".to_string()),
-                    AnalysedType::S8(_) => Ok("number".to_string()),
-                    AnalysedType::Bool(_) => Ok("boolean".to_string()),
-                    AnalysedType::Option(inner) => {
-                        let inner_ts_type = self.type_reference(&inner.inner)?;
+                    SchemaType::String { .. } => Ok("string".to_string()),
+                    SchemaType::Char { .. } => Ok("string".to_string()),
+                    SchemaType::F64 { .. } => Ok("number".to_string()),
+                    SchemaType::F32 { .. } => Ok("number".to_string()),
+                    SchemaType::U64 { .. } => Ok("number".to_string()),
+                    SchemaType::S64 { .. } => Ok("number".to_string()),
+                    SchemaType::U32 { .. } => Ok("number".to_string()),
+                    SchemaType::S32 { .. } => Ok("number".to_string()),
+                    SchemaType::U16 { .. } => Ok("number".to_string()),
+                    SchemaType::S16 { .. } => Ok("number".to_string()),
+                    SchemaType::U8 { .. } => Ok("number".to_string()),
+                    SchemaType::S8 { .. } => Ok("number".to_string()),
+                    SchemaType::Bool { .. } => Ok("boolean".to_string()),
+                    SchemaType::Option { inner, .. } => {
+                        let inner_ts_type = self.type_reference(inner)?;
                         Ok(format!("{} | undefined", inner_ts_type)) // TODO: use ? in parameter and field positions
                     }
-                    AnalysedType::List(inner) => {
-                        if matches!(&*inner.inner, AnalysedType::U8(_)) {
+                    SchemaType::List { element, .. } => {
+                        if matches!(**element, SchemaType::U8 { .. }) {
                             Ok("Uint8Array".to_string())
                         } else {
-                            let inner_ts_type = self.type_reference(&inner.inner)?;
+                            let inner_ts_type = self.type_reference(element)?;
                             Ok(format!("{}[]", inner_ts_type))
                         }
                     }
-                    AnalysedType::Tuple(inner) => {
-                        let types: Vec<String> = inner
-                            .items
+                    SchemaType::Tuple { elements, .. } => {
+                        let types: Vec<String> = elements
                             .iter()
                             .map(|item| self.type_reference(item))
                             .collect::<Result<_, _>>()?;
                         Ok(format!("[{}]", types.join(", ")))
                     }
-                    AnalysedType::Result(result) => {
-                        let ok_type = result
+                    SchemaType::Result { spec, .. } => {
+                        let ok_type = spec
                             .ok
-                            .as_ref()
+                            .as_deref()
                             .map(|t| self.type_reference(t))
                             .transpose()?
                             .unwrap_or("void".to_string());
-                        let err_type = result
+                        let err_type = spec
                             .err
-                            .as_ref()
+                            .as_deref()
                             .map(|t| self.type_reference(t))
                             .transpose()?
                             .unwrap_or("void".to_string());
                         Ok(format!("base.JsonResult<{ok_type}, {err_type}>"))
                     }
-                    AnalysedType::Handle(_) => Err(anyhow!("Handle types are not supported")),
-                    _ => match typ.name() {
-                        Some(name) => {
-                            if self.same_language {
-                                Ok(name.to_string())
-                            } else {
-                                Ok(name.to_upper_camel_case())
-                            }
-                        }
-                        None => self.type_definition(typ),
-                    },
+                    // Named-composite refs resolve via [`type_name_for_type`]
+                    // above; reaching this arm means the type_naming pass
+                    // did not register a name for an anonymous composite.
+                    // Fall through to an inline `type_definition`.
+                    SchemaType::Variant { .. }
+                    | SchemaType::Enum { .. }
+                    | SchemaType::Flags { .. }
+                    | SchemaType::Record { .. } => self.type_definition(typ),
+                    SchemaType::Ref { .. } => self.type_definition(typ),
+                    // Rich schema variants without a legacy AnalysedType
+                    // counterpart have no TS surface in the current SDK
+                    // template.
+                    SchemaType::FixedList { .. }
+                    | SchemaType::Map { .. }
+                    | SchemaType::Text { .. }
+                    | SchemaType::Binary { .. }
+                    | SchemaType::Path { .. }
+                    | SchemaType::Url { .. }
+                    | SchemaType::Datetime { .. }
+                    | SchemaType::Duration { .. }
+                    | SchemaType::Quantity { .. }
+                    | SchemaType::Union { .. }
+                    | SchemaType::Secret { .. }
+                    | SchemaType::QuotaToken { .. }
+                    | SchemaType::Future { .. }
+                    | SchemaType::Stream { .. } => Err(anyhow!(
+                        "Cannot emit TypeScript type reference for unsupported schema variant: {typ:?}"
+                    )),
                 }
             }
         }
     }
 
-    fn type_definition(&self, typ: &AnalysedType) -> anyhow::Result<String> {
-        match typ {
-            AnalysedType::Variant(variant) => {
+    fn type_definition(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        // Resolve through `Ref` so the body shape drives the type definition.
+        let resolved = self.resolve_ref(typ);
+        match resolved {
+            SchemaType::Variant { cases, .. } => {
                 let mut case_defs = Vec::new();
-                for case in &variant.cases {
+                for case in cases {
                     let case_name = &case.name;
-                    match &case.typ {
+                    match &case.payload {
                         Some(ty) => {
                             let case_type = self.type_reference(ty)?;
                             case_defs
@@ -2330,53 +2466,52 @@ impl TypeScriptBridgeGenerator {
                 let cases = format!("\n{}", case_defs.join(" |\n"));
                 Ok(cases)
             }
-            AnalysedType::Result(result) => {
-                let ok_type = result
+            SchemaType::Result { spec, .. } => {
+                let ok_type = spec
                     .ok
-                    .as_ref()
+                    .as_deref()
                     .map(|t| self.type_reference(t))
                     .transpose()?
                     .unwrap_or("void".to_string());
-                let err_type = result
+                let err_type = spec
                     .err
-                    .as_ref()
+                    .as_deref()
                     .map(|t| self.type_reference(t))
                     .transpose()?
                     .unwrap_or("void".to_string());
                 Ok(format!("base.JsonResult<{ok_type}, {err_type}>")) // TODO: convert to a more convenient result type
             }
-            AnalysedType::Option(option) => {
-                let inner_ts_type = self.type_reference(&option.inner)?;
+            SchemaType::Option { inner, .. } => {
+                let inner_ts_type = self.type_reference(inner)?;
                 Ok(format!("{} | undefined", inner_ts_type))
             }
-            AnalysedType::Enum(r#enum) => {
-                let cases = r#enum
-                    .cases
+            SchemaType::Enum { cases, .. } => {
+                let cases = cases
                     .iter()
                     .map(|case| format!("\"{}\"", case))
                     .collect::<Vec<_>>();
                 Ok(cases.join(" | "))
             }
-            AnalysedType::Flags(flags) => {
+            SchemaType::Flags { flags, .. } => {
                 let mut flags_def = String::new();
                 flags_def.push_str("{\n");
-                for flag in &flags.names {
+                for flag in flags {
                     let flag_name = self.to_js_ident(flag);
                     flags_def.push_str(&format!("  {flag_name}: boolean;\n"));
                 }
                 flags_def.push('}');
                 Ok(flags_def)
             }
-            AnalysedType::Record(record) => {
+            SchemaType::Record { fields, .. } => {
                 let mut record_def = String::new();
                 record_def.push_str("{\n");
-                for field in &record.fields {
+                for field in fields {
                     let js_name = self.to_js_ident(&field.name);
-                    let field_str = if let AnalysedType::Option(option) = &field.typ {
-                        let field_type = self.type_reference(&option.inner)?;
+                    let field_str = if let SchemaType::Option { inner, .. } = &field.body {
+                        let field_type = self.type_reference(inner)?;
                         format!("{js_name}?: {field_type};\n")
                     } else {
-                        let field_type = self.type_reference(&field.typ)?;
+                        let field_type = self.type_reference(&field.body)?;
                         format!("{js_name}: {field_type};\n")
                     };
                     let indented = indent(&field_str, 2);
@@ -2385,36 +2520,56 @@ impl TypeScriptBridgeGenerator {
                 record_def.push('}');
                 Ok(record_def)
             }
-            AnalysedType::Tuple(tuple) => {
-                let types: Vec<String> = tuple
-                    .items
+            SchemaType::Tuple { elements, .. } => {
+                let types: Vec<String> = elements
                     .iter()
                     .map(|item| self.type_reference(item))
                     .collect::<Result<_, _>>()?;
                 Ok(format!("[{}]", types.join(", ")))
             }
-            AnalysedType::List(list) => {
-                if matches!(*list.inner, AnalysedType::U8(_)) {
+            SchemaType::List { element, .. } => {
+                if matches!(**element, SchemaType::U8 { .. }) {
                     Ok("Uint8Array".to_string())
                 } else {
-                    let inner_type = self.type_reference(&list.inner)?;
+                    let inner_type = self.type_reference(element)?;
                     Ok(format!("{}[]", inner_type))
                 }
             }
-            AnalysedType::Str(_) => Ok("string".to_string()),
-            AnalysedType::Chr(_) => Ok("string".to_string()),
-            AnalysedType::F64(_) => Ok("number".to_string()),
-            AnalysedType::F32(_) => Ok("number".to_string()),
-            AnalysedType::U64(_) => Ok("number".to_string()),
-            AnalysedType::S64(_) => Ok("number".to_string()),
-            AnalysedType::U32(_) => Ok("number".to_string()),
-            AnalysedType::S32(_) => Ok("number".to_string()),
-            AnalysedType::U16(_) => Ok("number".to_string()),
-            AnalysedType::S16(_) => Ok("number".to_string()),
-            AnalysedType::U8(_) => Ok("number".to_string()),
-            AnalysedType::S8(_) => Ok("number".to_string()),
-            AnalysedType::Bool(_) => Ok("boolean".to_string()),
-            AnalysedType::Handle(_) => Err(anyhow!("Handle types are not supported")),
+            SchemaType::String { .. } => Ok("string".to_string()),
+            SchemaType::Char { .. } => Ok("string".to_string()),
+            SchemaType::F64 { .. } => Ok("number".to_string()),
+            SchemaType::F32 { .. } => Ok("number".to_string()),
+            SchemaType::U64 { .. } => Ok("number".to_string()),
+            SchemaType::S64 { .. } => Ok("number".to_string()),
+            SchemaType::U32 { .. } => Ok("number".to_string()),
+            SchemaType::S32 { .. } => Ok("number".to_string()),
+            SchemaType::U16 { .. } => Ok("number".to_string()),
+            SchemaType::S16 { .. } => Ok("number".to_string()),
+            SchemaType::U8 { .. } => Ok("number".to_string()),
+            SchemaType::S8 { .. } => Ok("number".to_string()),
+            SchemaType::Bool { .. } => Ok("boolean".to_string()),
+            // Refs are resolved by [`resolve_ref`] above.
+            SchemaType::Ref { .. } => {
+                unreachable!("Ref was resolved to its body via resolve_ref")
+            }
+            // Rich schema variants without a legacy AnalysedType
+            // counterpart have no TS surface in the current SDK template.
+            SchemaType::FixedList { .. }
+            | SchemaType::Map { .. }
+            | SchemaType::Text { .. }
+            | SchemaType::Binary { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. }
+            | SchemaType::Duration { .. }
+            | SchemaType::Quantity { .. }
+            | SchemaType::Union { .. }
+            | SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { .. } => Err(anyhow!(
+                "Cannot emit TypeScript type definition for unsupported schema variant: {typ:?}"
+            )),
         }
     }
 

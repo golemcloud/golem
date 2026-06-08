@@ -22,6 +22,8 @@ use std::fmt::{Display, Formatter};
 /// type name); cross-language interop requires the same `TypeId` on every side,
 /// which users can pin via the SDK's `named` attribute.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
 #[serde(transparent)]
 pub struct TypeId(pub String);
 
@@ -58,6 +60,8 @@ impl From<&str> for TypeId {
 /// validation constraints live on the relevant scalar's typed substructure,
 /// not here.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct MetadataEnvelope {
     /// Free-form documentation string.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,6 +96,8 @@ impl MetadataEnvelope {
 /// preserved as [`Role::Other`] so the producer's intent is not lost when a
 /// receiver does not understand the role.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]
 pub enum Role {
     Multimodal,
