@@ -1895,25 +1895,20 @@ impl TypeScriptBridgeGenerator {
             }
             SchemaType::Flags { flags, .. } => {
                 // Wire form is the raw schema-level flag name; the TS
-                // field name is the JS-cased identifier. Validate
-                // against raw names, then map each accepted name to
-                // its JS-cased field on the result object.
+                // field name is the JS-cased identifier. `base.decodeFlags`
+                // validates the wire names and maps them onto the JS-cased
+                // fields of the `initial` shape (every field starts `false`).
                 let flag_initializers = flags
                     .iter()
-                    .map(|name| {
-                        let flag_name = self.to_js_ident(name);
-                        format!("{flag_name}: false")
-                    })
+                    .map(|name| format!("{}: false", self.to_js_ident(name)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let raw_to_js_pairs = flags
+                let flag_pairs = flags
                     .iter()
                     .map(|name| format!("['{}', '{}']", name, self.to_js_ident(name)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!(
-                    "((v: unknown) => {{ if (!Array.isArray(v)) {{ throw new Error(`Expected array of flag names, got ${{v}}`); }} const result = {{ {flag_initializers} }}; const __flagMap: Record<string, string> = Object.fromEntries([{raw_to_js_pairs}]); for (const flag of v) {{ if (typeof flag !== 'string') {{ throw new Error(`Expected string flag name, got ${{flag}}`); }} const __js = __flagMap[flag]; if (__js === undefined) {{ throw new Error(`Unknown flag name ${{flag}}`); }} (result as Record<string, boolean>)[__js] = true; }} return result; }})({value})"
-                )
+                format!("base.decodeFlags({value}, {{ {flag_initializers} }}, [{flag_pairs}])")
             }
             SchemaType::Tuple { elements, .. } => {
                 // Tuple: decoded from an array

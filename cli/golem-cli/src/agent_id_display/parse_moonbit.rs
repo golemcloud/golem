@@ -22,10 +22,6 @@ use heck::{ToSnakeCase, ToUpperCamelCase};
 pub(super) struct MoonBitDialect;
 
 impl Dialect for MoonBitDialect {
-    fn normalize_field_name(name: &str) -> String {
-        name.to_snake_case()
-    }
-
     fn parse_char(lexer: &mut Lexer) -> Result<char, ParseError> {
         let (tok, pos, _) = lexer.next_token()?;
         match tok {

@@ -33,7 +33,7 @@ pub(super) fn render_value_scala(
 
 fn render_cm_value(buf: &mut String, graph: &SchemaGraph, ty: &SchemaType, value: &SchemaValue) {
     let (resolved, def_name) = resolve_named_ref(graph, ty);
-    render_cm_value_inner(buf, graph, resolved, def_name.as_deref(), value);
+    render_cm_value_inner(buf, graph, resolved, def_name, value);
 }
 
 fn render_cm_value_inner(
@@ -293,7 +293,7 @@ fn render_result(
 
 pub fn render_type_scala(graph: &SchemaGraph, ty: &SchemaType, prefer_name: bool) -> String {
     let (resolved, def_name) = resolve_named_ref(graph, ty);
-    render_type_scala_inner(graph, resolved, def_name.as_deref(), prefer_name)
+    render_type_scala_inner(graph, resolved, def_name, prefer_name)
 }
 
 fn render_type_scala_inner(

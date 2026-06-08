@@ -22,10 +22,6 @@ use heck::ToLowerCamelCase;
 pub(super) struct TsDialect;
 
 impl Dialect for TsDialect {
-    fn normalize_field_name(name: &str) -> String {
-        name.to_lower_camel_case()
-    }
-
     fn parse_char(lexer: &mut Lexer) -> Result<char, ParseError> {
         let (s, pos, _) = lexer.expect_string()?;
         let mut chars = s.chars();

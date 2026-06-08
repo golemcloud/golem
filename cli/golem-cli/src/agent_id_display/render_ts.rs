@@ -263,7 +263,7 @@ fn render_result(
 
 pub fn render_type_ts(graph: &SchemaGraph, ty: &SchemaType, prefer_name: bool) -> String {
     let (resolved, def_name) = resolve_named_ref(graph, ty);
-    render_type_ts_inner(graph, resolved, def_name.as_deref(), prefer_name)
+    render_type_ts_inner(graph, resolved, def_name, prefer_name)
 }
 
 fn render_type_ts_inner(

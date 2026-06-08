@@ -22,14 +22,6 @@ use heck::{ToLowerCamelCase, ToUpperCamelCase};
 pub(super) struct ScalaDialect;
 
 impl Dialect for ScalaDialect {
-    fn normalize_field_name(name: &str) -> String {
-        name.to_lower_camel_case()
-    }
-
-    fn named_element_separator() -> Token {
-        Token::Eq
-    }
-
     fn parse_char(lexer: &mut Lexer) -> Result<char, ParseError> {
         let (tok, pos, _) = lexer.next_token()?;
         match tok {

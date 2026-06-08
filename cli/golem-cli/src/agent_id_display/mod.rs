@@ -306,10 +306,10 @@ pub fn parse_agent_id_params(
 pub(crate) fn resolve_named_ref<'a>(
     graph: &'a SchemaGraph,
     ty: &'a SchemaType,
-) -> (&'a SchemaType, Option<String>) {
+) -> (&'a SchemaType, Option<&'a str>) {
     match ty {
         SchemaType::Ref { id, .. } => match graph.lookup(id) {
-            Some(def) => (&def.body, def.name.clone()),
+            Some(def) => (&def.body, def.name.as_deref()),
             None => (ty, None),
         },
         _ => (ty, None),

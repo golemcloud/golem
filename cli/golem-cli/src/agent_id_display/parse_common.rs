@@ -60,12 +60,7 @@ impl From<LexError> for ParseError {
 /// (text/binary/path/url/datetime/duration/quantity/secret/quota-token).
 /// Dialect implementations cover the structural composites whose syntax
 /// varies between languages.
-#[allow(dead_code)]
 pub(super) trait Dialect: Sized {
-    /// Normalise a schema field name to the dialect's casing convention
-    /// (e.g. `snake_case` for Rust, `lowerCamelCase` for TypeScript).
-    fn normalize_field_name(name: &str) -> String;
-
     fn parse_char(lexer: &mut Lexer) -> Result<char, ParseError>;
 
     fn parse_tuple(
@@ -130,13 +125,6 @@ pub(super) trait Dialect: Sized {
         }
         lexer.expect(&Token::RBrack)?;
         Ok(SchemaValue::List { elements: items })
-    }
-
-    /// The token used to separate field names from values in named element
-    /// lists. Defaults to `Token::Colon` (`:`) for Rust and TypeScript.
-    /// Scala overrides this to `Token::Eq` (`=`).
-    fn named_element_separator() -> Token {
-        Token::Colon
     }
 }
 
