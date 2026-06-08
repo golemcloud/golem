@@ -13,7 +13,10 @@ Path|Method|Protected
 ```json copy
 {
   "name": "string",
-  "email": "string"
+  "email": "string",
+  "roles": [
+    "admin"
+  ]
 }
 ```
 
@@ -29,6 +32,7 @@ Path|Method|Protected
   "roles": [
     "admin"
   ],
+  "accountRootCardId": "dc9e74a3-7f70-412c-9cf0-c0704225960b",
   "tokenRootCardId": "a8e18d8d-94ae-4ca6-9f9a-b3e564c451f4",
   "tokenRootCardEpoch": 0
 }
@@ -57,6 +61,7 @@ Path|Method|Protected
   "roles": [
     "admin"
   ],
+  "accountRootCardId": "dc9e74a3-7f70-412c-9cf0-c0704225960b",
   "tokenRootCardId": "a8e18d8d-94ae-4ca6-9f9a-b3e564c451f4",
   "tokenRootCardEpoch": 0
 }
@@ -117,6 +122,7 @@ The response is the updated account data.
   "roles": [
     "admin"
   ],
+  "accountRootCardId": "dc9e74a3-7f70-412c-9cf0-c0704225960b",
   "tokenRootCardId": "a8e18d8d-94ae-4ca6-9f9a-b3e564c451f4",
   "tokenRootCardEpoch": 0
 }
@@ -187,42 +193,7 @@ Path|Method|Protected
   "roles": [
     "admin"
   ],
-  "tokenRootCardId": "a8e18d8d-94ae-4ca6-9f9a-b3e564c451f4",
-  "tokenRootCardEpoch": 0
-}
-```
-
-## Set the roles of an account
-Path|Method|Protected
----|---|---
-`/v1/accounts/{account_id}/roles`|PUT|Yes
-
-
-
-
-
-**Example Request JSON**
-```json copy
-{
-  "currentRevision": 0,
-  "roles": [
-    "admin"
-  ]
-}
-```
-
-**Example Response JSON**
-
-```json copy
-{
-  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-  "revision": 0,
-  "name": "string",
-  "email": "string",
-  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
-  "roles": [
-    "admin"
-  ],
+  "accountRootCardId": "dc9e74a3-7f70-412c-9cf0-c0704225960b",
   "tokenRootCardId": "a8e18d8d-94ae-4ca6-9f9a-b3e564c451f4",
   "tokenRootCardEpoch": 0
 }

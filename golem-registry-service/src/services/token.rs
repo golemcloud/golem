@@ -22,8 +22,11 @@ use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenId;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
+use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::{
+    AccountTokenResourcePattern, AccountTokenVerb, ClassPermissionTarget, PermissionTarget,
+};
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::AccountAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError, GlobalAction};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
@@ -91,8 +94,13 @@ impl TokenService {
             .ok_or(TokenError::TokenNotFound(token_id))?
             .into();
 
-        auth.authorize_account_action(token.account_id, AccountAction::ViewToken)
-            .map_err(|_| TokenError::TokenNotFound(token_id))?;
+        authorize_account_token_permission(
+            auth,
+            token.account_id,
+            AccountTokenVerb::View,
+            AccountTokenResourcePattern::Token(token_id),
+        )
+        .map_err(|_| TokenError::TokenNotFound(token_id))?;
 
         Ok(token)
     }
@@ -109,8 +117,13 @@ impl TokenService {
             .ok_or(TokenError::TokenBySecretNotFound)?
             .into();
 
-        auth.authorize_account_action(token.account_id, AccountAction::ViewToken)
-            .map_err(|_| TokenError::TokenBySecretNotFound)?;
+        authorize_account_token_permission(
+            auth,
+            token.account_id,
+            AccountTokenVerb::View,
+            AccountTokenResourcePattern::Token(token.id),
+        )
+        .map_err(|_| TokenError::TokenBySecretNotFound)?;
 
         Ok(token)
     }
@@ -135,7 +148,7 @@ impl TokenService {
         auth: &AuthCtx,
     ) -> Result<Vec<TokenWithSecret>, TokenError> {
         self.account_service
-            .get(account_id, auth)
+            .get(account_id, &AuthCtx::System)
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
@@ -144,7 +157,12 @@ impl TokenService {
                 other => other.into(),
             })?;
 
-        auth.authorize_account_action(account_id, AccountAction::ViewToken)?;
+        authorize_account_token_permission(
+            auth,
+            account_id,
+            AccountTokenVerb::View,
+            AccountTokenResourcePattern::Any,
+        )?;
 
         let tokens: Vec<TokenWithSecret> = self
             .token_repo
@@ -164,7 +182,7 @@ impl TokenService {
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
         self.account_service
-            .get(account_id, auth)
+            .get(account_id, &AuthCtx::System)
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
@@ -173,7 +191,12 @@ impl TokenService {
                 other => other.into(),
             })?;
 
-        auth.authorize_account_action(account_id, AccountAction::CreateToken)?;
+        authorize_account_token_permission(
+            auth,
+            account_id,
+            AccountTokenVerb::Create,
+            AccountTokenResourcePattern::Any,
+        )?;
 
         let secret = TokenSecret::new();
         self.create_known_secret(account_id, secret, expires_at, None)
@@ -271,7 +294,12 @@ impl TokenService {
             .ok_or(TokenError::TokenNotFound(token_id))?
             .into();
 
-        auth.authorize_account_action(token.account_id, AccountAction::DeleteToken)?;
+        authorize_account_token_permission(
+            auth,
+            token.account_id,
+            AccountTokenVerb::Delete,
+            AccountTokenResourcePattern::Token(token_id),
+        )?;
 
         if let Some(account_id) = self.token_repo.delete(token_id.0).await? {
             let _ = account_id.signal_new_events_available(&self.registry_change_notifier);
@@ -279,4 +307,27 @@ impl TokenService {
 
         Ok(())
     }
+}
+
+fn authorize_account_token_permission(
+    auth: &AuthCtx,
+    account_id: AccountId,
+    verb: AccountTokenVerb,
+    resource: AccountTokenResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&account_token_permission_target(account_id, verb, resource))
+}
+
+fn account_token_permission_target(
+    account_id: AccountId,
+    verb: AccountTokenVerb,
+    resource: AccountTokenResourcePattern,
+) -> PermissionTarget {
+    PermissionTarget::AccountToken(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: AccountOwnerPattern::Account {
+            account: account_id.to_string(),
+        },
+        resource,
+    })
 }

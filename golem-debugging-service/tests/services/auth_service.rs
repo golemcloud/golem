@@ -26,6 +26,8 @@ impl AuthService for TestAuthService {
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
             token_root_card_id: None,
+            account_holder: self.test_ctx.account_id.to_string(),
+            auth_card: None,
         }))
     }
     async fn check_user_allowed_to_debug_in_environment(

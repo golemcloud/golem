@@ -21,12 +21,13 @@ use crate::services::permission_share::{PermissionShareError, PermissionShareSer
 use chrono::Utc;
 use golem_common::model::account::{Account, AccountId, TokenRootCardEpoch};
 use golem_common::model::auth::{TokenId, TokenSecret};
+use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     Card, CardAlgebraError, CardId, CardManagedBy, EffectiveSurface, PermissionPattern,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{
-    AdminImpersonationAuthCtx, AuthCtx, GlobalAction, UserAuthCtx,
+    AdminImpersonationAuthCtx, AuthCard, AuthCtx, GlobalAction, UserAuthCtx,
 };
 use golem_service_base::repo::RepoError;
 use std::collections::BTreeSet;
@@ -107,10 +108,11 @@ impl AuthService {
             // Normal login flow
             None => {
                 let account_roles = BTreeSet::from_iter(target_account.roles.clone());
-                let token_root_card_id = self
+                let account_holder = target_account.email.as_str().to_string();
+                let token_root_card = self
                     .ensure_token_root_card(
                         target_account.id,
-                        target_account.email.as_str().to_string(),
+                        account_holder.clone(),
                         target_account.account_root_card_id,
                         target_account.token_root_card_id,
                         target_account.token_root_card_epoch,
@@ -121,7 +123,9 @@ impl AuthService {
                     account_id: target_account.id,
                     account_roles,
                     account_plan_id: target_account.plan_id,
-                    token_root_card_id: Some(token_root_card_id),
+                    token_root_card_id: Some(token_root_card.card_id),
+                    account_holder,
+                    auth_card: Some(AuthCard::from(token_root_card)),
                 }))
             }
             // Impersonation flow
@@ -140,6 +144,8 @@ impl AuthService {
                         account_roles,
                         account_plan_id: admin_account.plan_id,
                         token_root_card_id: None,
+                        account_holder: admin_account.email.as_str().to_string(),
+                        auth_card: None,
                     });
 
                     if admin_auth_ctx
@@ -155,10 +161,11 @@ impl AuthService {
                 }
 
                 let target_account_roles = BTreeSet::from_iter(target_account.roles.clone());
-                let token_root_card_id = self
+                let target_account_holder = target_account.email.as_str().to_string();
+                let token_root_card = self
                     .ensure_token_root_card(
                         target_account.id,
-                        target_account.email.as_str().to_string(),
+                        target_account_holder.clone(),
                         target_account.account_root_card_id,
                         target_account.token_root_card_id,
                         target_account.token_root_card_epoch,
@@ -170,7 +177,9 @@ impl AuthService {
                     target_account_id: target_account.id,
                     target_account_roles,
                     target_account_plan_id: target_account.plan_id,
-                    token_root_card_id: Some(token_root_card_id),
+                    token_root_card_id: Some(token_root_card.card_id),
+                    target_account_holder,
+                    auth_card: Some(AuthCard::from(token_root_card)),
                 }))
             }
         }
@@ -183,12 +192,34 @@ impl AuthService {
         mut account_root_card_id: CardId,
         snapshot_card_id: Option<CardId>,
         snapshot_epoch: TokenRootCardEpoch,
-    ) -> Result<CardId, AuthError> {
-        if let Some(card_id) = snapshot_card_id {
-            return Ok(card_id);
-        }
-
+    ) -> Result<Card, AuthError> {
         let mut expected_epoch = snapshot_epoch;
+
+        if let Some(card_id) = snapshot_card_id {
+            if let Some(card) = self.load_card(card_id).await? {
+                return Ok(card);
+            }
+
+            let account = self
+                .account_service
+                .get(account_id, &AuthCtx::System)
+                .await
+                .map_err(|e| match e {
+                    AccountError::AccountNotFound(_) => AuthError::CouldNotAuthenticate,
+                    other => other.into(),
+                })?;
+
+            if let Some(refreshed_card_id) = account.token_root_card_id {
+                return self
+                    .load_card(refreshed_card_id)
+                    .await?
+                    .ok_or_else(|| missing_token_root_card(account_id, refreshed_card_id));
+            }
+
+            account_holder = account.email.as_str().to_string();
+            account_root_card_id = account.account_root_card_id;
+            expected_epoch = account.token_root_card_epoch;
+        }
 
         for _ in 0..MAX_REDERIVE_ATTEMPTS {
             let account_root_card: Card = self
@@ -232,11 +263,15 @@ impl AuthService {
                 );
             }
 
-            EffectiveSurface::from_cards(&parent_cards, &account_holder)
+            let account_recipient = RecipientPattern::Account {
+                account: account_holder.clone(),
+            };
+
+            EffectiveSurface::from_cards(&parent_cards, &account_recipient)
                 .and_then(|surface| surface.validates_derivation(&lower_positive, &upper_positive))
                 .map_err(|err| invalid_token_root_derivation(account_id, err))?;
 
-            if let Some(card_id) = self
+            if let Some(card) = self
                 .insert_token_root_card(
                     account_id,
                     expected_epoch,
@@ -248,7 +283,7 @@ impl AuthService {
                 )
                 .await?
             {
-                return Ok(card_id);
+                return Ok(card);
             }
 
             // Creating the card failed, refetch account to ensure we are working with up-to-date data on next loop.
@@ -265,7 +300,10 @@ impl AuthService {
                 })?;
 
             if let Some(card_id) = account.token_root_card_id {
-                return Ok(card_id);
+                return self
+                    .load_card(card_id)
+                    .await?
+                    .ok_or_else(|| missing_token_root_card(account_id, card_id));
             }
 
             account_holder = account.email.as_str().to_string();
@@ -289,7 +327,7 @@ impl AuthService {
         lower_negative: Vec<PermissionPattern>,
         upper_positive: Vec<PermissionPattern>,
         upper_negative: Vec<PermissionPattern>,
-    ) -> Result<Option<CardId>, AuthError> {
+    ) -> Result<Option<Card>, AuthError> {
         let card_id = CardId(Uuid::now_v7());
         let card = CardRecord::creation(
             card_id,
@@ -308,12 +346,21 @@ impl AuthService {
             .insert_token_root_card(account_id.0, expected_epoch.into(), card)
             .await
         {
-            Ok(record) => Ok(Some(CardId(record.card_id))),
+            Ok(record) => Ok(Some(record.try_into()?)),
             Err(CardRepoError::ConcurrentModification | CardRepoError::ParentNotFound(_)) => {
                 Ok(None)
             }
             Err(err) => Err(err.into()),
         }
+    }
+
+    async fn load_card(&self, card_id: CardId) -> Result<Option<Card>, AuthError> {
+        self.card_repo
+            .get(card_id)
+            .await?
+            .map(Card::try_from)
+            .transpose()
+            .map_err(Into::into)
     }
 }
 
@@ -336,4 +383,13 @@ fn invalid_token_root_derivation(account_id: AccountId, err: CardAlgebraError) -
         account_id,
         err
     ))
+}
+
+fn missing_token_root_card(account_id: AccountId, card_id: CardId) -> AuthError {
+    tracing::warn!(
+        "Token root card {} for account {} does not exist",
+        card_id,
+        account_id
+    );
+    AuthError::CouldNotAuthenticate
 }

@@ -30,6 +30,14 @@ fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> Perm
     })
 }
 
+fn fs_target(owner: &str, resource: FilesystemResourcePattern) -> PermissionTarget {
+    PermissionTarget::Filesystem(ClassPermissionTarget::<FilesystemClass> {
+        verb: Some(FilesystemVerb::Read),
+        owner: AgentOwnerPattern::parse(owner).unwrap(),
+        resource,
+    })
+}
+
 fn secret_reveal(
     owner: &str,
     recipient: &str,
@@ -39,6 +47,14 @@ fn secret_reveal(
         verb: Some(SecretVerb::Reveal),
         owner: EnvironmentOwnerPattern::parse(owner).unwrap(),
         recipient: AgentRecipientPattern::parse(recipient).unwrap(),
+        resource,
+    })
+}
+
+fn secret_reveal_target(owner: &str, resource: SecretResourcePattern) -> PermissionTarget {
+    PermissionTarget::Secret(ClassPermissionTarget::<SecretClass> {
+        verb: Some(SecretVerb::Reveal),
+        owner: EnvironmentOwnerPattern::parse(owner).unwrap(),
         resource,
     })
 }
@@ -95,6 +111,7 @@ fn recipient_depths_are_validated() {
 #[test]
 fn effective_surface_requires_lower_and_all_upper_bounds() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let read_all = fs(
         "acme/shop/prod/cart/agent",
         "acme/shop/prod/cart/agent",
@@ -105,8 +122,7 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
             ],
         }),
     );
-    let read_secret = fs(
-        "acme/shop/prod/cart/agent",
+    let read_secret_target = fs_target(
         "acme/shop/prod/cart/agent",
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
@@ -125,18 +141,28 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
             ],
         }),
     );
+    let read_public_target = fs_target(
+        "acme/shop/prod/cart/agent",
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("data".to_string()),
+                FilesystemPathSegmentPattern::Literal("public.txt".to_string()),
+            ],
+        }),
+    );
 
     let lower = card(vec![read_all], Vec::new());
     let ceiling = card(Vec::new(), vec![read_public.clone()]);
-    let surface = EffectiveSurface::from_cards(&[lower, ceiling], holder).unwrap();
+    let surface = EffectiveSurface::from_cards(&[lower, ceiling], &recipient).unwrap();
 
-    assert!(surface.authorize(&read_public).unwrap());
-    assert!(!surface.authorize(&read_secret).unwrap());
+    assert!(surface.authorize(&read_public_target).unwrap());
+    assert!(!surface.authorize(&read_secret_target).unwrap());
 }
 
 #[test]
 fn upper_negative_without_positive_is_unrestricted_except_denials() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let read_tmp = fs(
         holder,
         holder,
@@ -147,7 +173,17 @@ fn upper_negative_without_positive_is_unrestricted_except_denials() {
             ],
         }),
     );
+    let read_tmp_target = fs_target(
+        holder,
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("tmp".to_string()),
+                FilesystemPathSegmentPattern::Literal("file.txt".to_string()),
+            ],
+        }),
+    );
     let reveal_secret = secret_reveal("acme/shop/prod", holder, SecretResourcePattern::Any);
+    let reveal_secret_target = secret_reveal_target("acme/shop/prod", SecretResourcePattern::Any);
 
     let lower = card(vec![read_tmp.clone(), reveal_secret.clone()], Vec::new());
     let ceiling = card_with_bounds(
@@ -156,12 +192,12 @@ fn upper_negative_without_positive_is_unrestricted_except_denials() {
         Vec::new(),
         vec![reveal_secret.clone()],
     );
-    let surface = EffectiveSurface::from_cards(&[lower, ceiling.clone()], holder).unwrap();
+    let surface = EffectiveSurface::from_cards(&[lower, ceiling.clone()], &recipient).unwrap();
     let ceiling_surface =
-        EffectiveSurface::from_cards(std::slice::from_ref(&ceiling), holder).unwrap();
+        EffectiveSurface::from_cards(std::slice::from_ref(&ceiling), &recipient).unwrap();
 
-    assert!(surface.authorize(&read_tmp).unwrap());
-    assert!(!surface.authorize(&reveal_secret).unwrap());
+    assert!(surface.authorize(&read_tmp_target).unwrap());
+    assert!(!surface.authorize(&reveal_secret_target).unwrap());
     assert!(
         ceiling_surface
             .validates_derivation(&[], std::slice::from_ref(&read_tmp))
@@ -176,6 +212,7 @@ fn upper_negative_without_positive_is_unrestricted_except_denials() {
 #[test]
 fn lower_negative_is_scoped_to_its_card() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let read_all = fs(
         holder,
         holder,
@@ -196,6 +233,15 @@ fn lower_negative_is_scoped_to_its_card() {
             ],
         }),
     );
+    let read_secret_target = fs_target(
+        holder,
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![
+                FilesystemPathSegmentPattern::Literal("data".to_string()),
+                FilesystemPathSegmentPattern::Literal("secret.txt".to_string()),
+            ],
+        }),
+    );
 
     let deny_in_one_card = card_with_bounds(
         vec![read_all],
@@ -205,14 +251,16 @@ fn lower_negative_is_scoped_to_its_card() {
     );
     let allow_in_another_card = card(vec![read_secret.clone()], Vec::new());
     let surface =
-        EffectiveSurface::from_cards(&[deny_in_one_card, allow_in_another_card], holder).unwrap();
+        EffectiveSurface::from_cards(&[deny_in_one_card, allow_in_another_card], &recipient)
+            .unwrap();
 
-    assert!(surface.authorize(&read_secret).unwrap());
+    assert!(surface.authorize(&read_secret_target).unwrap());
 }
 
 #[test]
 fn derivation_upper_bound_uses_parent_ceiling_intersection() {
     let holder = "acme/shop/prod/cart/agent";
+    let recipient = RecipientPattern::parse(holder).unwrap();
     let read_all = fs(
         holder,
         holder,
@@ -242,7 +290,7 @@ fn derivation_upper_bound_uses_parent_ceiling_intersection() {
         vec![read_secret.clone()],
     );
     let parent_surface =
-        EffectiveSurface::from_cards(&[parent_allow, parent_deny], holder).unwrap();
+        EffectiveSurface::from_cards(&[parent_allow, parent_deny], &recipient).unwrap();
 
     assert!(matches!(
         parent_surface.validates_derivation(&[], std::slice::from_ref(&read_secret)),

@@ -138,6 +138,7 @@ pub trait VerbPattern:
     + Clone
     + PartialEq
     + Eq
+    + std::hash::Hash
     + Serialize
     + for<'de> Deserialize<'de>
     + desert_rust::BinarySerializer
@@ -150,7 +151,7 @@ pub trait VerbPattern:
 
 #[cfg(not(feature = "full"))]
 pub trait VerbPattern:
-    Debug + Copy + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de>
+    Debug + Copy + Clone + PartialEq + Eq + std::hash::Hash + Serialize + for<'de> Deserialize<'de>
 {
     fn parse_verb(verb: &str) -> Option<Self>
     where
@@ -163,6 +164,7 @@ pub trait ResourcePattern:
     + Clone
     + PartialEq
     + Eq
+    + std::hash::Hash
     + Serialize
     + for<'de> Deserialize<'de>
     + desert_rust::BinarySerializer
@@ -177,7 +179,7 @@ pub trait ResourcePattern:
 
 #[cfg(not(feature = "full"))]
 pub trait ResourcePattern:
-    Debug + Clone + PartialEq + Eq + Serialize + for<'de> Deserialize<'de>
+    Debug + Clone + PartialEq + Eq + std::hash::Hash + Serialize + for<'de> Deserialize<'de>
 {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError>
     where
@@ -203,7 +205,15 @@ pub trait PermissionClass {
         Self: Sized;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct ClassPermissionTarget<C: PermissionClass> {
+    pub verb: Option<C::Verb>,
+    pub owner: C::Owner,
+    pub resource: C::Resource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct ClassPermissionPattern<C: PermissionClass> {
     pub verb: Option<C::Verb>,
@@ -220,12 +230,14 @@ impl<C: PermissionClass> ClassPermissionPattern<C> {
             && self.resource.subsumes(&other.resource)
     }
 
-    pub fn matches_holder(&self, holder: &str) -> bool {
-        self.recipient.matches_holder(holder)
+    pub fn subsumes_target(&self, other: &ClassPermissionTarget<C>) -> bool {
+        self.owner.subsumes(&other.owner)
+            && (self.verb.is_none() || self.verb == other.verb)
+            && self.resource.subsumes(&other.resource)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct PolymorphicClassPermissionPattern<C: PermissionClass> {
     pub verb: Option<C::Verb>,
@@ -234,7 +246,7 @@ pub struct PolymorphicClassPermissionPattern<C: PermissionClass> {
     pub resource: C::Resource,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct PolymorphicManifestClassPermissionPattern<C: PermissionClass> {
     pub verb: Option<C::Verb>,

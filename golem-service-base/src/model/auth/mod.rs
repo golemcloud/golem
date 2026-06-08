@@ -19,7 +19,10 @@ use axum::http::header;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
-use golem_common::model::card::CardId;
+use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::card::{
+    Card, CardAlgebraError, CardId, EffectiveSurface, PermissionPattern, PermissionTarget,
+};
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
@@ -33,10 +36,7 @@ use std::sync::LazyLock;
 
 pub const COOKIE_KEY: &str = "GOLEM_SESSION";
 pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
-static SYSTEM_ACCOUNT_ROLES: LazyLock<BTreeSet<AccountRole>> =
-    LazyLock::new(|| BTreeSet::from_iter([AccountRole::Admin]));
-static IMPERSONATED_USER_ACCOUNT_ROLES: LazyLock<BTreeSet<AccountRole>> =
-    LazyLock::new(BTreeSet::new);
+static EMPTY_ACCOUNT_ROLES: LazyLock<BTreeSet<AccountRole>> = LazyLock::new(BTreeSet::new);
 
 #[derive(SecurityScheme)]
 #[oai(rename = "Token", ty = "bearer", checker = "bearer_checker")]
@@ -255,6 +255,13 @@ pub enum AuthorizationError {
     AccountActionNotAllowed(AccountAction),
     #[error("The environment action {0} is not allowed")]
     EnvironmentActionNotAllowed(EnvironmentAction),
+    #[error("The permission target {0:?} is not allowed")]
+    PermissionNotAllowed(Box<PermissionTarget>),
+    #[error("Failed to evaluate permission target {target:?}: {error:?}")]
+    PermissionEvaluationFailed {
+        target: Box<PermissionTarget>,
+        error: CardAlgebraError,
+    },
 }
 
 impl SafeDisplay for AuthorizationError {
@@ -272,11 +279,34 @@ pub struct AuthDetailsForEnvironment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AuthCard {
+    pub card_id: CardId,
+    pub lower_positive: Vec<PermissionPattern>,
+    pub lower_negative: Vec<PermissionPattern>,
+    pub upper_positive: Vec<PermissionPattern>,
+    pub upper_negative: Vec<PermissionPattern>,
+}
+
+impl From<Card> for AuthCard {
+    fn from(value: Card) -> Self {
+        Self {
+            card_id: value.card_id,
+            lower_positive: value.lower_positive,
+            lower_negative: value.lower_negative,
+            upper_positive: value.upper_positive,
+            upper_negative: value.upper_negative,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserAuthCtx {
     pub account_id: AccountId,
     pub account_plan_id: PlanId,
     pub account_roles: BTreeSet<AccountRole>,
     pub token_root_card_id: Option<CardId>,
+    pub account_holder: String,
+    pub auth_card: Option<AuthCard>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -297,6 +327,8 @@ pub struct AdminImpersonationAuthCtx {
     pub target_account_roles: BTreeSet<AccountRole>,
     pub target_account_plan_id: PlanId,
     pub token_root_card_id: Option<CardId>,
+    pub target_account_holder: String,
+    pub auth_card: Option<AuthCard>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -337,6 +369,8 @@ impl AuthCtx {
             target_account_roles,
             target_account_plan_id,
             token_root_card_id: None,
+            target_account_holder: target_account_id.to_string(),
+            auth_card: None,
         })
     }
 
@@ -403,9 +437,9 @@ impl AuthCtx {
 
     pub fn account_roles(&self) -> &BTreeSet<AccountRole> {
         match self {
-            Self::System => &SYSTEM_ACCOUNT_ROLES,
+            Self::System => &EMPTY_ACCOUNT_ROLES,
             Self::User(user) => &user.account_roles,
-            Self::Agent(_) => &IMPERSONATED_USER_ACCOUNT_ROLES,
+            Self::Agent(_) => &EMPTY_ACCOUNT_ROLES,
             Self::AdminImpersonation(ctx) => &ctx.target_account_roles,
         }
     }
@@ -433,6 +467,10 @@ impl AuthCtx {
     }
 
     pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
+        if self.is_system() {
+            return Ok(());
+        }
+
         let is_allowed = match action {
             GlobalAction::CreateAccount => self.has_any_account_role(&[AccountRole::Admin]),
             GlobalAction::GetDefaultPlan => self.has_any_account_role(&[AccountRole::Admin]),
@@ -449,11 +487,39 @@ impl AuthCtx {
         Ok(())
     }
 
+    pub fn authorize_permission(
+        &self,
+        target: &PermissionTarget,
+    ) -> Result<(), AuthorizationError> {
+        match self {
+            Self::System => Ok(()),
+            Self::User(user) => {
+                let recipient = RecipientPattern::Account {
+                    account: user.account_holder.clone(),
+                };
+                authorize_auth_card_permission(user.auth_card.as_ref(), &recipient, target)
+            }
+            Self::AdminImpersonation(ctx) => {
+                let recipient = RecipientPattern::Account {
+                    account: ctx.target_account_holder.clone(),
+                };
+                authorize_auth_card_permission(ctx.auth_card.as_ref(), &recipient, target)
+            }
+            Self::Agent(_) => Err(AuthorizationError::PermissionNotAllowed(Box::new(
+                target.clone(),
+            ))),
+        }
+    }
+
     pub fn authorize_plan_action(
         &self,
         plan_id: &PlanId,
         action: PlanAction,
     ) -> Result<(), AuthorizationError> {
+        if self.is_system() {
+            return Ok(());
+        }
+
         match action {
             PlanAction::ViewPlan => {
                 // Users are allowed to see their own plan
@@ -486,6 +552,10 @@ impl AuthCtx {
         target_account_id: AccountId,
         action: AccountAction,
     ) -> Result<(), AuthorizationError> {
+        if self.is_system() {
+            return Ok(());
+        }
+
         let is_allowed = match action {
             AccountAction::SetPlan => self.has_any_account_role(&[AccountRole::Admin]),
             _ => {
@@ -507,7 +577,11 @@ impl AuthCtx {
         roles_from_shares: &BTreeSet<EnvironmentRole>,
         action: EnvironmentAction,
     ) -> Result<(), AuthorizationError> {
-        // Environment owners, admins and system users are allowed to do everything with their environments
+        if self.is_system() {
+            return Ok(());
+        }
+
+        // Environment owners and admins are allowed to do everything with their environments.
         if self.access_account_id() == account_owning_enviroment
             || self.has_any_account_role(&[AccountRole::Admin])
         {
@@ -782,6 +856,43 @@ fn has_any_role<T: Eq + Hash + Ord>(roles: &BTreeSet<T>, allowed: &[T]) -> bool 
     allowed.iter().any(|r| roles.contains(r))
 }
 
+fn authorize_auth_card_permission(
+    auth_card: Option<&AuthCard>,
+    recipient: &RecipientPattern,
+    target: &PermissionTarget,
+) -> Result<(), AuthorizationError> {
+    let Some(auth_card) = auth_card else {
+        return Err(AuthorizationError::PermissionNotAllowed(Box::new(
+            target.clone(),
+        )));
+    };
+
+    let surface = EffectiveSurface::from_grants(
+        &auth_card.lower_positive,
+        &auth_card.lower_negative,
+        &auth_card.upper_positive,
+        &auth_card.upper_negative,
+        recipient,
+    )
+    .map_err(|error| AuthorizationError::PermissionEvaluationFailed {
+        target: Box::new(target.clone()),
+        error,
+    })?;
+
+    if surface.authorize(target).map_err(|error| {
+        AuthorizationError::PermissionEvaluationFailed {
+            target: Box::new(target.clone()),
+            error,
+        }
+    })? {
+        Ok(())
+    } else {
+        Err(AuthorizationError::PermissionNotAllowed(Box::new(
+            target.clone(),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::AUTH_ERROR_MESSAGE;
@@ -1007,9 +1118,60 @@ mod test {
 mod protobuf {
     use super::AuthDetailsForEnvironment;
     use super::{
-        AdminImpersonationAuthCtx, AgentAuthCtx, AuthCtx, AuthorizationError, UserAuthCtx,
+        AdminImpersonationAuthCtx, AgentAuthCtx, AuthCard, AuthCtx, AuthorizationError, UserAuthCtx,
     };
     use golem_common::model::auth::{AccountRole, EnvironmentRole};
+    use golem_common::model::card::{CardId, PermissionPattern};
+
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthCard> for AuthCard {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::auth::AuthCard,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                card_id: CardId(value.card_id.ok_or("missing card_id")?.into()),
+                lower_positive: deserialize_permission_patterns(value.lower_positive)?,
+                lower_negative: deserialize_permission_patterns(value.lower_negative)?,
+                upper_positive: deserialize_permission_patterns(value.upper_positive)?,
+                upper_negative: deserialize_permission_patterns(value.upper_negative)?,
+            })
+        }
+    }
+
+    impl From<AuthCard> for golem_api_grpc::proto::golem::auth::AuthCard {
+        fn from(value: AuthCard) -> Self {
+            Self {
+                card_id: Some(value.card_id.0.into()),
+                lower_positive: serialize_permission_patterns(value.lower_positive),
+                lower_negative: serialize_permission_patterns(value.lower_negative),
+                upper_positive: serialize_permission_patterns(value.upper_positive),
+                upper_negative: serialize_permission_patterns(value.upper_negative),
+            }
+        }
+    }
+
+    fn serialize_permission_patterns(patterns: Vec<PermissionPattern>) -> Vec<Vec<u8>> {
+        patterns
+            .into_iter()
+            .map(|pattern| {
+                desert_rust::serialize_to_byte_vec(&pattern)
+                    .expect("PermissionPattern Desert serialization failed")
+            })
+            .collect()
+    }
+
+    fn deserialize_permission_patterns(
+        values: Vec<Vec<u8>>,
+    ) -> Result<Vec<PermissionPattern>, String> {
+        values
+            .into_iter()
+            .map(|value| {
+                desert_rust::deserialize(&value)
+                    .map_err(|err| format!("invalid permission pattern: {err}"))
+            })
+            .collect()
+    }
 
     impl TryFrom<golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment>
         for AuthDetailsForEnvironment
@@ -1055,14 +1217,20 @@ mod protobuf {
         fn try_from(
             value: golem_api_grpc::proto::golem::auth::UserAuthCtx,
         ) -> Result<Self, Self::Error> {
+            let account_roles = value
+                .account_roles()
+                .map(AccountRole::try_from)
+                .collect::<Result<_, _>>()?;
+            let auth_card = value.auth_card.map(AuthCard::try_from).transpose()?;
+            let token_root_card_id = auth_card.as_ref().map(|card| card.card_id);
+
             Ok(Self {
-                account_roles: value
-                    .account_roles()
-                    .map(AccountRole::try_from)
-                    .collect::<Result<_, _>>()?,
+                account_roles,
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
                 account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
-                token_root_card_id: None,
+                token_root_card_id,
+                account_holder: value.account_holder,
+                auth_card,
             })
         }
     }
@@ -1077,6 +1245,8 @@ mod protobuf {
                     .into_iter()
                     .map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::from(ar).into())
                     .collect(),
+                account_holder: value.account_holder,
+                auth_card: value.auth_card.map(Into::into),
             }
         }
     }
@@ -1116,6 +1286,9 @@ mod protobuf {
                         .and_then(AccountRole::try_from)
                 })
                 .collect::<Result<_, _>>()?;
+            let auth_card = value.auth_card.map(AuthCard::try_from).transpose()?;
+            let token_root_card_id = auth_card.as_ref().map(|card| card.card_id);
+
             Ok(Self {
                 admin_account_id: value
                     .admin_account_id
@@ -1130,7 +1303,9 @@ mod protobuf {
                     .target_account_plan_id
                     .ok_or("missing target_account_plan_id")?
                     .try_into()?,
-                token_root_card_id: None,
+                token_root_card_id,
+                target_account_holder: value.target_account_holder,
+                auth_card,
             })
         }
     }
@@ -1148,6 +1323,8 @@ mod protobuf {
                     .map(|r| golem_api_grpc::proto::golem::auth::AccountRole::from(r).into())
                     .collect(),
                 target_account_plan_id: Some(value.target_account_plan_id.into()),
+                target_account_holder: value.target_account_holder,
+                auth_card: value.auth_card.map(Into::into),
             }
         }
     }

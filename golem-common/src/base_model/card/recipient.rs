@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum RecipientPattern {
     Any,
@@ -35,7 +35,7 @@ pub enum RecipientPattern {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicRecipientPattern {
     Concrete(RecipientPattern),
@@ -44,7 +44,7 @@ pub enum PolymorphicRecipientPattern {
     Agent(PolymorphicAgentRecipientPattern),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicEnvironmentRecipientPattern {
     AccountEnvironments,
@@ -52,7 +52,7 @@ pub enum PolymorphicEnvironmentRecipientPattern {
     Environment,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum PolymorphicAgentRecipientPattern {
     AccountAgents,
@@ -88,13 +88,6 @@ impl RecipientPattern {
             }),
             _ => Err(value.to_string()),
         }
-    }
-
-    pub fn matches_holder(&self, holder: &str) -> bool {
-        let Ok(holder) = Self::parse_holder(holder) else {
-            return false;
-        };
-        self.subsumes(&holder)
     }
 
     pub fn subsumes(&self, other: &Self) -> bool {
@@ -137,14 +130,6 @@ impl RecipientPattern {
             }
             (Self::Agent { .. }, _) => false,
         }
-    }
-
-    fn parse_holder(value: &str) -> Result<Self, String> {
-        let segments = parse_holder_segments(value)?;
-        if segments.contains(&"*") {
-            return Err(value.to_string());
-        }
-        Self::parse(value)
     }
 
     fn account_part(&self) -> Option<&str> {
@@ -238,14 +223,6 @@ fn parse_anchored_segments(value: &str) -> Result<Vec<&str>, String> {
         Err(value.to_string())
     } else {
         Ok(segments)
-    }
-}
-
-fn parse_holder_segments(value: &str) -> Result<Vec<&str>, String> {
-    let segments = parse_anchored_segments(value)?;
-    match segments.len() {
-        1 | 3 | 5 => Ok(segments),
-        _ => Err(value.to_string()),
     }
 }
 
