@@ -33,7 +33,7 @@ use golem_common::model::card::{
     AccountResourcePattern, AccountVerb, ClassPermissionTarget, PermissionTarget,
     SystemResourcePattern, SystemVerb,
 };
-use golem_common::model::plan::PlanId;
+use golem_common::model::plan::{Plan, PlanId};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::collections::HashMap;
@@ -233,6 +233,23 @@ impl AccountService {
             .map_err(|_| AccountError::AccountNotFound(account_id))?;
 
         Ok(account)
+    }
+
+    pub async fn get_plan(
+        &self,
+        account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<Plan, AccountError> {
+        let account = self.get(account_id, auth).await?;
+        authorize_account_permission(auth, &account.email, AccountVerb::ViewPlan)?;
+
+        self.plan_service
+            .get(&account.plan_id, &AuthCtx::System)
+            .await
+            .map_err(|e| match e {
+                PlanError::PlanNotFound(plan_id) => AccountError::PlanByIdNotFound(plan_id),
+                other => other.into(),
+            })
     }
 
     pub async fn get_by_email(
