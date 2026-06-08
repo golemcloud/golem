@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::mirror::{DeployedAgentTypeMirror, ResolvedAgentTypeMirror, schema_mirror_error};
 use super::authorize_environment_permission;
+use super::mirror::{DeployedAgentTypeMirror, ResolvedAgentTypeMirror, schema_mirror_error};
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
