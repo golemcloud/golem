@@ -34,7 +34,7 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
 use golem_wasm::Uri;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };

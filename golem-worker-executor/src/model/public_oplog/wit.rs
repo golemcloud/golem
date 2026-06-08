@@ -1004,7 +1004,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::CreateResource(params) => Ok(Self::CreateResource {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 id: golem_common::model::oplog::AgentResourceId(params.id),
-                resource_type_id: golem_wasm::wasmtime::ResourceTypeId {
+                resource_type_id: golem_wasm::resource_runtime::ResourceTypeId {
                     name: params.resource_type_id.name,
                     owner: params.resource_type_id.owner,
                 },
@@ -1012,7 +1012,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::DropResource(params) => Ok(Self::DropResource {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 id: golem_common::model::oplog::AgentResourceId(params.id),
-                resource_type_id: golem_wasm::wasmtime::ResourceTypeId {
+                resource_type_id: golem_wasm::resource_runtime::ResourceTypeId {
                     name: params.resource_type_id.name,
                     owner: params.resource_type_id.owner,
                 },

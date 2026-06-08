@@ -65,6 +65,11 @@ mod value_and_type;
 #[cfg(feature = "host")]
 pub mod wasmtime;
 
+/// Runtime resource helpers (`ResourceStore`, `ResourceTypeId`) extracted from
+/// the value bridge so they survive its deletion.
+#[cfg(feature = "host")]
+pub mod resource_runtime;
+
 #[cfg(any(feature = "host", feature = "guest"))]
 use crate::builder::WitValueBuilder;
 

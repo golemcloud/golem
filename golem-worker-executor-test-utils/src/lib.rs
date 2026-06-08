@@ -70,7 +70,7 @@ use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_wasm::Uri;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };

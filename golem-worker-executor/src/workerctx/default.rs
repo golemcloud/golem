@@ -73,7 +73,7 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::{Uri, WitType};
 use std::collections::HashSet;
 use std::future::Future;
