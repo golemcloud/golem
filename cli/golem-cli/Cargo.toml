@@ -74,6 +74,7 @@ portable-pty = { workspace = true }
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
+ratatui = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }

@@ -84,6 +84,14 @@ pub const REPL: &str = "Examples:
   # Always start from a clean state (delete agents and environment)
   golem-cli repl --reset";
 
+pub const TUI: &str = "Examples:
+  # Open the Golem terminal UI
+  golem-cli tui
+
+  # Open the TUI for a specific environment
+  golem-cli tui -E staging
+  golem-cli tui --cloud";
+
 pub const DEPLOY: &str = "Examples:
   # Build, upload and activate everything (always pass --yes for non-interactive use)
   golem-cli deploy --yes

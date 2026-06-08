@@ -42,13 +42,16 @@ The runtime owns the terminal and drives a loop with these inputs:
 
 - terminal key and mouse events
 - terminal resize events
-- periodic ticks
 - background task results
 - nested CLI session output
 
 The runtime updates `TuiApp` state, then renders a full frame.
 
 Keep the runtime small. Prefer one straightforward event loop and plain state structs over callback-heavy abstractions or generic framework layers.
+
+The runtime should be event-oriented. It should block waiting for terminal input when there is no background work, and redraw only after input, resize, nested CLI output, background task completion, or explicit scheduled refresh events. Avoid a fixed polling render loop.
+
+When periodic refresh is needed, model it as an explicit event source for the view or job that needs it, not as a global frame tick.
 
 ## Terminal Lifecycle
 

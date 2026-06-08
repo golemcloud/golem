@@ -18,7 +18,7 @@ Decisions recorded:
 Repository observations:
 
 - `golem-cli` already depends on `crossterm`, `portable-pty`, `expectrl`, `fuzzy-matcher`, and `goldenfile`.
-- `ratatui` is not yet in workspace dependencies.
+- `ratatui` was not in workspace dependencies before this scaffold.
 - Existing REPL implementation goes through `ReplHandler` and `TypeScriptRepl`, with PTY supervision for interactive mode.
 - Existing CLI interactive tests use `expectrl` and can inform TUI PTY tests.
 - Existing command metadata collection can be reused for command discovery.
@@ -26,4 +26,18 @@ Repository observations:
 Current status:
 
 - Planning documents have been created.
-- No code implementation has started yet.
+- TUI scaffolding has started with dependency wiring, command dispatch, a minimal terminal runtime, and a dashboard render test.
+- Added `ratatui 0.30.1` as a workspace dependency and wired it into `golem-cli`.
+- Added the top-level `tui` command for both `golem-cli tui` and `golem tui` through existing command dispatch.
+- Excluded `tui` from REPL command metadata because it is an interactive top-level mode, not a REPL command candidate.
+- Added a minimal TUI runtime using `ratatui` plus `crossterm`, with raw mode, alternate screen, cursor hide/show, and cleanup through a terminal guard.
+- Switched the scaffold runtime from fixed polling to blocking terminal events; redraws now happen after keypresses and resizes.
+- Added an initial dashboard render with selected application/environment/server/config context.
+- Added a focused `test-r` render test that captures the `TestBackend` buffer as readable text for agentic inspection.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo check -p golem-cli`
+- `cargo test -p golem-cli renders_dashboard_frame`
+- RustRover build check for the touched TUI and command wiring files

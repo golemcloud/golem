@@ -39,6 +39,7 @@ use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::repl::ReplHandler;
+use crate::command_handler::tui::TuiCommandHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
@@ -71,6 +72,7 @@ mod resource_definition;
 mod retry_policy;
 mod secret;
 pub(crate) mod template;
+mod tui;
 mod worker;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
@@ -316,6 +318,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         )
                         .await
                 }
+                GolemCliSubcommand::Tui => TuiCommandHandler::new(self.ctx.clone()).cmd_tui(),
                 GolemCliSubcommand::Deploy {
                     plan,
                     stage,

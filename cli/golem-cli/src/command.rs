@@ -92,6 +92,7 @@ impl GolemCliCommand {
                     vec!["profile"],
                     vec!["repl"],
                     vec!["server"],
+                    vec!["tui"],
                 ],
                 arg_id_exclude: vec![
                     "app_manifest_path",
@@ -729,6 +730,9 @@ pub enum GolemCliSubcommand {
         #[clap(long)]
         disable_auto_imports: bool,
     },
+    /// Open the terminal UI for monitoring and managing Golem environments.
+    #[command(after_help = crate::command_examples::TUI)]
+    Tui,
     /// Deploy application
     #[command(after_help = crate::command_examples::DEPLOY)]
     Deploy {
