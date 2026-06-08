@@ -41,3 +41,22 @@ Validation:
 - `cargo check -p golem-cli`
 - `cargo test -p golem-cli renders_dashboard_frame`
 - RustRover build check for the touched TUI and command wiring files
+
+Navigation and palette scaffold:
+
+- Added static views: Dashboard, Environments, Components, Agents, and Output.
+- Added tab rendering and view switching with `]`, `[`, `Tab`, `Shift-Tab`, and `1` through `5`.
+- Added a command palette opened with `Ctrl-P` or `:`.
+- Added fuzzy filtering with `fuzzy-matcher` over built-in TUI actions.
+- Added built-in palette actions for view switching and quitting.
+- Added keyboard routing so palette input is handled separately while the palette is open.
+- Added focused tests for active tab rendering, tab switching, numeric jumps, palette opening, palette filtering, and palette action execution.
+- Workflow decision: after TUI implementation changes, prepare the matching manual playground by reinstalling `golem` for the active checkout. For this checkout, use `CARGO_INSTALL_ROOT=/Users/noise64/.cargo-alt-02 cargo make install-golem-dev-release`, then test from `/Users/noise64/workspace/golem-demo/golem-02` with `/Users/noise64/.cargo-alt-02/bin` first in `PATH`.
+- Fixed tab label jitter by rendering inactive tabs with the same width as active bracketed tabs.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo check -p golem-cli`
+- `cargo test -p golem-cli tui::app::tests`
+- RustRover build check for `cli/golem-cli/src/tui/app.rs`

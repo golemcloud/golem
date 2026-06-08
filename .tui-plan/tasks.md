@@ -17,6 +17,7 @@ Rules:
 - If a task grows, split it instead of keeping a vague checkbox.
 - Record important decisions, validation commands, and direction changes in `progress.md`.
 - Record any added abstraction with the reason it is needed.
+- After TUI implementation changes, prepare the matching manual playground by reinstalling `golem` for the active checkout.
 
 ## Phase 1: Scaffold
 
@@ -42,28 +43,29 @@ Rules:
 ## Phase 1 Follow-Ups
 
 - [ ] Add panic/error cleanup strategy for terminal restoration.
-- [ ] Add a small manual smoke note or script for launching the installed playground TUI.
+- [x] Add a small manual smoke note or script for launching the installed playground TUI.
 - [ ] Decide whether a terminal parser such as `vt100` is needed for PTY frame tests, or whether `expectrl` plus text assertions is enough initially.
 - [ ] Verify raw mode and alternate screen manually on macOS after each terminal-lifecycle change.
 
 ## Phase 2: Navigation And Actions
 
-- [ ] Define `TuiView` or tab enum.
-- [ ] Define focus model.
+- [x] Implement initial view navigation and command palette shell.
+- [x] Define `TuiView` or tab enum.
+- [x] Define focus model.
 - [ ] Define notification/status model.
-- [ ] Implement tab strip.
+- [x] Implement tab strip.
 - [ ] Implement current-view help/shortcut overlay.
-- [ ] Define `TuiAction` registry.
+- [x] Define `TuiAction` registry.
 - [ ] Add command availability reasons.
-- [ ] Add direct internal action execution mode.
+- [x] Add direct internal action execution mode.
 
 ## Phase 3: Command Palette
 
-- [ ] Implement command palette modal.
-- [ ] Add command palette filtering with `fuzzy-matcher`.
-- [ ] Add built-in TUI actions to the palette.
+- [x] Implement command palette modal.
+- [x] Add command palette filtering with `fuzzy-matcher`.
+- [x] Add built-in TUI actions to the palette.
 - [ ] Add filtered CLI command metadata to the palette.
-- [ ] Add palette interaction test.
+- [x] Add palette interaction test.
 
 ## Phase 4: Data Providers
 
