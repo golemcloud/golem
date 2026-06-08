@@ -79,6 +79,7 @@ Rules:
 
 ## Phase 5: Nested CLI Jobs
 
+- [x] Add subtle section backgrounds and prefix glyphs after minimal layout review.
 - [x] Modernize header/body/output borders.
 - [x] Hide command input row when it is not relevant.
 - [x] Stabilize Output view layout and reduce command/footer reflow.

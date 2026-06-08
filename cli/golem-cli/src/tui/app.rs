@@ -908,14 +908,18 @@ fn render(frame: &mut Frame<'_>, app: &TuiApp) {
     if app.active_view == TuiView::Output {
         render_output_view(frame, body, app);
     } else {
-        let dashboard = Paragraph::new(view_lines(app)).wrap(Wrap { trim: false });
+        render_surface(frame, body);
+        let dashboard = Paragraph::new(view_lines(app))
+            .style(surface_style())
+            .wrap(Wrap { trim: false });
         frame.render_widget(dashboard, body);
     }
 
     let footer = Paragraph::new(footer_line(app.command_options))
-        .style(Style::default().fg(Color::DarkGray))
+        .style(footer_style())
         .alignment(Alignment::Center);
     frame.render_widget(footer, footer_area);
+    render_left_rail(frame, footer_area, footer_rail_style());
 
     match app.mode {
         TuiMode::Normal => {}
@@ -927,6 +931,7 @@ fn render(frame: &mut Frame<'_>, app: &TuiApp) {
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let line = Line::from(vec![
+        Span::styled("┃ ", header_rail_style()),
         Span::styled("Golem", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw("  app:"),
         Span::styled(
@@ -943,14 +948,104 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         Span::raw("  server:"),
         Span::styled(app.context.server.clone(), Style::default().fg(Color::Cyan)),
     ]);
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(Paragraph::new(line).style(header_style()), area);
+    render_left_rail(frame, area, header_rail_style());
 }
 
 fn render_separator(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
-        Paragraph::new("─".repeat(area.width as usize)).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(Line::from(vec![
+            Span::styled("┃", separator_rail_style()),
+            Span::raw(" ".repeat(area.width.saturating_sub(1) as usize)),
+        ]))
+        .style(separator_style()),
         area,
     );
+    render_left_rail(frame, area, separator_rail_style());
+}
+
+fn render_surface(frame: &mut Frame<'_>, area: Rect) {
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
+    render_left_rail(frame, area, surface_rail_style());
+}
+
+fn render_left_rail(frame: &mut Frame<'_>, area: Rect, style: Style) {
+    for y in area.y..area.y.saturating_add(area.height) {
+        frame.buffer_mut()[(area.x, y)]
+            .set_symbol("┃")
+            .set_style(style);
+    }
+}
+
+fn header_style() -> Style {
+    Style::default().bg(Color::Rgb(24, 28, 35))
+}
+
+fn header_rail_style() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .bg(Color::Rgb(24, 28, 35))
+        .add_modifier(Modifier::BOLD)
+}
+
+fn tabs_style() -> Style {
+    Style::default().bg(Color::Rgb(18, 22, 28))
+}
+
+fn tabs_rail_style() -> Style {
+    Style::default()
+        .fg(Color::Rgb(90, 200, 250))
+        .bg(Color::Rgb(18, 22, 28))
+}
+
+fn separator_style() -> Style {
+    Style::default().bg(Color::Rgb(32, 38, 48))
+}
+
+fn separator_rail_style() -> Style {
+    Style::default()
+        .fg(Color::Rgb(140, 180, 220))
+        .bg(Color::Rgb(32, 38, 48))
+}
+
+fn surface_style() -> Style {
+    Style::default().bg(Color::Rgb(13, 17, 23))
+}
+
+fn surface_rail_style() -> Style {
+    Style::default()
+        .fg(Color::Rgb(58, 67, 82))
+        .bg(Color::Rgb(13, 17, 23))
+}
+
+fn command_status_bg_style() -> Style {
+    Style::default().bg(Color::Rgb(24, 28, 35))
+}
+
+fn command_rail_style() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .bg(Color::Rgb(24, 28, 35))
+        .add_modifier(Modifier::BOLD)
+}
+
+fn footer_style() -> Style {
+    Style::default()
+        .fg(Color::DarkGray)
+        .bg(Color::Rgb(18, 22, 28))
+}
+
+fn footer_rail_style() -> Style {
+    Style::default()
+        .fg(Color::Rgb(58, 67, 82))
+        .bg(Color::Rgb(18, 22, 28))
+}
+
+fn prefixed_line(text: impl Into<String>) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("┃ ", surface_rail_style()),
+        Span::raw(text.into()),
+    ])
 }
 
 fn render_help(frame: &mut Frame<'_>) {
@@ -1002,10 +1097,10 @@ fn render_help(frame: &mut Frame<'_>) {
 }
 
 fn render_tabs(frame: &mut Frame<'_>, area: Rect, active_view: TuiView) {
-    let mut spans = Vec::new();
+    let mut spans = vec![Span::styled("┃ ", tabs_rail_style())];
 
     for view in TuiView::ALL {
-        if !spans.is_empty() {
+        if spans.len() > 1 {
             spans.push(Span::raw("  "));
         }
 
@@ -1020,28 +1115,35 @@ fn render_tabs(frame: &mut Frame<'_>, area: Rect, active_view: TuiView) {
         spans.push(Span::styled(title, style));
     }
 
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(tabs_style()), area);
+    render_left_rail(frame, area, tabs_rail_style());
 }
 
 fn view_lines(app: &TuiApp) -> Vec<Line<'static>> {
     let mut lines = vec![
-        Line::from(vec![Span::styled(
-            app.active_view.title(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
+        Line::from(vec![
+            Span::styled("┃ ", surface_rail_style()),
+            Span::styled(
+                app.active_view.title(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::default(),
-        Line::from(app.active_view.placeholder()),
+        Line::from(vec![
+            Span::styled("┃ ", surface_rail_style()),
+            Span::raw(app.active_view.placeholder()),
+        ]),
     ];
 
     if app.active_view == TuiView::Dashboard {
         lines.extend([
             Line::default(),
-            Line::from(format!("Application : {}", app.context.application)),
-            Line::from(format!("Environment : {}", app.context.environment)),
-            Line::from(format!("Server      : {}", app.context.server)),
-            Line::from(format!("Config dir  : {}", app.context.config_dir)),
+            prefixed_line(format!("Application : {}", app.context.application)),
+            prefixed_line(format!("Environment : {}", app.context.environment)),
+            prefixed_line(format!("Server      : {}", app.context.server)),
+            prefixed_line(format!("Config dir  : {}", app.context.config_dir)),
             Line::default(),
-            Line::from("Scaffold ready. Next steps: command execution and live data."),
+            prefixed_line("Scaffold ready. Next steps: command execution and live data."),
         ]);
     }
 
@@ -1049,6 +1151,7 @@ fn view_lines(app: &TuiApp) -> Vec<Line<'static>> {
 }
 
 fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    render_surface(frame, area);
     let has_input = show_command_input(app);
     let [summary_area, output_area, input_area] = Layout::default()
         .direction(Direction::Vertical)
@@ -1063,6 +1166,7 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let summary = match run {
         Some(run) => command_status_line(run),
         None => Line::from(vec![
+            Span::styled("┃ ", command_rail_style()),
             fixed_span("none", 7, Style::default().fg(Color::DarkGray)),
             Span::raw(" "),
             fixed_span("idle", 10, Style::default().fg(Color::DarkGray)),
@@ -1076,23 +1180,38 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             fixed_span("ready", 17, Style::default().fg(Color::DarkGray)),
         ]),
     };
-    frame.render_widget(Paragraph::new(summary), summary_area);
+    frame.render_widget(
+        Paragraph::new(summary).style(command_status_bg_style()),
+        summary_area,
+    );
+    render_left_rail(frame, summary_area, command_rail_style());
 
     let output_lines = run
         .map(|run| render_output_lines(&run.output, output_area.height as usize))
-        .unwrap_or_else(|| vec![Line::from("Output will appear here.")]);
+        .unwrap_or_else(|| vec![prefixed_line("Output will appear here.")]);
     frame.render_widget(
-        Paragraph::new(output_lines).wrap(Wrap { trim: false }),
+        Paragraph::new(output_lines)
+            .style(surface_style())
+            .wrap(Wrap { trim: false }),
         output_area,
     );
+    render_left_rail(frame, output_area, surface_rail_style());
     if let Some(run) = run {
         render_output_scrollbar(frame, output_area, &run.output);
     }
 
     if has_input {
         let prompt = "stdin ";
-        frame.render_widget(Paragraph::new(prompt), input_area);
-        frame.set_cursor_position((input_area.x + prompt.len() as u16, input_area.y));
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("┃ ", command_rail_style()),
+                Span::raw(prompt),
+            ]))
+            .style(surface_style()),
+            input_area,
+        );
+        render_left_rail(frame, input_area, command_rail_style());
+        frame.set_cursor_position((input_area.x + 2 + prompt.len() as u16, input_area.y));
     }
 }
 
@@ -1140,6 +1259,7 @@ fn output_scrollbar_position(total: usize, visible_height: usize, scroll_offset:
 
 fn footer_line(options: CommandOptions) -> Line<'static> {
     Line::from(vec![
+        Span::styled("┃ ", footer_rail_style()),
         key_hint("b"),
         Span::raw(" "),
         fixed_span("Build", 7, Style::default().fg(Color::DarkGray)),
@@ -1165,6 +1285,7 @@ fn footer_line(options: CommandOptions) -> Line<'static> {
 
 fn command_status_line(run: &CommandRun) -> Line<'static> {
     Line::from(vec![
+        Span::styled("┃ ", command_rail_style()),
         fixed_span(
             run.kind.title(),
             7,
@@ -1278,7 +1399,14 @@ fn render_output_lines(buffer: &OutputBuffer, height: usize) -> Vec<Line<'static
         .visible_lines(height)
         .into_iter()
         .flat_map(output_bytes_to_lines)
+        .map(output_line_with_rail)
         .collect()
+}
+
+fn output_line_with_rail(line: Line<'static>) -> Line<'static> {
+    let mut spans = vec![Span::styled("┃ ", surface_rail_style())];
+    spans.extend(line.spans);
+    Line::from(spans)
 }
 
 fn output_bytes_to_lines(bytes: Vec<u8>) -> Vec<Line<'static>> {

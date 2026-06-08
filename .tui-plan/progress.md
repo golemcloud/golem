@@ -95,6 +95,11 @@ Build/deploy nested CLI feature:
 - Added a focused spinner tick test.
 - Modernized the main TUI chrome by removing boxes from the header, non-output body, and Output sections while keeping modal boxes.
 - Added a subtle horizontal separator under the tab row.
+- Added subtle background colors for header, tabs, body surface, command status, and footer.
+- Added section prefix glyphs (`┃`, `│`) to restore visual structure without returning to heavy boxed layouts.
+- Standardized a left `┃` rail across header, tabs, separator bar, surfaces, command status, output, input, and footer.
+- Replaced the horizontal dash separator with a full-width background bar row and a left rail.
+- Changed the spinner first frame from `-` to `|` to better match the rail-based visual language.
 - Hid the command input row when no command is running or when the current command was started with `yes:on`.
 - Preserved the command input row for the lifetime of commands started with `yes:off`, even if the future-run `yes` toggle changes during the run.
 - Added focused tests for hidden/visible command input row behavior.
