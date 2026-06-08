@@ -150,16 +150,16 @@ impl TokenService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<TokenWithSecret>, TokenError> {
-        let account = self
-            .account_service
-            .get(account_id, &AuthCtx::System)
-            .await
-            .map_err(|err| match err {
-                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    TokenError::ParentAccountNotFound(account_id)
-                }
-                other => other.into(),
-            })?;
+        let account =
+            self.account_service
+                .get(account_id, auth)
+                .await
+                .map_err(|err| match err {
+                    AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                        TokenError::ParentAccountNotFound(account_id)
+                    }
+                    other => other.into(),
+                })?;
 
         let tokens: Vec<TokenWithSecret> = self
             .token_repo
@@ -189,16 +189,16 @@ impl TokenService {
         expires_at: DateTime<Utc>,
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
-        let account = self
-            .account_service
-            .get(account_id, &AuthCtx::System)
-            .await
-            .map_err(|err| match err {
-                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    TokenError::ParentAccountNotFound(account_id)
-                }
-                other => other.into(),
-            })?;
+        let account =
+            self.account_service
+                .get(account_id, auth)
+                .await
+                .map_err(|err| match err {
+                    AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                        TokenError::ParentAccountNotFound(account_id)
+                    }
+                    other => other.into(),
+                })?;
 
         authorize_account_token_permission(
             auth,

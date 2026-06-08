@@ -275,11 +275,16 @@ impl ApplicationService {
         name: &ApplicationName,
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
-        let account = self
-            .account_service
-            .get_optional(account_id, auth)
-            .await?
-            .ok_or_else(|| ApplicationError::ApplicationByNameNotFound(name.clone()))?;
+        let account =
+            self.account_service
+                .get(account_id, auth)
+                .await
+                .map_err(|err| match err {
+                    AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                        ApplicationError::ParentAccountNotFound(account_id)
+                    }
+                    other => other.into(),
+                })?;
 
         authorize_application_permission(
             auth,
@@ -304,21 +309,16 @@ impl ApplicationService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<Application>, ApplicationError> {
-        // TODO: fetch account information from db as part of query
-        // This is done this way to not leak existence of accounts
-        let account = self
-            .account_service
-            .get_optional(account_id, auth)
-            .await?
-            .ok_or_else(|| {
-                ApplicationError::Unauthorized(AuthorizationError::PermissionNotAllowed(Box::new(
-                    PermissionTarget::Application(ClassPermissionTarget {
-                        verb: Some(ApplicationVerb::View),
-                        owner: AccountOwnerPattern::Any,
-                        resource: ApplicationResourcePattern::Any,
-                    }),
-                )))
-            })?;
+        let account =
+            self.account_service
+                .get(account_id, auth)
+                .await
+                .map_err(|err| match err {
+                    AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
+                        ApplicationError::ParentAccountNotFound(account_id)
+                    }
+                    other => other.into(),
+                })?;
 
         let result = self
             .application_repo

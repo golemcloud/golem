@@ -102,21 +102,23 @@ impl AccountService {
         accounts: &HashMap<String, PrecreatedAccount>,
     ) -> Result<(), AccountError> {
         for (name, account) in accounts {
-            let existing_account = self.get_optional(account.id, &AuthCtx::System).await?;
-
-            if existing_account.is_none() {
-                info!("Creating initial account {} with id {}", name, account.id);
-                self.create_internal(
-                    account.id,
-                    AccountCreation {
-                        name: account.name.clone(),
-                        email: account.email.clone(),
-                        roles: vec![account.role],
-                    },
-                    account.plan_id,
-                    &AuthCtx::System,
-                )
-                .await?;
+            match self.get(account.id, &AuthCtx::System).await {
+                Ok(_) => {}
+                Err(AccountError::AccountNotFound(_)) => {
+                    info!("Creating initial account {} with id {}", name, account.id);
+                    self.create_internal(
+                        account.id,
+                        AccountCreation {
+                            name: account.name.clone(),
+                            email: account.email.clone(),
+                            roles: vec![account.role],
+                        },
+                        account.plan_id,
+                        &AuthCtx::System,
+                    )
+                    .await?;
+                }
+                Err(other) => return Err(other),
             }
         }
         Ok(())
@@ -141,7 +143,7 @@ impl AccountService {
         update: AccountUpdate,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let mut account: Account = self.load(account_id).await?;
+        let mut account = self.get(account_id, auth).await?;
 
         authorize_account_permission(auth, &account.email, AccountVerb::Update)?;
 
@@ -164,7 +166,7 @@ impl AccountService {
         update: AccountSetPlan,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let mut account: Account = self.load(account_id).await?;
+        let mut account = self.get(account_id, auth).await?;
 
         authorize_account_permission(auth, &account.email, AccountVerb::SetPlan)?;
 
@@ -194,7 +196,7 @@ impl AccountService {
         current_revision: AccountRevision,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let mut account: Account = self.load(account_id).await?;
+        let mut account = self.get(account_id, auth).await?;
 
         authorize_account_permission(auth, &account.email, AccountVerb::Delete)?;
 
@@ -228,7 +230,12 @@ impl AccountService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let account = self.load(account_id).await?;
+        let account: Account = self
+            .account_repo
+            .get_by_id(account_id.0)
+            .await?
+            .ok_or(AccountError::AccountNotFound(account_id))?
+            .try_into()?;
         authorize_account_permission(auth, &account.email, AccountVerb::View)
             .map_err(|_| AccountError::AccountNotFound(account_id))?;
 
@@ -272,18 +279,6 @@ impl AccountService {
         Ok(account)
     }
 
-    pub async fn get_optional(
-        &self,
-        account_id: AccountId,
-        auth: &AuthCtx,
-    ) -> Result<Option<Account>, AccountError> {
-        match self.get(account_id, auth).await {
-            Ok(account) => Ok(Some(account)),
-            Err(AccountError::AccountNotFound(_)) => Ok(None),
-            Err(other) => Err(other),
-        }
-    }
-
     async fn create_internal(
         &self,
         id: AccountId,
@@ -318,15 +313,6 @@ impl AccountService {
             }
             Err(other) => Err(other)?,
         }
-    }
-
-    async fn load(&self, account_id: AccountId) -> Result<Account, AccountError> {
-        self.account_repo
-            .get_by_id(account_id.0)
-            .await?
-            .ok_or(AccountError::AccountNotFound(account_id))?
-            .try_into()
-            .map_err(AccountError::from)
     }
 
     async fn update_internal(

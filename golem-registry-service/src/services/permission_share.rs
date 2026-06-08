@@ -103,7 +103,7 @@ impl PermissionShareService {
         data: PermissionShareCreation,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        let owner_account = self.get_account(owner_account_id).await?;
+        let owner_account = self.get_account(owner_account_id, auth).await?;
         authorize_permission_share_permission(
             auth,
             &owner_account.email,
@@ -315,7 +315,7 @@ impl PermissionShareService {
         name: &str,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        let owner_account = self.get_account(owner_account_id).await?;
+        let owner_account = self.get_account(owner_account_id, auth).await?;
         authorize_permission_share_permission(
             auth,
             &owner_account.email,
@@ -338,7 +338,7 @@ impl PermissionShareService {
         owner_account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<PermissionShare>, PermissionShareError> {
-        let owner_account = self.get_account(owner_account_id).await?;
+        let owner_account = self.get_account(owner_account_id, auth).await?;
 
         let shares = self
             .permission_share_repo
@@ -367,7 +367,7 @@ impl PermissionShareService {
         target_account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<PermissionShare>, PermissionShareError> {
-        let target_account = self.get_account(target_account_id).await?;
+        let target_account = self.get_account(target_account_id, auth).await?;
 
         let shares = self
             .permission_share_repo
@@ -408,9 +408,13 @@ impl PermissionShareService {
             .collect()
     }
 
-    async fn get_account(&self, account_id: AccountId) -> Result<Account, PermissionShareError> {
+    async fn get_account(
+        &self,
+        account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<Account, PermissionShareError> {
         self.account_service
-            .get(account_id, &AuthCtx::System)
+            .get(account_id, auth)
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
