@@ -28,37 +28,41 @@
 
 name: cloud-density-saturation
 benchmarks:
+  # Synthetic footprint — each agent retains a deterministic per-agent-distinct
+  # amount of resident memory, exercising the admission/eviction path with a
+  # controllable footprint near the limit. Run first: this is the variant that
+  # actually fills memory and drives the gate to its reject/evict path.
+  # size   = number of active, memory-holding agents (the ramp axis)
+  # length = base per-agent memory footprint in bytes; each agent retains a
+  #          deterministic multiple (1x..8x), averaging ~4.5x. 16 MiB base =>
+  #          ~72 MiB average per agent, filling a ~10 GiB usable pool around
+  #          ~145 agents. The sweep brackets that ceiling and pushes well past it
+  #          so the admission gate's reject/evict behaviour near OOM is exercised.
+  - name: throughput-saturation-counters
+    iterations: 1
+    clusterSize: [2]
+    size: [50, 100, 150, 200, 300, 500]
+    length: [16777216]
+
   # Rust echo agents — lean per-instance linear memory (the ~900 KB module is
   # charged once per component, shared across all agents; what scales per agent
-  # is the small instance heap). Knee expected in the thousands, so sweep high.
-  # The current admission algorithm craters around ~700 agents/node; the reworked
-  # admission is expected to push this knee substantially higher.
+  # is the small instance heap). The previous run reached the top of the sweep
+  # (12000) without saturating pod memory, so the knee here is throughput /
+  # eviction-churn rather than memory. Dropped the low points that told us
+  # nothing and pushed the range up with coarser steps.
   - name: throughput-saturation-echo-rust
-    iterations: 3
+    iterations: 1
     clusterSize: [2]
-    size: [500, 1000, 2000, 4000, 8000, 12000]
+    size: [4000, 8000, 16000, 24000, 32000]
     length: [0]
 
   # TypeScript echo agents — each instance instantiates its own QuickJS runtime
   # and JS heap in its own linear memory (the 17.4 MB module is shared once per
   # component; the per-instance runtime state is the heavy per-agent cost).
-  # Expect the knee in the hundreds, well below the Rust variant.
+  # Heavier per agent than the Rust variant, so a lower knee — but the previous
+  # run reached 2000 without saturating, so push higher and drop the low points.
   - name: throughput-saturation-echo-ts
-    iterations: 3
+    iterations: 1
     clusterSize: [2]
-    size: [100, 250, 500, 750, 1000, 1500, 2000]
+    size: [1000, 2000, 4000, 6000, 8000]
     length: [0]
-
-  # Synthetic footprint — each agent retains a deterministic per-agent-distinct
-  # amount of resident memory, exercising the admission/eviction path with a
-  # controllable footprint near the limit.
-  # size   = number of active, memory-holding agents (the ramp axis)
-  # length = base per-agent memory footprint in bytes; each agent retains a
-  #          deterministic multiple (1x..8x), averaging ~4.5x. 4 MiB base =>
-  #          ~18 MiB average per agent, filling a ~10 GiB usable pool around
-  #          ~580 agents (bracketing the old ~700 crater point).
-  - name: throughput-saturation-counters
-    iterations: 3
-    clusterSize: [2]
-    size: [100, 250, 500, 750, 1000, 1500]
-    length: [4194304]

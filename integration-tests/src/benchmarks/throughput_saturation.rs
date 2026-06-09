@@ -78,8 +78,10 @@ const IDLE_GAP: Duration = Duration::from_millis(200);
 
 /// Total measured wall-clock duration of the sustained-load phase. Throughput
 /// and churn are measured over this fixed window so steps with different `size`
-/// are comparable.
-const RUN_DURATION: Duration = Duration::from_secs(30);
+/// are comparable. Held long enough that the high-residency plateau persists for
+/// at least a minute, so steady-state behaviour at the memory ceiling (not just
+/// the initial burst) is observed.
+const RUN_DURATION: Duration = Duration::from_secs(90);
 
 /// Maximum per-agent start stagger, so the fleet is not synchronised: at any
 /// instant some agents are mid-call (demanding memory) while others sit idle
