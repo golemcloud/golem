@@ -22,12 +22,13 @@ use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenId;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
-use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::{
     AccountTokenResourcePattern, AccountTokenVerb, ClassPermissionTarget, PermissionTarget,
+    SystemResourcePattern, SystemVerb,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError, GlobalAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -263,7 +264,7 @@ impl TokenService {
         expires_at: DateTime<Utc>,
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
-        auth.authorize_global_action(GlobalAction::ImpersonateUser)?;
+        authorize_system_permission(auth, SystemVerb::ImpersonateUser)?;
 
         // Verify the target account exists.
         self.account_service
@@ -316,6 +317,14 @@ fn authorize_account_token_permission(
     resource: AccountTokenResourcePattern,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&account_token_permission_target(account_id, verb, resource))
+}
+
+fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::System(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EmptyOwnerPattern,
+        resource: SystemResourcePattern,
+    }))
 }
 
 fn account_token_permission_target(

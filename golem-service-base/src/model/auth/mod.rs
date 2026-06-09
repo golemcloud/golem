@@ -18,7 +18,7 @@ mod tests;
 use axum::http::header;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
+use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::card::owner::{
     AgentOwnerPattern, ApplicationOwnerPattern, EnvironmentOwnerPattern,
 };
@@ -34,7 +34,6 @@ use poem::Request;
 use poem_openapi::SecurityScheme;
 use poem_openapi::auth::{ApiKey, Bearer};
 use std::collections::BTreeSet;
-use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
@@ -155,112 +154,10 @@ impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
-pub enum GlobalAction {
-    CreateAccount,
-    GetDefaultPlan,
-    GetReports,
-    ImpersonateUser,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
-pub enum PlanAction {
-    ViewPlan,
-    CreateOrUpdatePlan,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
-pub enum AccountAction {
-    CreateApplication,
-    CreateEnvironment,
-    CreateKnownSecret,
-    CreatePermissionShare,
-    CreateToken,
-    DeleteAccount,
-    DeleteApplication,
-    DeletePlugin,
-    DeletePermissionShare,
-    DeleteToken,
-    ListAllApplicationEnvironments,
-    RegisterPlugin,
-    SetPlan,
-    UpdateAccount,
-    UpdateApplication,
-    UpdatePermissionShare,
-    UpdateUsage,
-    ViewAccount,
-    ViewApplications,
-    ViewPlugin,
-    ViewPermissionShare,
-    ViewToken,
-    ViewUsage,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
-pub enum EnvironmentAction {
-    CreateAgentSecret,
-    CreateComponent,
-    CreateDomainRegistration,
-    CreateEnvironmentPluginGrant,
-    CreateHttpApiDeployment,
-    CreateMcpDeployment,
-    CreateResourceDefinition,
-    CreateRetryPolicy,
-    CreateSecurityScheme,
-    CreateShare,
-    CreateWorker,
-    DebugWorker,
-    DeleteAgentSecret,
-    DeleteDomainRegistration,
-    DeleteEnvironment,
-    DeleteEnvironmentPluginGrant,
-    DeleteHttpApiDeployment,
-    DeleteMcpDeployment,
-    DeleteResourceDefinition,
-    DeleteRetryPolicy,
-    DeleteSecurityScheme,
-    DeleteShare,
-    DeleteWorker,
-    DeployEnvironment,
-    UpdateAgentSecret,
-    UpdateComponent,
-    UpdateEnvironment,
-    UpdateHttpApiDeployment,
-    UpdateMcpDeployment,
-    UpdateResourceDefinition,
-    UpdateRetryPolicy,
-    UpdateSecurityScheme,
-    UpdateShare,
-    UpdateWorker,
-    ViewAgentSecret,
-    ViewAgentTypes,
-    ViewComponent,
-    ViewDeployment,
-    ViewDeploymentPlan,
-    ViewDomainRegistration,
-    ViewEnvironment,
-    ViewEnvironmentPluginGrant,
-    ViewHttpApiDeployment,
-    ViewMcpDeployment,
-    ViewResourceDefinition,
-    ViewRetryPolicy,
-    ViewSecurityScheme,
-    ViewShares,
-    ViewWorker,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorizationError {
-    #[error("The global action {0} is not allowed")]
-    GlobalActionNotAllowed(GlobalAction),
     #[error("The system-only action {0} is not allowed")]
     SystemOnlyActionNotAllowed(String),
-    #[error("The plan action {0} is not allowed")]
-    PlanActionNotAllowed(PlanAction),
-    #[error("The account action {0} is not allowed")]
-    AccountActionNotAllowed(AccountAction),
-    #[error("The environment action {0} is not allowed")]
-    EnvironmentActionNotAllowed(EnvironmentAction),
     #[error("The permission target {0:?} is not allowed")]
     PermissionNotAllowed(Box<PermissionTarget>),
     #[error("Failed to evaluate permission target {target:?}: {error:?}")]
@@ -274,14 +171,6 @@ impl SafeDisplay for AuthorizationError {
     fn to_safe_string(&self) -> String {
         self.to_string()
     }
-}
-
-/// All information required to answer environment level authorization questions
-/// together with an AuthCtx
-#[derive(Debug, Clone)]
-pub struct AuthDetailsForEnvironment {
-    pub account_id_owning_environment: AccountId,
-    pub environment_roles_from_shares: BTreeSet<EnvironmentRole>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -429,41 +318,6 @@ impl AuthCtx {
         }
     }
 
-    fn has_any_account_role(&self, allowed: &[AccountRole]) -> bool {
-        let account_roles = self.account_roles();
-        allowed.iter().any(|r| account_roles.contains(r))
-    }
-
-    fn account_plan_id(&self) -> Option<&PlanId> {
-        match self {
-            Self::System => None,
-            Self::User(user) => Some(&user.account_plan_id),
-            Self::Agent(_) => None,
-            Self::AdminImpersonation(ctx) => Some(&ctx.target_account_plan_id),
-        }
-    }
-
-    pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
-        if self.is_system() {
-            return Ok(());
-        }
-
-        let is_allowed = match action {
-            GlobalAction::CreateAccount => self.has_any_account_role(&[AccountRole::Admin]),
-            GlobalAction::GetDefaultPlan => self.has_any_account_role(&[AccountRole::Admin]),
-            GlobalAction::GetReports => {
-                self.has_any_account_role(&[AccountRole::Admin, AccountRole::MarketingAdmin])
-            }
-            GlobalAction::ImpersonateUser => self.has_any_account_role(&[AccountRole::Admin]),
-        };
-
-        if !is_allowed {
-            Err(AuthorizationError::GlobalActionNotAllowed(action))?
-        }
-
-        Ok(())
-    }
-
     pub fn authorize_permission(
         &self,
         target: &PermissionTarget,
@@ -482,350 +336,6 @@ impl AuthCtx {
             }
         }
     }
-
-    pub fn authorize_plan_action(
-        &self,
-        plan_id: &PlanId,
-        action: PlanAction,
-    ) -> Result<(), AuthorizationError> {
-        if self.is_system() {
-            return Ok(());
-        }
-
-        match action {
-            PlanAction::ViewPlan => {
-                // Users are allowed to see their own plan
-                if let Some(account_plan_id) = self.account_plan_id()
-                    && account_plan_id == plan_id
-                {
-                    return Ok(());
-                }
-
-                // admins are allowed to see all plans
-                if self.has_any_account_role(&[AccountRole::Admin]) {
-                    return Ok(());
-                }
-
-                Err(AuthorizationError::PlanActionNotAllowed(action))
-            }
-            PlanAction::CreateOrUpdatePlan => {
-                // Only admins can change plan details
-                if self.has_any_account_role(&[AccountRole::Admin]) {
-                    Ok(())
-                } else {
-                    Err(AuthorizationError::PlanActionNotAllowed(action))
-                }
-            }
-        }
-    }
-
-    pub fn authorize_account_action(
-        &self,
-        target_account_id: AccountId,
-        action: AccountAction,
-    ) -> Result<(), AuthorizationError> {
-        if self.is_system() {
-            return Ok(());
-        }
-
-        let is_allowed = match action {
-            AccountAction::SetPlan => self.has_any_account_role(&[AccountRole::Admin]),
-            _ => {
-                (self.access_account_id() == target_account_id)
-                    || self.has_any_account_role(&[AccountRole::Admin])
-            }
-        };
-
-        if !is_allowed {
-            Err(AuthorizationError::AccountActionNotAllowed(action))?
-        }
-
-        Ok(())
-    }
-
-    pub fn authorize_environment_action(
-        &self,
-        account_owning_enviroment: AccountId,
-        roles_from_shares: &BTreeSet<EnvironmentRole>,
-        action: EnvironmentAction,
-    ) -> Result<(), AuthorizationError> {
-        if self.is_system() {
-            return Ok(());
-        }
-
-        // Environment owners and admins are allowed to do everything with their environments.
-        if self.access_account_id() == account_owning_enviroment
-            || self.has_any_account_role(&[AccountRole::Admin])
-        {
-            return Ok(());
-        }
-
-        let is_allowed = match action {
-            // environments
-            EnvironmentAction::ViewEnvironment => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            EnvironmentAction::UpdateEnvironment => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::DeleteEnvironment => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            // Components
-            EnvironmentAction::CreateComponent => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::UpdateComponent => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::ViewComponent => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            // Environment shares
-            EnvironmentAction::ViewShares => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::UpdateShare => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::CreateShare => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::DeleteShare => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            // Deployments
-            EnvironmentAction::DeployEnvironment => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::ViewDeployment => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            EnvironmentAction::ViewDeploymentPlan => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            // Environment plugin grants
-            EnvironmentAction::CreateEnvironmentPluginGrant => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::ViewEnvironmentPluginGrant => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            EnvironmentAction::DeleteEnvironmentPluginGrant => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            // Domain registrations
-            EnvironmentAction::CreateDomainRegistration => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::DeleteDomainRegistration => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::ViewDomainRegistration => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            // Workers
-            EnvironmentAction::CreateWorker => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            EnvironmentAction::DebugWorker => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            EnvironmentAction::DeleteWorker => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::ViewWorker => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            EnvironmentAction::UpdateWorker => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            // Security Schemes
-            EnvironmentAction::CreateSecurityScheme => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::UpdateSecurityScheme => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::DeleteSecurityScheme => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::ViewSecurityScheme => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            // Http api deployment
-            EnvironmentAction::CreateHttpApiDeployment => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::UpdateHttpApiDeployment => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::DeleteHttpApiDeployment => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::ViewHttpApiDeployment => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            // Mcp deployment
-            EnvironmentAction::CreateMcpDeployment => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::UpdateMcpDeployment => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::DeleteMcpDeployment => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::ViewMcpDeployment => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            // agent types
-            EnvironmentAction::ViewAgentTypes => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            // agent secrets
-            EnvironmentAction::ViewAgentSecret => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::UpdateAgentSecret => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::CreateAgentSecret => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::DeleteAgentSecret => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            // resource definitions
-            EnvironmentAction::CreateResourceDefinition => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::UpdateResourceDefinition => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::DeleteResourceDefinition => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::ViewResourceDefinition => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            // retry policies
-            EnvironmentAction::CreateRetryPolicy => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::UpdateRetryPolicy => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::DeleteRetryPolicy => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-            EnvironmentAction::ViewRetryPolicy => has_any_role(
-                roles_from_shares,
-                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
-            ),
-        };
-
-        if !is_allowed {
-            Err(AuthorizationError::EnvironmentActionNotAllowed(action))?
-        };
-
-        Ok(())
-    }
-}
-
-fn has_any_role<T: Eq + Hash + Ord>(roles: &BTreeSet<T>, allowed: &[T]) -> bool {
-    allowed.iter().any(|r| roles.contains(r))
 }
 
 fn authorize_effective_surface_permission(
@@ -875,8 +385,22 @@ fn temporary_agent_effective_surface(account_id: AccountId) -> EffectiveSurface 
                     resource: AgentResourcePattern::Any,
                 }),
                 PermissionTarget::Agent(ClassPermissionTarget {
-                    owner: AgentOwnerPattern::AccountAgents { account },
+                    owner: AgentOwnerPattern::AccountAgents {
+                        account: account.clone(),
+                    },
                     verb: Some(AgentVerb::Invoke),
+                    resource: AgentResourcePattern::Any,
+                }),
+                PermissionTarget::Agent(ClassPermissionTarget {
+                    owner: AgentOwnerPattern::AccountAgents {
+                        account: account.clone(),
+                    },
+                    verb: Some(AgentVerb::Resume),
+                    resource: AgentResourcePattern::Any,
+                }),
+                PermissionTarget::Agent(ClassPermissionTarget {
+                    owner: AgentOwnerPattern::AccountAgents { account },
+                    verb: Some(AgentVerb::UpdateRevision),
                     resource: AgentResourcePattern::Any,
                 }),
             ],
@@ -1109,11 +633,10 @@ mod test {
 }
 
 mod protobuf {
-    use super::AuthDetailsForEnvironment;
     use super::{
         AdminImpersonationAuthCtx, AgentAuthCtx, AuthCtx, AuthorizationError, UserAuthCtx,
     };
-    use golem_common::model::auth::{AccountRole, EnvironmentRole};
+    use golem_common::model::auth::AccountRole;
     use golem_common::model::card::{CardId, EffectiveSurface, GrantSurface, PermissionTarget};
 
     fn deserialize_effective_surface(
@@ -1192,45 +715,6 @@ mod protobuf {
                     .map_err(|err| format!("invalid permission target: {err}"))
             })
             .collect()
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment>
-        for AuthDetailsForEnvironment
-    {
-        type Error = String;
-        fn try_from(
-            value: golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment,
-        ) -> Result<Self, Self::Error> {
-            let environment_roles_from_shares = value
-                .environment_roles_from_shares()
-                .map(EnvironmentRole::try_from)
-                .collect::<Result<_, _>>()?;
-
-            let account_id_owning_environment = value
-                .account_id_owning_environment
-                .ok_or("missing account_id")?
-                .try_into()?;
-
-            Ok(Self {
-                account_id_owning_environment,
-                environment_roles_from_shares,
-            })
-        }
-    }
-
-    impl From<AuthDetailsForEnvironment>
-        for golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment
-    {
-        fn from(value: AuthDetailsForEnvironment) -> Self {
-            Self {
-                account_id_owning_environment: Some(value.account_id_owning_environment.into()),
-                environment_roles_from_shares: value
-                    .environment_roles_from_shares
-                    .into_iter()
-                    .map(|er| golem_api_grpc::proto::golem::auth::EnvironmentRole::from(er) as i32)
-                    .collect(),
-            }
-        }
     }
 
     impl TryFrom<golem_api_grpc::proto::golem::auth::UserAuthCtx> for UserAuthCtx {

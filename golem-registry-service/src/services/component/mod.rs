@@ -94,7 +94,12 @@ impl ComponentService {
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?)
     }
 
     pub async fn get_deployed_component(
@@ -132,7 +137,12 @@ impl ComponentService {
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?)
     }
 
     pub async fn get_all_deployed_component_versions(
@@ -175,7 +185,14 @@ impl ComponentService {
 
         let components = records
             .into_iter()
-            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
+            .map(|r| {
+                r.try_into_model(
+                    environment.application_id,
+                    environment.owner_account_id,
+                    environment.application_name.clone(),
+                    environment.name.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(components)
@@ -218,7 +235,12 @@ impl ComponentService {
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?)
     }
 
     pub async fn list_staged_components(
@@ -260,7 +282,14 @@ impl ComponentService {
             .list_staged(environment.id.0)
             .await?
             .into_iter()
-            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
+            .map(|r| {
+                r.try_into_model(
+                    environment.application_id,
+                    environment.owner_account_id,
+                    environment.application_name.clone(),
+                    environment.name.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -305,7 +334,12 @@ impl ComponentService {
                 component_name.clone(),
             ))?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?)
     }
 
     pub async fn get_deployed_component_by_name(
@@ -347,8 +381,12 @@ impl ComponentService {
                 component_name.clone(),
             ))?;
 
-        let converted =
-            record.try_into_model(environment.application_id, environment.owner_account_id)?;
+        let converted = record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?;
 
         Ok(converted)
     }
@@ -391,7 +429,14 @@ impl ComponentService {
             .list_by_deployment(environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
+            .map(|r| {
+                r.try_into_model(
+                    environment.application_id,
+                    environment.owner_account_id,
+                    environment.application_name.clone(),
+                    environment.name.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -445,7 +490,12 @@ impl ComponentService {
                 component_name.clone(),
             ))?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?)
     }
 
     pub async fn download_component_wasm(

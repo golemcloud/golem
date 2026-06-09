@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::DeployValidationError;
+use super::authorize_environment_permission;
 use super::deployment_context::DeploymentContext;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
@@ -30,11 +31,7 @@ use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
 use futures::TryFutureExt;
 use golem_common::model::agent::DeployedRegisteredAgentType;
-use golem_common::model::card::owner::ApplicationOwnerPattern;
-use golem_common::model::card::{
-    ClassPermissionTarget, EnvironmentName as CardEnvironmentName, EnvironmentResourcePattern,
-    EnvironmentVerb, PermissionTarget,
-};
+use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
 use golem_common::model::environment::Environment;
@@ -44,7 +41,6 @@ use golem_common::model::{
     environment::EnvironmentId,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::collections::HashMap;
@@ -410,11 +406,7 @@ impl DeploymentWriteService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeployEnvironment,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
 
         let current_deployment = environment
             .current_deployment
@@ -476,21 +468,4 @@ impl DeploymentWriteService {
 
         Ok(deployment)
     }
-}
-
-fn authorize_environment_permission(
-    auth: &AuthCtx,
-    environment: &Environment,
-    verb: EnvironmentVerb,
-) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
-        verb: Some(verb),
-        owner: ApplicationOwnerPattern::Application {
-            account: environment.owner_account_id.to_string(),
-            application: environment.application_name.0.clone(),
-        },
-        resource: EnvironmentResourcePattern::Environment(CardEnvironmentName(
-            environment.name.0.clone(),
-        )),
-    }))
 }

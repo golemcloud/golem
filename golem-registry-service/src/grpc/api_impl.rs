@@ -19,7 +19,6 @@ use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
-use crate::services::environment::EnvironmentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use crate::services::resource_definition::ResourceDefinitionService;
@@ -38,9 +37,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetAgentTypeResponse, GetAgentTypeSuccessResponse, GetAllAgentTypesRequest,
     GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse,
     GetAllDeployedComponentRevisionsRequest, GetAllDeployedComponentRevisionsResponse,
-    GetAllDeployedComponentRevisionsSuccessResponse, GetAuthDetailsForEnvironmentRequest,
-    GetAuthDetailsForEnvironmentResponse, GetAuthDetailsForEnvironmentSuccessResponse,
-    GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
+    GetAllDeployedComponentRevisionsSuccessResponse, GetComponentMetadataRequest,
+    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetCurrentEnvironmentStateRequest, GetCurrentEnvironmentStateResponse,
     GetCurrentEnvironmentStateSuccessResponse, GetDeployedComponentMetadataRequest,
     GetDeployedComponentMetadataResponse, GetDeployedComponentMetadataSuccessResponse,
@@ -56,12 +54,11 @@ use golem_api_grpc::proto::golem::registry::v1::{
     batch_update_resource_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
-    get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_current_environment_state_response,
-    get_deployed_component_metadata_response, get_resource_definition_by_id_response,
-    get_resource_definition_by_name_response, get_resource_limits_response, registry_service_error,
-    resolve_agent_type_by_names_response, resolve_component_response,
-    update_worker_connection_limit_response,
+    get_all_deployed_component_revisions_response, get_component_metadata_response,
+    get_current_environment_state_response, get_deployed_component_metadata_response,
+    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
+    get_resource_limits_response, registry_service_error, resolve_agent_type_by_names_response,
+    resolve_component_response, update_worker_connection_limit_response,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
@@ -73,7 +70,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
-use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
+use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -81,7 +78,6 @@ use tracing_futures::Instrument;
 
 pub struct RegistryServiceGrpcApi {
     auth_service: Arc<AuthService>,
-    environment_service: Arc<EnvironmentService>,
     account_usage_service: Arc<AccountUsageService>,
     component_service: Arc<ComponentService>,
     component_resolver_service: Arc<ComponentResolverService>,
@@ -97,7 +93,6 @@ pub struct RegistryServiceGrpcApi {
 impl RegistryServiceGrpcApi {
     pub fn new(
         auth_service: Arc<AuthService>,
-        environment_service: Arc<EnvironmentService>,
         account_usage_service: Arc<AccountUsageService>,
         component_service: Arc<ComponentService>,
         component_resolver_service: Arc<ComponentResolverService>,
@@ -111,7 +106,6 @@ impl RegistryServiceGrpcApi {
     ) -> Self {
         Self {
             auth_service,
-            environment_service,
             account_usage_service,
             component_service,
             component_resolver_service,
@@ -135,35 +129,6 @@ impl RegistryServiceGrpcApi {
             .await?;
         Ok(AuthenticateTokenSuccessResponse {
             auth_ctx: Some(auth_ctx.into()),
-        })
-    }
-
-    async fn get_auth_details_for_environment_internal(
-        &self,
-        request: GetAuthDetailsForEnvironmentRequest,
-    ) -> Result<GetAuthDetailsForEnvironmentSuccessResponse, GrpcApiError> {
-        let environment_id: EnvironmentId = request
-            .environment_id
-            .ok_or("missing environment_id field")?
-            .try_into()?;
-
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
-        let environment = self
-            .environment_service
-            .get(environment_id, request.include_deleted, &auth_ctx)
-            .await?;
-
-        let auth_details_for_environment = AuthDetailsForEnvironment {
-            account_id_owning_environment: environment.owner_account_id,
-            environment_roles_from_shares: environment.roles_from_active_shares,
-        };
-
-        Ok(GetAuthDetailsForEnvironmentSuccessResponse {
-            auth_details_for_environment: Some(auth_details_for_environment.into()),
         })
     }
 
@@ -566,27 +531,6 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(AuthenticateTokenResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn get_auth_details_for_environment(
-        &self,
-        request: Request<GetAuthDetailsForEnvironmentRequest>,
-    ) -> Result<Response<GetAuthDetailsForEnvironmentResponse>, tonic::Status> {
-        let record = recorded_grpc_api_request!("get_auth_details_for_environment",);
-
-        let response = match self
-            .get_auth_details_for_environment_internal(request.into_inner())
-            .instrument(record.span.clone())
-            .await
-            .apply(|r| record.result(r))
-        {
-            Ok(result) => get_auth_details_for_environment_response::Result::Success(result),
-            Err(error) => get_auth_details_for_environment_response::Result::Error(error.into()),
-        };
-
-        Ok(Response::new(GetAuthDetailsForEnvironmentResponse {
             result: Some(response),
         }))
     }

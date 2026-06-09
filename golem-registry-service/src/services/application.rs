@@ -30,7 +30,6 @@ use golem_common::model::card::{
     ClassPermissionTarget, PermissionTarget,
 };
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::AccountAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -301,9 +300,15 @@ impl ApplicationService {
         self.account_service
             .get_optional(account_id, auth)
             .await?
-            .ok_or(ApplicationError::Unauthorized(
-                AuthorizationError::AccountActionNotAllowed(AccountAction::ViewApplications),
-            ))?;
+            .ok_or_else(|| {
+                ApplicationError::Unauthorized(AuthorizationError::PermissionNotAllowed(Box::new(
+                    application_permission_target(
+                        account_id,
+                        ApplicationVerb::View,
+                        ApplicationResourcePattern::Any,
+                    ),
+                )))
+            })?;
 
         authorize_application_permission(
             auth,

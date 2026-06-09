@@ -21,12 +21,14 @@ use crate::services::permission_share::{PermissionShareError, PermissionShareSer
 use chrono::Utc;
 use golem_common::model::account::{Account, AccountId};
 use golem_common::model::auth::{TokenId, TokenSecret};
+use golem_common::model::card::owner::EmptyOwnerPattern;
 use golem_common::model::card::recipient::RecipientPattern;
-use golem_common::model::card::{Card, EffectiveSurface};
-use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{
-    AdminImpersonationAuthCtx, AuthCtx, GlobalAction, UserAuthCtx,
+use golem_common::model::card::{
+    Card, ClassPermissionTarget, EffectiveSurface, PermissionTarget, SystemResourcePattern,
+    SystemVerb,
 };
+use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::{AdminImpersonationAuthCtx, AuthCtx, UserAuthCtx};
 use golem_service_base::repo::RepoError;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -133,7 +135,11 @@ impl AuthService {
                     });
 
                     if admin_auth_ctx
-                        .authorize_global_action(GlobalAction::ImpersonateUser)
+                        .authorize_permission(&PermissionTarget::System(ClassPermissionTarget {
+                            verb: Some(SystemVerb::ImpersonateUser),
+                            owner: EmptyOwnerPattern,
+                            resource: SystemResourcePattern,
+                        }))
                         .is_err()
                     {
                         warn!(

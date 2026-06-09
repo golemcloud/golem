@@ -15,7 +15,7 @@
 use crate::custom_api::CompiledRoutes;
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::mcp::CompiledMcp;
-use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment};
+use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::environment::EnvironmentState;
 use crate::model::{AccountResourceLimits, ResourceLimits};
@@ -25,19 +25,17 @@ use golem_api_grpc::proto::golem::registry::v1::registry_service_client::Registr
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateResourceUsageRequest, DownloadComponentRequest,
     GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentTypeRequest,
-    GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
-    GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
+    GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest, GetComponentMetadataRequest,
     GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     ResolveAgentTypeByNamesRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest,
     authenticate_token_response, batch_update_resource_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
-    get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_current_environment_state_response,
-    get_deployed_component_metadata_response, get_resource_definition_by_id_response,
-    get_resource_definition_by_name_response, get_resource_limits_response,
-    resolve_agent_type_by_names_response, resolve_component_response,
+    get_all_deployed_component_revisions_response, get_component_metadata_response,
+    get_current_environment_state_response, get_deployed_component_metadata_response,
+    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
+    get_resource_limits_response, resolve_agent_type_by_names_response, resolve_component_response,
     update_worker_connection_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
@@ -86,13 +84,6 @@ pub trait RegistryService: Send + Sync {
         &self,
         token: &TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError>;
-
-    async fn get_auth_details_for_environment(
-        &self,
-        environment_id: EnvironmentId,
-        include_deleted: bool,
-        auth_ctx: &AuthCtx,
-    ) -> Result<AuthDetailsForEnvironment, RegistryServiceError>;
 
     // limits api
     async fn get_resource_limits(
@@ -461,40 +452,6 @@ impl RegistryService for GrpcRegistryService {
                 Ok(auth_ctx)
             }
             Some(authenticate_token_response::Result::Error(error)) => Err(error.into()),
-        }
-    }
-
-    async fn get_auth_details_for_environment(
-        &self,
-        environment_id: EnvironmentId,
-        include_deleted: bool,
-        auth_ctx: &AuthCtx,
-    ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
-        let response = self
-            .client
-            .call("get_auth_details_for_environment", move |client| {
-                let request = GetAuthDetailsForEnvironmentRequest {
-                    environment_id: Some(environment_id.into()),
-                    include_deleted,
-                    auth_ctx: Some(auth_ctx.clone().into()),
-                };
-                Box::pin(client.get_auth_details_for_environment(request))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            None => Err(RegistryServiceError::empty_response()),
-            Some(get_auth_details_for_environment_response::Result::Success(payload)) => {
-                let auth_details: AuthDetailsForEnvironment = payload
-                    .auth_details_for_environment
-                    .ok_or("missing auth_details_for_environment field")?
-                    .try_into()?;
-                Ok(auth_details)
-            }
-            Some(get_auth_details_for_environment_response::Result::Error(error)) => {
-                Err(error.into())
-            }
         }
     }
 

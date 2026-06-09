@@ -21,10 +21,11 @@ use golem_common::model::card::owner::{
 };
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    AccountOauth2IdentityResourcePattern, AccountPluginResourcePattern, AccountResourcePattern,
-    AccountTokenResourcePattern, AccountUsageResourcePattern, AgentResourcePattern,
-    ApplicationResourcePattern, BlobResourcePattern, CardId, CardManagedBy, CardResourcePattern,
-    ClassPermissionPattern, ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
+    AccountOauth2IdentityResourcePattern, AccountPermissionShareResourcePattern,
+    AccountPluginResourcePattern, AccountResourcePattern, AccountTokenResourcePattern,
+    AccountUsageResourcePattern, AgentResourcePattern, ApplicationResourcePattern,
+    BlobResourcePattern, CardId, CardManagedBy, CardResourcePattern, ClassPermissionPattern,
+    ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
     EnvironmentAgentSecretResourcePattern, EnvironmentBlobBucketResourcePattern,
     EnvironmentDomainRegistrationResourcePattern, EnvironmentHttpApiDeploymentResourcePattern,
     EnvironmentInitialFilesResourcePattern, EnvironmentKvBucketResourcePattern,
@@ -165,6 +166,12 @@ fn add_account_grants(
             owner: account_owner.clone(),
             recipient: RecipientPattern::Any,
             resource: AccountPluginResourcePattern::Any,
+        }),
+        PermissionPattern::AccountPermissionShare(ClassPermissionPattern {
+            verb: None,
+            owner: account_owner.clone(),
+            recipient: RecipientPattern::Any,
+            resource: AccountPermissionShareResourcePattern::Any,
         }),
         PermissionPattern::AccountToken(ClassPermissionPattern {
             verb: None,

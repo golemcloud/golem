@@ -46,7 +46,7 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
-use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use std::pin::Pin;
@@ -73,17 +73,63 @@ fn build_public_agent_id(
     })
 }
 
-fn required_environment_action_for_invocation_mode(mode: i32) -> EnvironmentAction {
+fn agent_verb_for_invocation_mode(mode: i32) -> AgentVerb {
     if mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32 {
-        EnvironmentAction::ViewWorker
+        AgentVerb::View
     } else {
-        EnvironmentAction::UpdateWorker
+        AgentVerb::Invoke
     }
+}
+
+fn authorize_agent_permission(
+    auth_ctx: &AuthCtx,
+    component: &Component,
+    agent_id: &AgentId,
+    verb: AgentVerb,
+    resource: AgentResourcePattern,
+) -> WorkerResult<()> {
+    auth_ctx
+        .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::Agent {
+                account: component.account_id.to_string(),
+                application: component.application_name.0.clone(),
+                environment: component.environment_name.0.clone(),
+                component: component.component_name.0.clone(),
+                agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
+            },
+            verb: Some(verb),
+            resource,
+        }))
+        .map_err(AuthServiceError::Unauthorized)?;
+
+    Ok(())
+}
+
+fn authorize_component_agents_permission(
+    auth_ctx: &AuthCtx,
+    component: &Component,
+    verb: AgentVerb,
+    resource: AgentResourcePattern,
+) -> WorkerResult<()> {
+    auth_ctx
+        .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::ComponentAgents {
+                account: component.account_id.to_string(),
+                application: component.application_name.0.clone(),
+                environment: component.environment_name.0.clone(),
+                component: component.component_name.0.clone(),
+            },
+            verb: Some(verb),
+            resource,
+        }))
+        .map_err(AuthServiceError::Unauthorized)?;
+
+    Ok(())
 }
 
 pub struct WorkerService {
     component_service: Arc<dyn ComponentService>,
-    auth_service: Arc<dyn AuthService>,
+    _auth_service: Arc<dyn AuthService>,
     limit_service: Arc<dyn LimitService>,
     worker_client: Arc<dyn WorkerClient>,
     agent_resolution_cache: Arc<AgentResolutionCache>,
@@ -99,7 +145,7 @@ impl WorkerService {
     ) -> Self {
         Self {
             component_service,
-            auth_service,
+            _auth_service: auth_service,
             limit_service,
             worker_client,
             agent_resolution_cache,
@@ -148,14 +194,13 @@ impl WorkerService {
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
         assert!(component.id == agent_id.component_id);
 
-        let environment_auth_details = self
-            .auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::CreateWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Any,
+        )?;
 
         let (_, fingerprint) = self
             .worker_client
@@ -164,7 +209,7 @@ impl WorkerService {
                 environment_variables,
                 config,
                 ignore_already_existing,
-                environment_auth_details.account_id_owning_environment,
+                component.account_id,
                 component.environment_id,
                 auth_ctx,
                 invocation_context,
@@ -185,37 +230,32 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        let environment_auth_details = self
-            .auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::ViewWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )?;
 
         let stream = self
             .worker_client
             .connect(
                 agent_id,
                 component.environment_id,
-                environment_auth_details.account_id_owning_environment,
+                component.account_id,
                 auth_ctx,
             )
             .await?;
 
         self.limit_service
-            .update_worker_connection_limit(
-                environment_auth_details.account_id_owning_environment,
-                agent_id,
-                true,
-            )
+            .update_worker_connection_limit(component.account_id, agent_id, true)
             .await?;
 
         Ok(ConnectWorkerStream::new(
             stream,
             agent_id.clone(),
-            environment_auth_details.account_id_owning_environment,
+            component.account_id,
             self.limit_service.clone(),
         ))
     }
@@ -226,13 +266,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::DeleteWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::Delete,
+            AgentResourcePattern::Any,
+        )?;
 
         self.worker_client
             .delete(agent_id, component.environment_id, auth_ctx)
@@ -253,13 +293,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Any,
+        )?;
 
         let result = self
             .worker_client
@@ -280,13 +320,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::Interrupt,
+            AgentResourcePattern::Any,
+        )?;
 
         self.worker_client
             .interrupt(
@@ -310,13 +350,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::ViewWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )?;
 
         let result = self
             .worker_client
@@ -340,13 +380,12 @@ impl WorkerService {
             .get_current_by_id(component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::ViewWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_component_agents_permission(
+            &auth_ctx,
+            &component,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )?;
 
         let result = self
             .worker_client
@@ -375,13 +414,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::Resume,
+            AgentResourcePattern::Any,
+        )?;
 
         self.worker_client
             .resume(agent_id, force, component.environment_id, auth_ctx)
@@ -403,13 +442,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::UpdateRevision,
+            AgentResourcePattern::Any,
+        )?;
 
         self.worker_client
             .update(
@@ -438,13 +477,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::ViewWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::View,
+            AgentResourcePattern::OplogIndex(from_oplog_index.into()),
+        )?;
 
         let result = self
             .worker_client
@@ -474,13 +513,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::ViewWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )?;
 
         let result = self
             .worker_client
@@ -508,14 +547,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        let environment_auth_details = self
-            .auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::ViewWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )?;
 
         let nodes = self
             .worker_client
@@ -523,7 +561,7 @@ impl WorkerService {
                 agent_id,
                 path,
                 component.environment_id,
-                environment_auth_details.account_id_owning_environment,
+                component.account_id,
                 auth_ctx,
             )
             .await?;
@@ -542,14 +580,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        let environment_auth_details = self
-            .auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::ViewWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )?;
 
         let contents_stream = self
             .worker_client
@@ -557,7 +594,7 @@ impl WorkerService {
                 agent_id,
                 path,
                 component.environment_id,
-                environment_auth_details.account_id_owning_environment,
+                component.account_id,
                 auth_ctx,
             )
             .await?;
@@ -576,13 +613,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::ActivatePlugin,
+            AgentResourcePattern::Any,
+        )?;
 
         self.worker_client
             .activate_plugin(
@@ -607,13 +644,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::DeactivatePlugin,
+            AgentResourcePattern::Any,
+        )?;
 
         self.worker_client
             .deactivate_plugin(
@@ -639,14 +676,13 @@ impl WorkerService {
             .get_current_by_id(source_agent_id.component_id)
             .await?;
 
-        let environment_auth_details = self
-            .auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            source_agent_id,
+            AgentVerb::Fork,
+            AgentResourcePattern::Any,
+        )?;
 
         self.worker_client
             .fork_worker(
@@ -654,7 +690,7 @@ impl WorkerService {
                 target_agent_id,
                 oplog_index_cut_off,
                 component.environment_id,
-                environment_auth_details.account_id_owning_environment,
+                component.account_id,
                 auth_ctx,
             )
             .await?;
@@ -673,13 +709,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::Revert,
+            AgentResourcePattern::Any,
+        )?;
 
         self.worker_client
             .revert_worker(agent_id, target, component.environment_id, auth_ctx)
@@ -699,13 +735,13 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth_ctx,
-            )
-            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::CancelInvocation,
+            AgentResourcePattern::Any,
+        )?;
 
         let canceled = self
             .worker_client
@@ -733,14 +769,17 @@ impl WorkerService {
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let environment_auth_details = self
-            .auth_service
-            .authorize_environment_actions(
-                environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth_ctx,
-            )
+        let component = self
+            .component_service
+            .get_revision(target_agent_id.component_id, component_revision)
             .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            target_agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Any,
+        )?;
 
         self.worker_client
             .process_oplog_entries(
@@ -748,7 +787,7 @@ impl WorkerService {
                 environment_id,
                 component_revision,
                 idempotency_key,
-                environment_auth_details.account_id_owning_environment,
+                component.account_id,
                 config,
                 metadata,
                 first_entry_index,
@@ -781,14 +820,22 @@ impl WorkerService {
             }
         };
 
-        let environment_auth_details = self
-            .auth_service
-            .authorize_environment_actions(
-                environment_id,
-                required_environment_action_for_invocation_mode(mode),
-                &auth_ctx,
-            )
+        let component = self
+            .component_service
+            .get_current_by_id(agent_id.component_id)
             .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            agent_verb_for_invocation_mode(mode),
+            method_name
+                .as_ref()
+                .map(|method_name| {
+                    AgentResourcePattern::Method(AgentMethodName(method_name.clone()))
+                })
+                .unwrap_or(AgentResourcePattern::Any),
+        )?;
 
         self.worker_client
             .invoke_agent(
@@ -800,7 +847,7 @@ impl WorkerService {
                 idempotency_key,
                 invocation_context,
                 environment_id,
-                environment_auth_details.account_id_owning_environment,
+                component.account_id,
                 auth_ctx,
                 principal,
             )
@@ -1073,7 +1120,7 @@ impl WorkerService {
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkerService, required_environment_action_for_invocation_mode};
+    use super::{WorkerService, agent_verb_for_invocation_mode};
     use crate::api::agents::{AgentInvocationMode, AgentInvocationRequest, CreateAgentRequest};
     use crate::service::agent_resolution_cache::AgentResolutionCache;
     use crate::service::auth::{AuthService, AuthServiceError};
@@ -1095,7 +1142,7 @@ mod tests {
         RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting, UntypedJsonDataValue,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
-    use golem_common::model::auth::EnvironmentRole;
+    use golem_common::model::card::AgentVerb;
     use golem_common::model::component::{
         CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
     };
@@ -1107,10 +1154,10 @@ mod tests {
     use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
     use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
-    use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
+    use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
     use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
-    use std::collections::{BTreeMap, BTreeSet, HashMap};
+    use std::collections::{BTreeMap, HashMap};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -1128,15 +1175,6 @@ mod tests {
             &self,
             _: &golem_common::model::auth::TokenSecret,
         ) -> Result<AuthCtx, RegistryServiceError> {
-            unimplemented!()
-        }
-
-        async fn get_auth_details_for_environment(
-            &self,
-            _: EnvironmentId,
-            _: bool,
-            _: &AuthCtx,
-        ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
             unimplemented!()
         }
 
@@ -1346,9 +1384,7 @@ mod tests {
         }
     }
 
-    struct AllowAllAuthService {
-        account_id: AccountId,
-    }
+    struct AllowAllAuthService;
 
     #[async_trait]
     impl AuthService for AllowAllAuthService {
@@ -1357,18 +1393,6 @@ mod tests {
             _: golem_common::model::auth::TokenSecret,
         ) -> Result<AuthCtx, AuthServiceError> {
             unimplemented!()
-        }
-
-        async fn authorize_environment_actions(
-            &self,
-            _: EnvironmentId,
-            _: EnvironmentAction,
-            _: &AuthCtx,
-        ) -> Result<AuthDetailsForEnvironment, AuthServiceError> {
-            Ok(AuthDetailsForEnvironment {
-                account_id_owning_environment: self.account_id,
-                environment_roles_from_shares: BTreeSet::<EnvironmentRole>::new(),
-            })
         }
     }
 
@@ -1704,7 +1728,7 @@ mod tests {
             Self {
                 worker_service: WorkerService::new(
                     Arc::new(StaticComponentService { component }),
-                    Arc::new(AllowAllAuthService { account_id }),
+                    Arc::new(AllowAllAuthService),
                     Arc::new(NoopLimitService),
                     worker_client.clone(),
                     agent_resolution_cache,
@@ -1797,6 +1821,8 @@ mod tests {
             hash: Hash::empty(),
             application_id: ApplicationId(Uuid::new_v4()),
             account_id,
+            application_name: ApplicationName::try_from("weather-app".to_string()).unwrap(),
+            environment_name: EnvironmentName::try_from("prod").unwrap(),
             component_size: 0,
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),
@@ -1827,22 +1853,22 @@ mod tests {
     }
 
     #[test]
-    fn lookup_invocation_requires_view_worker_permission() {
+    fn lookup_invocation_requires_view_agent_permission() {
         assert_eq!(
-            required_environment_action_for_invocation_mode(
+            agent_verb_for_invocation_mode(
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
             ),
-            EnvironmentAction::ViewWorker,
+            AgentVerb::View,
         );
     }
 
     #[test]
-    fn non_lookup_invocation_requires_update_worker_permission() {
+    fn non_lookup_invocation_requires_invoke_agent_permission() {
         assert_eq!(
-            required_environment_action_for_invocation_mode(
+            agent_verb_for_invocation_mode(
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             ),
-            EnvironmentAction::UpdateWorker,
+            AgentVerb::Invoke,
         );
     }
 

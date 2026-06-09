@@ -20,8 +20,8 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::mcp_deployment::{McpDeploymentRepoError, McpDeploymentRevisionRecord};
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
-    ClassPermissionTarget, EnvironmentMcpDeploymentResourcePattern, EnvironmentMcpDeploymentVerb,
-    PermissionTarget,
+    ClassPermissionTarget, EnvironmentMcpDeploymentName, EnvironmentMcpDeploymentResourcePattern,
+    EnvironmentMcpDeploymentVerb, PermissionTarget,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
@@ -31,7 +31,7 @@ use golem_common::model::mcp_deployment::{
     McpDeploymentUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
 
@@ -64,6 +64,31 @@ pub enum McpDeploymentError {
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+fn authorize_mcp_deployment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    domain: Option<&Domain>,
+    verb: EnvironmentMcpDeploymentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentMcpDeployment(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: domain
+                .map(|domain| {
+                    EnvironmentMcpDeploymentResourcePattern::Name(EnvironmentMcpDeploymentName(
+                        domain.0.clone(),
+                    ))
+                })
+                .unwrap_or(EnvironmentMcpDeploymentResourcePattern::Any),
+        },
+    ))
 }
 
 impl SafeDisplay for McpDeploymentError {
@@ -131,10 +156,11 @@ impl McpDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateMcpDeployment,
+        authorize_mcp_deployment_permission(
+            auth,
+            &environment,
+            Some(&data.domain),
+            EnvironmentMcpDeploymentVerb::Create,
         )?;
 
         self.domain_registration_service
@@ -208,17 +234,19 @@ impl McpDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewMcpDeployment,
+        authorize_mcp_deployment_permission(
+            auth,
+            &environment,
+            Some(&mcp_deployment.domain),
+            EnvironmentMcpDeploymentVerb::View,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateMcpDeployment,
+        authorize_mcp_deployment_permission(
+            auth,
+            &environment,
+            Some(&mcp_deployment.domain),
+            EnvironmentMcpDeploymentVerb::Update,
         )?;
 
         if update.current_revision != mcp_deployment.revision {
@@ -274,17 +302,19 @@ impl McpDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewMcpDeployment,
+        authorize_mcp_deployment_permission(
+            auth,
+            &environment,
+            Some(&mcp_deployment.domain),
+            EnvironmentMcpDeploymentVerb::View,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteMcpDeployment,
+        authorize_mcp_deployment_permission(
+            auth,
+            &environment,
+            Some(&mcp_deployment.domain),
+            EnvironmentMcpDeploymentVerb::Delete,
         )?;
 
         if current_revision != mcp_deployment.revision {
@@ -331,10 +361,11 @@ impl McpDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewMcpDeployment,
+        authorize_mcp_deployment_permission(
+            auth,
+            &environment,
+            Some(&mcp_deployment.domain),
+            EnvironmentMcpDeploymentVerb::View,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?;
 
@@ -365,7 +396,12 @@ impl McpDeploymentService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<McpDeployment>, McpDeploymentError> {
-        authorize_mcp_deployment_permission(auth, environment, EnvironmentMcpDeploymentVerb::View)?;
+        authorize_mcp_deployment_permission(
+            auth,
+            environment,
+            None,
+            EnvironmentMcpDeploymentVerb::View,
+        )?;
 
         let mcp_deployments: Vec<McpDeployment> = self
             .mcp_deployment_repo
@@ -395,10 +431,11 @@ impl McpDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewMcpDeployment,
+        authorize_mcp_deployment_permission(
+            auth,
+            &environment,
+            Some(domain),
+            EnvironmentMcpDeploymentVerb::View,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentByDomainNotFound(domain.clone()))?;
 
@@ -438,10 +475,11 @@ impl McpDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewMcpDeployment,
+        authorize_mcp_deployment_permission(
+            auth,
+            &environment,
+            Some(&mcp_deployment.domain),
+            EnvironmentMcpDeploymentVerb::View,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?;
 
@@ -469,10 +507,11 @@ impl McpDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewMcpDeployment,
+        authorize_mcp_deployment_permission(
+            auth,
+            &environment,
+            Some(domain),
+            EnvironmentMcpDeploymentVerb::View,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentByDomainNotFound(domain.clone()))?;
 
@@ -505,10 +544,11 @@ impl McpDeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewMcpDeployment,
+        authorize_mcp_deployment_permission(
+            auth,
+            &environment,
+            None,
+            EnvironmentMcpDeploymentVerb::View,
         )?;
 
         let mcp_deployments: Vec<McpDeployment> = self
@@ -521,22 +561,4 @@ impl McpDeploymentService {
 
         Ok(mcp_deployments)
     }
-}
-
-fn authorize_mcp_deployment_permission(
-    auth: &AuthCtx,
-    environment: &Environment,
-    verb: EnvironmentMcpDeploymentVerb,
-) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::EnvironmentMcpDeployment(
-        ClassPermissionTarget {
-            verb: Some(verb),
-            owner: EnvironmentOwnerPattern::Environment {
-                account: environment.owner_account_id.to_string(),
-                application: environment.application_name.0.clone(),
-                environment: environment.name.0.clone(),
-            },
-            resource: EnvironmentMcpDeploymentResourcePattern::Any,
-        },
-    ))
 }

@@ -20,14 +20,18 @@ use crate::repo::model::permission_share::{
 };
 use crate::repo::permission_share::PermissionShareRepo;
 use golem_common::model::account::{Account, AccountId};
+use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::recipient::RecipientPattern;
-use golem_common::model::card::{Card, CardId, CardManagedBy, CardParseError, PermissionPattern};
+use golem_common::model::card::{
+    AccountPermissionShareResourcePattern, AccountPermissionShareVerb, Card, CardId, CardManagedBy,
+    CardParseError, ClassPermissionTarget, PermissionPattern, PermissionTarget,
+};
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareId,
     PermissionShareName, PermissionShareRevision, PermissionShareUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AccountAction, AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -96,7 +100,12 @@ impl PermissionShareService {
         data: PermissionShareCreation,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        auth.authorize_account_action(owner_account_id, AccountAction::CreatePermissionShare)?;
+        authorize_permission_share_permission(
+            auth,
+            owner_account_id,
+            AccountPermissionShareVerb::Create,
+            AccountPermissionShareResourcePattern::Any,
+        )?;
 
         let target_account = self.get_account(data.target_account_id).await?;
 
@@ -143,9 +152,11 @@ impl PermissionShareService {
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
         let mut share = self.get(permission_share_id, auth).await?;
-        auth.authorize_account_action(
+        authorize_permission_share_permission(
+            auth,
             share.owner_account_id,
-            AccountAction::UpdatePermissionShare,
+            AccountPermissionShareVerb::Update,
+            AccountPermissionShareResourcePattern::Name(share.name.clone()),
         )?;
 
         if share.revision != update.current_revision {
@@ -199,9 +210,11 @@ impl PermissionShareService {
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
         let mut share = self.get(permission_share_id, auth).await?;
-        auth.authorize_account_action(
+        authorize_permission_share_permission(
+            auth,
             share.owner_account_id,
-            AccountAction::DeletePermissionShare,
+            AccountPermissionShareVerb::Delete,
+            AccountPermissionShareResourcePattern::Name(share.name.clone()),
         )?;
 
         if share.revision != current_revision {
@@ -257,7 +270,12 @@ impl PermissionShareService {
         name: &str,
         auth: &AuthCtx,
     ) -> Result<PermissionShare, PermissionShareError> {
-        auth.authorize_account_action(owner_account_id, AccountAction::ViewPermissionShare)?;
+        authorize_permission_share_permission(
+            auth,
+            owner_account_id,
+            AccountPermissionShareVerb::View,
+            AccountPermissionShareResourcePattern::Name(PermissionShareName(name.to_string())),
+        )?;
 
         self.permission_share_repo
             .get_by_owner_and_name(owner_account_id.0, name)
@@ -274,7 +292,12 @@ impl PermissionShareService {
         owner_account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<PermissionShare>, PermissionShareError> {
-        auth.authorize_account_action(owner_account_id, AccountAction::ViewPermissionShare)?;
+        authorize_permission_share_permission(
+            auth,
+            owner_account_id,
+            AccountPermissionShareVerb::View,
+            AccountPermissionShareResourcePattern::Any,
+        )?;
 
         self.permission_share_repo
             .get_for_owner(owner_account_id.0)
@@ -289,7 +312,12 @@ impl PermissionShareService {
         target_account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<Vec<PermissionShare>, PermissionShareError> {
-        auth.authorize_account_action(target_account_id, AccountAction::ViewPermissionShare)?;
+        authorize_permission_share_permission(
+            auth,
+            target_account_id,
+            AccountPermissionShareVerb::View,
+            AccountPermissionShareResourcePattern::Any,
+        )?;
 
         self.permission_share_repo
             .get_for_target(target_account_id.0)
@@ -370,16 +398,40 @@ impl PermissionShareService {
         share: &PermissionShare,
         auth: &AuthCtx,
     ) -> Result<(), PermissionShareError> {
-        auth.authorize_account_action(share.owner_account_id, AccountAction::ViewPermissionShare)
-            .or_else(|_| {
-                auth.authorize_account_action(
-                    share.target_account_id,
-                    AccountAction::ViewPermissionShare,
-                )
-            })?;
+        authorize_permission_share_permission(
+            auth,
+            share.owner_account_id,
+            AccountPermissionShareVerb::View,
+            AccountPermissionShareResourcePattern::Name(share.name.clone()),
+        )
+        .or_else(|_| {
+            authorize_permission_share_permission(
+                auth,
+                share.target_account_id,
+                AccountPermissionShareVerb::View,
+                AccountPermissionShareResourcePattern::Name(share.name.clone()),
+            )
+        })?;
 
         Ok(())
     }
+}
+
+fn authorize_permission_share_permission(
+    auth: &AuthCtx,
+    account_id: AccountId,
+    verb: AccountPermissionShareVerb,
+    resource: AccountPermissionShareResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::AccountPermissionShare(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: AccountOwnerPattern::Account {
+                account: account_id.to_string(),
+            },
+            resource,
+        },
+    ))
 }
 
 struct ParsedPermissionShareData {

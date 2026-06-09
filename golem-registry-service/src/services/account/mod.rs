@@ -27,13 +27,13 @@ use anyhow::anyhow;
 use golem_common::model::account::{
     Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
-use golem_common::model::card::owner::AccountOwnerPattern;
+use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::{
     AccountResourcePattern, AccountVerb, ClassPermissionTarget, PermissionTarget,
+    SystemResourcePattern, SystemVerb,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::GlobalAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -126,7 +126,7 @@ impl AccountService {
         account: AccountCreation,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        auth.authorize_global_action(GlobalAction::CreateAccount)?;
+        authorize_system_permission(auth, SystemVerb::CreateAccount)?;
 
         let id = AccountId::new();
         info!("Creating account: {}", id);
@@ -272,7 +272,7 @@ impl AccountService {
         plan_id: PlanId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        auth.authorize_global_action(GlobalAction::CreateAccount)?;
+        authorize_system_permission(auth, SystemVerb::CreateAccount)?;
 
         if id == AccountId::SYSTEM {
             Err(anyhow!("Cannot create account with reserved account id"))?
@@ -341,6 +341,14 @@ fn authorize_account_permission(
     verb: AccountVerb,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&account_permission_target(account_id, verb))
+}
+
+fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::System(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EmptyOwnerPattern,
+        resource: SystemResourcePattern,
+    }))
 }
 
 fn account_permission_target(account_id: AccountId, verb: AccountVerb) -> PermissionTarget {

@@ -26,6 +26,7 @@ use crate::model::card::recipient::{
     PolymorphicRecipientPattern, RecipientPattern,
 };
 use crate::model::environment_share::EnvironmentShareId;
+use crate::model::permission_share::PermissionShareName;
 use RecipientPattern as AccountRecipientPattern;
 use RecipientPattern as AgentRecipientPattern;
 use RecipientPattern as EnvironmentRecipientPattern;
@@ -714,6 +715,32 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                 resource: AccountPluginResourcePattern::Name(AccountPluginName(
                     "plugin-a".to_string(),
                 )),
+            }),
+        ),
+        (
+            "account_permission_share",
+            "account.permission-share(acme) @ acme : update : team-access",
+            PermissionPattern::AccountPermissionShare(ClassPermissionPattern::<
+                AccountPermissionShareClass,
+            > {
+                verb: Some(AccountPermissionShareVerb::Update),
+                owner: account_owner("acme"),
+                recipient: account_recipient("acme"),
+                resource: AccountPermissionShareResourcePattern::Name(PermissionShareName(
+                    "team-access".to_string(),
+                )),
+            }),
+        ),
+        (
+            "account_permission_share_create_any",
+            "account.permission-share(acme) @ acme : create : *",
+            PermissionPattern::AccountPermissionShare(ClassPermissionPattern::<
+                AccountPermissionShareClass,
+            > {
+                verb: Some(AccountPermissionShareVerb::Create),
+                owner: account_owner("acme"),
+                recipient: account_recipient("acme"),
+                resource: AccountPermissionShareResourcePattern::Any,
             }),
         ),
         (
