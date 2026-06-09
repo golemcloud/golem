@@ -72,7 +72,7 @@ use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    AgentExportFuncs, InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::worker::{RetryDecision, Worker};
@@ -267,6 +267,9 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
+    /// Per-instance cache of resolved typed guest export handles, populated
+    /// lazily on first use during invocation dispatch.
+    agent_export_funcs: AgentExportFuncs,
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -278,6 +281,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let idempotency_key_oplog_index =
             self.state.current_idempotency_key_oplog_index(oplog_index);
         IdempotencyKey::derived(&current_idempotency_key, idempotency_key_oplog_index)
+    }
+
+    /// Returns the per-instance cache of resolved typed guest export handles.
+    pub(crate) fn agent_export_funcs(&self) -> &AgentExportFuncs {
+        &self.agent_export_funcs
+    }
+
+    /// Returns a mutable reference to the per-instance cache of resolved typed
+    /// guest export handles.
+    pub(crate) fn agent_export_funcs_mut(&mut self) -> &mut AgentExportFuncs {
+        &mut self.agent_export_funcs
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -495,6 +509,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_dir,
             execution_status,
             resource_limits,
+            agent_export_funcs: AgentExportFuncs::default(),
         })
     }
 

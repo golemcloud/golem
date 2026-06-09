@@ -352,57 +352,93 @@ fn decode_invoke_output(
     }
 }
 
-fn load_agent_guest<Ctx: WorkerCtx>(
-    store: &mut StoreContextMut<'_, Ctx>,
-    instance: &wasmtime::component::Instance,
-) -> Result<guest_exports::Guest, WorkerExecutorError> {
-    let instance_pre = instance.instance_pre(&*store);
-    let indices = guest_exports::GuestIndices::new(&instance_pre).map_err(|e| {
-        WorkerExecutorError::invalid_request(format!("agent guest export not available: {e}"))
-    })?;
-    indices.load(&mut *store, instance).map_err(|e| {
-        WorkerExecutorError::invalid_request(format!("failed to load agent guest export: {e}"))
-    })
+/// Per-instance cache of typed guest export handles.
+///
+/// Resolving a typed export (`GuestIndices::new` + `load`) performs name-based
+/// export lookups and typed function signature checks against the component.
+/// Both the wasmtime [`Instance`](wasmtime::component::Instance) and the
+/// [`Store`](wasmtime::Store) holding this cache live for the entire worker
+/// instance lifetime and are reused across every invocation, so the resolved
+/// [`Guest`](guest_exports::Guest) handles (cheaply cloneable bundles of
+/// `Func` handles) can be resolved once and reused. Each interface is cached
+/// independently and resolved lazily on first use, because not every component
+/// exports every interface (e.g. `oplog-processor` is optional).
+#[derive(Clone, Default)]
+pub(crate) struct AgentExportFuncs {
+    agent_guest: Option<guest_exports::Guest>,
+    save_snapshot: Option<save_snapshot_exports::Guest>,
+    load_snapshot: Option<load_snapshot_exports::Guest>,
+    oplog_processor: Option<oplog_processor_exports::Guest>,
 }
 
-fn load_save_snapshot_guest<Ctx: WorkerCtx>(
-    store: &mut StoreContextMut<'_, Ctx>,
-    instance: &wasmtime::component::Instance,
-) -> Result<save_snapshot_exports::Guest, WorkerExecutorError> {
-    let instance_pre = instance.instance_pre(&*store);
-    let indices = save_snapshot_exports::GuestIndices::new(&instance_pre).map_err(|e| {
-        WorkerExecutorError::invalid_request(format!("save-snapshot export not available: {e}"))
-    })?;
-    indices.load(&mut *store, instance).map_err(|e| {
-        WorkerExecutorError::invalid_request(format!("failed to load save-snapshot export: {e}"))
-    })
+/// Generates a per-instance cached loader for a typed guest export interface.
+///
+/// On the first call for a given worker instance the export is resolved and
+/// stored in the [`AgentExportFuncs`] cache held by the worker's
+/// `DurableWorkerCtx`; subsequent calls return the cached handle, skipping the
+/// name-based lookup and typed signature checks.
+macro_rules! cached_guest_loader {
+    ($fn_name:ident, $exports:ident, $field:ident, $missing_msg:literal, $load_msg:literal) => {
+        fn $fn_name<Ctx: WorkerCtx>(
+            store: &mut StoreContextMut<'_, Ctx>,
+            instance: &wasmtime::component::Instance,
+        ) -> Result<$exports::Guest, WorkerExecutorError> {
+            if let Some(guest) = store
+                .data()
+                .durable_ctx()
+                .agent_export_funcs()
+                .$field
+                .clone()
+            {
+                return Ok(guest);
+            }
+
+            let instance_pre = instance.instance_pre(&*store);
+            let indices = $exports::GuestIndices::new(&instance_pre).map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(concat!($missing_msg, ": {}"), e))
+            })?;
+            let guest = indices.load(&mut *store, instance).map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(concat!($load_msg, ": {}"), e))
+            })?;
+
+            store
+                .data_mut()
+                .durable_ctx_mut()
+                .agent_export_funcs_mut()
+                .$field = Some(guest.clone());
+            Ok(guest)
+        }
+    };
 }
 
-fn load_load_snapshot_guest<Ctx: WorkerCtx>(
-    store: &mut StoreContextMut<'_, Ctx>,
-    instance: &wasmtime::component::Instance,
-) -> Result<load_snapshot_exports::Guest, WorkerExecutorError> {
-    let instance_pre = instance.instance_pre(&*store);
-    let indices = load_snapshot_exports::GuestIndices::new(&instance_pre).map_err(|e| {
-        WorkerExecutorError::invalid_request(format!("load-snapshot export not available: {e}"))
-    })?;
-    indices.load(&mut *store, instance).map_err(|e| {
-        WorkerExecutorError::invalid_request(format!("failed to load load-snapshot export: {e}"))
-    })
-}
-
-fn load_oplog_processor_guest<Ctx: WorkerCtx>(
-    store: &mut StoreContextMut<'_, Ctx>,
-    instance: &wasmtime::component::Instance,
-) -> Result<oplog_processor_exports::Guest, WorkerExecutorError> {
-    let instance_pre = instance.instance_pre(&*store);
-    let indices = oplog_processor_exports::GuestIndices::new(&instance_pre).map_err(|e| {
-        WorkerExecutorError::invalid_request(format!("oplog-processor export not available: {e}"))
-    })?;
-    indices.load(&mut *store, instance).map_err(|e| {
-        WorkerExecutorError::invalid_request(format!("failed to load oplog-processor export: {e}"))
-    })
-}
+cached_guest_loader!(
+    load_agent_guest,
+    guest_exports,
+    agent_guest,
+    "agent guest export not available",
+    "failed to load agent guest export"
+);
+cached_guest_loader!(
+    load_save_snapshot_guest,
+    save_snapshot_exports,
+    save_snapshot,
+    "save-snapshot export not available",
+    "failed to load save-snapshot export"
+);
+cached_guest_loader!(
+    load_load_snapshot_guest,
+    load_snapshot_exports,
+    load_snapshot,
+    "load-snapshot export not available",
+    "failed to load load-snapshot export"
+);
+cached_guest_loader!(
+    load_oplog_processor_guest,
+    oplog_processor_exports,
+    oplog_processor,
+    "oplog-processor export not available",
+    "failed to load oplog-processor export"
+);
 
 async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
@@ -588,9 +624,12 @@ pub fn lower_invocation(
             ..
         } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
+            // `agent_type` is owned, so consume `methods` and move the matched
+            // method's `output_schema` into the lowered call rather than cloning
+            // it on every invocation.
             let method = agent_type
                 .methods
-                .iter()
+                .into_iter()
                 .find(|m| m.name == method_name)
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(format!(
@@ -615,7 +654,7 @@ pub fn lower_invocation(
                     method_name,
                     input: encode_value(&input_value),
                     principal: principal.into(),
-                    output_schema: method.output_schema.clone(),
+                    output_schema: method.output_schema,
                 },
             })
         }
