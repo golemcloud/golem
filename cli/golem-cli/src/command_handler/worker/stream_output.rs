@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command_handler::log::print_toon_document;
+use crate::command_handler::log::print_structured_document;
+use crate::model::agent::stream::AgentStreamEvent;
 use crate::model::format::Format;
-use crate::model::text::fmt::{to_colored_json, to_colored_yaml};
 use crate::model::worker::AgentLogStreamOptions;
 use colored::Colorize;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::fmt::Write;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -41,28 +40,6 @@ struct WorkerStreamOutputState {
     pub stderr: String,
     pub last_timestamp: Timestamp,
     pub last_timestamp_hashes: HashSet<u64>,
-}
-
-fn stream_event(
-    timestamp: Timestamp,
-    kind: &str,
-    level: &str,
-    context: &str,
-    message: &str,
-    extra_fields: serde_json::Map<String, serde_json::Value>,
-) -> serde_json::Value {
-    let mut event = serde_json::Map::new();
-    event.insert("timestamp".to_string(), serde_json::json!(timestamp));
-    event.insert("kind".to_string(), serde_json::json!(kind));
-    event.insert("level".to_string(), serde_json::json!(level));
-    event.insert("context".to_string(), serde_json::json!(context));
-    event.insert("message".to_string(), serde_json::json!(message));
-
-    for (key, value) in extra_fields {
-        event.insert(key, value);
-    }
-
-    serde_json::Value::Object(event)
 }
 
 impl WorkerStreamOutput {
@@ -163,24 +140,12 @@ impl WorkerStreamOutput {
                 LogLevel::Critical => "CRITICAL",
             };
 
-            match self.format {
-                Format::Json
-                | Format::PrettyJson
-                | Format::Yaml
-                | Format::PrettyYaml
-                | Format::Toon => self.machine_event(stream_event(
-                    timestamp,
-                    "log",
-                    level_str,
-                    &context,
-                    &message,
-                    serde_json::Map::new(),
-                )),
-                Format::Text => {
-                    let prefix = self.prefix(timestamp, level_str);
-                    self.colored(level, &format!("{prefix}[{context}] {message}"));
-                }
-            }
+            self.output_event(AgentStreamEvent::log(
+                timestamp,
+                level_str,
+                context.clone(),
+                message.clone(),
+            ));
         }
     }
 
@@ -192,24 +157,7 @@ impl WorkerStreamOutput {
             .await
             && !self.options.logs_only
         {
-            match self.format {
-                Format::Json
-                | Format::PrettyJson
-                | Format::Yaml
-                | Format::PrettyYaml
-                | Format::Toon => self.machine_event(stream_event(
-                    timestamp,
-                    "stream-closed",
-                    "STREAM",
-                    "",
-                    "Stream closed",
-                    serde_json::Map::new(),
-                )),
-                Format::Text => {
-                    let prefix = self.prefix(timestamp, "STREAM");
-                    self.colored(LogLevel::Debug, &format!("{prefix}Stream closed"));
-                }
-            }
+            self.output_event(AgentStreamEvent::stream_closed(timestamp));
         }
     }
 
@@ -221,31 +169,7 @@ impl WorkerStreamOutput {
             .await
             && !self.options.logs_only
         {
-            match self.format {
-                Format::Json
-                | Format::PrettyJson
-                | Format::Yaml
-                | Format::PrettyYaml
-                | Format::Toon => {
-                    let mut fields = serde_json::Map::new();
-                    fields.insert("error".to_string(), serde_json::json!(error.to_string()));
-                    self.machine_event(stream_event(
-                        timestamp,
-                        "stream-error",
-                        "WARN",
-                        "",
-                        &format!("Stream failed with error: {error}"),
-                        fields,
-                    ));
-                }
-                Format::Text => {
-                    let prefix = self.prefix(timestamp, "STREAM");
-                    self.colored(
-                        LogLevel::Warn,
-                        &format!("{prefix}Stream failed with error: {error}"),
-                    );
-                }
-            }
+            self.output_event(AgentStreamEvent::stream_error(timestamp, error));
         }
     }
 
@@ -266,35 +190,11 @@ impl WorkerStreamOutput {
             .await
             && !self.options.logs_only
         {
-            match self.format {
-                Format::Json
-                | Format::PrettyJson
-                | Format::Yaml
-                | Format::PrettyYaml
-                | Format::Toon => {
-                    let mut fields = serde_json::Map::new();
-                    fields.insert("functionName".to_string(), serde_json::json!(function_name));
-                    fields.insert(
-                        "idempotencyKey".to_string(),
-                        serde_json::json!(idempotency_key.to_string()),
-                    );
-                    self.machine_event(stream_event(
-                        timestamp,
-                        "invocation-started",
-                        "TRACE",
-                        "",
-                        "Invocation started",
-                        fields,
-                    ));
-                }
-                Format::Text => {
-                    let prefix = self.prefix(timestamp, "INVOKE");
-                    self.colored(
-                        LogLevel::Trace,
-                        &format!("{prefix}STARTED  {function_name} ({idempotency_key})"),
-                    );
-                }
-            }
+            self.output_event(AgentStreamEvent::invocation_started(
+                timestamp,
+                function_name.clone(),
+                idempotency_key.clone(),
+            ));
         }
     }
 
@@ -315,35 +215,11 @@ impl WorkerStreamOutput {
             .await
             && !self.options.logs_only
         {
-            match self.format {
-                Format::Json
-                | Format::PrettyJson
-                | Format::Yaml
-                | Format::PrettyYaml
-                | Format::Toon => {
-                    let mut fields = serde_json::Map::new();
-                    fields.insert("functionName".to_string(), serde_json::json!(function_name));
-                    fields.insert(
-                        "idempotencyKey".to_string(),
-                        serde_json::json!(idempotency_key.to_string()),
-                    );
-                    self.machine_event(stream_event(
-                        timestamp,
-                        "invocation-finished",
-                        "TRACE",
-                        "",
-                        "Invocation finished",
-                        fields,
-                    ));
-                }
-                Format::Text => {
-                    let prefix = self.prefix(timestamp, "INVOKE");
-                    self.colored(
-                        LogLevel::Trace,
-                        &format!("{prefix}FINISHED {function_name} ({idempotency_key})",),
-                    );
-                }
-            }
+            self.output_event(AgentStreamEvent::invocation_finished(
+                timestamp,
+                function_name.clone(),
+                idempotency_key.clone(),
+            ));
         }
     }
 
@@ -359,36 +235,10 @@ impl WorkerStreamOutput {
             .await
             && !self.options.logs_only
         {
-            match self.format {
-                Format::Json
-                | Format::PrettyJson
-                | Format::Yaml
-                | Format::PrettyYaml
-                | Format::Toon => {
-                    let mut fields = serde_json::Map::new();
-                    fields.insert(
-                        "numberOfMissedMessages".to_string(),
-                        serde_json::json!(number_of_missed_messages),
-                    );
-                    self.machine_event(stream_event(
-                        timestamp,
-                        "missed-messages",
-                        "WARN",
-                        "",
-                        &format!(
-                            "Stream output fell behind the server and {number_of_missed_messages} messages were missed"
-                        ),
-                        fields,
-                    ));
-                }
-                Format::Text => {
-                    let prefix = self.prefix(timestamp, "STREAM");
-                    self.colored(
-                        LogLevel::Warn,
-                        &format!("{prefix}Stream output fell behind the server and {number_of_missed_messages} messages were missed", ),
-                    );
-                }
-            }
+            self.output_event(AgentStreamEvent::missed_messages(
+                timestamp,
+                number_of_missed_messages,
+            ));
         }
     }
 
@@ -440,68 +290,26 @@ impl WorkerStreamOutput {
     }
 
     fn print_stdout(&self, timestamp: Timestamp, message: &str) {
-        match self.format {
-            Format::Json
-            | Format::PrettyJson
-            | Format::Yaml
-            | Format::PrettyYaml
-            | Format::Toon => self.machine_event(stream_event(
-                timestamp,
-                "stdout",
-                "STDOUT",
-                "",
-                message,
-                serde_json::Map::new(),
-            )),
-            Format::Text => {
-                let prefix = self.prefix(timestamp, "STDOUT");
-                self.colored(LogLevel::Info, &format!("{prefix}{message}"));
-            }
-        }
+        self.output_event(AgentStreamEvent::stdout(timestamp, message));
     }
 
     fn print_stderr(&self, timestamp: Timestamp, message: &str) {
-        match self.format {
-            Format::Json
-            | Format::PrettyJson
-            | Format::Yaml
-            | Format::PrettyYaml
-            | Format::Toon => self.machine_event(stream_event(
-                timestamp,
-                "stderr",
-                "STDERR",
-                "",
-                message,
-                serde_json::Map::new(),
-            )),
-            Format::Text => {
-                let prefix = self.prefix(timestamp, "STDERR");
-                self.colored(LogLevel::Error, &format!("{prefix}{message}"));
-            }
+        self.output_event(AgentStreamEvent::stderr(timestamp, message));
+    }
+
+    fn output_event(&self, event: AgentStreamEvent) {
+        if self.format.is_structured() {
+            self.machine_event(&event);
+        } else {
+            self.colored(
+                event.text_log_level(),
+                &event.render_text(self.options.show_timestamp, self.options.show_level),
+            );
         }
     }
 
-    fn machine_event(&self, event: serde_json::Value) {
-        match self.format {
-            Format::Json => println!("{event}"),
-            Format::PrettyJson => {
-                if self.options.colors {
-                    println!("{}", to_colored_json(&event).unwrap());
-                } else {
-                    println!("{}", serde_json::to_string_pretty(&event).unwrap());
-                }
-            }
-            Format::Yaml => println!("---\n{}", serde_yaml::to_string(&event).unwrap()),
-            Format::PrettyYaml => {
-                if self.options.colors {
-                    println!("---\n{}", to_colored_yaml(&event).unwrap());
-                } else {
-                    println!("---\n{}", serde_yaml::to_string(&event).unwrap());
-                }
-            }
-            Format::Toon => print_toon_document(&event),
-            Format::Text => unreachable!(),
-        }
+    fn machine_event(&self, event: &AgentStreamEvent) {
+        print_structured_document(self.format, self.options.colors, event);
     }
 
     fn colored(&self, level: LogLevel, s: &str) {
@@ -518,50 +326,5 @@ impl WorkerStreamOutput {
         } else {
             println!("{s}");
         }
-    }
-
-    fn prefix(&self, timestamp: Timestamp, level_or_source: &str) -> String {
-        let mut result = String::new();
-        if self.options.show_timestamp {
-            let _ = write!(&mut result, "[{timestamp}] ");
-        }
-        if self.options.show_level {
-            let _ = result.write_char('[');
-            let _ = result.write_str(level_or_source);
-            for _ in level_or_source.len()..8 {
-                let _ = result.write_char(' ');
-            }
-            let _ = result.write_char(']');
-            let _ = result.write_char(' ');
-        }
-        result
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::stream_event;
-    use golem_common::model::Timestamp;
-    use std::str::FromStr;
-
-    #[test_r::test]
-    fn stream_event_contains_common_and_extra_fields() {
-        let timestamp = Timestamp::from_str("2026-01-01T00:00:00Z").unwrap();
-        let mut extra = serde_json::Map::new();
-        extra.insert("functionName".to_string(), serde_json::json!("run"));
-
-        let event = stream_event(
-            timestamp,
-            "invocation-started",
-            "TRACE",
-            "",
-            "Invocation started",
-            extra,
-        );
-
-        assert_eq!(event["kind"], "invocation-started");
-        assert_eq!(event["level"], "TRACE");
-        assert_eq!(event["message"], "Invocation started");
-        assert_eq!(event["functionName"], "run");
     }
 }

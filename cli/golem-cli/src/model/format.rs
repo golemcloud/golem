@@ -50,6 +50,12 @@ impl Display for Format {
     }
 }
 
+impl Format {
+    pub fn is_structured(&self) -> bool {
+        !matches!(self, Format::Text)
+    }
+}
+
 impl FromStr for Format {
     type Err = String;
 

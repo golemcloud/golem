@@ -33,8 +33,35 @@ pub fn render_toon_document<S: Serialize>(value: &S) -> String {
     )
 }
 
-pub fn print_toon_document<S: Serialize>(value: &S) {
-    println!("{}", render_toon_document(value));
+pub fn render_structured_document<S: Serialize>(
+    format: Format,
+    colorize: bool,
+    value: &S,
+) -> String {
+    match format {
+        Format::Json => serde_json::to_string(value).unwrap(),
+        Format::PrettyJson => {
+            if colorize {
+                to_colored_json(value).unwrap()
+            } else {
+                serde_json::to_string_pretty(value).unwrap()
+            }
+        }
+        Format::Yaml => format!("---\n{}", serde_yaml::to_string(value).unwrap()),
+        Format::PrettyYaml => {
+            if colorize {
+                format!("---\n{}", to_colored_yaml(value).unwrap())
+            } else {
+                format!("---\n{}", serde_yaml::to_string(value).unwrap())
+            }
+        }
+        Format::Toon => render_toon_document(value),
+        Format::Text => unreachable!("text is not a structured output format"),
+    }
+}
+
+pub fn print_structured_document<S: Serialize>(format: Format, colorize: bool, value: &S) {
+    println!("{}", render_structured_document(format, colorize, value));
 }
 
 pub struct LogHandler {
@@ -48,28 +75,12 @@ impl LogHandler {
 
     pub fn log_serializable<S: Serialize>(&self, value: &S) {
         match self.ctx.format() {
-            Format::Json => {
-                println!("{}", serde_json::to_string(value).unwrap());
-            }
-            Format::PrettyJson => {
-                if self.ctx.should_colorize() {
-                    println!("{}", to_colored_json(value).unwrap());
-                } else {
-                    println!("{}", serde_json::to_string_pretty(value).unwrap());
-                }
-            }
-            Format::Yaml => {
-                println!("---\n{}", serde_yaml::to_string(value).unwrap());
-            }
-            Format::PrettyYaml => {
-                if self.ctx.should_colorize() {
-                    println!("---\n{}", to_colored_yaml(value).unwrap());
-                } else {
-                    println!("---\n{}", serde_yaml::to_string(value).unwrap());
-                }
-            }
-            Format::Toon => {
-                print_toon_document(value);
+            Format::Json
+            | Format::PrettyJson
+            | Format::Yaml
+            | Format::PrettyYaml
+            | Format::Toon => {
+                print_structured_document(self.ctx.format(), self.ctx.should_colorize(), value);
             }
             Format::Text => {
                 let formatted = if self.ctx.should_colorize() {
@@ -86,28 +97,12 @@ impl LogHandler {
 
     pub fn log_view<View: TextView + Serialize>(&self, view: &View) {
         match self.ctx.format() {
-            Format::Json => {
-                println!("{}", serde_json::to_string(view).unwrap());
-            }
-            Format::PrettyJson => {
-                if self.ctx.should_colorize() {
-                    println!("{}", to_colored_json(view).unwrap());
-                } else {
-                    println!("{}", serde_json::to_string_pretty(view).unwrap());
-                }
-            }
-            Format::Yaml => {
-                println!("---\n{}", serde_yaml::to_string(view).unwrap());
-            }
-            Format::PrettyYaml => {
-                if self.ctx.should_colorize() {
-                    println!("---\n{}", to_colored_yaml(view).unwrap());
-                } else {
-                    println!("---\n{}", serde_yaml::to_string(view).unwrap());
-                }
-            }
-            Format::Toon => {
-                print_toon_document(view);
+            Format::Json
+            | Format::PrettyJson
+            | Format::Yaml
+            | Format::PrettyYaml
+            | Format::Toon => {
+                print_structured_document(self.ctx.format(), self.ctx.should_colorize(), view);
             }
             Format::Text => {
                 view.log();
@@ -123,26 +118,8 @@ impl LogHandler {
         match self.ctx.format() {
             Format::Text => view.render_truncated(max_lines, self.ctx.should_colorize()),
             _ => {
-                let rendered = match self.ctx.format() {
-                    Format::Json => serde_json::to_string(view).unwrap(),
-                    Format::PrettyJson => {
-                        if self.ctx.should_colorize() {
-                            to_colored_json(view).unwrap()
-                        } else {
-                            serde_json::to_string_pretty(view).unwrap()
-                        }
-                    }
-                    Format::Yaml => format!("---\n{}", serde_yaml::to_string(view).unwrap()),
-                    Format::PrettyYaml => {
-                        if self.ctx.should_colorize() {
-                            format!("---\n{}", to_colored_yaml(view).unwrap())
-                        } else {
-                            format!("---\n{}", serde_yaml::to_string(view).unwrap())
-                        }
-                    }
-                    Format::Toon => render_toon_document(view),
-                    Format::Text => unreachable!(),
-                };
+                let rendered =
+                    render_structured_document(self.ctx.format(), self.ctx.should_colorize(), view);
                 truncate_rendered(rendered, max_lines)
             }
         }
