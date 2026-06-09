@@ -26,7 +26,8 @@ use golem_common::model::agent_secret::{
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, EnvironmentAgentSecretKeyPathPattern,
-    EnvironmentAgentSecretResourcePattern, EnvironmentAgentSecretVerb, PermissionTarget,
+    EnvironmentAgentSecretKeySegmentPattern, EnvironmentAgentSecretResourcePattern,
+    EnvironmentAgentSecretVerb, PermissionTarget,
 };
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
@@ -62,7 +63,7 @@ pub enum AgentSecretError {
 fn authorize_agent_secret_permission(
     auth: &AuthCtx,
     environment: &Environment,
-    key: Option<&[String]>,
+    key: Option<&CanonicalAgentSecretPath>,
     verb: EnvironmentAgentSecretVerb,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&PermissionTarget::EnvironmentAgentSecret(
@@ -76,8 +77,14 @@ fn authorize_agent_secret_permission(
             resource: key
                 .map(|key| {
                     EnvironmentAgentSecretResourcePattern::Key(
-                        EnvironmentAgentSecretKeyPathPattern::parse(&key.join("."))
-                            .expect("agent secret keys are valid card resources"),
+                        EnvironmentAgentSecretKeyPathPattern {
+                            segments: key
+                                .0
+                                .iter()
+                                .cloned()
+                                .map(EnvironmentAgentSecretKeySegmentPattern::Literal)
+                                .collect(),
+                        },
                     )
                 })
                 .unwrap_or(EnvironmentAgentSecretResourcePattern::Any),
@@ -137,10 +144,12 @@ impl AgentSecretService {
                 other => other.into(),
             })?;
 
+        let agent_secret_path: CanonicalAgentSecretPath = data.path.into();
+
         authorize_agent_secret_permission(
             auth,
             &environment,
-            Some(&data.path.0),
+            Some(&agent_secret_path),
             EnvironmentAgentSecretVerb::Create,
         )?;
 
@@ -174,8 +183,6 @@ impl AgentSecretService {
             .transpose()?;
 
         let id = AgentSecretId::new();
-
-        let agent_secret_path: CanonicalAgentSecretPath = data.path.into();
 
         let stored_agent_secret = self
             .agent_secret_repo
@@ -214,7 +221,7 @@ impl AgentSecretService {
         authorize_agent_secret_permission(
             auth,
             &environment,
-            Some(&agent_secret.path.0),
+            Some(&agent_secret.path),
             EnvironmentAgentSecretVerb::Update,
         )?;
 
@@ -283,7 +290,7 @@ impl AgentSecretService {
         authorize_agent_secret_permission(
             auth,
             &environment,
-            Some(&agent_secret.path.0),
+            Some(&agent_secret.path),
             EnvironmentAgentSecretVerb::Delete,
         )?;
 
@@ -398,7 +405,7 @@ impl AgentSecretService {
         authorize_agent_secret_permission(
             auth,
             &environment,
-            Some(&agent_secret.path.0),
+            Some(&agent_secret.path),
             EnvironmentAgentSecretVerb::View,
         )
         .map_err(|_| AgentSecretError::AgentSecretNotFound(agent_secret_id))?;
