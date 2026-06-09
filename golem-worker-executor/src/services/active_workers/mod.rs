@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod admission;
+pub mod component_charge;
 pub mod concurrent_agents_scheduler;
 pub mod concurrent_agents_semaphore;
 pub mod fs_semaphore;
@@ -30,6 +31,8 @@ pub use fs_semaphore::{
 
 use admission::{AdmissionController, AdmissionDecision, EvictionPriority, EvictionSource};
 use async_trait::async_trait;
+pub use component_charge::HeldComponentCharge;
+use component_charge::{ChargeSource, ComponentChargeGuard, ComponentChargeRegistry};
 use memory_probe::default_probe;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,7 +48,7 @@ use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -80,7 +83,21 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     /// when short. The estimate-based `worker_memory` semaphore is the cheap
     /// pre-filter and atomic commit in front of it.
     admission: AdmissionController,
+    /// Charges each resident component's compiled module size to the estimate
+    /// pool exactly once (shared across all its workers) rather than per worker.
+    component_charges:
+        Arc<ComponentChargeRegistry<ComponentChargeKey, MemoryPoolChargeSource<Ctx>>>,
+    /// Multiplier applied to a component's `component_size` when sizing its
+    /// module charge permit.
+    component_size_coefficient: f64,
 }
+
+/// Identifies a compiled component for module-charge accounting.
+type ComponentChargeKey = (ComponentId, ComponentRevision);
+
+/// Guard held by a resident worker keeping its component's module charge alive.
+pub type WorkerComponentCharge<Ctx> =
+    ComponentChargeGuard<ComponentChargeKey, MemoryPoolChargeSource<Ctx>>;
 
 #[derive(Debug)]
 pub struct WorkerMemoryPermit {
@@ -124,25 +141,54 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             default_probe(memory_config.total_system_memory()),
             memory_config.admission_policy(),
         );
+        let workers = Cache::new(
+            None,
+            FullCacheEvictionMode::None,
+            BackgroundEvictionMode::None,
+            "active_workers",
+        );
+        let worker_memory = Arc::new(Semaphore::new(worker_memory_size));
+        let priority_allocation_lock = Arc::new(Mutex::new(()));
+        let component_charges = ComponentChargeRegistry::new(MemoryPoolChargeSource {
+            worker_memory: worker_memory.clone(),
+            workers: workers.clone(),
+            priority_allocation_lock: priority_allocation_lock.clone(),
+            acquire_retry_delay: memory_config.acquire_retry_delay,
+        });
         let active_workers = Self {
-            workers: Cache::new(
-                None,
-                FullCacheEvictionMode::None,
-                BackgroundEvictionMode::None,
-                "active_workers",
-            ),
-            worker_memory: Arc::new(Semaphore::new(worker_memory_size)),
+            workers,
+            worker_memory,
             worker_filesystem_storage: Arc::new(FilesystemStorageSemaphore::new(
                 storage_config.worker_filesystem_storage(),
                 storage_config.acquire_retry_delay,
             )),
             concurrent_agents: Arc::new(ConcurrentAgentsScheduler::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
-            priority_allocation_lock: Arc::new(Mutex::new(())),
+            priority_allocation_lock,
             admission,
+            component_charges,
+            component_size_coefficient: memory_config.component_size_coefficient,
         };
         active_workers.initialize_metrics(worker_memory_size);
         active_workers
+    }
+
+    /// Acquire (or share) the per-component module charge for a worker of the
+    /// given component. The first resident worker of the component pays its
+    /// compiled-module size (scaled by `component_size_coefficient`) into the
+    /// estimate pool; subsequent workers share the same charge. The returned
+    /// guard releases residency on drop, and the charge is freed when the last
+    /// worker of the component unloads.
+    pub async fn acquire_component_charge(
+        &self,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+        component_module_bytes: u64,
+    ) -> WorkerComponentCharge<Ctx> {
+        let charge_bytes = (self.component_size_coefficient * component_module_bytes as f64) as u64;
+        self.component_charges
+            .acquire((component_id, component_revision), charge_bytes)
+            .await
     }
 
     pub async fn get_or_add<T>(
@@ -237,44 +283,21 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 continue;
             }
 
-            let available = self.worker_memory.available_permits();
-            let lock = self.priority_allocation_lock.lock().await; // Block trying until a priority request is retrying once
-            let result = self.worker_memory.clone().try_acquire_many_owned(mem32);
-            drop(lock);
-            match result {
-                Ok(permit) => {
-                    debug!(
-                        "Acquired {} memory of {}, new available: {}, permit size: {}",
-                        mem32,
-                        available,
-                        self.worker_memory.available_permits(),
-                        permit.num_permits()
-                    );
-                    break WorkerMemoryPermit::new(permit);
-                }
-                Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
-                Err(TryAcquireError::NoPermits) => {
-                    debug!(
-                        "Not enough memory to allocate {mem32} (available: {}), trying to free some up",
-                        self.worker_memory.available_permits()
-                    );
-                    if self.try_free_up_memory(memory).await {
-                        debug!("Freed up some memory, retrying");
-                        // We have enough memory unless another worker has taken it in the meantime,
-                        // so retry the loop
-                        continue;
-                    } else {
-                        debug!(
-                            "Could not free up memory, retrying asking for permits after some time"
-                        );
-                        // Could not free up enough memory, so waiting for permits to be available.
-                        // We cannot use acquire_many() to wait for the permits because it eagerly preallocates
-                        // the available permits, and by that causing deadlocks. So we sleep and retry.
-
-                        tokio::time::sleep(self.acquire_retry_delay).await;
-                    }
-                }
+            // Estimate-semaphore pool: cheap pre-check + atomic commit.
+            if let Some(permit) = acquire_pool_permit(
+                &self.worker_memory,
+                &self.workers,
+                &self.priority_allocation_lock,
+                self.acquire_retry_delay,
+                mem32,
+                memory,
+            )
+            .await
+            {
+                break permit;
             }
+            // Pool could not satisfy the estimate even after eviction; loop and
+            // re-run the gate before trying again.
         }
     }
 
@@ -334,29 +357,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 }
             }
         }
-    }
-
-    async fn try_free_up_memory(&self, memory: u64) -> bool {
-        let current_avail = self.worker_memory.available_permits();
-        let needed = memory.saturating_sub(current_avail as u64);
-
-        if needed == 0 {
-            debug!("Memory was freed up in the meantime");
-            return true;
-        }
-
-        let mut freed = 0u64;
-        for priority in [EvictionPriority::Idle, EvictionPriority::Warm] {
-            if freed >= needed {
-                break;
-            }
-            freed += evict_at_most_memory(&self.workers, priority, needed - freed).await;
-        }
-
-        if freed > 0 {
-            debug!("Freed up {freed}");
-        }
-        freed >= needed
     }
 
     /// Blocking acquire of storage semaphore permits. Loops until the requested
@@ -531,8 +531,62 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
     freed
 }
 
-/// Adapts the live worker set to the [`EvictionSource`] the admission controller
-/// drives. Holds a cheap clone of the worker cache handle.
+/// Frees up to `memory` estimate-permit bytes by evicting idle-then-warm
+/// workers, accounting for permits already available. Returns true when enough
+/// is (or was already) free.
+async fn try_free_up_pool_memory<Ctx: WorkerCtx>(
+    worker_memory: &Semaphore,
+    workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+    memory: u64,
+) -> bool {
+    let current_avail = worker_memory.available_permits();
+    let needed = memory.saturating_sub(current_avail as u64);
+    if needed == 0 {
+        return true;
+    }
+
+    let mut freed = 0u64;
+    for priority in [EvictionPriority::Idle, EvictionPriority::Warm] {
+        if freed >= needed {
+            break;
+        }
+        freed += evict_at_most_memory(workers, priority, needed - freed).await;
+    }
+    freed >= needed
+}
+
+/// Single estimate-semaphore acquisition attempt with eviction. Returns the
+/// permit on success, or `None` when the pool cannot satisfy `mem32` even after
+/// evicting idle/warm workers (caller decides whether to retry). Shared by
+/// `ActiveWorkers::acquire` and the per-component charge source so there is one
+/// pool-acquire implementation.
+async fn acquire_pool_permit<Ctx: WorkerCtx>(
+    worker_memory: &Arc<Semaphore>,
+    workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+    priority_allocation_lock: &Mutex<()>,
+    acquire_retry_delay: Duration,
+    mem32: u32,
+    memory: u64,
+) -> Option<WorkerMemoryPermit> {
+    let lock = priority_allocation_lock.lock().await; // Block trying until a priority request is retrying once
+    let result = worker_memory.clone().try_acquire_many_owned(mem32);
+    drop(lock);
+    match result {
+        Ok(permit) => Some(WorkerMemoryPermit::new(permit)),
+        Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
+        Err(TryAcquireError::NoPermits) => {
+            if try_free_up_pool_memory(worker_memory, workers, memory).await {
+                // Freed enough; signal the caller to retry the acquire.
+                None
+            } else {
+                // Could not free enough; wait before the caller retries.
+                tokio::time::sleep(acquire_retry_delay).await;
+                None
+            }
+        }
+    }
+}
+
 struct WorkerEvictionSource<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
 }
@@ -541,5 +595,39 @@ struct WorkerEvictionSource<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
     async fn evict_at_most(&self, priority: EvictionPriority, needed_bytes: u64) -> u64 {
         evict_at_most_memory(&self.workers, priority, needed_bytes).await
+    }
+}
+
+/// Production [`ChargeSource`] for the per-component module charge. Takes
+/// estimate-semaphore permits via the same pool acquire+evict path as worker
+/// memory (the measured-headroom gate already accounts for the resident module
+/// via real RSS, so the charge does not pass through it).
+pub struct MemoryPoolChargeSource<Ctx: WorkerCtx> {
+    worker_memory: Arc<Semaphore>,
+    workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+    priority_allocation_lock: Arc<Mutex<()>>,
+    acquire_retry_delay: Duration,
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> ChargeSource for MemoryPoolChargeSource<Ctx> {
+    type Charge = WorkerMemoryPermit;
+
+    async fn acquire_charge(&self, bytes: u64) -> WorkerMemoryPermit {
+        let mem32: u32 = bytes.try_into().expect("component charge size too large");
+        loop {
+            if let Some(permit) = acquire_pool_permit(
+                &self.worker_memory,
+                &self.workers,
+                &self.priority_allocation_lock,
+                self.acquire_retry_delay,
+                mem32,
+                bytes,
+            )
+            .await
+            {
+                break permit;
+            }
+        }
     }
 }

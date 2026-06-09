@@ -27,7 +27,8 @@ use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::{
-    FilesystemStoragePermit, RegisteredConcurrentAccount, WorkerMemoryPermit,
+    FilesystemStoragePermit, HeldComponentCharge, RegisteredConcurrentAccount,
+    WorkerComponentCharge, WorkerMemoryPermit,
 };
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
@@ -58,6 +59,7 @@ use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
 use golem_common::model::component::CanonicalFilePath;
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
@@ -122,7 +124,6 @@ pub struct Worker<Ctx: WorkerCtx> {
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     update_state_lock: Mutex<()>,
     worker_estimate_coefficient: f64,
-    component_size_coefficient: f64,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
@@ -341,7 +342,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status: current_status,
             metrics_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
-            component_size_coefficient: deps.config().memory.component_size_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
             update_state_lock: Mutex::new(()),
@@ -797,15 +797,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.execution_status.read().unwrap().agent_mode()
     }
 
-    /// Gets the estimated memory requirement of the worker
+    /// Gets the estimated memory requirement of the worker.
+    ///
+    /// This covers only the per-worker linear memory. The compiled component
+    /// module is shared by all workers of a component and is charged once per
+    /// resident component via the component-charge registry, not per worker.
     pub async fn memory_requirement(&self) -> Result<u64, WorkerExecutorError> {
         let metadata = self.get_latest_worker_metadata().await;
 
-        let ml = metadata.last_known_status.total_linear_memory_size as f64;
-        let sw = metadata.last_known_status.component_size as f64;
-        let c = self.component_size_coefficient;
-        let x = self.worker_estimate_coefficient;
-        Ok((x * (ml + c * sw)) as u64)
+        let linear_memory_bytes = metadata.last_known_status.total_linear_memory_size as f64;
+        let estimate_coefficient = self.worker_estimate_coefficient;
+        Ok((estimate_coefficient * linear_memory_bytes) as u64)
+    }
+
+    /// Returns the component identity and compiled-module size used to charge
+    /// the shared module memory once per resident component.
+    pub async fn component_charge_requirement(
+        &self,
+    ) -> Result<(ComponentId, ComponentRevision, u64), WorkerExecutorError> {
+        let metadata = self.get_latest_worker_metadata().await;
+        let component_id = self.owned_agent_id.component_id();
+        let component_revision = metadata.last_known_status.component_revision;
+        let component_module_bytes = metadata.last_known_status.component_size;
+        Ok((component_id, component_revision, component_module_bytes))
     }
 
     /// Gets the storage requirement of the worker based on the last known status.
@@ -2192,6 +2206,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
         permit: WorkerMemoryPermit,
+        component_charge: WorkerComponentCharge<Ctx>,
         filesystem_storage_permit: Option<FilesystemStoragePermit>,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
@@ -2207,6 +2222,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     this.queue.clone(),
                     this.clone(),
                     permit,
+                    component_charge,
                     concurrent_agent_permit,
                     oom_retry_count,
                 )
@@ -2361,6 +2377,27 @@ impl WaitingWorker {
                 // concurrency slot. Otherwise one account could fill the memory
                 // pool with workers that are not allowed to run yet.
                 let permit = parent.active_workers().acquire(memory_requirement).await;
+                // Charge the component's compiled module size once per resident
+                // component (shared by all its workers). Held for as long as this
+                // worker is resident.
+                let component_charge = match parent.component_charge_requirement().await {
+                    Ok((component_id, component_revision, component_module_bytes)) => {
+                        parent
+                            .active_workers()
+                            .acquire_component_charge(
+                                component_id,
+                                component_revision,
+                                component_module_bytes,
+                            )
+                            .await
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Failed to determine component charge requirement, not starting: {err}"
+                        );
+                        return;
+                    }
+                };
                 // Pre-acquire storage permits for this restart.
                 //
                 // We need to acquire `filesystem_storage_requirement + desired_extra` total:
@@ -2412,6 +2449,7 @@ impl WaitingWorker {
                 Worker::start_waiting_worker(
                     parent,
                     permit,
+                    component_charge,
                     filesystem_storage_permit,
                     concurrent_agent_permit,
                     oom_retry_count,
@@ -2444,6 +2482,12 @@ struct RunningWorker {
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     permit: WorkerMemoryPermit,
+    /// Keeps this worker's component module charge alive for as long as the
+    /// worker is resident. Held only to be dropped: dropping it releases the
+    /// component's residency, and the module charge if this was the last worker
+    /// of the component.
+    #[allow(dead_code)]
+    component_charge: Box<dyn HeldComponentCharge>,
     /// Storage semaphore permits held by this worker. `None` until storage
     /// space is first acquired (at startup or on first write). Dropped
     /// automatically when `RunningWorker` is dropped, returning storage
@@ -2475,6 +2519,7 @@ impl RunningWorker {
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
         permit: WorkerMemoryPermit,
+        component_charge: WorkerComponentCharge<Ctx>,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
     ) -> Self {
@@ -2525,6 +2570,7 @@ impl RunningWorker {
             sender,
             queue,
             permit,
+            component_charge: Box::new(component_charge),
             filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,

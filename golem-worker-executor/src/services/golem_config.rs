@@ -963,11 +963,8 @@ pub struct MemoryConfig {
     pub system_memory_override: Option<u64>,
     pub worker_memory_ratio: f64,
     pub worker_estimate_coefficient: f64,
-    /// Multiplier applied to a worker's `component_size` when estimating its
-    /// memory permit requirement. The compiled component is loaded into the
-    /// engine once per component (shared across all workers of that component),
-    /// so this term over-accounts per-worker memory for large components.
-    /// Lower this (e.g. to 0.0) to size permits primarily off linear memory.
+    /// Multiplier applied to a component's `component_size`, charged once per
+    /// resident component (shared across all its workers) rather than per worker.
     pub component_size_coefficient: f64,
     /// Bytes of measured headroom kept free below the usable ceiling as a margin
     /// against concurrent admissions overshooting before becoming resident. Used
