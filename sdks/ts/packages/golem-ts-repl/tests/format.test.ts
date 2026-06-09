@@ -143,9 +143,9 @@ describe('formatEvalError', () => {
     expect(formatted).toContain('Stderr:');
     expect(formatted).toContain('JavaScript error: BOOM!');
     expect(formatted).toContain('at boom (user:91:19)');
-    expect(formatted).toContain('Wasm trap: wasm `unreachable` instruction executed');
     expect(formatted).toContain('Cause:');
     expect(formatted).toContain('agent_guest.wasm!abort');
+    expect(formatted).toContain('wasm trap: wasm `unreachable` instruction executed');
     expect(formatted).toContain('Bridge stack:');
     expect(formatted).not.toContain('{"code"');
     expect(formatted).not.toContain('Worker stderr:');
@@ -204,13 +204,35 @@ describe('formatEvalError', () => {
     expect(inspected).toContain('Status: 500 Internal Server Error');
     expect(inspected).toContain('Message: Invocation Failed');
     expect(inspected).toContain('JavaScript error: BOOM!');
-    expect(inspected).toContain('Wasm trap: wasm `unreachable` instruction executed');
     expect(inspected).toContain('Cause:');
     expect(inspected).toContain('Bridge stack:');
     expect(inspected).not.toContain('bodyText');
     expect(inspected).not.toContain('{"code"');
     expect(inspected).toContain('agent_guest.wasm!abort');
     expect(inspected).not.toContain('Worker cause:');
+  });
+
+  it('keeps rust-style cause frames highlighted in formatted output', () => {
+    const error = new GolemServiceError({
+      operation: 'invokeAgent',
+      status: 500,
+      statusText: 'Internal Server Error',
+      body: {
+        code: 'INTERNAL_AGENT_EXECUTION_FAILED',
+        error: 'Invocation Failed',
+        agentError: {
+          stderr: "thread '<unnamed>' panicked at src/counter_agent.rs:36:9:\nBOOM!",
+          cause:
+            'error while executing at wasm backtrace:\n   11:   0xcad3 - <xyz_rust_main::counter_agent::CounterImpl>::boom\n                    at /tmp/src/counter_agent.rs:36:9: wasm trap: wasm `unreachable` instruction executed',
+        },
+      },
+    });
+
+    const formatted = formatEvalError(error);
+    const stripped = util.stripVTControlCharacters(formatted);
+
+    expect(stripped).toContain('<xyz_rust_main::counter_agent::CounterImpl>::boom');
+    expect(stripped).toContain('/tmp/src/counter_agent.rs:36:9');
   });
 
   it('formats non-json proxy response bodies in base and inspect output', () => {

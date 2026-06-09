@@ -384,22 +384,16 @@ function formatGolemServiceError(error: GolemServiceErrorLike): string {
   const lines = formatServiceResponse(error);
 
   if (error.agentError?.cause.trim()) {
-    const trap = extractWasmTrap(error.agentError.cause);
-    if (trap) {
-      lines.push('');
-      lines.push(`${pc.dim('Wasm trap:')} ${pc.dim(trap)}`);
-    }
-
     const stderr = trimEmptyLines(error.agentError.stderr.split('\n'));
     if (stderr.length > 0) {
       lines.push('');
       lines.push(pc.dim('Stderr:'));
-      lines.push(...stderr.map(colorizeGolemServiceErrorLine));
+      lines.push(...stderr.map(formatStderrLine));
     }
 
     lines.push('');
     lines.push(pc.dim('Cause:'));
-    lines.push(...formatAgentCause(error.agentError.cause));
+    lines.push(...formatCauseLines(error.agentError.cause));
   }
 
   const bridgeStack = formatBridgeStack(error.stack, error.message);
@@ -410,13 +404,6 @@ function formatGolemServiceError(error: GolemServiceErrorLike): string {
   }
 
   return lines.join('\n');
-}
-
-function extractWasmTrap(cause: string): string | undefined {
-  const trapLine = trimEmptyLines(cause.split('\n'))
-    .reverse()
-    .find((line) => line.includes('wasm trap:'));
-  return trapLine?.split('wasm trap:').pop()?.trim();
 }
 
 function formatServiceResponse(error: GolemServiceErrorLike): string[] {
@@ -462,8 +449,36 @@ function getServiceResponseFields(error: GolemServiceError): {
   return { responseFallback: error.message.split('\n').slice(1) };
 }
 
-function formatAgentCause(cause: string): string[] {
-  return trimEmptyLines(cause.split('\n')).map((line) => pc.dim(line));
+function formatCauseLines(cause: string): string[] {
+  return trimEmptyLines(cause.split('\n')).map(formatCauseLine);
+}
+
+function formatStderrLine(line: string): string {
+  if (
+    line.startsWith('JavaScript exception:') ||
+    line.startsWith('JavaScript error:') ||
+    line.startsWith('Error:')
+  ) {
+    return pc.red(pc.bold(line));
+  }
+  if (isWasmFrame(line) || line.includes('RUST_BACKTRACE=1')) {
+    return pc.dim(line);
+  }
+  return pc.yellow(line);
+}
+
+function formatCauseLine(line: string): string {
+  if (line.includes('called without being linked with an implementation')) {
+    return pc.red(pc.bold(line));
+  }
+  if (isWasmFrame(line)) {
+    return pc.dim(line);
+  }
+  return pc.yellow(line);
+}
+
+function isWasmFrame(line: string): boolean {
+  return line.includes('<unknown>!<wasm function') || line.includes('agent_guest.wasm!');
 }
 
 function colorizeGolemServiceErrorLine(line: string): string {
