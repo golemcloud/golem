@@ -17,10 +17,9 @@ use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode, AgentStatus,
-    AgentStatusRecord, ComponentId, FilterComparator,
-    IdempotencyKey, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, StringFilterComparator, Timestamp,
+    AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
+    AgentStatus, AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
 use golem_wasm::ValueAndType;

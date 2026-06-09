@@ -203,7 +203,7 @@ mod tests {
                 component_revision: ComponentRevision::INITIAL,
                 component_name: "test:component".to_string(),
                 account_id: AccountId(Uuid::new_v4()),
-                account_email: AccountEmail::new("test@golem.cloud")
+                account_email: AccountEmail::new("test@golem.cloud"),
             },
             webhook_prefix_authority_and_path: Some("example.com/webhooks".to_string()),
         }
@@ -255,7 +255,7 @@ mod tests {
             component_revision: ComponentRevision::INITIAL,
             component_name: "test:component".to_string(),
             account_id: AccountId(Uuid::new_v4()),
-            account_email: AccountEmail::new("test@golem.cloud")
+            account_email: AccountEmail::new("test@golem.cloud"),
         };
         let resolved = ResolvedAgentType {
             registered_agent_type: RegisteredAgentType {
