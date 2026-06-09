@@ -20,6 +20,11 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::http_api_deployment::{
     HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
 };
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentHttpApiDeploymentResourcePattern,
+    EnvironmentHttpApiDeploymentVerb, PermissionTarget,
+};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{Environment, EnvironmentId};
@@ -384,10 +389,10 @@ impl HttpApiDeploymentService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<HttpApiDeployment>, HttpApiDeploymentError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+        authorize_http_api_deployment_permission(
+            auth,
+            environment,
+            EnvironmentHttpApiDeploymentVerb::View,
         )?;
 
         let http_api_deployments: Vec<HttpApiDeployment> = self
@@ -545,4 +550,22 @@ impl HttpApiDeploymentService {
 
         Ok(http_api_deployment)
     }
+}
+
+fn authorize_http_api_deployment_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentHttpApiDeploymentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentHttpApiDeployment(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: EnvironmentHttpApiDeploymentResourcePattern::Any,
+        },
+    ))
 }

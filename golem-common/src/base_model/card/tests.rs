@@ -152,9 +152,15 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
     );
 
     let lower = card(vec![read_all], Vec::new());
+    let lower_card_id = lower.card_id;
     let ceiling = card(Vec::new(), vec![read_public.clone()]);
+    let ceiling_card_id = ceiling.card_id;
     let surface = EffectiveSurface::from_cards(&[lower, ceiling], &recipient).unwrap();
 
+    assert_eq!(
+        surface.source_card_ids,
+        vec![lower_card_id, ceiling_card_id]
+    );
     assert!(surface.authorize(&read_public_target).unwrap());
     assert!(!surface.authorize(&read_secret_target).unwrap());
 }

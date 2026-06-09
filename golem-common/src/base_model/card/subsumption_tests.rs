@@ -928,16 +928,6 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
 
 #[test]
 fn negative_grants_override_positive_grants() {
-    let allowed = fs(
-        "acme/shop/prod/cart/agent",
-        "acme/*/*/*/*",
-        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
-    );
-    let denied = fs(
-        "acme/shop/prod/cart/agent",
-        "acme/*/*/*/*",
-        fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
-    );
     let public = fs_target(
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
@@ -947,8 +937,14 @@ fn negative_grants_override_positive_grants() {
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let surface = GrantSurface {
-        positive: vec![allowed],
-        negative: vec![denied],
+        positive: vec![fs_target(
+            "acme/shop/prod/cart/agent",
+            fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+        )],
+        negative: vec![fs_target(
+            "acme/shop/prod/cart/agent",
+            fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
+        )],
     };
 
     assert!(surface.allows(&public).unwrap());

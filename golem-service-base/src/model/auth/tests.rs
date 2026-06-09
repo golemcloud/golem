@@ -14,12 +14,16 @@
 
 use super::*;
 use assert2::assert;
-use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
+use golem_common::model::card::owner::{
+    AccountOwnerPattern, AgentOwnerPattern, ApplicationOwnerPattern, EmptyOwnerPattern,
+    EnvironmentOwnerPattern,
+};
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     AccountResourcePattern, AccountTokenResourcePattern, AccountTokenVerb, AccountVerb,
-    ClassPermissionPattern, ClassPermissionTarget, PermissionTarget, SystemResourcePattern,
-    SystemVerb,
+    AgentResourcePattern, AgentVerb, ClassPermissionPattern, ClassPermissionTarget,
+    ComponentResourcePattern, ComponentVerb, EnvironmentResourcePattern, EnvironmentVerb,
+    PermissionPattern, PermissionTarget, SystemResourcePattern, SystemVerb,
 };
 use test_r::test;
 
@@ -28,9 +32,7 @@ fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) ->
         account_id,
         account_plan_id: plan_id,
         account_roles: roles.iter().cloned().collect(),
-        token_root_card_id: None,
-        account_holder: account_id.to_string(),
-        auth_card: None,
+        effective_surface: empty_effective_surface(),
     })
 }
 
@@ -40,6 +42,14 @@ fn mk_impersonated(id: AccountId) -> AuthCtx {
 
 fn make_env_roles(roles: &[EnvironmentRole]) -> BTreeSet<EnvironmentRole> {
     roles.iter().copied().collect()
+}
+
+fn empty_effective_surface() -> EffectiveSurface {
+    EffectiveSurface {
+        source_card_ids: Vec::new(),
+        lower: Vec::new(),
+        upper: Vec::new(),
+    }
 }
 
 fn report_grant(recipient: RecipientPattern) -> PermissionPattern {
@@ -101,6 +111,46 @@ fn account_target(account_id: AccountId) -> PermissionTarget {
     })
 }
 
+fn environment_target(account_id: AccountId, verb: EnvironmentVerb) -> PermissionTarget {
+    PermissionTarget::Environment(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: ApplicationOwnerPattern::AccountApplications {
+            account: account_id.to_string(),
+        },
+        resource: EnvironmentResourcePattern::Any,
+    })
+}
+
+fn component_target(account_id: AccountId, verb: ComponentVerb) -> PermissionTarget {
+    PermissionTarget::Component(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EnvironmentOwnerPattern::AccountEnvironments {
+            account: account_id.to_string(),
+        },
+        resource: ComponentResourcePattern::Any,
+    })
+}
+
+fn agent_target(account_id: AccountId, verb: AgentVerb) -> PermissionTarget {
+    PermissionTarget::Agent(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: AgentOwnerPattern::AccountAgents {
+            account: account_id.to_string(),
+        },
+        resource: AgentResourcePattern::Any,
+    })
+}
+
+fn effective_surface_for_account(
+    account_id: AccountId,
+    lower_positive: Vec<PermissionPattern>,
+) -> EffectiveSurface {
+    let recipient = RecipientPattern::Account {
+        account: account_id.to_string(),
+    };
+    EffectiveSurface::from_grants(&lower_positive, &[], &[], &[], &recipient).unwrap()
+}
+
 #[test]
 fn system_can_do_global_actions() {
     let ctx = AuthCtx::System;
@@ -119,7 +169,7 @@ fn system_can_do_global_actions() {
 }
 
 #[test]
-fn system_authorization_bypasses_roles_and_auth_card() {
+fn system_authorization_bypasses_roles_and_effective_surface() {
     let ctx = AuthCtx::System;
     assert!(!ctx.account_roles().contains(&AccountRole::Admin));
 
@@ -177,7 +227,7 @@ fn marketing_admin_can_get_reports() {
 }
 
 #[test]
-fn user_with_auth_card_can_authorize_permission() {
+fn user_with_effective_surface_can_authorize_permission() {
     let account_id = AccountId::new();
     let grant = report_grant(RecipientPattern::Account {
         account: account_id.to_string(),
@@ -187,22 +237,14 @@ fn user_with_auth_card_can_authorize_permission() {
         account_id,
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
-        token_root_card_id: None,
-        account_holder: account_id.to_string(),
-        auth_card: Some(AuthCard {
-            card_id: CardId::new(),
-            lower_positive: vec![grant],
-            lower_negative: Vec::new(),
-            upper_positive: Vec::new(),
-            upper_negative: Vec::new(),
-        }),
+        effective_surface: effective_surface_for_account(account_id, vec![grant]),
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());
 }
 
 #[test]
-fn user_without_auth_card_cannot_authorize_permission() {
+fn user_with_empty_effective_surface_cannot_authorize_permission() {
     let permission = report_target();
     let ctx = mk_user_ctx(&[], PlanId::new(), AccountId::new());
 
@@ -210,7 +252,50 @@ fn user_without_auth_card_cannot_authorize_permission() {
 }
 
 #[test]
-fn user_with_auth_card_can_authorize_account_token_permission() {
+fn agent_context_can_authorize_temporary_same_account_permissions() {
+    let account_id = AccountId::new();
+    let ctx = mk_impersonated(account_id);
+
+    assert!(
+        ctx.authorize_permission(&environment_target(account_id, EnvironmentVerb::View))
+            .is_ok()
+    );
+    assert!(
+        ctx.authorize_permission(&component_target(account_id, ComponentVerb::View))
+            .is_ok()
+    );
+    assert!(
+        ctx.authorize_permission(&agent_target(account_id, AgentVerb::View))
+            .is_ok()
+    );
+    assert!(
+        ctx.authorize_permission(&agent_target(account_id, AgentVerb::Invoke))
+            .is_ok()
+    );
+}
+
+#[test]
+fn agent_context_rejects_cross_account_and_non_whitelisted_permissions() {
+    let account_id = AccountId::new();
+    let ctx = mk_impersonated(account_id);
+
+    assert!(
+        ctx.authorize_permission(&environment_target(AccountId::new(), EnvironmentVerb::View))
+            .is_err()
+    );
+    assert!(
+        ctx.authorize_permission(&component_target(AccountId::new(), ComponentVerb::View))
+            .is_err()
+    );
+    assert!(
+        ctx.authorize_permission(&environment_target(account_id, EnvironmentVerb::Update))
+            .is_err()
+    );
+    assert!(ctx.authorize_permission(&report_target()).is_err());
+}
+
+#[test]
+fn user_with_effective_surface_can_authorize_account_token_permission() {
     let account_id = AccountId::new();
     let recipient = RecipientPattern::Account {
         account: account_id.to_string(),
@@ -221,22 +306,14 @@ fn user_with_auth_card_can_authorize_account_token_permission() {
         account_id,
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
-        token_root_card_id: None,
-        account_holder: account_id.to_string(),
-        auth_card: Some(AuthCard {
-            card_id: CardId::new(),
-            lower_positive: vec![grant],
-            lower_negative: Vec::new(),
-            upper_positive: Vec::new(),
-            upper_negative: Vec::new(),
-        }),
+        effective_surface: effective_surface_for_account(account_id, vec![grant]),
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());
 }
 
 #[test]
-fn auth_card_account_token_grant_for_different_holder_does_not_authorize_target() {
+fn effective_surface_account_token_grant_for_different_holder_does_not_authorize_target() {
     let account_id = AccountId::new();
     let other_account_id = AccountId::new();
     let grant = account_token_grant(
@@ -250,22 +327,14 @@ fn auth_card_account_token_grant_for_different_holder_does_not_authorize_target(
         account_id,
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
-        token_root_card_id: None,
-        account_holder: account_id.to_string(),
-        auth_card: Some(AuthCard {
-            card_id: CardId::new(),
-            lower_positive: vec![grant],
-            lower_negative: Vec::new(),
-            upper_positive: Vec::new(),
-            upper_negative: Vec::new(),
-        }),
+        effective_surface: effective_surface_for_account(account_id, vec![grant]),
     });
 
     assert!(ctx.authorize_permission(&target).is_err());
 }
 
 #[test]
-fn auth_card_account_token_target_ignores_recipient_after_holder_filtering() {
+fn effective_surface_account_token_target_ignores_recipient_after_holder_filtering() {
     let account_id = AccountId::new();
     let grant = account_token_grant(
         account_id,
@@ -278,22 +347,14 @@ fn auth_card_account_token_target_ignores_recipient_after_holder_filtering() {
         account_id,
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
-        token_root_card_id: None,
-        account_holder: account_id.to_string(),
-        auth_card: Some(AuthCard {
-            card_id: CardId::new(),
-            lower_positive: vec![grant],
-            lower_negative: Vec::new(),
-            upper_positive: Vec::new(),
-            upper_negative: Vec::new(),
-        }),
+        effective_surface: effective_surface_for_account(account_id, vec![grant]),
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());
 }
 
 #[test]
-fn auth_card_account_token_grant_does_not_authorize_different_owner_target() {
+fn effective_surface_account_token_grant_does_not_authorize_different_owner_target() {
     let account_id = AccountId::new();
     let grant = account_token_grant(
         account_id,
@@ -305,15 +366,7 @@ fn auth_card_account_token_grant_does_not_authorize_different_owner_target() {
         account_id,
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
-        token_root_card_id: None,
-        account_holder: account_id.to_string(),
-        auth_card: Some(AuthCard {
-            card_id: CardId::new(),
-            lower_positive: vec![grant],
-            lower_negative: Vec::new(),
-            upper_positive: Vec::new(),
-            upper_negative: Vec::new(),
-        }),
+        effective_surface: effective_surface_for_account(account_id, vec![grant]),
     });
     let requested = account_token_target(AccountId::new());
 
@@ -321,7 +374,7 @@ fn auth_card_account_token_grant_does_not_authorize_different_owner_target() {
 }
 
 #[test]
-fn user_without_auth_card_cannot_authorize_account_token_permission() {
+fn user_with_empty_effective_surface_cannot_authorize_account_token_permission() {
     let account_id = AccountId::new();
     let permission = account_token_target(account_id);
     let ctx = mk_user_ctx(&[], PlanId::new(), account_id);
@@ -330,7 +383,7 @@ fn user_without_auth_card_cannot_authorize_account_token_permission() {
 }
 
 #[test]
-fn user_with_auth_card_can_authorize_account_permission() {
+fn user_with_effective_surface_can_authorize_account_permission() {
     let account_id = AccountId::new();
     let recipient = RecipientPattern::Account {
         account: account_id.to_string(),
@@ -341,22 +394,14 @@ fn user_with_auth_card_can_authorize_account_permission() {
         account_id,
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
-        token_root_card_id: None,
-        account_holder: account_id.to_string(),
-        auth_card: Some(AuthCard {
-            card_id: CardId::new(),
-            lower_positive: vec![grant],
-            lower_negative: Vec::new(),
-            upper_positive: Vec::new(),
-            upper_negative: Vec::new(),
-        }),
+        effective_surface: effective_surface_for_account(account_id, vec![grant]),
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());
 }
 
 #[test]
-fn user_without_auth_card_cannot_authorize_account_permission() {
+fn user_with_empty_effective_surface_cannot_authorize_account_permission() {
     let account_id = AccountId::new();
     let permission = account_target(account_id);
     let ctx = mk_user_ctx(&[], PlanId::new(), account_id);

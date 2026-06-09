@@ -80,6 +80,7 @@ pub(super) fn schema_mirror_error(err: SchemaAdapterError) -> DeploymentError {
 mod tests {
     use super::*;
     use golem_common::model::Empty;
+    use golem_common::model::account::AccountId;
     use golem_common::model::agent::{
         AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, AgentTypeName,
         ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
@@ -200,6 +201,8 @@ mod tests {
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: ComponentId(Uuid::new_v4()),
                 component_revision: ComponentRevision::INITIAL,
+                component_name: "test:component".to_string(),
+                account_id: AccountId(Uuid::new_v4()),
             },
             webhook_prefix_authority_and_path: Some("example.com/webhooks".to_string()),
         }
@@ -249,6 +252,8 @@ mod tests {
         let implementer = RegisteredAgentTypeImplementer {
             component_id: ComponentId(Uuid::new_v4()),
             component_revision: ComponentRevision::INITIAL,
+            component_name: "test:component".to_string(),
+            account_id: AccountId(Uuid::new_v4()),
         };
         let resolved = ResolvedAgentType {
             registered_agent_type: RegisteredAgentType {

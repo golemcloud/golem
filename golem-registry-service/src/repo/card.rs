@@ -34,13 +34,6 @@ pub trait CardRepo: Send + Sync {
 
     async fn get(&self, card_id: CardId) -> Result<Option<CardRecord>, CardRepoError>;
 
-    async fn insert_token_root_card(
-        &self,
-        account_id: Uuid,
-        expected_epoch: i64,
-        card: CardRecord,
-    ) -> Result<CardRecord, CardRepoError>;
-
     // Delete a card including all descendants. Returns ids of all deleted cards.
     async fn delete(
         &self,
@@ -78,20 +71,6 @@ impl<Repo: CardRepo> CardRepo for LoggedCardRepo<Repo> {
         self.repo
             .get(card_id)
             .instrument(Self::span_card_id(card_id))
-            .await
-    }
-
-    async fn insert_token_root_card(
-        &self,
-        account_id: Uuid,
-        expected_epoch: i64,
-        card: CardRecord,
-    ) -> Result<CardRecord, CardRepoError> {
-        let span = Self::span_card_id(CardId(card.card_id));
-
-        self.repo
-            .insert_token_root_card(account_id, expected_epoch, card)
-            .instrument(span)
             .await
     }
 
@@ -355,44 +334,6 @@ impl CardRepo for DbCardRepo<PostgresPool> {
             )
             .await
             .map_err(Into::into)
-    }
-
-    async fn insert_token_root_card(
-        &self,
-        account_id: Uuid,
-        expected_epoch: i64,
-        record: CardRecord,
-    ) -> Result<CardRecord, CardRepoError> {
-        self.db_pool
-            .with_tx_err(METRICS_SVC_NAME, "insert_token_root_card", |tx| {
-                Box::pin(async move {
-                    let inserted = Self::create_in_tx(tx, record).await?;
-
-                    let rows_affected = tx
-                        .execute(
-                            sqlx::query(indoc! { r#"
-                                UPDATE accounts
-                                SET token_root_card_id = $1
-                                WHERE account_id = $2
-                                  AND token_root_card_epoch = $3
-                                  AND token_root_card_id IS NULL
-                                  AND deleted_at IS NULL
-                            "#})
-                            .bind(inserted.card_id)
-                            .bind(account_id)
-                            .bind(expected_epoch),
-                        )
-                        .await?
-                        .rows_affected();
-
-                    if rows_affected == 1 {
-                        Ok::<_, CardRepoError>(inserted)
-                    } else {
-                        Err(CardRepoError::ConcurrentModification)
-                    }
-                })
-            })
-            .await
     }
 
     async fn delete(

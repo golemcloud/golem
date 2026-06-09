@@ -23,6 +23,11 @@ use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretId, AgentSecretRevision, AgentSecretUpdate,
     CanonicalAgentSecretPath,
 };
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentAgentSecretResourcePattern, EnvironmentAgentSecretVerb,
+    PermissionTarget,
+};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::schema::adapters::analysed_type::{
@@ -310,11 +315,7 @@ impl AgentSecretService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Vec<AgentSecret>, AgentSecretError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewAgentSecret,
-        )?;
+        authorize_agent_secret_permission(auth, environment, EnvironmentAgentSecretVerb::View)?;
 
         let result = self.list_in_environment_unchecked(environment.id).await?;
 
@@ -369,4 +370,22 @@ impl AgentSecretService {
 
         Ok((agent_secret, environment))
     }
+}
+
+fn authorize_agent_secret_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: EnvironmentAgentSecretVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentAgentSecret(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: EnvironmentAgentSecretResourcePattern::Any,
+        },
+    ))
 }
