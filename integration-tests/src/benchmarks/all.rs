@@ -133,6 +133,30 @@ async fn main() {
             >(mode, verbosity, item, primary_only, otlp))
         }),
     );
+    benchmarks_by_name.insert(
+        "throughput-saturation-counters",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationCounters,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-saturation-echo-rust",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationEchoRust,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-saturation-echo-ts",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                integration_tests::benchmarks::throughput_saturation::ThroughputSaturationEchoTs,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
 
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
     let tracer_provider = BenchmarkTestDependencies::init_logging(&params);

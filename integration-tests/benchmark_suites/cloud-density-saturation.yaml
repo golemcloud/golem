@@ -1,0 +1,64 @@
+# Cloud throughput-saturation benchmark suite.
+#
+# Unlike cloud-perf's throughput benchmarks (which keep `size` small enough that
+# all workers fit in memory), this suite deliberately ramps the number of
+# active, memory-holding agents up to and past the executor's memory ceiling to
+# find the per-pod active-agent capacity and the throughput sustained once
+# memory is exhausted.
+#
+# Each agent retains a deterministic, per-agent-distinct amount of resident
+# memory, so the fleet presents a mix of footprints near the limit (exercising
+# the admission/eviction path). The measured phase drives one in-flight
+# `busy_for` call per agent and records aggregate throughput.
+#
+# Run with the benchmarks binary's `cloud` subcommand (same flags as cloud-perf):
+#
+#   benchmarks suite integration-tests/benchmark_suites/cloud-density-saturation.yaml \
+#     --save-to-json result.json \
+#     cloud --api-url https://<host> --apps-base-domain <domain> \
+#       --admin-account-token <token> --builtin-plugin-owner-account-id <uuid> \
+#       --default-plan-id <uuid> --component-directory <path-to-wasm-components>
+#
+# Reading the result: plot `saturation-throughput-ops-per-sec` and
+# invocation-retries/timeouts against `size`. Throughput climbs with `size`
+# until the pod's memory is exhausted, then plateaus or drops while retries and
+# eviction churn rise — that knee is the active-agent ceiling.
+#
+# `clusterSize` is ignored in cloud mode (single observed cluster).
+
+name: cloud-density-saturation
+benchmarks:
+  # Rust echo agents — lean per-instance linear memory (the ~900 KB module is
+  # charged once per component, shared across all agents; what scales per agent
+  # is the small instance heap). Knee expected in the thousands, so sweep high.
+  # The current admission algorithm craters around ~700 agents/node; the reworked
+  # admission is expected to push this knee substantially higher.
+  - name: throughput-saturation-echo-rust
+    iterations: 3
+    clusterSize: [2]
+    size: [500, 1000, 2000, 4000, 8000, 12000]
+    length: [0]
+
+  # TypeScript echo agents — each instance instantiates its own QuickJS runtime
+  # and JS heap in its own linear memory (the 17.4 MB module is shared once per
+  # component; the per-instance runtime state is the heavy per-agent cost).
+  # Expect the knee in the hundreds, well below the Rust variant.
+  - name: throughput-saturation-echo-ts
+    iterations: 3
+    clusterSize: [2]
+    size: [100, 250, 500, 750, 1000, 1500, 2000]
+    length: [0]
+
+  # Synthetic footprint — each agent retains a deterministic per-agent-distinct
+  # amount of resident memory, exercising the admission/eviction path with a
+  # controllable footprint near the limit.
+  # size   = number of active, memory-holding agents (the ramp axis)
+  # length = base per-agent memory footprint in bytes; each agent retains a
+  #          deterministic multiple (1x..8x), averaging ~4.5x. 4 MiB base =>
+  #          ~18 MiB average per agent, filling a ~10 GiB usable pool around
+  #          ~580 agents (bracketing the old ~700 crater point).
+  - name: throughput-saturation-counters
+    iterations: 3
+    clusterSize: [2]
+    size: [100, 250, 500, 750, 1000, 1500]
+    length: [4194304]
