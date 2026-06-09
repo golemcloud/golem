@@ -20,6 +20,7 @@
 //! shapes (`{ data, languageCode }` for text, `{ data, mimeType }` for binary,
 //! and the multimodal `parts` array of `{ name, value }` objects).
 
+use crate::mcp::schema::field_disambiguation::field_name_mapping;
 use golem_common::schema::adapters::{
     FALLBACK_OUTPUT_FIELD_NAME, is_multimodal_schema_type, resolve_ref,
 };
@@ -67,14 +68,21 @@ pub fn input_schema_to_mcp(graph: &SchemaGraph, input: &InputSchema) -> JsonObje
 /// Merge the constructor's user-supplied parameters with the method's and
 /// render them as a single MCP JSON object schema. Auto-injected fields are
 /// dropped by the renderer; `required` is computed option-aware.
+///
+/// When a user-supplied parameter name appears on both sides, the colliding
+/// names are disambiguated (`constructor_<name>` / `method_<name>`) so the two
+/// properties don't collapse into one. The same mapping is recomputed on the
+/// invoke path to translate the advertised names back before extraction (see
+/// [`field_name_mapping`]).
 pub fn combined_input_schema(
     graph: &SchemaGraph,
     constructor: &AgentConstructorSchema,
     method: &AgentMethodSchema,
 ) -> JsonObject {
-    let mut fields: Vec<NamedField> = Vec::new();
-    fields.extend(constructor.input_schema.fields().iter().cloned());
-    fields.extend(method.input_schema.fields().iter().cloned());
+    let mapping = field_name_mapping(constructor, method);
+    let mut fields: Vec<NamedField> =
+        mapping.apply_to_constructor_fields(constructor.input_schema.fields());
+    fields.extend(mapping.apply_to_method_fields(method.input_schema.fields()));
     let combined = InputSchema::Parameters(fields);
     input_schema_to_mcp(graph, &combined)
 }
@@ -189,6 +197,34 @@ mod tests {
         let required = schema.input_schema["required"].as_array().unwrap();
         assert!(required.contains(&json!("name")));
         assert!(required.contains(&json!("city")));
+    }
+
+    #[test]
+    fn colliding_constructor_and_method_params_are_disambiguated() {
+        let graph = SchemaGraph::empty();
+        let ctor = constructor(vec![NamedField::user_supplied("id", SchemaType::string())]);
+        let meth = method(
+            vec![NamedField::user_supplied("id", SchemaType::u32())],
+            OutputSchema::Single(Box::new(SchemaType::string())),
+        );
+        let schema = get_mcp_tool_schema(&graph, &ctor, &meth);
+        let props = schema.input_schema["properties"].as_object().unwrap();
+
+        // The shared `id` name must not collapse: both sides are present under
+        // disambiguated names, and the raw `id` is gone.
+        assert!(
+            !props.contains_key("id"),
+            "raw collide name leaked: {props:#?}"
+        );
+        assert!(props.contains_key("constructor_id"));
+        assert!(props.contains_key("method_id"));
+        // Types are preserved per side (constructor = string, method = integer).
+        assert_eq!(props["constructor_id"]["type"], json!("string"));
+        assert_eq!(props["method_id"]["type"], json!("integer"));
+
+        let required = schema.input_schema["required"].as_array().unwrap();
+        assert!(required.contains(&json!("constructor_id")));
+        assert!(required.contains(&json!("method_id")));
     }
 
     #[test]

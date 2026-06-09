@@ -15,6 +15,7 @@
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::invoke::agent_method_input::get_agent_method_input;
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
+use crate::mcp::schema::field_name_mapping;
 use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::AgentId;
@@ -55,16 +56,23 @@ pub async fn invoke_tool(
             ErrorData::internal_error(format!("Failed to convert method schema: {}", e), None)
         })?;
 
+    // The advertised tool schema disambiguates constructor/method parameter
+    // names that collide (see `combined_input_schema`). Recompute the same
+    // mapping here and translate the advertised argument names back to the
+    // original constructor/method field names each extractor expects.
+    let field_names = field_name_mapping(&mcp_tool.constructor, &mcp_tool.method);
+    let constructor_args = field_names.rewrite_constructor_args(&args_map);
+    let method_args = field_names.rewrite_method_args(&args_map);
+
     let constructor_params =
-        extract_constructor_input_values(&args_map, &legacy_constructor.input_schema).map_err(
-            |e| {
+        extract_constructor_input_values(&constructor_args, &legacy_constructor.input_schema)
+            .map_err(|e| {
                 tracing::error!("Failed to extract constructor parameters: {}", e);
                 ErrorData::invalid_params(
                     format!("Failed to extract constructor parameters: {}", e),
                     None,
                 )
-            },
-        )?;
+            })?;
 
     let parsed_agent_id = LegacyParsedAgentId::new_auto_phantom(
         mcp_tool.agent_type_name.clone(),
@@ -82,11 +90,11 @@ pub async fn invoke_tool(
         ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
     })?;
 
-    let method_params_data_value = get_agent_method_input(&args_map, &legacy_method.input_schema)
-        .map_err(|e| {
-        tracing::error!("Failed to extract method parameters: {}", e);
-        ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
-    })?;
+    let method_params_data_value =
+        get_agent_method_input(&method_args, &legacy_method.input_schema).map_err(|e| {
+            tracing::error!("Failed to extract method parameters: {}", e);
+            ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
+        })?;
 
     let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
         method_params_data_value.into();
@@ -339,8 +347,11 @@ mod tests {
     };
     use golem_common::model::AgentInvocationOutput;
     use golem_common::schema::InputSchema;
-    use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
+    use golem_common::schema::agent::{
+        AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
+    };
     use golem_common::schema::graph::SchemaGraph;
+    use golem_common::schema::schema_type::SchemaType;
     use golem_wasm::Value;
     use golem_wasm::analysis::{AnalysedType, TypeStr};
     use rmcp::model::Tool;
@@ -558,5 +569,88 @@ mod tests {
         let agent_id = harness.recorded_agent_id();
         assert_eq!(agent_id.component_id, harness.component_id);
         assert!(phantom_id(&agent_id).is_some());
+    }
+
+    #[test]
+    async fn invoke_tool_routes_disambiguated_args_to_each_side() {
+        // Constructor and method both declare a user-supplied `id`, so the
+        // advertised tool schema disambiguates them to `constructor_id` /
+        // `method_id`. The invoke path must translate those advertised names
+        // back and route each value to the correct side (different types make
+        // a swap observable: constructor = string, method = u32).
+        let harness = InvocationHarness::new(AgentInvocationOutput {
+            result: golem_common::model::AgentInvocationResult::AgentMethod {
+                output: UntypedDataValue::Tuple(vec![]),
+            },
+            consumed_fuel: None,
+            invocation_status: None,
+            component_revision: None,
+            oplog_index: None,
+            agent_fingerprint: None,
+        });
+        let tool = AgentMcpTool {
+            tool: Tool {
+                name: Cow::Borrowed("mcp-agent-run"),
+                title: None,
+                description: None,
+                input_schema: Arc::new(JsonObject::default()),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            environment_id: harness.environment_id,
+            account_id: harness.account_id,
+            schema_graph: Arc::new(SchemaGraph::empty()),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![NamedField::user_supplied(
+                    "id",
+                    SchemaType::string(),
+                )]),
+            },
+            method: AgentMethodSchema {
+                name: "run".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![NamedField::user_supplied(
+                    "id",
+                    SchemaType::u32(),
+                )]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            },
+            component_id: harness.component_id,
+            agent_type_name: AgentTypeName("mcp-agent".to_string()),
+            agent_mode: AgentMode::Ephemeral,
+        };
+
+        let args = json!({ "constructor_id": "abc", "method_id": 7 })
+            .as_object()
+            .unwrap()
+            .clone();
+
+        let result = invoke_tool(args, &tool, &harness.worker_service).await;
+        assert!(result.is_ok(), "invoke failed: {result:?}");
+
+        // The method received the u32 value, not the constructor's string.
+        let method_params = harness.recorded_method_params();
+        assert_eq!(
+            method_params,
+            UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(Value::U32(7))])
+        );
+
+        // The constructor received the string value: it is encoded into the
+        // generated agent id.
+        let agent_id = harness.recorded_agent_id();
+        assert!(
+            agent_id.agent_id.contains("abc"),
+            "constructor value missing from agent id: {}",
+            agent_id.agent_id
+        );
     }
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::mcp::schema::field_name_mapping;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::schema::adapters::{
     is_multimodal_schema_type, multimodal_union_branches, resolve_ref,
@@ -63,8 +64,17 @@ impl AgentMcpPrompt {
         let prompt_name = format!("{}-{}", agent_type_name.0, method.name);
         let name = PromptName(prompt_name.clone());
 
-        let constructor_arg_names = constructor_arg_names(&constructor.input_schema);
-        let input_description = describe_input(graph, &constructor_arg_names, &method.input_schema);
+        // Mirror the advertised tool schema: constructor/method parameter names
+        // that collide are disambiguated, so the prompt must list the same
+        // (possibly prefixed) property names a client will actually send.
+        let mapping = field_name_mapping(constructor, method);
+        let constructor_fields =
+            mapping.apply_to_constructor_fields(constructor.input_schema.fields());
+        let method_input_schema =
+            InputSchema::Parameters(mapping.apply_to_method_fields(method.input_schema.fields()));
+
+        let constructor_arg_names = constructor_arg_names(&constructor_fields);
+        let input_description = describe_input(graph, &constructor_arg_names, &method_input_schema);
         let output_description = describe_output(graph, &method.output_schema);
 
         let mut text = prompt_hint.to_string();
@@ -99,9 +109,8 @@ impl AgentMcpPrompt {
     }
 }
 
-fn constructor_arg_names(schema: &InputSchema) -> Vec<String> {
-    schema
-        .fields()
+fn constructor_arg_names(fields: &[NamedField]) -> Vec<String> {
+    fields
         .iter()
         .filter(|f| matches!(f.source, FieldSource::UserSupplied))
         .map(|f| f.name.clone())

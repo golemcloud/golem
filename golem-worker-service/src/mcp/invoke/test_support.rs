@@ -316,6 +316,8 @@ impl LimitService for NoopLimitService {
 
 struct RecordingWorkerClient {
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
+    method_params:
+        Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::component::UntypedDataValue>>>>,
     invocation_output: AgentInvocationOutput,
 }
 
@@ -511,7 +513,7 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         agent_id: &AgentId,
         _: Option<String>,
-        _: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
+        method_params: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
         _: Option<IdempotencyKey>,
@@ -522,6 +524,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: golem_api_grpc::proto::golem::component::Principal,
     ) -> WorkerResult<AgentInvocationOutput> {
         self.agent_ids.lock().unwrap().push(agent_id.clone());
+        self.method_params.lock().unwrap().push(method_params);
         Ok(self.invocation_output.clone())
     }
 
@@ -548,6 +551,8 @@ pub(crate) struct InvocationHarness {
     pub(crate) environment_id: EnvironmentId,
     pub(crate) account_id: AccountId,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
+    method_params:
+        Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::component::UntypedDataValue>>>>,
 }
 
 impl InvocationHarness {
@@ -595,8 +600,10 @@ impl InvocationHarness {
             object_store_key: String::new(),
         };
         let agent_ids = Arc::new(Mutex::new(Vec::new()));
+        let method_params = Arc::new(Mutex::new(Vec::new()));
         let worker_client = Arc::new(RecordingWorkerClient {
             agent_ids: agent_ids.clone(),
+            method_params: method_params.clone(),
             invocation_output,
         });
 
@@ -617,11 +624,22 @@ impl InvocationHarness {
             environment_id,
             account_id,
             agent_ids,
+            method_params,
         }
     }
 
     pub(crate) fn recorded_agent_id(&self) -> AgentId {
         self.agent_ids.lock().unwrap()[0].clone()
+    }
+
+    /// The method parameters recorded for the first invocation, decoded back
+    /// from the gRPC carrier into the runtime `UntypedDataValue`.
+    pub(crate) fn recorded_method_params(&self) -> golem_common::model::agent::UntypedDataValue {
+        self.method_params.lock().unwrap()[0]
+            .clone()
+            .expect("method params were recorded")
+            .try_into()
+            .expect("method params decode back into UntypedDataValue")
     }
 }
 
