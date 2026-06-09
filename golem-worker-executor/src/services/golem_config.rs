@@ -970,6 +970,13 @@ pub struct MemoryConfig {
     /// against concurrent admissions overshooting before becoming resident. Used
     /// by the measured-headroom admission gate.
     pub admission_reserve_bytes: u64,
+    /// Whether the measured-headroom admission gate is active. Requires the
+    /// executor to own its memory environment (its own cgroup/process), as in a
+    /// production pod. Disable in shared environments — such as the in-process
+    /// test harness — where the probe cannot isolate this executor's footprint
+    /// from co-resident processes; admission then relies on the estimate
+    /// semaphore alone.
+    pub enable_measured_admission: bool,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
     pub oom_retry_config: RetryConfig,
@@ -1031,6 +1038,11 @@ impl SafeDisplay for MemoryConfig {
             &mut result,
             "admission reserve bytes: {}",
             self.admission_reserve_bytes
+        );
+        let _ = writeln!(
+            &mut result,
+            "measured admission enabled: {}",
+            self.enable_measured_admission
         );
         let _ = writeln!(
             &mut result,
@@ -1558,6 +1570,7 @@ impl Default for MemoryConfig {
             worker_estimate_coefficient: 1.1,
             component_size_coefficient: 2.0,
             admission_reserve_bytes: 256 * 1024 * 1024,
+            enable_measured_admission: true,
             acquire_retry_delay: Duration::from_millis(500),
             oom_retry_config: RetryConfig {
                 max_attempts: u32::MAX,

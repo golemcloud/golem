@@ -81,8 +81,10 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     /// Authoritative measured-headroom admission gate. Decides whether real
     /// memory headroom permits a new acquisition, evicting via the worker set
     /// when short. The estimate-based `worker_memory` semaphore is the cheap
-    /// pre-filter and atomic commit in front of it.
-    admission: AdmissionController,
+    /// pre-filter and atomic commit in front of it. `None` when measured
+    /// admission is disabled (e.g. shared test environments) — admission then
+    /// relies on the estimate semaphore alone.
+    admission: Option<AdmissionController>,
     /// Charges each resident component's compiled module size to the estimate
     /// pool exactly once (shared across all its workers) rather than per worker.
     component_charges:
@@ -137,10 +139,12 @@ impl Drop for WorkerMemoryPermit {
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub fn new(memory_config: &MemoryConfig, storage_config: &FilesystemStorageConfig) -> Self {
         let worker_memory_size = memory_config.worker_memory();
-        let admission = AdmissionController::new(
-            default_probe(memory_config.total_system_memory()),
-            memory_config.admission_policy(),
-        );
+        let admission = memory_config.enable_measured_admission.then(|| {
+            AdmissionController::new(
+                default_probe(memory_config.system_memory_override),
+                memory_config.admission_policy(),
+            )
+        });
         let workers = Cache::new(
             None,
             FullCacheEvictionMode::None,
@@ -269,14 +273,12 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             .expect("requested memory size is too large");
 
         loop {
-            // Authoritative measured-headroom gate. Evicts idle-then-warm when
-            // real headroom is short; rejects (and we back off) when it cannot
-            // make room rather than risking the limit.
-            if self
-                .admission
-                .try_admit(memory, &self.eviction_source())
-                .await
-                == AdmissionDecision::Reject
+            // Authoritative measured-headroom gate (when enabled). Evicts
+            // idle-then-warm when real headroom is short; rejects (and we back
+            // off) when it cannot make room rather than risking the limit.
+            if let Some(admission) = &self.admission
+                && admission.try_admit(memory, &self.eviction_source()).await
+                    == AdmissionDecision::Reject
             {
                 debug!("Measured headroom insufficient for {mem32}, backing off and retrying");
                 tokio::time::sleep(self.acquire_retry_delay).await;
@@ -314,14 +316,12 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             .try_into()
             .expect("requested memory size is too large");
 
-        // Authoritative measured-headroom gate. Single attempt (this is the
-        // non-blocking path): if real headroom is insufficient even after
-        // eviction, do not admit.
-        if self
-            .admission
-            .try_admit(memory, &self.eviction_source())
-            .await
-            == AdmissionDecision::Reject
+        // Authoritative measured-headroom gate (when enabled). Single attempt
+        // (this is the non-blocking path): if real headroom is insufficient even
+        // after eviction, do not admit.
+        if let Some(admission) = &self.admission
+            && admission.try_admit(memory, &self.eviction_source()).await
+                == AdmissionDecision::Reject
         {
             debug!("Measured headroom insufficient for {mem32}, not admitting");
             return None;

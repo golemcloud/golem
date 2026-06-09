@@ -533,6 +533,15 @@ fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
         // without attempting a gRPC connection to a registry service that does
         // not exist in this test setup.
         resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
+        // The measured-headroom admission gate requires the executor to own its
+        // memory environment (cgroup/process). The in-process test harness runs
+        // the executor alongside the test framework and other services, so the
+        // probe cannot isolate this executor's footprint — disable it and gate on
+        // the estimate semaphore alone, matching pre-gate behaviour.
+        memory: MemoryConfig {
+            enable_measured_admission: false,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -696,6 +705,9 @@ pub async fn start_customized(
     apply_sqlite_storage_config(&mut config, deps, context);
     config.memory = MemoryConfig {
         system_memory_override,
+        // Measured admission disabled in the shared in-process test harness; the
+        // small system_memory_override here drives the estimate semaphore alone.
+        enable_measured_admission: false,
         ..Default::default()
     };
     config.filesystem_storage = FilesystemStorageConfig {

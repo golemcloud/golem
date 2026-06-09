@@ -127,6 +127,7 @@ max_oplog_query_pages_size = 100
 acquire_retry_delay = "500ms"
 admission_reserve_bytes = 268435456
 component_size_coefficient = 2.0
+enable_measured_admission = true
 worker_estimate_coefficient = 1.1
 worker_memory_ratio = 0.8
 
@@ -460,6 +461,7 @@ without_time = false
 # acquire_retry_delay = "500ms"
 # admission_reserve_bytes = 268435456
 # component_size_coefficient = 2.0
+# enable_measured_admission = true
 # worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
 # 
@@ -763,6 +765,7 @@ without_time = false
 # acquire_retry_delay = "500ms"
 # admission_reserve_bytes = 268435456
 # component_size_coefficient = 2.0
+# enable_measured_admission = true
 # worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
 # 

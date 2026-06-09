@@ -163,18 +163,29 @@ impl MemoryProbe for CgroupV2Probe {
     }
 }
 
-/// Constructs the best available probe for the current platform.
+/// Constructs the best available probe.
 ///
-/// On Linux, prefers cgroup v2; falls back to process RSS. On other targets,
-/// uses process RSS until dedicated backends land. `limit_bytes` is the limit
-/// to charge against and is also the fallback when the cgroup reports an
-/// unlimited `memory.max`.
-pub fn default_probe(limit_bytes: u64) -> Box<dyn MemoryProbe> {
+/// When `memory_override` is set, the limit is self-declared and treated as an
+/// isolated budget measured against this process's RSS — the executor does not
+/// assume it owns a cgroup. When it is `None`, the executor is assumed to own
+/// its memory environment, so on Linux the exact cgroup v2 numbers are used
+/// (falling back to host RAM / process RSS otherwise).
+pub fn default_probe(memory_override: Option<u64>) -> Box<dyn MemoryProbe> {
+    if let Some(limit) = memory_override {
+        return Box::new(ProcessRssProbe::new(limit));
+    }
+
+    let host_ram = {
+        let mut sysinfo = sysinfo::System::new();
+        sysinfo.refresh_memory();
+        sysinfo.total_memory()
+    };
+
     #[cfg(target_os = "linux")]
     {
-        if let Some(probe) = CgroupV2Probe::try_new(limit_bytes) {
+        if let Some(probe) = CgroupV2Probe::try_new(host_ram) {
             return Box::new(probe);
         }
     }
-    Box::new(ProcessRssProbe::new(limit_bytes))
+    Box::new(ProcessRssProbe::new(host_ram))
 }
