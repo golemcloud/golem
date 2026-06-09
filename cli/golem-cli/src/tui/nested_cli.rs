@@ -32,6 +32,9 @@ pub struct NestedCliSpec {
 pub enum NestedCliTarget {
     Command,
     Server,
+    Repl,
+    AgentOplog,
+    AgentStream,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +121,9 @@ pub fn spawn_nested_cli(
                         let _ = event_tx.send(match target {
                             NestedCliTarget::Command => TuiEvent::CommandOutputClosed(None),
                             NestedCliTarget::Server => TuiEvent::ServerOutputClosed(None),
+                            NestedCliTarget::Repl => TuiEvent::ReplOutputClosed(None),
+                            NestedCliTarget::AgentOplog => TuiEvent::AgentOplogOutputClosed(None),
+                            NestedCliTarget::AgentStream => TuiEvent::AgentStreamOutputClosed(None),
                         });
                         return;
                     }
@@ -129,6 +135,13 @@ pub fn spawn_nested_cli(
                                 }
                                 NestedCliTarget::Server => {
                                     TuiEvent::ServerOutput(buffer[..n].to_vec())
+                                }
+                                NestedCliTarget::Repl => TuiEvent::ReplOutput(buffer[..n].to_vec()),
+                                NestedCliTarget::AgentOplog => {
+                                    TuiEvent::AgentOplogOutput(buffer[..n].to_vec())
+                                }
+                                NestedCliTarget::AgentStream => {
+                                    TuiEvent::AgentStreamOutput(buffer[..n].to_vec())
                                 }
                             })
                             .is_err()
@@ -143,6 +156,15 @@ pub fn spawn_nested_cli(
                             }
                             NestedCliTarget::Server => {
                                 TuiEvent::ServerOutputClosed(Some(error.to_string()))
+                            }
+                            NestedCliTarget::Repl => {
+                                TuiEvent::ReplOutputClosed(Some(error.to_string()))
+                            }
+                            NestedCliTarget::AgentOplog => {
+                                TuiEvent::AgentOplogOutputClosed(Some(error.to_string()))
+                            }
+                            NestedCliTarget::AgentStream => {
+                                TuiEvent::AgentStreamOutputClosed(Some(error.to_string()))
                             }
                         });
                         return;
@@ -162,6 +184,9 @@ pub fn spawn_nested_cli(
             let _ = event_tx.send(match target {
                 NestedCliTarget::Command => TuiEvent::CommandExited(exit),
                 NestedCliTarget::Server => TuiEvent::ServerExited(exit),
+                NestedCliTarget::Repl => TuiEvent::ReplExited(exit),
+                NestedCliTarget::AgentOplog => TuiEvent::AgentOplogExited(exit),
+                NestedCliTarget::AgentStream => TuiEvent::AgentStreamExited(exit),
             });
         }
     });

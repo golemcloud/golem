@@ -15,10 +15,12 @@
 use crate::context::Context;
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::tui::TuiEvent;
+use crate::tui::input::encode_key_for_pty;
 use crate::tui::nested_cli::{
     CommandExit, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
 };
 use crate::tui::terminal::TerminalGuard;
+use crate::tui::terminal_screen::TerminalScreen;
 use ansi_to_tui::IntoText;
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
@@ -26,7 +28,7 @@ use crossterm::event::{
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -128,6 +130,7 @@ struct TuiApp {
     command_options: CommandOptions,
     command_run: Option<CommandRun>,
     server: ServerState,
+    repl: ReplState,
     agents: AgentsState,
     next_command_id: u64,
     context: TuiContextInfo,
@@ -143,6 +146,7 @@ impl TuiApp {
             command_options: CommandOptions::default(),
             command_run: None,
             server: ServerState::default(),
+            repl: ReplState::default(),
             agents: AgentsState::default(),
             next_command_id: 1,
             context: TuiContextInfo::from_context(ctx),
@@ -178,6 +182,35 @@ impl TuiApp {
             }
             TuiEvent::ServerExited(exit) => self.finish_server(exit, event_tx),
             TuiEvent::ServerSpinnerTick(server_id) => self.handle_server_spinner_tick(server_id),
+            TuiEvent::ReplOutput(bytes) => self.append_repl_output(&bytes),
+            TuiEvent::ReplOutputClosed(error) => self.handle_repl_output_closed(error),
+            TuiEvent::ReplExited(exit) => self.finish_repl(exit),
+            TuiEvent::AgentOplogOutput(bytes) => self.agents.inspect.oplog.output.append(&bytes),
+            TuiEvent::AgentOplogOutputClosed(error) => {
+                if let Some(error) = error {
+                    self.agents
+                        .inspect
+                        .oplog
+                        .output
+                        .append_local_line(format!("oplog output closed: {error}"));
+                }
+            }
+            TuiEvent::AgentOplogExited(exit) => {
+                self.finish_agent_inspect_job(AgentInspectPane::Oplog, exit)
+            }
+            TuiEvent::AgentStreamOutput(bytes) => self.agents.inspect.stream.output.append(&bytes),
+            TuiEvent::AgentStreamOutputClosed(error) => {
+                if let Some(error) = error {
+                    self.agents
+                        .inspect
+                        .stream
+                        .output
+                        .append_local_line(format!("stream output closed: {error}"));
+                }
+            }
+            TuiEvent::AgentStreamExited(exit) => {
+                self.finish_agent_inspect_job(AgentInspectPane::Stream, exit)
+            }
             TuiEvent::AgentRefreshTick => self.refresh_agents(Some(event_tx)),
             TuiEvent::AgentRefreshFinished { generation, result } => {
                 self.finish_agent_refresh(generation, result)
@@ -193,14 +226,22 @@ impl TuiApp {
     fn handle_key_with_events(&mut self, key: KeyEvent, event_tx: Option<&Sender<TuiEvent>>) {
         match self.mode {
             TuiMode::Normal => self.handle_global_key(key, event_tx),
+            TuiMode::LeaderNormal => self.handle_leader_key(key, event_tx, TuiMode::Normal),
             TuiMode::Palette => self.handle_palette_key(key, event_tx),
             TuiMode::Help => self.handle_help_key(key),
             TuiMode::AgentFilter => self.handle_agent_filter_key(key, event_tx),
             TuiMode::CommandInteraction => self.handle_command_interaction_key(key),
+            TuiMode::Repl => self.handle_repl_key(key),
+            TuiMode::LeaderRepl => self.handle_leader_key(key, event_tx, TuiMode::Repl),
         }
     }
 
     fn handle_global_key(&mut self, key: KeyEvent, event_tx: Option<&Sender<TuiEvent>>) {
+        if self.active_view == TuiView::Agents && self.agents.view_mode == AgentsViewMode::Inspect {
+            self.handle_agent_inspect_key(key);
+            return;
+        }
+
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -213,34 +254,23 @@ impl TuiApp {
             KeyCode::Char('b') => self.start_command(CommandKind::Build, event_tx),
             KeyCode::Char('d') => self.start_command(CommandKind::Deploy, event_tx),
             KeyCode::Char('c') => self.start_command(CommandKind::Clean, event_tx),
-            KeyCode::Char('y') => self.command_options.yes = !self.command_options.yes,
-            KeyCode::Char('r') => self.command_options.reset = !self.command_options.reset,
+            KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.mode = TuiMode::LeaderNormal
+            }
+            KeyCode::Char('r') => self.start_or_focus_repl(event_tx),
             KeyCode::Char('u') if self.active_view == TuiView::Agents => {
                 self.refresh_agents(event_tx)
             }
-            KeyCode::Char('a') if self.active_view == TuiView::Agents => {
-                self.toggle_agent_auto_refresh(event_tx)
-            }
-            KeyCode::Char('m') if self.active_view == TuiView::Agents => {
-                self.cycle_agent_mode(event_tx)
-            }
-            KeyCode::Char('i') if self.active_view == TuiView::Agents => {
-                self.agents.detail_visible = !self.agents.detail_visible
+            KeyCode::Enter if self.active_view == TuiView::Agents => {
+                self.open_agent_inspect(event_tx)
             }
             KeyCode::Char('/') if self.active_view == TuiView::Agents => {
                 self.mode = TuiMode::AgentFilter
             }
-            KeyCode::Char('s') if self.active_view == TuiView::Server => {
-                self.toggle_server(event_tx)
-            }
-            KeyCode::Char('R') if self.active_view == TuiView::Server => {
-                self.restart_server(ServerStartMode::Current, event_tx)
-            }
-            KeyCode::Char('x') if self.active_view == TuiView::Server => {
-                self.server.clean = !self.server.clean
-            }
-            KeyCode::Char('C') if self.active_view == TuiView::Server => {
-                self.restart_server(ServerStartMode::Clean, event_tx)
+            KeyCode::Char('s') => self.open_and_toggle_server(event_tx),
+            KeyCode::Enter if self.active_view == TuiView::Server => self.toggle_server(event_tx),
+            KeyCode::Enter if self.active_view == TuiView::Repl => {
+                self.start_or_focus_repl(event_tx)
             }
             KeyCode::PageUp if self.active_view == TuiView::Server => self.scroll_server_up_by(10),
             KeyCode::PageDown if self.active_view == TuiView::Server => {
@@ -273,6 +303,7 @@ impl TuiApp {
             KeyCode::Char('2') => self.open_agents_view(event_tx),
             KeyCode::Char('3') => self.active_view = TuiView::Output,
             KeyCode::Char('4') => self.active_view = TuiView::Server,
+            KeyCode::Char('5') => self.active_view = TuiView::Repl,
             _ => {}
         }
     }
@@ -348,12 +379,77 @@ impl TuiApp {
         }
     }
 
+    fn handle_leader_key(
+        &mut self,
+        key: KeyEvent,
+        event_tx: Option<&Sender<TuiEvent>>,
+        return_mode: TuiMode,
+    ) {
+        match key.code {
+            KeyCode::Esc => self.mode = return_mode,
+            KeyCode::Char('?') => self.mode = TuiMode::Help,
+            KeyCode::Char('p') => self.open_palette(),
+            KeyCode::Char('y') => {
+                self.command_options.yes = !self.command_options.yes;
+                self.mode = return_mode;
+            }
+            KeyCode::Char('r') => {
+                self.command_options.reset = !self.command_options.reset;
+                self.mode = return_mode;
+            }
+            KeyCode::Char('s') => {
+                self.server.clean = !self.server.clean;
+                self.mode = return_mode;
+            }
+            KeyCode::Char('a') if self.active_view == TuiView::Agents => {
+                self.toggle_agent_auto_refresh(event_tx);
+                self.mode = return_mode;
+            }
+            KeyCode::Char('d') if self.active_view == TuiView::Agents => {
+                self.agents.detail_visible = !self.agents.detail_visible;
+                self.mode = return_mode;
+            }
+            KeyCode::Char('m') if self.active_view == TuiView::Agents => {
+                self.cycle_agent_mode(event_tx);
+                self.mode = return_mode;
+            }
+            KeyCode::Char('q') if return_mode == TuiMode::Repl => self.mode = TuiMode::Normal,
+            KeyCode::Char('k') if return_mode == TuiMode::Repl => {
+                self.stop_repl();
+                self.mode = TuiMode::Normal;
+            }
+            KeyCode::Char('R') if return_mode == TuiMode::Repl => {
+                self.restart_repl(event_tx);
+                self.mode = TuiMode::Repl;
+            }
+            KeyCode::Char('R') if self.active_view == TuiView::Server => {
+                self.restart_server(ServerStartMode::Current, event_tx);
+                self.mode = return_mode;
+            }
+            KeyCode::Char('C') if self.active_view == TuiView::Server => {
+                self.restart_server(ServerStartMode::Clean, event_tx);
+                self.mode = return_mode;
+            }
+            _ => self.mode = return_mode,
+        }
+    }
+
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         match (self.active_view, mouse.kind) {
             (TuiView::Output, MouseEventKind::ScrollUp) => self.scroll_output_up_by(3),
             (TuiView::Output, MouseEventKind::ScrollDown) => self.scroll_output_down_by(3),
             (TuiView::Server, MouseEventKind::ScrollUp) => self.scroll_server_up_by(3),
             (TuiView::Server, MouseEventKind::ScrollDown) => self.scroll_server_down_by(3),
+            (TuiView::Agents, MouseEventKind::ScrollUp)
+                if self.agents.view_mode == AgentsViewMode::Inspect =>
+            {
+                self.scroll_agent_inspect_up_by(3)
+            }
+            (TuiView::Agents, MouseEventKind::ScrollDown)
+                if self.agents.view_mode == AgentsViewMode::Inspect =>
+            {
+                self.scroll_agent_inspect_down_by(3)
+            }
             _ => {}
         }
     }
@@ -388,13 +484,9 @@ impl TuiApp {
                 self.command_options.reset = !self.command_options.reset;
                 self.close_palette();
             }
-            TuiActionKind::StartServer => {
+            TuiActionKind::ToggleServer => {
                 self.close_palette();
-                self.start_server(ServerStartMode::Current, event_tx);
-            }
-            TuiActionKind::StopServer => {
-                self.close_palette();
-                self.stop_server();
+                self.open_and_toggle_server(event_tx);
             }
             TuiActionKind::RestartServer => {
                 self.close_palette();
@@ -424,6 +516,26 @@ impl TuiApp {
                 self.cycle_agent_mode(event_tx);
                 self.close_palette();
             }
+            TuiActionKind::StartOrFocusRepl => {
+                self.close_palette();
+                self.start_or_focus_repl(event_tx);
+            }
+            TuiActionKind::FocusRepl => {
+                self.close_palette();
+                self.focus_repl();
+            }
+            TuiActionKind::LeaveRepl => {
+                self.palette.reset();
+                self.mode = TuiMode::Normal;
+            }
+            TuiActionKind::StopRepl => {
+                self.close_palette();
+                self.stop_repl();
+            }
+            TuiActionKind::RestartRepl => {
+                self.close_palette();
+                self.restart_repl(event_tx);
+            }
             TuiActionKind::ShowHelp => {
                 self.palette.reset();
                 self.mode = TuiMode::Help;
@@ -448,6 +560,8 @@ impl TuiApp {
     fn default_mode(&self) -> TuiMode {
         if self.command_is_running() {
             TuiMode::CommandInteraction
+        } else if self.active_view == TuiView::Repl && self.repl.is_running() {
+            TuiMode::Repl
         } else {
             TuiMode::Normal
         }
@@ -550,6 +664,152 @@ impl TuiApp {
         self.refresh_agents(event_tx);
     }
 
+    fn handle_agent_inspect_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.close_agent_inspect(),
+            KeyCode::Left => self.agents.inspect.focus = AgentInspectPane::Oplog,
+            KeyCode::Right => self.agents.inspect.focus = AgentInspectPane::Stream,
+            KeyCode::Up => self.scroll_agent_inspect_up_by(1),
+            KeyCode::Down => self.scroll_agent_inspect_down_by(1),
+            KeyCode::PageUp => self.scroll_agent_inspect_up_by(10),
+            KeyCode::PageDown => self.scroll_agent_inspect_down_by(10),
+            KeyCode::Home => self.focused_agent_inspect_job_mut().output.scroll_top(),
+            KeyCode::End => self.focused_agent_inspect_job_mut().output.scroll_bottom(),
+            _ => {}
+        }
+    }
+
+    fn open_agent_inspect(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+        let Some(agent_name) = self
+            .filtered_agents()
+            .get(self.agents.selected)
+            .map(|agent| agent.name.clone())
+        else {
+            return;
+        };
+
+        self.close_agent_inspect_jobs();
+        self.agents.view_mode = AgentsViewMode::Inspect;
+        self.agents.inspect = AgentInspectState {
+            agent_name: Some(agent_name.clone()),
+            focus: AgentInspectPane::Oplog,
+            oplog: InspectJob::start(vec![
+                "agent".to_string(),
+                "oplog".to_string(),
+                agent_name.clone(),
+            ]),
+            stream: InspectJob::start(vec!["agent".to_string(), "stream".to_string(), agent_name]),
+        };
+
+        self.agents.inspect.oplog.output.append_local_line(format!(
+            "$ {}",
+            command_display(&self.agents.inspect.oplog.args)
+        ));
+        self.agents.inspect.stream.output.append_local_line(format!(
+            "$ {}",
+            command_display(&self.agents.inspect.stream.args)
+        ));
+
+        let Some(event_tx) = event_tx else {
+            return;
+        };
+
+        self.start_agent_inspect_job(AgentInspectPane::Oplog, event_tx);
+        self.start_agent_inspect_job(AgentInspectPane::Stream, event_tx);
+    }
+
+    fn start_agent_inspect_job(&mut self, pane: AgentInspectPane, event_tx: &Sender<TuiEvent>) {
+        let args = self.agent_inspect_job(pane).args.clone();
+        let spec = match self.command_spec(args) {
+            Ok(spec) => spec,
+            Err(error) => {
+                let job = self.agent_inspect_job_mut(pane);
+                job.status = InspectJobStatus::Failed;
+                job.output
+                    .append_local_line(format!("failed to prepare command: {error:#}"));
+                return;
+            }
+        };
+
+        let target = match pane {
+            AgentInspectPane::Oplog => NestedCliTarget::AgentOplog,
+            AgentInspectPane::Stream => NestedCliTarget::AgentStream,
+        };
+
+        match spawn_nested_cli(spec, event_tx.clone(), target) {
+            Ok(runtime) => {
+                let job = self.agent_inspect_job_mut(pane);
+                job.status = InspectJobStatus::Running;
+                job.runtime = Some(runtime);
+            }
+            Err(error) => {
+                let job = self.agent_inspect_job_mut(pane);
+                job.status = InspectJobStatus::Failed;
+                job.output
+                    .append_local_line(format!("failed to start command: {error:#}"));
+            }
+        }
+    }
+
+    fn close_agent_inspect(&mut self) {
+        self.close_agent_inspect_jobs();
+        self.agents.view_mode = AgentsViewMode::List;
+    }
+
+    fn close_agent_inspect_jobs(&mut self) {
+        for pane in [AgentInspectPane::Oplog, AgentInspectPane::Stream] {
+            let job = self.agent_inspect_job_mut(pane);
+            if let Some(runtime) = job.runtime.as_mut() {
+                let _ = runtime.kill();
+            }
+            job.runtime = None;
+            if job.is_running() {
+                job.status = InspectJobStatus::Stopped;
+            }
+        }
+    }
+
+    fn finish_agent_inspect_job(&mut self, pane: AgentInspectPane, exit: CommandExit) {
+        let job = self.agent_inspect_job_mut(pane);
+        job.runtime = None;
+        job.exit_code = exit.code;
+        job.status = if exit.success || job.status == InspectJobStatus::Stopping {
+            InspectJobStatus::Stopped
+        } else {
+            InspectJobStatus::Failed
+        };
+    }
+
+    fn scroll_agent_inspect_up_by(&mut self, amount: usize) {
+        self.focused_agent_inspect_job_mut()
+            .output
+            .scroll_up(amount);
+    }
+
+    fn scroll_agent_inspect_down_by(&mut self, amount: usize) {
+        self.focused_agent_inspect_job_mut()
+            .output
+            .scroll_down(amount);
+    }
+
+    fn focused_agent_inspect_job_mut(&mut self) -> &mut InspectJob {
+        self.agent_inspect_job_mut(self.agents.inspect.focus)
+    }
+
+    fn agent_inspect_job(&self, pane: AgentInspectPane) -> &InspectJob {
+        match pane {
+            AgentInspectPane::Oplog => &self.agents.inspect.oplog,
+            AgentInspectPane::Stream => &self.agents.inspect.stream,
+        }
+    }
+
+    fn agent_inspect_job_mut(&mut self, pane: AgentInspectPane) -> &mut InspectJob {
+        match pane {
+            AgentInspectPane::Oplog => &mut self.agents.inspect.oplog,
+            AgentInspectPane::Stream => &mut self.agents.inspect.stream,
+        }
+    }
+
     fn handle_command_interaction_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.cancel_or_force_kill_command(),
@@ -565,7 +825,7 @@ impl TuiApp {
             }
             KeyCode::Char('?') => self.mode = TuiMode::Help,
             _ => {
-                if let Some(bytes) = encode_key_for_child(key)
+                if let Some(bytes) = encode_key_for_pty(key)
                     && let Some(run) = self.command_run.as_mut()
                     && let Some(runtime) = run.runtime.as_mut()
                     && let Err(error) = runtime.write_all(&bytes)
@@ -751,6 +1011,8 @@ impl TuiApp {
             run.stop_spinner();
         }
         self.cleanup_server();
+        self.cleanup_repl();
+        self.close_agent_inspect_jobs();
     }
 
     fn command_is_running(&self) -> bool {
@@ -778,6 +1040,7 @@ impl TuiApp {
         {
             let _ = runtime.resize(cols, rows);
         }
+        self.resize_repl_for_terminal(cols, rows);
     }
 
     fn scroll_output_up(&mut self) {
@@ -818,6 +1081,11 @@ impl TuiApp {
         } else {
             self.start_server(ServerStartMode::Current, event_tx);
         }
+    }
+
+    fn open_and_toggle_server(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+        self.active_view = TuiView::Server;
+        self.toggle_server(event_tx);
     }
 
     fn start_server(&mut self, mode: ServerStartMode, event_tx: Option<&Sender<TuiEvent>>) {
@@ -993,15 +1261,187 @@ impl TuiApp {
     fn scroll_server_down_by(&mut self, amount: usize) {
         self.server.run.output.scroll_down(amount);
     }
+
+    fn start_or_focus_repl(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+        self.active_view = TuiView::Repl;
+        if self.repl.is_running() {
+            self.mode = TuiMode::Repl;
+            return;
+        }
+
+        self.start_repl(event_tx);
+    }
+
+    fn start_repl(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+        let args = vec!["repl".to_string()];
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let (screen_rows, screen_cols) = repl_screen_size_for_terminal(cols, rows);
+        self.repl.run = ReplRun::new(args.clone(), screen_rows, screen_cols);
+        self.mode = TuiMode::Repl;
+        self.repl
+            .run
+            .screen
+            .feed(format!("$ {}\r\n", command_display(&args)).as_bytes());
+
+        let Some(event_tx) = event_tx else {
+            return;
+        };
+
+        let spec = match self.repl_spec(args) {
+            Ok(spec) => spec,
+            Err(error) => {
+                self.repl.run.status = ReplStatus::Failed;
+                self.repl.run.last_error = Some(format!("failed to prepare REPL: {error:#}"));
+                self.mode = TuiMode::Normal;
+                return;
+            }
+        };
+
+        match spawn_nested_cli(spec, event_tx.clone(), NestedCliTarget::Repl) {
+            Ok(mut runtime) => {
+                let _ = runtime.resize(screen_cols, screen_rows);
+                self.repl.run.status = ReplStatus::Running;
+                self.repl.run.runtime = Some(runtime);
+            }
+            Err(error) => {
+                self.repl.run.status = ReplStatus::Failed;
+                self.repl.run.last_error = Some(format!("failed to start REPL: {error:#}"));
+                self.mode = TuiMode::Normal;
+            }
+        }
+    }
+
+    fn repl_spec(&self, args: Vec<String>) -> anyhow::Result<NestedCliSpec> {
+        let mut env = HashMap::new();
+        env.insert("CLICOLOR_FORCE".to_string(), "1".to_string());
+        env.insert("FORCE_COLOR".to_string(), "1".to_string());
+        if std::env::var("TERM").is_err() || std::env::var("TERM").is_ok_and(|term| term == "dumb")
+        {
+            env.insert("TERM".to_string(), "xterm-256color".to_string());
+        }
+
+        Ok(NestedCliSpec {
+            program: PathBuf::from(crate::binary_path_to_string()?),
+            args,
+            cwd: crate::fs::current_dir_lexical()?,
+            env,
+        })
+    }
+
+    fn focus_repl(&mut self) {
+        self.active_view = TuiView::Repl;
+        if self.repl.is_running() {
+            self.mode = TuiMode::Repl;
+        }
+    }
+
+    fn handle_repl_key(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.mode = TuiMode::LeaderRepl;
+            return;
+        }
+
+        if let Some(bytes) = encode_key_for_pty(key)
+            && let Some(runtime) = self.repl.run.runtime.as_mut()
+            && let Err(error) = runtime.write_all(&bytes)
+        {
+            self.repl.run.last_error = Some(format!("failed to send REPL input: {error:#}"));
+        }
+    }
+
+    fn append_repl_output(&mut self, bytes: &[u8]) {
+        self.repl.run.screen.feed(bytes);
+        if self.repl.run.status == ReplStatus::Starting {
+            self.repl.run.status = ReplStatus::Running;
+        }
+    }
+
+    fn handle_repl_output_closed(&mut self, error: Option<String>) {
+        if let Some(error) = error {
+            self.repl.run.last_error = Some(format!("REPL output closed: {error}"));
+        }
+    }
+
+    fn finish_repl(&mut self, exit: CommandExit) {
+        self.repl.run.runtime = None;
+        self.repl.run.exit_code = exit.code;
+        self.repl.run.status = if exit.success || self.repl.run.status == ReplStatus::Stopping {
+            ReplStatus::Stopped
+        } else {
+            ReplStatus::Failed
+        };
+        self.repl.run.screen.feed(
+            format!(
+                "\r\nREPL {}\r\n",
+                if self.repl.run.status == ReplStatus::Stopped {
+                    "stopped"
+                } else {
+                    "failed"
+                }
+            )
+            .as_bytes(),
+        );
+        if matches!(self.mode, TuiMode::Repl | TuiMode::LeaderRepl) {
+            self.mode = TuiMode::Normal;
+        }
+    }
+
+    fn stop_repl(&mut self) {
+        match self.repl.run.status {
+            ReplStatus::Starting | ReplStatus::Running => {
+                if let Some(runtime) = self.repl.run.runtime.as_mut()
+                    && let Err(error) = runtime.send_ctrl_c()
+                {
+                    self.repl.run.last_error = Some(format!("failed to stop REPL: {error:#}"));
+                }
+                self.repl.run.status = ReplStatus::Stopping;
+            }
+            ReplStatus::Stopping => {
+                if let Some(runtime) = self.repl.run.runtime.as_mut()
+                    && let Err(error) = runtime.kill()
+                {
+                    self.repl.run.last_error =
+                        Some(format!("failed to force kill REPL: {error:#}"));
+                }
+                self.repl.run.runtime = None;
+                self.repl.run.status = ReplStatus::Stopped;
+            }
+            ReplStatus::Stopped | ReplStatus::Failed => {}
+        }
+    }
+
+    fn cleanup_repl(&mut self) {
+        if let Some(runtime) = self.repl.run.runtime.as_mut() {
+            let _ = runtime.kill();
+        }
+    }
+
+    fn restart_repl(&mut self, event_tx: Option<&Sender<TuiEvent>>) {
+        if let Some(runtime) = self.repl.run.runtime.as_mut() {
+            let _ = runtime.kill();
+        }
+        self.start_repl(event_tx);
+    }
+
+    fn resize_repl_for_terminal(&mut self, cols: u16, rows: u16) {
+        let (screen_rows, screen_cols) = repl_screen_size_for_terminal(cols, rows);
+        self.repl.run.screen.resize(screen_rows, screen_cols);
+        if let Some(runtime) = self.repl.run.runtime.as_mut() {
+            let _ = runtime.resize(screen_cols, screen_rows);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TuiMode {
     Normal,
+    LeaderNormal,
     Palette,
     Help,
     AgentFilter,
     CommandInteraction,
+    Repl,
+    LeaderRepl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1090,7 +1530,12 @@ struct ServerState {
     run: ServerRun,
 }
 
+struct ReplState {
+    run: ReplRun,
+}
+
 struct AgentsState {
+    view_mode: AgentsViewMode,
     mode: AgentModeFilter,
     query: String,
     selected: usize,
@@ -1101,11 +1546,13 @@ struct AgentsState {
     auto_refresh_stop: Option<Arc<AtomicBool>>,
     last_error: Option<String>,
     agents: Vec<AgentListItem>,
+    inspect: AgentInspectState,
 }
 
 impl Default for AgentsState {
     fn default() -> Self {
         Self {
+            view_mode: AgentsViewMode::List,
             mode: AgentModeFilter::Durable,
             query: String::new(),
             selected: 0,
@@ -1116,6 +1563,7 @@ impl Default for AgentsState {
             auto_refresh_stop: None,
             last_error: None,
             agents: Vec::new(),
+            inspect: AgentInspectState::default(),
         }
     }
 }
@@ -1152,6 +1600,107 @@ impl AgentsState {
 
     fn selected_agent<'a>(&self, filtered: &'a [&'a AgentListItem]) -> Option<&'a AgentListItem> {
         filtered.get(self.selected).copied()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentsViewMode {
+    List,
+    Inspect,
+}
+
+struct AgentInspectState {
+    agent_name: Option<String>,
+    focus: AgentInspectPane,
+    oplog: InspectJob,
+    stream: InspectJob,
+}
+
+impl Default for AgentInspectState {
+    fn default() -> Self {
+        Self {
+            agent_name: None,
+            focus: AgentInspectPane::Oplog,
+            oplog: InspectJob::default(),
+            stream: InspectJob::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentInspectPane {
+    Oplog,
+    Stream,
+}
+
+impl AgentInspectPane {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Oplog => "oplog",
+            Self::Stream => "stream",
+        }
+    }
+}
+
+struct InspectJob {
+    args: Vec<String>,
+    status: InspectJobStatus,
+    output: OutputBuffer,
+    runtime: Option<NestedCliRuntime>,
+    exit_code: Option<i32>,
+}
+
+impl Default for InspectJob {
+    fn default() -> Self {
+        Self {
+            args: Vec::new(),
+            status: InspectJobStatus::Idle,
+            output: OutputBuffer::default(),
+            runtime: None,
+            exit_code: None,
+        }
+    }
+}
+
+impl InspectJob {
+    fn start(args: Vec<String>) -> Self {
+        Self {
+            args,
+            status: InspectJobStatus::Starting,
+            output: OutputBuffer::default(),
+            runtime: None,
+            exit_code: None,
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        matches!(
+            self.status,
+            InspectJobStatus::Starting | InspectJobStatus::Running | InspectJobStatus::Stopping
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InspectJobStatus {
+    Idle,
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed,
+}
+
+impl InspectJobStatus {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+        }
     }
 }
 
@@ -1214,6 +1763,14 @@ impl Default for ServerState {
             clean: false,
             next_id: 1,
             run: ServerRun::default(),
+        }
+    }
+}
+
+impl Default for ReplState {
+    fn default() -> Self {
+        Self {
+            run: ReplRun::default(),
         }
     }
 }
@@ -1305,6 +1862,75 @@ enum ServerStartMode {
     Clean,
 }
 
+struct ReplRun {
+    status: ReplStatus,
+    args: Vec<String>,
+    screen: TerminalScreen,
+    runtime: Option<NestedCliRuntime>,
+    exit_code: Option<i32>,
+    last_error: Option<String>,
+}
+
+impl Default for ReplRun {
+    fn default() -> Self {
+        Self {
+            status: ReplStatus::Stopped,
+            args: vec!["repl".to_string()],
+            screen: TerminalScreen::new(20, 80),
+            runtime: None,
+            exit_code: None,
+            last_error: None,
+        }
+    }
+}
+
+impl ReplRun {
+    fn new(args: Vec<String>, rows: u16, cols: u16) -> Self {
+        Self {
+            status: ReplStatus::Starting,
+            args,
+            screen: TerminalScreen::new(rows, cols),
+            runtime: None,
+            exit_code: None,
+            last_error: None,
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        matches!(
+            self.status,
+            ReplStatus::Starting | ReplStatus::Running | ReplStatus::Stopping
+        )
+    }
+}
+
+impl ReplState {
+    fn is_running(&self) -> bool {
+        self.run.is_running()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplStatus {
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+    Failed,
+}
+
+impl ReplStatus {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 struct OutputBuffer {
     lines: Vec<Vec<u8>>,
     pending: Vec<u8>,
@@ -1391,25 +2017,6 @@ impl OutputBuffer {
             let drain_count = self.lines.len() - self.max_lines;
             self.lines.drain(0..drain_count);
         }
-    }
-}
-
-fn encode_key_for_child(key: KeyEvent) -> Option<Vec<u8>> {
-    match key.code {
-        KeyCode::Char(character)
-            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-        {
-            let mut bytes = [0; 4];
-            Some(character.encode_utf8(&mut bytes).as_bytes().to_vec())
-        }
-        KeyCode::Enter => Some(b"\r".to_vec()),
-        KeyCode::Backspace => Some(vec![0x7f]),
-        KeyCode::Tab => Some(b"\t".to_vec()),
-        KeyCode::Left => Some(b"\x1b[D".to_vec()),
-        KeyCode::Right => Some(b"\x1b[C".to_vec()),
-        KeyCode::Up => Some(b"\x1b[A".to_vec()),
-        KeyCode::Down => Some(b"\x1b[B".to_vec()),
-        _ => None,
     }
 }
 
@@ -1536,10 +2143,17 @@ enum TuiView {
     Agents,
     Output,
     Server,
+    Repl,
 }
 
 impl TuiView {
-    const ALL: [Self; 4] = [Self::Dashboard, Self::Agents, Self::Output, Self::Server];
+    const ALL: [Self; 5] = [
+        Self::Dashboard,
+        Self::Agents,
+        Self::Output,
+        Self::Server,
+        Self::Repl,
+    ];
 
     fn title(self) -> &'static str {
         match self {
@@ -1547,6 +2161,7 @@ impl TuiView {
             Self::Agents => "Agents",
             Self::Output => "Output",
             Self::Server => "Server",
+            Self::Repl => "REPL",
         }
     }
 
@@ -1556,6 +2171,7 @@ impl TuiView {
             Self::Agents => "Agent monitoring and management will appear here.",
             Self::Output => "Nested command output will appear here.",
             Self::Server => "Local server logs will appear here.",
+            Self::Repl => "Embedded REPL session will appear here.",
         }
     }
 
@@ -1648,6 +2264,51 @@ fn format_server(server: &Server) -> String {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TuiTheme {
+    background: Color,
+    surface: Color,
+    panel: Color,
+    panel_strong: Color,
+    border_subtle: Color,
+    border: Color,
+    text: Color,
+    text_secondary: Color,
+    text_muted: Color,
+    text_faint: Color,
+    accent: Color,
+    accent_hover: Color,
+    marker: Color,
+    success: Color,
+    error: Color,
+}
+
+impl TuiTheme {
+    fn golem_dark() -> Self {
+        Self {
+            background: Color::Rgb(10, 10, 13),
+            surface: Color::Rgb(13, 13, 18),
+            panel: Color::Rgb(20, 20, 27),
+            panel_strong: Color::Rgb(26, 26, 34),
+            border_subtle: Color::Rgb(42, 42, 53),
+            border: Color::Rgb(58, 58, 72),
+            text: Color::Rgb(237, 237, 240),
+            text_secondary: Color::Rgb(168, 168, 180),
+            text_muted: Color::Rgb(110, 110, 126),
+            text_faint: Color::Rgb(74, 74, 85),
+            accent: Color::Rgb(245, 176, 62),
+            accent_hover: Color::Rgb(255, 197, 96),
+            marker: Color::Rgb(224, 122, 61),
+            success: Color::Rgb(134, 239, 172),
+            error: Color::Rgb(224, 108, 117),
+        }
+    }
+}
+
+fn theme() -> TuiTheme {
+    TuiTheme::golem_dark()
+}
+
 fn render(frame: &mut Frame<'_>, app: &TuiApp) {
     let [header, tabs, separator, body, footer_area] = Layout::default()
         .direction(Direction::Vertical)
@@ -1662,7 +2323,7 @@ fn render(frame: &mut Frame<'_>, app: &TuiApp) {
 
     render_header(frame, header, app);
 
-    render_tabs(frame, tabs, app.active_view);
+    render_tabs(frame, tabs, app);
     render_separator(frame, separator);
 
     if app.active_view == TuiView::Agents {
@@ -1671,12 +2332,16 @@ fn render(frame: &mut Frame<'_>, app: &TuiApp) {
         render_output_view(frame, body, app);
     } else if app.active_view == TuiView::Server {
         render_server_view(frame, body, app);
+    } else if app.active_view == TuiView::Repl {
+        render_repl_view(frame, body, app);
     } else {
         render_surface(frame, body);
-        let dashboard = Paragraph::new(view_lines(app))
+        render_dashboard_logo(frame, body);
+        let dashboard = Paragraph::new(view_lines(app, body.width as usize))
             .style(surface_style())
             .wrap(Wrap { trim: false });
         frame.render_widget(dashboard, body);
+        render_left_rail(frame, body, surface_rail_style());
     }
 
     let footer = Paragraph::new(footer_line(app.command_options))
@@ -1687,10 +2352,47 @@ fn render(frame: &mut Frame<'_>, app: &TuiApp) {
 
     match app.mode {
         TuiMode::Normal => {}
+        TuiMode::LeaderNormal => render_leader_hint(frame, app, TuiMode::Normal),
         TuiMode::AgentFilter => {}
         TuiMode::CommandInteraction => {}
+        TuiMode::Repl => {}
+        TuiMode::LeaderRepl => render_leader_hint(frame, app, TuiMode::Repl),
         TuiMode::Palette => render_palette(frame, app),
         TuiMode::Help => render_help(frame),
+    }
+}
+
+fn render_repl_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    render_surface(frame, area);
+    let [summary_area, terminal_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(area);
+
+    frame.render_widget(
+        Paragraph::new(repl_status_line(&app.repl, app.mode)).style(command_status_bg_style()),
+        summary_area,
+    );
+    render_left_rail(frame, summary_area, command_rail_style());
+
+    let lines = if app.repl.run.status == ReplStatus::Stopped && app.repl.run.exit_code.is_none() {
+        vec![prefixed_line("Press r or Enter to start `golem repl`.")]
+    } else {
+        repl_screen_lines(&app.repl.run, terminal_area.height as usize)
+    };
+
+    frame.render_widget(Paragraph::new(lines).style(surface_style()), terminal_area);
+    render_left_rail(frame, terminal_area, surface_rail_style());
+
+    if app.mode == TuiMode::Repl
+        && let Some(cursor) = app.repl.run.screen.cursor_position(Position::new(
+            terminal_area.x.saturating_add(2),
+            terminal_area.y,
+        ))
+        && cursor.x < terminal_area.x.saturating_add(terminal_area.width)
+        && cursor.y < terminal_area.y.saturating_add(terminal_area.height)
+    {
+        frame.set_cursor_position(cursor);
     }
 }
 
@@ -1737,6 +2439,11 @@ fn render_agents_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     );
     render_left_rail(frame, summary_area, command_rail_style());
 
+    if app.agents.view_mode == AgentsViewMode::Inspect {
+        render_agent_inspect_view(frame, content_area, app);
+        return;
+    }
+
     let areas = if app.agents.detail_visible {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -1752,6 +2459,124 @@ fn render_agents_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     if app.agents.detail_visible {
         render_agent_details(frame, areas[1], app.agents.selected_agent(&filtered));
     }
+}
+
+fn render_agent_inspect_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    render_surface(frame, area);
+    let [oplog_area, stream_area] = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .areas(area);
+
+    render_agent_inspect_pane(
+        frame,
+        oplog_area,
+        "Oplog",
+        AgentInspectPane::Oplog,
+        &app.agents.inspect,
+    );
+    render_agent_inspect_pane(
+        frame,
+        stream_area,
+        "Stream",
+        AgentInspectPane::Stream,
+        &app.agents.inspect,
+    );
+}
+
+fn render_agent_inspect_pane(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &'static str,
+    pane: AgentInspectPane,
+    inspect: &AgentInspectState,
+) {
+    render_surface(frame, area);
+    let [title_area, output_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(area);
+    let job = match pane {
+        AgentInspectPane::Oplog => &inspect.oplog,
+        AgentInspectPane::Stream => &inspect.stream,
+    };
+    let focused = inspect.focus == pane;
+    frame.render_widget(
+        Paragraph::new(agent_inspect_title_line(title, job, focused)).style(if focused {
+            command_status_bg_style()
+        } else {
+            surface_style()
+        }),
+        title_area,
+    );
+    render_left_rail(
+        frame,
+        title_area,
+        if focused {
+            command_rail_style()
+        } else {
+            surface_rail_style()
+        },
+    );
+
+    let output_lines = if job.output.total_lines() == 0 {
+        vec![prefixed_line(match pane {
+            AgentInspectPane::Oplog => "Oplog entries will appear here.",
+            AgentInspectPane::Stream => "Waiting for agent stream...",
+        })]
+    } else {
+        render_output_lines(&job.output, output_area.height as usize)
+    };
+    frame.render_widget(
+        Paragraph::new(output_lines)
+            .style(surface_style())
+            .wrap(Wrap { trim: false }),
+        output_area,
+    );
+    render_left_rail(frame, output_area, surface_rail_style());
+    render_output_scrollbar(frame, output_area, &job.output);
+}
+
+fn agent_inspect_title_line(title: &'static str, job: &InspectJob, focused: bool) -> Line<'static> {
+    let title_style = if focused {
+        Style::default()
+            .fg(theme().accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme().text_muted)
+    };
+    Line::from(vec![
+        Span::styled(
+            "┃ ",
+            if focused {
+                command_rail_style()
+            } else {
+                surface_rail_style()
+            },
+        ),
+        fixed_span(title, 8, title_style),
+        Span::raw(" "),
+        fixed_span(job.status.title(), 10, inspect_job_status_style(job.status)),
+        Span::raw(" | "),
+        fixed_span(
+            "Left/Right focus  Esc back",
+            30,
+            Style::default().fg(theme().text_muted),
+        ),
+    ])
+}
+
+fn inspect_job_status_style(status: InspectJobStatus) -> Style {
+    match status {
+        InspectJobStatus::Idle | InspectJobStatus::Stopped => {
+            Style::default().fg(theme().text_muted)
+        }
+        InspectJobStatus::Starting | InspectJobStatus::Running | InspectJobStatus::Stopping => {
+            Style::default().fg(theme().success)
+        }
+        InspectJobStatus::Failed => Style::default().fg(theme().error),
+    }
+    .add_modifier(Modifier::BOLD)
 }
 
 fn render_agent_list(
@@ -1782,7 +2607,7 @@ fn render_agent_list(
                 Style::default()
             };
             lines.push(Line::from(vec![
-                Span::styled("┃ ", surface_rail_style()),
+                content_prefix(),
                 Span::styled(marker, style),
                 Span::raw(" "),
                 fixed_span(&agent.name, 28, style),
@@ -1804,7 +2629,7 @@ fn render_agent_details(frame: &mut Frame<'_>, area: Rect, agent: Option<&AgentL
         Some(agent) => {
             let mut lines = vec![
                 Line::from(vec![
-                    Span::styled("┃ ", command_rail_style()),
+                    Span::styled("  ", surface_style()),
                     Span::styled("Details", Style::default().add_modifier(Modifier::BOLD)),
                 ]),
                 prefixed_line(format!("Name      : {}", agent.name)),
@@ -1834,10 +2659,44 @@ fn render_agent_details(frame: &mut Frame<'_>, area: Rect, agent: Option<&AgentL
         None => vec![prefixed_line("Select an agent to see details.")],
     };
     frame.render_widget(Paragraph::new(lines).style(surface_style()), area);
-    render_left_rail(frame, area, command_rail_style());
+    render_left_rail(frame, area, surface_rail_style());
 }
 
 fn agent_status_line(agents: &AgentsState) -> Line<'static> {
+    if agents.view_mode == AgentsViewMode::Inspect {
+        return Line::from(vec![
+            Span::styled("┃ ", command_rail_style()),
+            fixed_span(
+                "inspect",
+                8,
+                Style::default()
+                    .fg(theme().accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            fixed_span(
+                format!(
+                    "agent:{}",
+                    agents.inspect.agent_name.as_deref().unwrap_or("-")
+                ),
+                32,
+                Style::default(),
+            ),
+            Span::raw(" | "),
+            fixed_span(
+                format!("focus:{}", agents.inspect.focus.label()),
+                14,
+                Style::default().fg(theme().accent),
+            ),
+            Span::raw(" | "),
+            fixed_span(
+                "Left/Right switch  Esc back",
+                30,
+                Style::default().fg(theme().text_muted),
+            ),
+        ]);
+    }
+
     let count = agents.filtered_agents().len();
     let selected = if count == 0 {
         0
@@ -1850,14 +2709,14 @@ fn agent_status_line(agents: &AgentsState) -> Line<'static> {
             "agents",
             7,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme().accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         fixed_span(
             format!("mode:{}", agents.mode.label()),
             14,
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme().accent),
         ),
         Span::raw(" | "),
         fixed_span(
@@ -1876,7 +2735,7 @@ fn agent_status_line(agents: &AgentsState) -> Line<'static> {
         fixed_span(
             format!("{selected}/{count}"),
             8,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme().text_muted),
         ),
         Span::raw(" | "),
         flag_span("auto", agents.auto_refresh, false),
@@ -1885,13 +2744,13 @@ fn agent_status_line(agents: &AgentsState) -> Line<'static> {
             if agents.refresh_running {
                 "refreshing"
             } else {
-                "u refresh"
+                "Enter inspect"
             },
-            12,
+            14,
             if agents.refresh_running {
-                Style::default().fg(Color::Yellow)
+                Style::default().fg(theme().accent)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme().text_muted)
             },
         ),
     ])
@@ -1899,25 +2758,34 @@ fn agent_status_line(agents: &AgentsState) -> Line<'static> {
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let line = Line::from(vec![
-        Span::styled("┃ ", header_rail_style()),
-        Span::styled("Golem", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw("  app:"),
         Span::styled(
-            app.context.application.clone(),
-            Style::default().fg(Color::Cyan),
-        ),
-        Span::raw("  env:"),
-        Span::styled(
-            app.context.environment.clone(),
+            "┃ ",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme().accent)
+                .bg(theme().background)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  server:"),
-        Span::styled(app.context.server.clone(), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            " Golem ",
+            Style::default()
+                .fg(theme().background)
+                .bg(theme().accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" app: ", header_segment_label_style(0)),
+        Span::styled(
+            app.context.application.clone(),
+            header_segment_value_style(0),
+        ),
+        Span::styled("  env: ", header_segment_label_style(1)),
+        Span::styled(
+            app.context.environment.clone(),
+            header_segment_value_style(1).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  server: ", header_segment_label_style(2)),
+        Span::styled(app.context.server.clone(), header_segment_value_style(2)),
     ]);
     frame.render_widget(Paragraph::new(line).style(header_style()), area);
-    render_left_rail(frame, area, header_rail_style());
 }
 
 fn render_separator(frame: &mut Frame<'_>, area: Rect) {
@@ -1946,74 +2814,84 @@ fn render_left_rail(frame: &mut Frame<'_>, area: Rect, style: Style) {
 }
 
 fn header_style() -> Style {
-    Style::default().bg(Color::Rgb(24, 28, 35))
+    Style::default().fg(theme().background).bg(theme().accent)
 }
 
-fn header_rail_style() -> Style {
+fn header_segment_label_style(index: usize) -> Style {
     Style::default()
-        .fg(Color::Cyan)
-        .bg(Color::Rgb(24, 28, 35))
+        .fg(Color::Rgb(87, 58, 0))
+        .bg(header_segment_bg(index))
+}
+
+fn header_segment_value_style(index: usize) -> Style {
+    Style::default()
+        .fg(theme().background)
+        .bg(header_segment_bg(index))
         .add_modifier(Modifier::BOLD)
 }
 
+fn header_segment_bg(_index: usize) -> Color {
+    theme().accent
+}
+
 fn tabs_style() -> Style {
-    Style::default().bg(Color::Rgb(18, 22, 28))
+    Style::default()
+        .fg(theme().text_secondary)
+        .bg(theme().panel)
 }
 
 fn tabs_rail_style() -> Style {
     Style::default()
-        .fg(Color::Rgb(90, 200, 250))
-        .bg(Color::Rgb(18, 22, 28))
+        .fg(theme().accent)
+        .bg(theme().panel)
+        .add_modifier(Modifier::BOLD)
 }
 
 fn separator_style() -> Style {
-    Style::default().bg(Color::Rgb(32, 38, 48))
+    Style::default().bg(theme().border_subtle)
 }
 
 fn separator_rail_style() -> Style {
     Style::default()
-        .fg(Color::Rgb(140, 180, 220))
-        .bg(Color::Rgb(32, 38, 48))
+        .fg(theme().accent)
+        .bg(theme().border_subtle)
 }
 
 fn surface_style() -> Style {
-    Style::default().bg(Color::Rgb(13, 17, 23))
+    Style::default().fg(theme().text).bg(theme().surface)
 }
 
 fn surface_rail_style() -> Style {
     Style::default()
-        .fg(Color::Rgb(58, 67, 82))
-        .bg(Color::Rgb(13, 17, 23))
+        .fg(theme().border_subtle)
+        .bg(theme().surface)
 }
 
 fn command_status_bg_style() -> Style {
-    Style::default().bg(Color::Rgb(24, 28, 35))
+    Style::default().fg(theme().text).bg(theme().panel_strong)
 }
 
 fn command_rail_style() -> Style {
     Style::default()
-        .fg(Color::Yellow)
-        .bg(Color::Rgb(24, 28, 35))
+        .fg(theme().accent)
+        .bg(theme().panel_strong)
         .add_modifier(Modifier::BOLD)
 }
 
 fn footer_style() -> Style {
-    Style::default()
-        .fg(Color::DarkGray)
-        .bg(Color::Rgb(18, 22, 28))
+    Style::default().fg(theme().text_muted).bg(theme().panel)
 }
 
 fn footer_rail_style() -> Style {
-    Style::default()
-        .fg(Color::Rgb(58, 67, 82))
-        .bg(Color::Rgb(18, 22, 28))
+    Style::default().fg(theme().text_faint).bg(theme().panel)
 }
 
 fn prefixed_line(text: impl Into<String>) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("┃ ", surface_rail_style()),
-        Span::raw(text.into()),
-    ])
+    Line::from(vec![content_prefix(), Span::raw(text.into())])
+}
+
+fn content_prefix() -> Span<'static> {
+    Span::styled("  ", surface_style())
 }
 
 fn render_help(frame: &mut Frame<'_>) {
@@ -2028,7 +2906,8 @@ fn render_help(frame: &mut Frame<'_>) {
         Line::from("  Ctrl-P / :     Command palette"),
         Line::from("  ?              Help"),
         Line::from("  b / d / c      Build / deploy / clean"),
-        Line::from("  y / r          Toggle --yes / --reset"),
+        Line::from("  r              Start or focus REPL"),
+        Line::from("  Ctrl-X         Leader/settings"),
         Line::from("  q / Esc        Quit"),
         Line::from("  Ctrl-C         Quit"),
         Line::from("  ] / Tab        Next view"),
@@ -2041,12 +2920,26 @@ fn render_help(frame: &mut Frame<'_>) {
         Line::from("  Enter          Execute selected action"),
         Line::from("  Esc / Ctrl-C   Close palette"),
         Line::default(),
+        Line::from("Leader"),
+        Line::from("  Ctrl-X y       Toggle --yes"),
+        Line::from("  Ctrl-X r       Toggle --reset"),
+        Line::from("  Ctrl-X s       Toggle server --clean"),
+        Line::from("  Ctrl-X a/d/m   Agent auto/details/mode"),
+        Line::from("  Ctrl-X R/C     Restart / clean restart server"),
+        Line::default(),
         Line::from("Command"),
         Line::from("  Type           Send input to command"),
         Line::from("  Esc / Ctrl-C   Cancel command, press again to force kill"),
         Line::from("  PageUp/Down    Scroll output"),
         Line::from("  Home / End     Top / latest output"),
         Line::from("  Mouse wheel    Scroll output"),
+        Line::default(),
+        Line::from("REPL"),
+        Line::from("  r / Enter      Start or focus REPL"),
+        Line::from("  Ctrl-X q       Leave REPL focus, keep it running"),
+        Line::from("  Ctrl-X k       Stop REPL"),
+        Line::from("  Ctrl-X R       Restart REPL"),
+        Line::from("  Ctrl-X p / ?   Palette / help"),
         Line::default(),
         Line::from("Output"),
         Line::from("  Up / Down      Scroll output when no command is running"),
@@ -2059,63 +2952,219 @@ fn render_help(frame: &mut Frame<'_>) {
 
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Help ")),
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme().border))
+                .title(" Help "),
+        ),
         area,
     );
 }
 
-fn render_tabs(frame: &mut Frame<'_>, area: Rect, active_view: TuiView) {
+fn render_tabs(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let mut spans = vec![Span::styled("┃ ", tabs_rail_style())];
 
-    for view in TuiView::ALL {
+    for (index, view) in TuiView::ALL.iter().copied().enumerate() {
         if spans.len() > 1 {
             spans.push(Span::raw("  "));
         }
 
-        let title = view.title().to_string();
-        let style = if view == active_view {
+        let tab_style = if view == app.active_view {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme().accent_hover)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme().text_muted)
         };
-        spans.push(Span::styled(title, style));
+        spans.push(shortcut_text_span(format!("[{}]", index + 1)));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(view.title(), tab_style));
+        if let Some(status) = tab_status(view, app) {
+            spans.push(Span::raw(" "));
+            spans.push(status);
+        }
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)).style(tabs_style()), area);
     render_left_rail(frame, area, tabs_rail_style());
 }
 
-fn view_lines(app: &TuiApp) -> Vec<Line<'static>> {
-    let mut lines = vec![
+fn tab_status(view: TuiView, app: &TuiApp) -> Option<Span<'static>> {
+    let running = match view {
+        TuiView::Output => app.command_is_running(),
+        TuiView::Server => app.server.run.is_running(),
+        TuiView::Repl => app.repl.is_running(),
+        _ => return None,
+    };
+    let (label, style) = if running {
+        (
+            "●",
+            Style::default()
+                .fg(theme().success)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        ("○", Style::default().fg(theme().text_faint))
+    };
+    Some(Span::styled(label, style))
+}
+
+fn render_leader_hint(frame: &mut Frame<'_>, app: &TuiApp, return_mode: TuiMode) {
+    let area = Rect {
+        x: frame.area().x,
+        y: frame.area().y + frame.area().height.saturating_sub(2),
+        width: frame.area().width,
+        height: 1,
+    };
+    let line = if return_mode == TuiMode::Repl {
         Line::from(vec![
-            Span::styled("┃ ", surface_rail_style()),
-            Span::styled(
+            Span::styled("┃ ", command_rail_style()),
+            shortcut_span("Ctrl-X q"),
+            Span::raw(" leave  "),
+            shortcut_span("Ctrl-X k"),
+            Span::raw(" stop  "),
+            shortcut_span("Ctrl-X R"),
+            Span::raw(" restart  "),
+            shortcut_span("Ctrl-X p"),
+            Span::raw(" palette"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("┃ ", command_rail_style()),
+            shortcut_span("Ctrl-X y"),
+            Span::raw(format!(" yes:{}  ", flag_state(app.command_options.yes))),
+            shortcut_span("Ctrl-X r"),
+            Span::raw(format!(
+                " reset:{}  ",
+                flag_state(app.command_options.reset)
+            )),
+            shortcut_span("Ctrl-X s"),
+            Span::raw(format!(" clean:{}  ", flag_state(app.server.clean))),
+            shortcut_span("Ctrl-X ?"),
+            Span::raw(" help"),
+        ])
+    };
+    frame.render_widget(Paragraph::new(line).style(command_status_bg_style()), area);
+    render_left_rail(frame, area, command_rail_style());
+}
+
+fn render_dashboard_logo(frame: &mut Frame<'_>, area: Rect) {
+    const LOGO: [&str; 11] = [
+        "⠀⠀⠀⠀⠀⢀⣤⣦⡀⣼⣿⣿⣷⣤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "⠀⠀⠀⣀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢷⣦⡀⠀⠀⠀⠀⠀⠀⢀⣠⣤⣤⣤⣤⣤⣤⡄⠀⠀⠀⣀⣤⣤⣤⣤⣀⠀⠀⠀⠀⣤⡄⠀⠀⠀⠀⠀⠀⠀⢠⣤⣤⣤⣤⣤⣤⣤⣤⣤⠀⢠⡀⠀⠀⠀⠀⠀⠀⠀⠀⣠",
+        "⢠⣿⣿⡾⣿⣿⡏⠹⣿⣿⣿⡿⠙⣿⣿⣿⣷⣿⣷⡄⠀⠀⠀⢀⣴⣿⠿⠟⠛⠛⠛⠛⠛⠃⠀⢀⣾⣿⠿⠛⠛⠿⣿⣷⡄⠀⠀⣿⡇⠀⠀⠀⠀⠀⠀⠀⢸⣿⡟⠛⠛⠛⠛⠛⠛⠛⠀⢸⣿⣶⣄⠀⠀⠀⢀⣠⣾⣿",
+        "⢶⣿⣿⣇⣋⢿⣷⣶⣾⣿⣿⣶⣶⠿⣿⣬⣿⣿⣿⡶⠀⠀⠀⣾⡿⠁⠀⠀⠀⠀⠀⠀⠀⠀⢠⣿⡿⠁⠀⠀⠀⠀⠈⢻⣿⡄⠀⣿⡇⠀⠀⠀⠀⠀⠀⠀⢸⣿⣇⣀⣀⣀⣀⣀⠀⠀⠀⢸⣿⡿⣿⣷⣤⣴⣿⡿⢻⣿",
+        "⣶⣿⣿⣿⣿⣷⢽⣻⢿⣿⣿⣛⢋⡼⣾⣿⣿⣿⣿⣶⠀⠀⢸⣿⡇⠀⠀⠀⣶⣶⣶⣶⣶⡆⢸⣿⡇⠀⠀⠀⠀⠀⠀⢸⣿⡇⠀⣿⡇⠀⠀⠀⠀⠀⠀⠀⢸⣿⡿⠿⠿⠿⠿⠿⠀⠀⠀⢸⣿⡇⠀⠙⢿⠟⠉⠀⢸⣿",
+        "⣿⣿⠟⠊⠉⠁⠀⢻⣿⣿⣿⣿⠏⠀⠈⠉⠙⢻⣿⡏⠀⠀⠀⢿⣷⡀⠀⠀⠉⠉⠉⢹⣿⡇⠘⣿⣷⡀⠀⠀⠀⠀⠀⣼⣿⠃⠀⣿⡇⠀⠀⠀⠀⠀⠀⠀⢸⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⢸⣿⡇⠀⠀⠀⠀⠀⠀⢸⣿",
+        "⠻⣿⣿⣿⣅⢀⣴⣽⣿⣿⣿⣿⣯⣦⡀⣸⣿⣿⣿⠃⠀⠀⠀⠈⠻⣿⣶⣤⣤⣤⣤⣼⣿⡇⠀⠘⢿⣿⣦⣤⣤⣴⣾⡿⠋⠀⠀⣿⣧⣤⣤⣤⣤⣤⣤⡄⢸⣿⣧⣤⣤⣤⣤⣤⣤⣤⠀⢸⣿⡇⠀⠀⠀⠀⠀⠀⢸⣿",
+        "⠀⠈⠙⠛⠃⣼⣾⣾⣿⠟⠻⣿⣷⣿⣇⠙⠛⠋⠁⠀⠀⠀⠀⠀⠀⠈⠙⠛⠛⠛⠛⠛⠛⠃⠀⠀⠀⠉⠛⠛⠟⠛⠉⠀⠀⠀⠀⠛⠛⠛⠛⠛⠛⠛⠛⠃⠘⠛⠛⠛⠛⠛⠛⠛⠛⠛⠀⠘⠛⠃⠀⠀⠀⠀⠀⠀⠘⠛",
+        "⠀⠀⠀⢀⣶⡾⣿⣿⣿⠀⢀⣿⣿⣿⢷⣢⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+        "⠀⠀⠀⠺⢿⣷⣿⡿⠿⠂⠘⠿⢿⣿⣽⡿⠗⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
+    ];
+
+    let logo_width = LOGO
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0) as u16;
+    let logo_height = LOGO.len() as u16;
+    if area.width <= logo_width.saturating_add(4) || area.height <= logo_height.saturating_add(2) {
+        return;
+    }
+
+    let x = area.x + area.width.saturating_sub(logo_width) / 2;
+    let y = area.y + area.height.saturating_sub(logo_height) / 2;
+    let style = Style::default()
+        .fg(Color::Rgb(34, 34, 42))
+        .bg(theme().surface);
+
+    for (row, line) in LOGO.iter().enumerate() {
+        for (col, character) in line.chars().enumerate() {
+            if character == ' ' {
+                continue;
+            }
+            let x = x.saturating_add(col as u16);
+            let y = y.saturating_add(row as u16);
+            if x < area.x.saturating_add(area.width) && y < area.y.saturating_add(area.height) {
+                frame.buffer_mut()[(x, y)]
+                    .set_symbol(character.to_string().as_str())
+                    .set_style(style);
+            }
+        }
+    }
+}
+
+fn view_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        dashboard_line(
+            vec![Span::styled(
                 app.active_view.title(),
                 Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ]),
+            )],
+            width,
+        ),
         Line::default(),
-        Line::from(vec![
-            Span::styled("┃ ", surface_rail_style()),
-            Span::raw(app.active_view.placeholder()),
-        ]),
+        dashboard_line(vec![Span::raw(app.active_view.placeholder())], width),
     ];
 
     if app.active_view == TuiView::Dashboard {
         lines.extend([
             Line::default(),
-            prefixed_line(format!("Application : {}", app.context.application)),
-            prefixed_line(format!("Environment : {}", app.context.environment)),
-            prefixed_line(format!("Server      : {}", app.context.server)),
-            prefixed_line(format!("Config dir  : {}", app.context.config_dir)),
+            dashboard_line(
+                vec![Span::raw(format!(
+                    "Application : {}",
+                    app.context.application
+                ))],
+                width,
+            ),
+            dashboard_line(
+                vec![Span::raw(format!(
+                    "Environment : {}",
+                    app.context.environment
+                ))],
+                width,
+            ),
+            dashboard_line(
+                vec![Span::raw(format!("Server      : {}", app.context.server))],
+                width,
+            ),
+            dashboard_line(
+                vec![Span::raw(format!(
+                    "Config dir  : {}",
+                    app.context.config_dir
+                ))],
+                width,
+            ),
             Line::default(),
-            prefixed_line("Scaffold ready. Next steps: command execution and live data."),
+            dashboard_line(
+                vec![Span::raw(
+                    "Scaffold ready. Next steps: command execution and live data.",
+                )],
+                width,
+            ),
         ]);
     }
 
     lines
+}
+
+fn dashboard_line(mut spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let content_width = spans
+        .iter()
+        .map(|span| span.content.chars().count())
+        .sum::<usize>();
+    let mut line_spans = vec![content_prefix()];
+    line_spans.append(&mut spans);
+    let used_width = 2 + content_width;
+    if width > used_width {
+        line_spans.push(Span::styled(
+            " ".repeat(width - used_width),
+            surface_style(),
+        ));
+    }
+    Line::from(line_spans)
 }
 
 fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -2135,9 +3184,9 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         Some(run) => command_status_line(run),
         None => Line::from(vec![
             Span::styled("┃ ", command_rail_style()),
-            fixed_span("none", 7, Style::default().fg(Color::DarkGray)),
+            fixed_span("none", 7, Style::default().fg(theme().text_muted)),
             Span::raw(" "),
-            fixed_span("idle", 10, Style::default().fg(Color::DarkGray)),
+            fixed_span("idle", 10, Style::default().fg(theme().text_muted)),
             Span::raw(" | "),
             flag_span("yes", app.command_options.yes, false),
             Span::raw(" "),
@@ -2145,7 +3194,7 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             Span::raw(" | "),
             fixed_span("b build / d deploy / c clean", 30, Style::default()),
             Span::raw(" | "),
-            fixed_span("ready", 17, Style::default().fg(Color::DarkGray)),
+            fixed_span("ready", 17, Style::default().fg(theme().text_muted)),
         ]),
     };
     frame.render_widget(
@@ -2227,24 +3276,25 @@ fn output_scrollbar_position(total: usize, visible_height: usize, scroll_offset:
 
 fn footer_line(options: CommandOptions) -> Line<'static> {
     Line::from(vec![
-        Span::styled("┃ ", footer_rail_style()),
-        key_hint("b"),
+        shortcut_span("b"),
         Span::raw(" "),
-        fixed_span("Build", 7, Style::default().fg(Color::DarkGray)),
+        fixed_span("Build", 7, Style::default().fg(theme().text_muted)),
         Span::raw(" "),
-        key_hint("d"),
+        shortcut_span("d"),
         Span::raw(" "),
-        fixed_span("Deploy", 7, Style::default().fg(Color::DarkGray)),
+        fixed_span("Deploy", 7, Style::default().fg(theme().text_muted)),
         Span::raw(" "),
-        key_hint("c"),
+        shortcut_span("c"),
         Span::raw(" "),
-        fixed_span("Clean", 7, Style::default().fg(Color::DarkGray)),
+        fixed_span("Clean", 7, Style::default().fg(theme().text_muted)),
         Span::raw(" "),
-        key_hint("y"),
+        shortcut_span("r"),
+        Span::raw(" REPL  "),
+        shortcut_span("Ctrl-X y"),
         Span::raw(" "),
         flag_span("yes", options.yes, false),
         Span::raw(" "),
-        key_hint("r"),
+        shortcut_span("Ctrl-X r"),
         Span::raw(" "),
         flag_span("reset", options.reset, true),
         Span::raw("  Ctrl-P Palette  ? Help"),
@@ -2258,7 +3308,7 @@ fn command_status_line(run: &CommandRun) -> Line<'static> {
             run.kind.title(),
             7,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme().accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -2278,9 +3328,13 @@ fn command_status_line(run: &CommandRun) -> Line<'static> {
             run.status,
             CommandStatus::Running | CommandStatus::Cancelling
         ) {
-            fixed_span("Esc/Ctrl-C cancel", 17, Style::default().fg(Color::Yellow))
+            fixed_span("Esc/Ctrl-C cancel", 17, Style::default().fg(theme().accent))
         } else {
-            fixed_span("b/d/c run again", 17, Style::default().fg(Color::DarkGray))
+            fixed_span(
+                "b/d/c run again",
+                17,
+                Style::default().fg(theme().text_muted),
+            )
         },
     ])
 }
@@ -2298,7 +3352,7 @@ fn server_status_line(server: &ServerState) -> Line<'static> {
             "server",
             7,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme().accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -2312,8 +3366,56 @@ fn server_status_line(server: &ServerState) -> Line<'static> {
         Span::raw(" | "),
         fixed_span(command_display(&run.args), 34, Style::default()),
         Span::raw(" | "),
-        fixed_span(server_hint(run), 21, Style::default().fg(Color::DarkGray)),
+        fixed_span(
+            server_hint(run),
+            21,
+            Style::default().fg(theme().text_muted),
+        ),
     ])
+}
+
+fn repl_status_line(repl: &ReplState, mode: TuiMode) -> Line<'static> {
+    let run = &repl.run;
+    Line::from(vec![
+        Span::styled("┃ ", command_rail_style()),
+        fixed_span(
+            "repl",
+            7,
+            Style::default()
+                .fg(theme().accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        fixed_span(run.status.title(), 10, repl_status_style(run.status)),
+        Span::raw(" | "),
+        fixed_span(command_display(&run.args), 28, Style::default()),
+        Span::raw(" | "),
+        fixed_span(
+            repl_mode_hint(run, mode),
+            36,
+            Style::default().fg(theme().text_muted),
+        ),
+    ])
+}
+
+fn repl_status_style(status: ReplStatus) -> Style {
+    match status {
+        ReplStatus::Starting | ReplStatus::Running | ReplStatus::Stopping => {
+            Style::default().fg(theme().accent)
+        }
+        ReplStatus::Stopped => Style::default().fg(theme().text_muted),
+        ReplStatus::Failed => Style::default().fg(theme().error),
+    }
+    .add_modifier(Modifier::BOLD)
+}
+
+fn repl_mode_hint(run: &ReplRun, mode: TuiMode) -> &'static str {
+    match mode {
+        TuiMode::Repl => "Ctrl-X q leave  Ctrl-X k stop",
+        TuiMode::LeaderRepl => "q leave  k stop  R restart",
+        _ if run.is_running() => "r focus  Ctrl-X k stop",
+        _ => "r/Enter start",
+    }
 }
 
 fn server_status_display(run: &ServerRun) -> String {
@@ -2331,10 +3433,10 @@ fn server_status_display(run: &ServerRun) -> String {
 fn server_status_style(status: ServerStatus) -> Style {
     match status {
         ServerStatus::Starting | ServerStatus::Running | ServerStatus::Stopping => {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(theme().accent)
         }
-        ServerStatus::Stopped => Style::default().fg(Color::DarkGray),
-        ServerStatus::Failed => Style::default().fg(Color::Red),
+        ServerStatus::Stopped => Style::default().fg(theme().text_muted),
+        ServerStatus::Failed => Style::default().fg(theme().error),
     }
     .add_modifier(Modifier::BOLD)
 }
@@ -2343,15 +3445,15 @@ fn server_hint(run: &ServerRun) -> &'static str {
     match run.status {
         ServerStatus::Starting | ServerStatus::Running => "s/Ctrl-C stop",
         ServerStatus::Stopping => "s/Ctrl-C force kill",
-        ServerStatus::Stopped | ServerStatus::Failed => "s start  R restart",
+        ServerStatus::Stopped | ServerStatus::Failed => "s start  Ctrl-X R",
     }
 }
 
 fn command_status_style(status: CommandStatus) -> Style {
     match status {
-        CommandStatus::Running | CommandStatus::Cancelling => Style::default().fg(Color::Yellow),
-        CommandStatus::Succeeded => Style::default().fg(Color::Green),
-        CommandStatus::Failed | CommandStatus::Killed => Style::default().fg(Color::Red),
+        CommandStatus::Running | CommandStatus::Cancelling => Style::default().fg(theme().accent),
+        CommandStatus::Succeeded => Style::default().fg(theme().success),
+        CommandStatus::Failed | CommandStatus::Killed => Style::default().fg(theme().error),
     }
     .add_modifier(Modifier::BOLD)
 }
@@ -2380,13 +3482,13 @@ fn flag_span(name: &'static str, enabled: bool, warn_when_enabled: bool) -> Span
     let style = if enabled {
         Style::default()
             .fg(if warn_when_enabled {
-                Color::Yellow
+                theme().marker
             } else {
-                Color::Green
+                theme().success
             })
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme().text_muted)
     };
 
     let width = match name {
@@ -2398,11 +3500,15 @@ fn flag_span(name: &'static str, enabled: bool, warn_when_enabled: bool) -> Span
     fixed_span(format!("{name}:{}", flag_state(enabled)), width, style)
 }
 
-fn key_hint(key: &'static str) -> Span<'static> {
+fn shortcut_span(key: &'static str) -> Span<'static> {
+    shortcut_text_span(key.to_string())
+}
+
+fn shortcut_text_span(key: String) -> Span<'static> {
     Span::styled(
         key,
         Style::default()
-            .fg(Color::Cyan)
+            .fg(theme().accent_hover)
             .add_modifier(Modifier::BOLD),
     )
 }
@@ -2433,10 +3539,42 @@ fn render_output_lines(buffer: &OutputBuffer, height: usize) -> Vec<Line<'static
         .collect()
 }
 
+fn repl_screen_lines(run: &ReplRun, height: usize) -> Vec<Line<'static>> {
+    let mut lines = run
+        .screen
+        .lines()
+        .into_iter()
+        .take(height)
+        .map(output_line_with_rail)
+        .collect::<Vec<_>>();
+
+    if let Some(error) = &run.last_error
+        && !lines.is_empty()
+    {
+        lines[0] = Line::from(vec![
+            content_prefix(),
+            Span::styled(error.clone(), Style::default().fg(theme().error)),
+        ]);
+    }
+
+    lines
+}
+
+fn repl_screen_size_for_terminal(cols: u16, rows: u16) -> (u16, u16) {
+    let screen_rows = rows.saturating_sub(5).max(1);
+    let screen_cols = cols.saturating_sub(2).max(1);
+    (screen_rows, screen_cols)
+}
+
 fn output_line_with_rail(line: Line<'static>) -> Line<'static> {
-    let mut spans = vec![Span::styled("┃ ", surface_rail_style())];
-    spans.extend(line.spans);
+    let mut spans = vec![content_prefix()];
+    spans.extend(line.spans.into_iter().map(span_with_surface_bg));
     Line::from(spans)
+}
+
+fn span_with_surface_bg(mut span: Span<'static>) -> Span<'static> {
+    span.style = span.style.bg(theme().surface);
+    span
 }
 
 fn output_bytes_to_lines(bytes: Vec<u8>) -> Vec<Line<'static>> {
@@ -2466,40 +3604,53 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
     );
     let selected = app.palette.selected.min(actions.len().saturating_sub(1));
     let mut lines = vec![
-        Line::from(vec![Span::styled(
+        palette_line(vec![Span::styled(
             "Command Palette",
             Style::default().add_modifier(Modifier::BOLD),
         )]),
-        Line::from(format!("> {}", app.palette.query)),
-        Line::default(),
+        palette_line(vec![Span::raw(format!("> {}", app.palette.query))]),
+        palette_line(vec![]),
     ];
 
     if actions.is_empty() {
-        lines.push(Line::from("No matching commands"));
+        lines.push(palette_line(vec![Span::raw("No matching commands")]));
     } else {
         for (index, action) in visible_actions.iter().enumerate() {
             let prefix = if index == selected { "> " } else { "  " };
-            let shortcut = action
-                .shortcut
-                .map(|shortcut| format!(" ({shortcut})"))
-                .unwrap_or_default();
-            let label = format!("{prefix}{}{}", action.label, shortcut);
+            let plain_label = palette_action_label(action, prefix);
             let style = if index == selected {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
                 Style::default()
             };
-            lines.push(Line::from(vec![
-                Span::styled(format!("{label:<label_width$}"), style),
-                Span::raw("  "),
-                Span::raw(action.description),
-            ]));
+            let mut label_spans = vec![Span::styled(format!("{prefix}{}", action.label), style)];
+            if let Some(shortcut) = action.shortcut {
+                label_spans.push(Span::raw(" ("));
+                label_spans.push(shortcut_span(shortcut));
+                label_spans.push(Span::raw(")"));
+            }
+            let padding = label_width.saturating_sub(plain_label.chars().count());
+            let mut line_spans = label_spans;
+            line_spans.push(Span::raw(" ".repeat(padding)));
+            line_spans.push(Span::raw("  "));
+            line_spans.push(Span::raw(action.description));
+            lines.push(Line::from(line_spans));
         }
     }
 
-    let block = Block::default().borders(Borders::ALL).title(" Search ");
     frame.render_widget(Clear, area);
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    let content_area = Rect {
+        x: area.x.saturating_add(2),
+        y: area.y,
+        width: area.width.saturating_sub(2),
+        height: area.height,
+    };
+    frame.render_widget(Paragraph::new(lines), content_area);
+    render_left_rail(frame, area, Style::default().fg(theme().accent));
+}
+
+fn palette_line(mut spans: Vec<Span<'static>>) -> Line<'static> {
+    Line::from(std::mem::take(&mut spans))
 }
 
 fn palette_label_width(actions: &[TuiAction]) -> usize {
@@ -2532,7 +3683,8 @@ fn palette_width(
         .unwrap_or("No matching commands".len());
     let content_width = action_width
         .max("Command Palette".len())
-        .max(query.chars().count() + 2);
+        .max(query.chars().count() + 2)
+        + 2;
     let max_width = terminal_width.saturating_sub(4).max(20) as usize;
     let min_width = 36.min(max_width);
     (content_width + 2).clamp(min_width, max_width) as u16
@@ -2593,8 +3745,7 @@ enum TuiActionKind {
     Clean,
     ToggleYes,
     ToggleReset,
-    StartServer,
-    StopServer,
+    ToggleServer,
     RestartServer,
     CleanRestartServer,
     ToggleServerClean,
@@ -2602,11 +3753,16 @@ enum TuiActionKind {
     ToggleAgentAutoRefresh,
     CycleAgentMode,
     ToggleAgentDetails,
+    StartOrFocusRepl,
+    FocusRepl,
+    LeaveRepl,
+    StopRepl,
+    RestartRepl,
     ShowHelp,
     Quit,
 }
 
-const ACTIONS: [TuiAction; 20] = [
+const ACTIONS: [TuiAction; 25] = [
     TuiAction {
         label: "Build",
         description: "Run golem build",
@@ -2628,43 +3784,37 @@ const ACTIONS: [TuiAction; 20] = [
     TuiAction {
         label: "Toggle Yes",
         description: "Toggle --yes for build/deploy",
-        shortcut: Some("y"),
+        shortcut: Some("Ctrl-X y"),
         kind: TuiActionKind::ToggleYes,
     },
     TuiAction {
         label: "Toggle Reset",
         description: "Toggle --reset for deploy",
-        shortcut: Some("r"),
+        shortcut: Some("Ctrl-X r"),
         kind: TuiActionKind::ToggleReset,
     },
     TuiAction {
-        label: "Start Server",
-        description: "Run golem server run",
+        label: "Start/Stop Server",
+        description: "Switch to Server and toggle it",
         shortcut: Some("s"),
-        kind: TuiActionKind::StartServer,
-    },
-    TuiAction {
-        label: "Stop Server",
-        description: "Stop the local server",
-        shortcut: Some("s"),
-        kind: TuiActionKind::StopServer,
+        kind: TuiActionKind::ToggleServer,
     },
     TuiAction {
         label: "Restart Server",
         description: "Restart the local server",
-        shortcut: Some("R"),
+        shortcut: Some("Ctrl-X R"),
         kind: TuiActionKind::RestartServer,
     },
     TuiAction {
         label: "Clean Restart Server",
         description: "Restart local server with --clean",
-        shortcut: Some("C"),
+        shortcut: Some("Ctrl-X C"),
         kind: TuiActionKind::CleanRestartServer,
     },
     TuiAction {
         label: "Toggle Server Clean",
         description: "Toggle --clean for next server start",
-        shortcut: Some("x"),
+        shortcut: Some("Ctrl-X s"),
         kind: TuiActionKind::ToggleServerClean,
     },
     TuiAction {
@@ -2676,19 +3826,19 @@ const ACTIONS: [TuiAction; 20] = [
     TuiAction {
         label: "Toggle Agent Auto Refresh",
         description: "Toggle automatic agent refresh",
-        shortcut: Some("a"),
+        shortcut: Some("Ctrl-X a"),
         kind: TuiActionKind::ToggleAgentAutoRefresh,
     },
     TuiAction {
         label: "Cycle Agent Mode",
         description: "Cycle durable, ephemeral, all",
-        shortcut: Some("m"),
+        shortcut: Some("Ctrl-X m"),
         kind: TuiActionKind::CycleAgentMode,
     },
     TuiAction {
         label: "Toggle Agent Details",
         description: "Show or hide selected agent details",
-        shortcut: Some("i"),
+        shortcut: Some("Ctrl-X d"),
         kind: TuiActionKind::ToggleAgentDetails,
     },
     TuiAction {
@@ -2714,6 +3864,42 @@ const ACTIONS: [TuiAction; 20] = [
         description: "Switch to Server view",
         shortcut: Some("4"),
         kind: TuiActionKind::SelectView(TuiView::Server),
+    },
+    TuiAction {
+        label: "Go to REPL",
+        description: "Switch to REPL view",
+        shortcut: Some("5"),
+        kind: TuiActionKind::SelectView(TuiView::Repl),
+    },
+    TuiAction {
+        label: "Start or Focus REPL",
+        description: "Run golem repl and send input there",
+        shortcut: Some("r"),
+        kind: TuiActionKind::StartOrFocusRepl,
+    },
+    TuiAction {
+        label: "Focus REPL",
+        description: "Send keyboard input to the running REPL",
+        shortcut: Some("r"),
+        kind: TuiActionKind::FocusRepl,
+    },
+    TuiAction {
+        label: "Leave REPL Mode",
+        description: "Return keyboard input to the TUI",
+        shortcut: Some("Ctrl-X q"),
+        kind: TuiActionKind::LeaveRepl,
+    },
+    TuiAction {
+        label: "Stop REPL",
+        description: "Send Ctrl-C to the embedded REPL",
+        shortcut: Some("Ctrl-X k"),
+        kind: TuiActionKind::StopRepl,
+    },
+    TuiAction {
+        label: "Restart REPL",
+        description: "Restart the embedded REPL",
+        shortcut: Some("Ctrl-X R"),
+        kind: TuiActionKind::RestartRepl,
     },
     TuiAction {
         label: "Show Help",
@@ -2763,8 +3949,15 @@ mod tests {
         let app = test_app();
         let frame = render_app_text(&app);
 
+        assert!(
+            frame
+                .lines()
+                .next()
+                .is_some_and(|line| line.starts_with('┃')),
+            "{frame}"
+        );
         assert!(frame.contains("Golem"), "{frame}");
-        assert!(frame.contains("app:sample-app"), "{frame}");
+        assert!(frame.contains("app: sample-app"), "{frame}");
         assert!(frame.contains("sample-app"), "{frame}");
         assert!(frame.contains("Build"), "{frame}");
         assert!(frame.contains("Deploy"), "{frame}");
@@ -2778,8 +3971,74 @@ mod tests {
 
         assert!(frame.contains("Dashboard"), "{frame}");
         assert!(frame.contains("Agents"), "{frame}");
+        assert!(frame.contains("[1] Dashboard"), "{frame}");
+        assert!(frame.contains("[5] REPL"), "{frame}");
         assert!(!frame.contains("Environments"), "{frame}");
         assert!(!frame.contains("Components"), "{frame}");
+    }
+
+    #[test]
+    fn tabs_show_running_indicators_for_output_server_and_repl() {
+        let mut app = test_app();
+        app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+        ));
+        app.server.run.status = ServerStatus::Running;
+        app.repl.run.status = ReplStatus::Running;
+
+        let frame = render_app_text(&app);
+        let indicator_count = frame.chars().filter(|character| *character == '●').count();
+
+        assert!(indicator_count >= 3, "{frame}");
+    }
+
+    #[test]
+    fn tabs_show_idle_indicators_for_output_server_and_repl() {
+        let app = test_app();
+        let frame = render_app_text(&app);
+        let indicator_count = frame.chars().filter(|character| *character == '○').count();
+
+        assert!(indicator_count >= 3, "{frame}");
+    }
+
+    #[test]
+    fn dashboard_renders_braille_logo_background() {
+        let app = test_app();
+        let frame = render_app_text(&app);
+
+        assert!(frame.contains("⢶⣿⣿"), "{frame}");
+        assert!(frame.contains("⠺⢿⣷"), "{frame}");
+    }
+
+    #[test]
+    fn dashboard_body_keeps_single_left_rail_on_every_row() {
+        let app = test_app();
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for y in 3..23 {
+            let symbol = buffer.cell((0, y)).expect("missing cell").symbol();
+            assert_eq!(symbol, "┃", "missing rail at row {y}");
+        }
+    }
+
+    #[test]
+    fn leader_hint_renders_settings_shortcuts() {
+        let mut app = test_app();
+
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        let frame = render_app_text(&app);
+
+        assert_eq!(app.mode, TuiMode::LeaderNormal);
+        assert!(frame.contains("Ctrl-X y"), "{frame}");
+        assert!(frame.contains("Ctrl-X r"), "{frame}");
+        assert!(frame.contains("clean:off"), "{frame}");
     }
 
     #[test]
@@ -2882,6 +4141,7 @@ mod tests {
         app.agents.query = "cart".to_string();
         app.agents.selected = 3;
 
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('m')));
 
         assert_eq!(app.agents.mode, AgentModeFilter::Ephemeral);
@@ -2898,9 +4158,112 @@ mod tests {
         let frame = render_app_text(&app);
         assert!(frame.contains("Details"), "{frame}");
 
-        app.handle_key(key(KeyCode::Char('i')));
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('d')));
         let frame = render_app_text(&app);
         assert!(!frame.contains("Details"), "{frame}");
+    }
+
+    #[test]
+    fn enter_on_agent_opens_inspect_view() {
+        let mut app = test_app();
+        app.active_view = TuiView::Agents;
+        app.agents.agents = sample_agents();
+
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.agents.view_mode, AgentsViewMode::Inspect);
+        assert_eq!(app.agents.inspect.agent_name.as_deref(), Some("cart-1"));
+        assert_eq!(app.agents.inspect.focus, AgentInspectPane::Oplog);
+        assert_eq!(
+            app.agents.inspect.oplog.args,
+            vec!["agent", "oplog", "cart-1"]
+        );
+        assert_eq!(
+            app.agents.inspect.stream.args,
+            vec!["agent", "stream", "cart-1"]
+        );
+    }
+
+    #[test]
+    fn inspect_left_right_switches_focus() {
+        let mut app = inspect_app();
+
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.agents.inspect.focus, AgentInspectPane::Stream);
+
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.agents.inspect.focus, AgentInspectPane::Oplog);
+    }
+
+    #[test]
+    fn inspect_scrolls_focused_pane() {
+        let mut app = inspect_app();
+        for index in 0..20 {
+            app.agents
+                .inspect
+                .oplog
+                .output
+                .append(format!("oplog {index}\n").as_bytes());
+            app.agents
+                .inspect
+                .stream
+                .output
+                .append(format!("stream {index}\n").as_bytes());
+        }
+
+        app.handle_key(key(KeyCode::PageUp));
+        assert_eq!(app.agents.inspect.oplog.output.scroll_offset, 10);
+        assert_eq!(app.agents.inspect.stream.output.scroll_offset, 0);
+
+        app.handle_key(key(KeyCode::Right));
+        app.handle_key(key(KeyCode::PageUp));
+        assert_eq!(app.agents.inspect.stream.output.scroll_offset, 10);
+    }
+
+    #[test]
+    fn esc_returns_from_inspect_to_agent_list() {
+        let mut app = inspect_app();
+
+        app.handle_key(key(KeyCode::Esc));
+
+        assert_eq!(app.agents.view_mode, AgentsViewMode::List);
+    }
+
+    #[test]
+    fn renders_agent_inspect_split_view() {
+        let mut app = inspect_app();
+        app.agents.inspect.oplog.output.append(b"oplog entry\n");
+        app.agents.inspect.stream.output.append(b"stream entry\n");
+
+        let frame = render_app_text(&app);
+
+        assert!(frame.contains("inspect"), "{frame}");
+        assert!(frame.contains("agent:cart-1"), "{frame}");
+        assert!(frame.contains("Oplog"), "{frame}");
+        assert!(frame.contains("Stream"), "{frame}");
+        assert!(frame.contains("oplog entry"), "{frame}");
+        assert!(frame.contains("stream entry"), "{frame}");
+    }
+
+    #[test]
+    fn inspect_events_route_to_separate_buffers() {
+        let mut app = inspect_app();
+        let (tx, _rx) = mpsc::channel();
+
+        app.handle_event(TuiEvent::AgentOplogOutput(b"oplog event\n".to_vec()), &tx);
+        app.handle_event(TuiEvent::AgentStreamOutput(b"stream event\n".to_vec()), &tx);
+
+        let oplog =
+            String::from_utf8_lossy(&app.agents.inspect.oplog.output.visible_lines(10).concat())
+                .to_string();
+        let stream =
+            String::from_utf8_lossy(&app.agents.inspect.stream.output.visible_lines(10).concat())
+                .to_string();
+        assert!(oplog.contains("oplog event"));
+        assert!(!oplog.contains("stream event"));
+        assert!(stream.contains("stream event"));
+        assert!(!stream.contains("oplog event"));
     }
 
     #[test]
@@ -3012,7 +4375,9 @@ mod tests {
     fn toggles_command_options() {
         let mut app = test_app();
 
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('y')));
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('r')));
 
         assert!(app.command_options.yes);
@@ -3032,7 +4397,9 @@ mod tests {
         assert!(frame.contains("yes:off"), "{frame}");
         assert!(frame.contains("reset:off"), "{frame}");
 
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('y')));
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('r')));
         let frame = render_app_text(&app);
         assert!(frame.contains("yes:on"), "{frame}");
@@ -3126,6 +4493,7 @@ mod tests {
         let frame = render_app_text(&app);
         assert!(frame.contains("stdin"), "{frame}");
 
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('y')));
         let frame = render_app_text(&app);
         assert!(frame.contains("stdin"), "{frame}");
@@ -3135,6 +4503,7 @@ mod tests {
     fn output_input_row_is_hidden_for_yes_command() {
         let mut app = test_app();
 
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('y')));
         app.handle_key(key(KeyCode::Char('b')));
         let frame = render_app_text(&app);
@@ -3302,7 +4671,8 @@ mod tests {
         let mut app = test_app();
         app.active_view = TuiView::Server;
 
-        app.handle_key(key(KeyCode::Char('x')));
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('s')));
         app.handle_key(key(KeyCode::Char('s')));
 
         assert!(app.server.clean);
@@ -3323,6 +4693,7 @@ mod tests {
         assert_eq!(app.server.run.status, ServerStatus::Stopping);
 
         app.server.run.status = ServerStatus::Running;
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('R')));
         assert_eq!(app.server.run.status, ServerStatus::Stopping);
         assert_eq!(
@@ -3331,11 +4702,35 @@ mod tests {
         );
 
         app.server.run.status = ServerStatus::Running;
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('C')));
         assert_eq!(
             app.server.run.restart_after_stop,
             Some(ServerStartMode::Clean)
         );
+    }
+
+    #[test]
+    fn server_can_be_started_from_global_shortcut_or_enter() {
+        let mut app = test_app();
+
+        app.handle_key(key(KeyCode::Char('s')));
+        assert_eq!(app.active_view, TuiView::Server);
+        assert_eq!(app.server.run.status, ServerStatus::Starting);
+
+        app.server.run.status = ServerStatus::Running;
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.server.run.status, ServerStatus::Stopping);
+    }
+
+    #[test]
+    fn server_palette_action_switches_to_server_and_toggles() {
+        let mut app = test_app();
+
+        app.execute_action(TuiActionKind::ToggleServer, None);
+
+        assert_eq!(app.active_view, TuiView::Server);
+        assert_eq!(app.server.run.status, ServerStatus::Starting);
     }
 
     #[test]
@@ -3378,6 +4773,67 @@ mod tests {
         assert_eq!(app.server.run.output.scroll_offset, 3);
     }
 
+    #[test]
+    fn repl_key_switches_to_repl_and_records_command() {
+        let mut app = test_app();
+
+        app.handle_key(key(KeyCode::Char('r')));
+
+        assert_eq!(app.active_view, TuiView::Repl);
+        assert_eq!(app.mode, TuiMode::Repl);
+        assert_eq!(app.repl.run.status, ReplStatus::Starting);
+        assert_eq!(app.repl.run.args, vec!["repl"]);
+
+        let frame = render_app_text(&app);
+        assert!(frame.contains("REPL"), "{frame}");
+        assert!(frame.contains("starting"), "{frame}");
+        assert!(frame.contains("golem repl"), "{frame}");
+    }
+
+    #[test]
+    fn repl_output_is_rendered_as_terminal_screen() {
+        let mut app = test_app();
+        let (tx, _rx) = mpsc::channel();
+
+        app.handle_key(key(KeyCode::Char('r')));
+        app.handle_event(TuiEvent::ReplOutput(b"hello\x1b[2DXY".to_vec()), &tx);
+
+        let frame = render_app_text(&app);
+        assert!(frame.contains("helXY"), "{frame}");
+    }
+
+    #[test]
+    fn repl_focus_sets_cursor_from_terminal_screen() {
+        let mut app = test_app();
+        let (tx, _rx) = mpsc::channel();
+
+        app.handle_key(key(KeyCode::Char('r')));
+        app.handle_event(TuiEvent::ReplOutput(b"abc".to_vec()), &tx);
+        let (_, cursor) = render_app_text_and_cursor(&app);
+
+        assert!(cursor.x > 2, "cursor should be inside REPL terminal");
+        assert!(cursor.y > 3, "cursor should be inside REPL terminal");
+    }
+
+    #[test]
+    fn repl_leader_can_leave_or_stop_repl() {
+        let mut app = test_app();
+
+        app.handle_key(key(KeyCode::Char('r')));
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        assert_eq!(app.mode, TuiMode::LeaderRepl);
+
+        app.handle_key(key(KeyCode::Char('q')));
+        assert_eq!(app.mode, TuiMode::Normal);
+        assert_eq!(app.repl.run.status, ReplStatus::Starting);
+
+        app.handle_key(key(KeyCode::Char('r')));
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.mode, TuiMode::Normal);
+        assert_eq!(app.repl.run.status, ReplStatus::Stopping);
+    }
+
     fn test_app() -> TuiApp {
         TuiApp {
             should_quit: false,
@@ -3387,6 +4843,7 @@ mod tests {
             command_options: CommandOptions::default(),
             command_run: None,
             server: ServerState::default(),
+            repl: ReplState::default(),
             agents: AgentsState::default(),
             next_command_id: 1,
             context: TuiContextInfo {
@@ -3422,6 +4879,14 @@ mod tests {
                 raw: serde_json::json!({"name":"order-1"}),
             },
         ]
+    }
+
+    fn inspect_app() -> TuiApp {
+        let mut app = test_app();
+        app.active_view = TuiView::Agents;
+        app.agents.agents = sample_agents();
+        app.handle_key(key(KeyCode::Enter));
+        app
     }
 
     fn render_app_text(app: &TuiApp) -> String {

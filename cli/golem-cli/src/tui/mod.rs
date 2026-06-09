@@ -13,8 +13,10 @@
 // limitations under the License.
 
 mod app;
+mod input;
 mod nested_cli;
 mod terminal;
+pub(crate) mod terminal_screen;
 
 use crossterm::event::Event;
 use nested_cli::CommandExit;
@@ -31,6 +33,15 @@ enum TuiEvent {
     ServerOutputClosed(Option<String>),
     ServerExited(CommandExit),
     ServerSpinnerTick(u64),
+    ReplOutput(Vec<u8>),
+    ReplOutputClosed(Option<String>),
+    ReplExited(CommandExit),
+    AgentOplogOutput(Vec<u8>),
+    AgentOplogOutputClosed(Option<String>),
+    AgentOplogExited(CommandExit),
+    AgentStreamOutput(Vec<u8>),
+    AgentStreamOutputClosed(Option<String>),
+    AgentStreamExited(CommandExit),
     AgentRefreshTick,
     AgentRefreshFinished {
         generation: u64,

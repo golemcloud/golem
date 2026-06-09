@@ -67,6 +67,25 @@ Rules:
 - [ ] Add filtered CLI command metadata to the palette.
 - [x] Add palette interaction test.
 
+## Phase 3 Follow-Ups: Theme And Shortcuts
+
+- [x] Research current non-TUI CLI decorators and color conventions.
+- [x] Research opencode TUI theme/keybinding conventions.
+- [x] Research golem.cloud visual tokens and colors.
+- [x] Add Golem-branded default dark TUI theme tokens.
+- [x] Preserve nested CLI and REPL ANSI colors instead of remapping them into the TUI theme.
+- [x] Show tab numbering in the tab strip.
+- [x] Make `r` the direct REPL start/focus shortcut.
+- [x] Add general `Ctrl-X` leader mode for settings and secondary actions.
+- [x] Move flag/settings toggles behind `Ctrl-X` leader shortcuts.
+- [x] Use unified shortcut styling in footer, palette, and leader hints.
+- [x] Apply manual visual polish for rails, Agents sidebar separator, output backgrounds, and segmented header labels.
+- [x] Apply follow-up polish for single-background header, palette inner side rail, server toggle UX, and tab shortcut highlighting.
+- [x] Show idle/running indicators for Output, Server, and REPL in the tab row.
+- [x] Add centered Braille dashboard background logo generated from the in-repo Golem logo asset.
+- [x] Widen and darken the Braille dashboard logo and remove command palette box borders.
+- [ ] Manually review the updated Golem-branded TUI in the playground.
+
 ## Phase 4: Data Providers
 
 - [x] Replace placeholder Agent tab with fuzzy-filtered agent list.
@@ -81,6 +100,9 @@ Rules:
 - [ ] List components directly or via nested CLI after evaluation.
 - [ ] List agents directly or via nested CLI after evaluation.
 - [ ] Implement empty/error/loading states.
+- [x] Add Agents inspect subview with oplog and stream split panes.
+- [x] Add independent oplog/stream scrolling and pane focus switching.
+- [x] Stop agent inspect jobs on Esc and return to the agent list.
 
 ## Phase 5: Nested CLI Jobs
 
@@ -116,10 +138,13 @@ Rules:
 
 ## Phase 6: REPL
 
-- [ ] Add action to launch REPL for selected environment.
-- [ ] Start with nested PTY-backed `golem repl`.
-- [ ] Decide whether first UX is embedded pane or managed full-screen child mode.
-- [ ] Add REPL focus and exit behavior.
+- [x] Add reusable PTY input encoder for interactive sessions.
+- [x] Add terminal-screen session renderer for REPL.
+- [x] Add action to launch REPL for selected environment.
+- [x] Start with nested PTY-backed `golem repl`.
+- [x] Decide whether first UX is embedded pane or managed full-screen child mode.
+- [x] Add REPL focus and exit behavior.
+- [ ] Manually verify embedded REPL behavior in the playground TUI.
 
 ## Phase 7: Agentic Testing Loop
 

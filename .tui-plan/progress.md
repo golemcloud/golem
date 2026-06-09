@@ -118,15 +118,63 @@ Build/deploy nested CLI feature:
 - Added agent palette actions for refresh, auto-refresh, mode cycle, and details toggle.
 - Added robust JSON parsing for both array and `{ values: [...] }` agent list shapes.
 - Added focused tests for tab removal, agent filtering/selection, mode cycling, details panel, refresh result handling, and JSON parsing.
+- Added reusable PTY input encoder for future REPL mode and reused it for finite command interaction.
+- Added PTY input encoding tests for printable, control, alt, and navigation keys.
+- Added a `vt100`-backed terminal screen wrapper for future REPL rendering.
+- Terminal screen wrapper can feed PTY bytes, resize, expose cursor position, render Ratatui lines, and retain plain text for assertions.
+- Added terminal screen tests for plain text, cursor movement, cursor position, SGR styles, and resizing.
 - Hid the command input row when no command is running or when the current command was started with `yes:on`.
 - Preserved the command input row for the lifetime of commands started with `yes:off`, even if the future-run `yes` toggle changes during the run.
 - Added focused tests for hidden/visible command input row behavior.
+- Added a REPL tab backed by nested PTY `golem repl`.
+- Added REPL-specific TUI events for PTY output, output closure, and process exit.
+- Added `ReplState` and `ReplRun` with a `vt100` `TerminalScreen` instead of line-oriented output buffering.
+- Added REPL view rendering with a compact status row, embedded terminal screen, and native cursor placement.
+- Added REPL focus mode that sends keys directly to the REPL.
+- Added `Ctrl-X` REPL leader commands: `q` leave focus, `k` stop, `p` palette, `?` help, `r` restart.
+- Added `l` / Enter start-or-focus behavior and REPL palette actions for start/focus/leave/stop.
+- Added focused tests for REPL start/rendering, terminal-screen output, cursor placement, and leader behavior.
+- Researched non-TUI CLI styling and decorator conventions: green action words, yellow warnings, red errors, bold highlights, `-` bullets, UTF-8/ASCII comfy-table presets, `╔═`/`║`/`╚═` decorated help blocks, and `│` child-process output gutters.
+- Researched opencode theme/keybinding conventions: semantic theme tokens, truecolor expectation, system/terminal theme mode, `none` terminal defaults, and `Ctrl-X` leader key use.
+- Researched golem.cloud visual tokens: dark neutral surfaces, amber primary accent, warm orange marker, muted grey text scale, and dark code-block surfaces.
+- Added an internal Golem-branded dark TUI theme token set; no custom/system theme support yet.
+- Switched TUI chrome from cyan-led styling to Golem amber active/focus styling.
+- Kept nested CLI output and REPL screen ANSI-native; the Golem theme only styles surrounding chrome, gutters, status rows, palette, help, and selection surfaces.
+- Added tab numbering in the tab strip.
+- Changed the direct REPL shortcut from `l` to `r`.
+- Added a general `Ctrl-X` leader mode for settings and secondary actions.
+- Moved `--yes`, `--reset`, server clean, server restart/clean-restart, and agent settings toggles behind `Ctrl-X` leader shortcuts.
+- Added unified shortcut styling in footer, palette rows, and leader hints.
+- Added `Restart REPL` to the command palette and bound focused REPL restart to `Ctrl-X R`.
+- Added focused tests for numbered tabs and leader shortcut hint rendering.
+- Polished the Golem-branded theme after manual review: removed redundant content/footer rails, made dashboard surface rails consistently gray, changed the Agents detail divider to gray, normalized output line backgrounds to the TUI surface, added segmented warm header backgrounds, and added spaces after header labels such as `app: `.
+- Follow-up polish: restored gray content rails consistently on dashboard/content/output lines so non-empty rows no longer erase the surface rail while blank rows keep it.
+- Fixed the dashboard rail rendering at the root cause: body content now reserves the first columns and the gray surface rail is drawn after body content, with a regression test asserting every dashboard body row keeps the rail. The header is now a full amber background with darker warm segment backgrounds for `app: `, `env: `, and `server: `.
+- Header polish: restored the first-line `┃` separator, removed the multi-background gradient, and made the full header row amber with separate label/value text colors.
+- Palette polish: added an inner `┃` side decoration to command palette content.
+- Server UX polish: replaced separate `Start Server` and `Stop Server` palette entries with a single `Start/Stop Server` action using `s`, made `s` global so it jumps to Server and toggles the server, and added Server-tab `Enter` to toggle server like REPL-tab `Enter` starts/focuses REPL.
+- Tab polish: tab numbers now use the same highlighted shortcut styling as footer/palette shortcuts.
+- Added live tab indicators on the tab row for running Output commands, Server, and REPL sessions.
+- Replaced the hand-written Braille dashboard mark with faint centered Braille art generated from the in-repo `website/src/assets/logo/golem-horizontal-white.png` logo asset.
+- Changed tab running indicators to always render for Output, Server, and REPL: gray `○` when idle and green `●` when running.
+- Widened the generated Braille logo by changing its aspect ratio, darkened it to a more background-like gray, and made dashboard text rows paint their full width so the logo does not bleed through after foreground text.
+- Simplified the command palette by removing the old box border and changing the side rail to a full-height yellow rail for the whole palette subwindow.
+- Added an Agents inspect subview within the Agents tab. Pressing Enter on a selected agent opens a split view with `golem agent oplog <agent>` on the left and `golem agent stream <agent>` on the right.
+- Agent inspect mode uses independent PTY-backed nested CLI targets and output buffers for oplog and stream.
+- Left/Right switches focused pane; Up/Down, PageUp/PageDown, Home/End scroll the focused pane; Esc kills both inspect jobs and returns to the agent list.
+- Added focused tests for opening inspect mode, pane focus switching, focused-pane scrolling, Esc returning to the list, split-view rendering, and separate event routing for oplog/stream buffers.
 
 Validation:
 
 - `cargo fmt --package golem-cli`
 - `cargo check -p golem-cli`
 - `cargo test -p golem-cli tui::app::tests`
+- `cargo test -p golem-cli -- tui::app::tests tui::terminal_screen::tests`
+- `cargo test -p golem-cli -- tui::`
+- `cargo check -p golem-cli`
+- `CARGO_INSTALL_ROOT=/Users/noise64/.cargo-alt-02 cargo make install-golem-dev-release`
+- `PATH="/Users/noise64/.cargo-alt-02/bin:$PATH" golem tui --help` from `/Users/noise64/workspace/golem-demo/golem-02/test-app`
+- RustRover build check for touched TUI files after theme/keymap pass
 - RustRover build check for `cli/golem-cli/src/tui/app.rs`
 - RustRover build check for `cli/golem-cli/src/tui/mod.rs` and `cli/golem-cli/src/tui/nested_cli.rs`
 - RustRover build check for `cli/golem-cli/src/tui/terminal.rs`
