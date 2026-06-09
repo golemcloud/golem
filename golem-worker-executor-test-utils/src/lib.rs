@@ -2521,6 +2521,16 @@ impl Oplog for TestOplog {
         self.oplog.fallible_add(entry).await
     }
 
+    async fn fallible_add_pair(
+        &self,
+        first: OplogEntry,
+        second: OplogEntry,
+    ) -> Result<(OplogIndex, OplogIndex), String> {
+        self.check_oplog_add(&first).await?;
+        self.check_oplog_add(&second).await?;
+        self.oplog.fallible_add_pair(first, second).await
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.oplog.drop_prefix(last_dropped_id).await
     }

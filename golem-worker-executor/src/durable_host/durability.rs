@@ -790,7 +790,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
     }
 
     fn current_retry_point(&self) -> OplogIndex {
-        self.state.current_retry_point
+        self.state.effective_retry_point()
     }
 
     async fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
@@ -904,10 +904,17 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         response: &HostResponse,
         function_type: DurableFunctionType,
     ) {
+        let parent_start_index = self.state.current_parent_start_index();
         self.public_state
             .worker()
             .oplog()
-            .add_completed_host_call(function_name, request, response, function_type)
+            .add_completed_host_call(
+                function_name,
+                request,
+                response,
+                function_type,
+                parent_start_index,
+            )
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to serialize and store durable function invocation: {err}")
@@ -994,11 +1001,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             .worker()
             .get_non_detached_last_known_status()
             .await;
-        let current_retry_point = if let Some(region) = self.state.active_atomic_regions.last() {
-            region.begin_index
-        } else {
-            self.state.current_retry_point
-        };
+        let current_retry_point = self.state.effective_retry_point();
 
         // Resolve the matching named retry policy. The synthesized
         // default-from-config policy (with `Predicate::True`) is always

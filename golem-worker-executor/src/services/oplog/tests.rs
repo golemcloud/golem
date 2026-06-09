@@ -806,6 +806,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             &HostRequest::Custom("request".into_value_and_type()),
             &HostResponse::Custom("response".into_value_and_type()),
             DurableFunctionType::ReadRemote,
+            None,
         )
         .await
         .unwrap();
@@ -1012,6 +1013,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             &HostRequest::Custom("request".into_value_and_type()),
             &HostResponse::Custom(large_payload1.clone().into_value_and_type()),
             DurableFunctionType::ReadRemote,
+            None,
         )
         .await
         .unwrap();

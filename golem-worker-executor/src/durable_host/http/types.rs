@@ -1515,6 +1515,7 @@ async fn persist_http_response<Ctx: WorkerCtx>(
     begin_index: golem_common::model::oplog::OplogIndex,
 ) {
     if ctx.state.snapshotting_mode.is_none() {
+        let parent_start_index = ctx.state.current_parent_start_index();
         ctx.state
             .oplog
             .add_completed_host_call(
@@ -1524,6 +1525,7 @@ async fn persist_http_response<Ctx: WorkerCtx>(
                     response: serializable_response.clone(),
                 }),
                 DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
+                parent_start_index,
             )
             .await
             .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));

@@ -285,6 +285,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 // Snapshotting mode persists nothing (matching legacy `persist_raw`).
                 (ctx.state.oplog.current_oplog_index().await, false)
             } else {
+                let parent_start_index = ctx.state.current_parent_start_index();
                 let request: HostRequest = request.into();
                 let request_payload =
                     ctx.state
@@ -298,7 +299,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         })?;
                 let start = OplogEntry::Start {
                     timestamp: Timestamp::now_utc(),
-                    parent_start_index: None,
+                    parent_start_index,
                     function_name: Pair::HOST_FUNCTION_NAME,
                     request: Some(request_payload),
                     durable_function_type: function_type.clone(),

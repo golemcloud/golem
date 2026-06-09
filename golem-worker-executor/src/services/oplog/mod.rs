@@ -367,6 +367,19 @@ pub trait Oplog: Any + Debug + Send + Sync {
         (first_idx, second_idx)
     }
 
+    /// Like [`add_pair`](Self::add_pair) but for two already-built entries, returning a
+    /// `Result` so test wrappers can inject a write failure on either entry. The default
+    /// delegates to `add_pair`, inheriting its atomic buffering, so the two entries are
+    /// never split by a commit-threshold check or a crash boundary.
+    async fn fallible_add_pair(
+        &self,
+        first: OplogEntry,
+        second: OplogEntry,
+    ) -> Result<(OplogIndex, OplogIndex), String> {
+        let (first_idx, second_idx) = self.add_pair(first, Box::new(move |_| second)).await;
+        Ok((first_idx, second_idx))
+    }
+
     /// Returns the inner oplog wrapped by this implementation, if any.
     /// Wrapper oplogs should override this to enable generic traversal of the
     /// oplog composition chain (used by `downcast_oplog`).
@@ -440,19 +453,24 @@ pub trait OplogOps: Oplog {
     /// This will eventually be replaced with a recorder/`CallHandle` based API
     /// that captures `Start` eagerly (before the side effect) and `End` (or
     /// `Cancelled`) when the call completes.
+    ///
+    /// `parent_start_index` is the `Start` index of the enclosing durable scope (if any). This is
+    /// an explicit parameter because the oplog cannot see the worker state's open scope stack, so
+    /// the caller must supply the innermost open scope (`current_parent_start_index`).
     async fn add_completed_host_call(
         &self,
         function_name: HostFunctionName,
         request: &HostRequest,
         response: &HostResponse,
         function_type: DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
     ) -> Result<(OplogIndex, OplogIndex), String> {
         let request_payload: OplogPayload<HostRequest> = self.upload_payload(request).await?;
         let response_payload: OplogPayload<HostResponse> = self.upload_payload(response).await?;
         let now = Timestamp::now_utc();
         let start = OplogEntry::Start {
             timestamp: now,
-            parent_start_index: None,
+            parent_start_index,
             function_name,
             request: Some(request_payload),
             durable_function_type: function_type,

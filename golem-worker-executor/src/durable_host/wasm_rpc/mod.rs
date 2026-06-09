@@ -866,6 +866,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     SerializableInvokeResult::Pending
                 );
 
+                let parent_start_index = self.state.current_parent_start_index();
                 self.state
                     .oplog
                     .add_completed_host_call(
@@ -875,6 +876,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             result: serializable_invoke_result,
                         }),
                         DurableFunctionType::WriteRemote,
+                        parent_start_index,
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize RPC response: {err}"));

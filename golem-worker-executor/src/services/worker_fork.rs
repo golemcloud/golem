@@ -764,6 +764,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                     result: Ok(golem_common::model::ForkResult::Forked),
                 }),
                 DurableFunctionType::WriteRemote,
+                None,
             )
             .await
             .map_err(|err| {

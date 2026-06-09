@@ -945,3 +945,140 @@ fn public_oplog_entry_type_matches_wit() {
         "PublicOplogEntry::get_type() does not match the WIT public-oplog-entry definition"
     );
 }
+
+mod scope_scan {
+    use crate::model::oplog::host_functions::HostFunctionName;
+    use crate::model::oplog::{DurableFunctionType, OplogEntry, ScopeScanState};
+    use crate::model::{OplogIndex, Timestamp};
+    use test_r::test;
+
+    fn idx(i: u64) -> OplogIndex {
+        OplogIndex::from_u64(i)
+    }
+
+    fn start(parent: Option<u64>, durable_function_type: DurableFunctionType) -> OplogEntry {
+        OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: parent.map(idx),
+            function_name: HostFunctionName::Custom("test".to_string()),
+            request: None,
+            durable_function_type,
+        }
+    }
+
+    /// Replays the forward scan that `lookup_oplog_entry_with_condition_and_state` performs,
+    /// returning `true` if no entry between the scope `Start` (`root`) and its `End` is a foreign
+    /// concurrent side effect (i.e. `for_all_intermediate` holds for all of `entries`).
+    fn scan(
+        root: u64,
+        entries: &[(u64, OplogEntry)],
+        persistence_level: crate::model::oplog::PersistenceLevel,
+    ) -> bool {
+        let mut state = ScopeScanState::new(idx(root), persistence_level);
+        let mut ok = true;
+        for (i, entry) in entries {
+            entry.track_scope_membership(idx(*i), &mut state);
+            if !entry.no_concurrent_side_effect(idx(root), &state) {
+                ok = false;
+            }
+        }
+        ok
+    }
+
+    fn persist_all() -> crate::model::oplog::PersistenceLevel {
+        crate::model::oplog::PersistenceLevel::Smart
+    }
+
+    #[test]
+    fn direct_child_scope_is_allowed() {
+        // An HTTP call inside a batched-write scope writes a `Start` whose parent is the scope root.
+        let entries = vec![(
+            11,
+            start(
+                Some(10),
+                DurableFunctionType::WriteRemoteBatched(Some(idx(10))),
+            ),
+        )];
+        assert!(scan(10, &entries, persist_all()));
+    }
+
+    #[test]
+    fn transitive_grandchild_scope_is_allowed() {
+        // A grandchild's parent is the inner scope (11), not the root (10); transitive tracking
+        // must still recognise it as part of the scope.
+        let entries = vec![
+            (
+                11,
+                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
+            ),
+            (12, start(Some(11), DurableFunctionType::WriteRemote)),
+        ];
+        assert!(scan(10, &entries, persist_all()));
+    }
+
+    #[test]
+    fn foreign_read_remote_is_allowed() {
+        let entries = vec![(11, start(None, DurableFunctionType::ReadRemote))];
+        assert!(scan(10, &entries, persist_all()));
+    }
+
+    #[test]
+    fn foreign_write_remote_is_rejected() {
+        let entries = vec![(11, start(None, DurableFunctionType::WriteRemote))];
+        assert!(!scan(10, &entries, persist_all()));
+    }
+
+    #[test]
+    fn foreign_batched_scope_is_rejected() {
+        let entries = vec![(
+            11,
+            start(None, DurableFunctionType::WriteRemoteBatched(None)),
+        )];
+        assert!(!scan(10, &entries, persist_all()));
+    }
+
+    #[test]
+    fn grandchild_of_foreign_scope_is_rejected() {
+        // The intermediate scope (11) is foreign (parent is unrelated 99), so its descendant (12)
+        // must not be absorbed into the root scope.
+        let entries = vec![
+            (
+                11,
+                start(Some(99), DurableFunctionType::WriteRemoteBatched(None)),
+            ),
+            (12, start(Some(11), DurableFunctionType::WriteRemote)),
+        ];
+        assert!(!scan(10, &entries, persist_all()));
+    }
+
+    #[test]
+    fn persist_nothing_ignores_foreign_side_effects() {
+        let entries = vec![(11, start(None, DurableFunctionType::WriteRemote))];
+        assert!(scan(
+            10,
+            &entries,
+            crate::model::oplog::PersistenceLevel::PersistNothing
+        ));
+    }
+
+    #[test]
+    fn end_and_cancelled_markers_are_not_side_effects() {
+        let end = OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: idx(11),
+            response: None,
+            forced_commit: false,
+        };
+        let cancelled = OplogEntry::Cancelled {
+            timestamp: Timestamp::now_utc(),
+            start_index: idx(12),
+            partial: None,
+        };
+        let entries = vec![
+            (11, start(Some(10), DurableFunctionType::WriteRemote)),
+            (12, end),
+            (13, cancelled),
+        ];
+        assert!(scan(10, &entries, persist_all()));
+    }
+}

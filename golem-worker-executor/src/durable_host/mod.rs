@@ -103,7 +103,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogIndex, PersistenceLevel, RawSnapshotData, TimestampedUpdateDescription, UpdateDescription,
+    OplogIndex, PersistenceLevel, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription,
+    UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -1193,9 +1194,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
         {
             let result = if self.is_live() {
+                let parent_start_index = self.state.current_parent_start_index();
                 let entry = OplogEntry::Start {
                     timestamp: Timestamp::now_utc(),
-                    parent_start_index: None,
+                    parent_start_index,
                     function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
                     request: None,
                     durable_function_type: function_type.clone(),
@@ -1234,10 +1236,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .replay_state
                         .lookup_oplog_entry_with_condition_and_state(
                             begin_index,
-                            OplogEntry::is_end_remote_write_s::<PersistenceLevel>,
+                            OplogEntry::is_end_remote_write_s::<ScopeScanState>,
                             OplogEntry::no_concurrent_side_effect,
-                            self.state.persistence_level,
-                            OplogEntry::track_persistence_level,
+                            ScopeScanState::new(begin_index, self.state.persistence_level),
+                            OplogEntry::track_scope_membership,
                         )
                         .await;
                     match lookup_result {
@@ -1266,7 +1268,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             // and later we replay it, we need to skip the first attempt and only replay the second.
                             // Se we add a Jump entry to the oplog that registers a deleted region.
                             let deleted_region = OplogRegion {
-                                start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                                start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
                                 end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
                             };
 
@@ -1293,11 +1295,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }?;
 
-            // A `BeginRemoteWrite` region (remote write / HTTP request) is now open until the
-            // matching `end_function`; the tip is inside it, so block mid-invocation checkpoints.
-            self.state.open_rollback_regions.insert(result);
+            // A durable scope (remote write / HTTP request) is now open until the matching
+            // `end_function`; the tip is inside it, so block mid-invocation checkpoints, and any
+            // `Start` written while it is open links back to it via `parent_start_index`.
+            let kind = if matches!(
+                *function_type,
+                DurableFunctionType::WriteRemoteBatched(None)
+            ) {
+                DurableScopeKind::BatchedWrite
+            } else {
+                DurableScopeKind::NonIdempotentWrite
+            };
+            self.state.push_durable_scope(result, kind);
 
-            // The current retry point will point to the scope `Start` entry
+            // The effective retry point now derives from the open scope; keep the global fallback
+            // pointing at the scope `Start` so it survives the scope being closed.
             self.state.current_retry_point = result;
             Ok(result)
         } else {
@@ -1361,8 +1373,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     ));
                 }
             }
-            // The `BeginRemoteWrite` region opened in `begin_function` is now closed.
-            self.state.open_rollback_regions.remove(&begin_index);
+            // The durable scope opened in `begin_function` is now closed.
+            self.state.pop_durable_scope(begin_index)?;
             Ok(())
         } else {
             Ok(())
@@ -1393,31 +1405,90 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     {
         if self.is_live() {
             let (tx_id, tx) = handler.create_new().await?;
-            let begin_index = self
+            let parent_start_index = self.state.current_parent_start_index();
+            // A transaction is a durable scope: append the scope `Start` and the
+            // `BeginRemoteTransaction` marker atomically so the pair is never split across a crash
+            // boundary. The scope `Start` index is the stable begin index for the whole transaction.
+            let scope_start = OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index,
+                function_name: HostFunctionName::Custom("<scope:transaction>".to_string()),
+                request: None,
+                durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+            };
+            let (begin_index, _) = self
                 .public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::begin_remote_transaction(tx_id, None))
+                .oplog()
+                .add_pair(
+                    scope_start,
+                    Box::new(move |_start_index| OplogEntry::begin_remote_transaction(tx_id, None)),
+                )
+                .await;
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
 
-            // A remote transaction region is now open until commit/rollback; block checkpoints.
-            self.state.open_rollback_regions.insert(begin_index);
+            // The transaction scope is now open until commit/rollback; block checkpoints.
+            self.state
+                .push_durable_scope(begin_index, DurableScopeKind::Transaction);
             self.state.current_retry_point = begin_index;
 
             Ok((begin_index, tx))
         } else {
+            // The transaction scope `Start` is preserved across restarts, so its index is the
+            // stable original begin index that keys every transaction marker.
+            let (scope_start_index, scope_start_entry) =
+                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::Start)?;
+            // Reject anything that is not the exact `Start` shape `begin_transaction_function`
+            // writes, so a corrupt or interleaved oplog fails here instead of silently driving the
+            // recovery logic with the wrong scope.
+            if let OplogEntry::Start {
+                function_name,
+                request,
+                durable_function_type,
+                ..
+            } = &scope_start_entry
+            {
+                let is_transaction_scope = matches!(
+                    function_name,
+                    HostFunctionName::Custom(name) if name == "<scope:transaction>"
+                ) && request.is_none()
+                    && matches!(
+                        durable_function_type,
+                        DurableFunctionType::WriteRemoteTransaction(None)
+                    );
+                if !is_transaction_scope {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "Start { <scope:transaction>, WriteRemoteTransaction(None) }".to_string(),
+                        format!("Start {{ {function_name}, {durable_function_type:?} }}"),
+                    )
+                    .into());
+                }
+            }
             let (begin_index, begin_entry) = crate::get_oplog_entry!(
                 self.state.replay_state,
                 OplogEntry::BeginRemoteTransaction
             )?;
-            let original_begin_index = if let OplogEntry::BeginRemoteTransaction {
+            // The `BeginRemoteTransaction` right after the scope `Start` either starts a fresh
+            // transaction (`original_begin_index: None`) or, after a restart, points back at this
+            // scope `Start`.
+            if let OplogEntry::BeginRemoteTransaction {
                 original_begin_index: Some(idx),
                 ..
             } = &begin_entry
+                && *idx != scope_start_index
             {
-                *idx
-            } else {
-                begin_index
-            };
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    format!(
+                        "BeginRemoteTransaction {{ original_begin_index: None | Some({scope_start_index}) }}"
+                    ),
+                    format!("BeginRemoteTransaction {{ original_begin_index: Some({idx}) }}"),
+                )
+                .into());
+            }
+            let original_begin_index = scope_start_index;
 
             let assume_idempotence = self.state.assume_idempotence;
 
@@ -1428,8 +1499,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     original_begin_index,
                     OplogEntry::is_pre_remote_transaction_s,
                     OplogEntry::no_concurrent_side_effect,
-                    self.state.persistence_level,
-                    OplogEntry::track_persistence_level,
+                    ScopeScanState::new(original_begin_index, self.state.persistence_level),
+                    OplogEntry::track_scope_membership,
                 )
                 .await;
 
@@ -1458,8 +1529,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             original_begin_index,
                             OplogEntry::is_end_remote_transaction_s,
                             OplogEntry::no_concurrent_side_effect,
-                            self.state.persistence_level,
-                            OplogEntry::track_persistence_level,
+                            ScopeScanState::new(original_begin_index, self.state.persistence_level),
+                            OplogEntry::track_scope_membership,
                         )
                         .await;
 
@@ -1472,7 +1543,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 // if we can not confirm the transaction was committed, we need to restart
                                 should_restart = !handler.is_committed(&tx_id).await?;
                             } else if pre_entry
-                                .is_pre_commit_remote_transaction(original_begin_index)
+                                .is_pre_rollback_remote_transaction(original_begin_index)
                             {
                                 // if we can not confirm the transaction was rolled back, we need to restart
                                 should_restart = !handler.is_rolled_back(&tx_id).await?;
@@ -1518,7 +1589,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     // and later we replay it, we need to skip the first attempt and only replay the second.
                     // Se we add a Jump entry to the oplog that registers a deleted region.
                     let deleted_region = OplogRegion {
-                        start: begin_index, // need to delete the previous BeginRemoteTransaction entry, because we'll get a new TX id
+                        // Delete the previous `BeginRemoteTransaction` entry (and everything after),
+                        // because we'll get a new tx id. The transaction scope `Start` lives at
+                        // `scope_start_index < begin_index`, so it is preserved.
+                        start: begin_index,
                         end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
                     };
 
@@ -1546,8 +1620,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 Ok((original_begin_index, tx))
             }?;
 
-            // The (possibly re-begun) remote transaction region is open until commit/rollback.
-            self.state.open_rollback_regions.insert(result);
+            // The (possibly re-begun) transaction scope is open until commit/rollback.
+            self.state
+                .push_durable_scope(result, DurableScopeKind::Transaction);
             self.state.current_retry_point = original_begin_index;
 
             Ok((result, tx))
@@ -1615,9 +1690,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            // The final marker and the scope `End` are appended as an atomic pair so they can never
+            // be split across a crash boundary (which would leave a marker without its `End`).
             self.state
                 .oplog
-                .fallible_add(OplogEntry::committed_remote_transaction(begin_index))
+                .fallible_add_pair(
+                    OplogEntry::committed_remote_transaction(begin_index),
+                    OplogEntry::End {
+                        timestamp: Timestamp::now_utc(),
+                        start_index: begin_index,
+                        response: None,
+                        forced_commit: true,
+                    },
+                )
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -1630,11 +1715,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state.replay_state,
                 OplogEntry::CommittedRemoteTransaction
             )?;
+            let (_, end_entry) = crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
+            if let OplogEntry::End { start_index, .. } = end_entry
+                && start_index != begin_index
+            {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    format!("End {{ start_index: {begin_index} }}"),
+                    format!("End {{ start_index: {start_index} }}"),
+                ));
+            }
         }
-        // The remote transaction region opened in `begin_transaction_function` is now closed: the
-        // `CommittedRemoteTransaction` entry has been durably committed (live) or replayed, so the
-        // tip is no longer inside a jumpable region on its account.
-        self.state.open_rollback_regions.remove(&begin_index);
+        // The transaction scope opened in `begin_transaction_function` is now closed: the
+        // `CommittedRemoteTransaction` marker and the scope `End` have been durably committed (live)
+        // or replayed, so the tip is no longer inside a jumpable scope on its account.
+        self.state.pop_durable_scope(begin_index)?;
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
         // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
@@ -1650,9 +1744,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            // The final marker and the scope `End` are appended as an atomic pair so they can never
+            // be split across a crash boundary (which would leave a marker without its `End`).
             self.state
                 .oplog
-                .fallible_add(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .fallible_add_pair(
+                    OplogEntry::rolled_back_remote_transaction(begin_index),
+                    OplogEntry::End {
+                        timestamp: Timestamp::now_utc(),
+                        start_index: begin_index,
+                        response: None,
+                        forced_commit: true,
+                    },
+                )
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -1665,11 +1769,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state.replay_state,
                 OplogEntry::RolledBackRemoteTransaction
             )?;
+            let (_, end_entry) = crate::get_oplog_entry!(self.state.replay_state, OplogEntry::End)?;
+            if let OplogEntry::End { start_index, .. } = end_entry
+                && start_index != begin_index
+            {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    format!("End {{ start_index: {begin_index} }}"),
+                    format!("End {{ start_index: {start_index} }}"),
+                ));
+            }
         }
-        // The remote transaction region opened in `begin_transaction_function` is now closed: the
-        // `RolledBackRemoteTransaction` entry has been durably committed (live) or replayed, so the
-        // tip is no longer inside a jumpable region on its account.
-        self.state.open_rollback_regions.remove(&begin_index);
+        // The transaction scope opened in `begin_transaction_function` is now closed: the
+        // `RolledBackRemoteTransaction` marker and the scope `End` have been durably committed (live)
+        // or replayed, so the tip is no longer inside a jumpable scope on its account.
+        self.state.pop_durable_scope(begin_index)?;
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
         // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
@@ -2714,11 +2827,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_current_retry_point(&self) -> OplogIndex {
-        if let Some(region) = self.state.active_atomic_regions.last() {
-            region.begin_index
-        } else {
-            self.state.current_retry_point
-        }
+        self.state.effective_retry_point()
     }
 }
 
@@ -4064,6 +4173,28 @@ struct ActiveAtomicRegion {
     has_side_effects: bool,
 }
 
+/// The kind of a durable scope, identified by the `OplogIndex` of its `Start` entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DurableScopeKind {
+    /// A batched remote write scope (`WriteRemoteBatched(None)`).
+    BatchedWrite,
+    /// A non-idempotent remote write scope (`WriteRemote` with `assume_idempotence == false`).
+    NonIdempotentWrite,
+    /// A remote transaction scope.
+    Transaction,
+}
+
+/// A currently open durable scope. Durable scopes are first-class `Start`/`End` pairs
+/// (batched writes, non-idempotent writes, transactions) identified by their `Start` index.
+/// The innermost open scope provides the `parent_start_index` for any `Start` written while
+/// it is open, and contributes to the effective retry point (see `effective_retry_point`).
+#[derive(Debug, Clone, Copy)]
+struct ActiveDurableScope {
+    start_index: OplogIndex,
+    #[allow(dead_code)]
+    kind: DurableScopeKind,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FilesystemOutputStreamState {
     pub descriptor_rep: u32,
@@ -4208,16 +4339,22 @@ struct PrivateDurableWorkerState {
     /// from scratch.
     active_atomic_regions: Vec<ActiveAtomicRegion>,
 
-    /// Begin indices of currently open rollback-capable regions other than atomic regions: remote
-    /// writes / HTTP requests (`BeginRemoteWrite`..`EndRemoteWrite`) and remote transactions
-    /// (`BeginRemoteTransaction`..`Committed`/`RolledBackRemoteTransaction`). Maintained by
-    /// `begin_function`/`end_function` and the transaction lifecycle functions. While any such
-    /// region is open, the current oplog tip sits inside it, so a later trap/replay can append a
-    /// jump that deletes the tip — making a mid-invocation status checkpoint at the tip unsafe (see
-    /// `at_clean_checkpoint_boundary`). Keyed by begin index so begin/end are self-balancing across
-    /// the messy replay/restart paths; a fresh state is built per worker incarnation, so a region
-    /// left open by a trap is cleared on restart.
-    open_rollback_regions: HashSet<OplogIndex>,
+    /// Currently open durable scopes other than atomic regions, innermost last: batched / remote
+    /// writes (`Start`..`End`) and remote transactions (`Start`..`End` wrapping the transaction
+    /// markers). Maintained by `begin_function`/`end_function` and the transaction lifecycle
+    /// functions. This serves two purposes:
+    ///
+    /// 1. The innermost (last) open scope is the `parent_start_index` for any `Start` written while
+    ///    it is open (`current_parent_start_index`), giving the oplog real scope nesting.
+    /// 2. While any such scope is open, the current oplog tip sits inside it, so a later trap/replay
+    ///    can append a jump that deletes the tip — making a mid-invocation status checkpoint at the
+    ///    tip unsafe (see `at_clean_checkpoint_boundary`).
+    ///
+    /// Durable scopes are strictly nested, so they close in LIFO order; `pop_durable_scope`
+    /// enforces this and hard-errors on a mismatch rather than silently corrupting the nesting. A
+    /// fresh state is built per worker incarnation, so a scope left open by a trap is cleared on
+    /// restart.
+    active_durable_scopes: Vec<ActiveDurableScope>,
 
     /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
     /// invocation (the `NoOp` marker it plants). It is the only realistic `set_oplog_index` target,
@@ -4371,7 +4508,7 @@ impl PrivateDurableWorkerState {
             pending_update: tokio::sync::Mutex::new(pending_update),
             current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
-            open_rollback_regions: HashSet::new(),
+            active_durable_scopes: Vec::new(),
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
@@ -4462,6 +4599,49 @@ impl PrivateDurableWorkerState {
         self.active_atomic_regions
             .first()
             .is_some_and(|region| region.has_side_effects)
+    }
+
+    /// The `parent_start_index` to attach to a `Start` written right now: the index of the
+    /// innermost currently open durable scope, or `None` at the top level.
+    fn current_parent_start_index(&self) -> Option<OplogIndex> {
+        self.active_durable_scopes.last().map(|s| s.start_index)
+    }
+
+    /// Opens a durable scope identified by its `Start` index. Must be balanced by
+    /// `pop_durable_scope` on the matching `End`/`Cancelled`.
+    fn push_durable_scope(&mut self, start_index: OplogIndex, kind: DurableScopeKind) {
+        self.active_durable_scopes
+            .push(ActiveDurableScope { start_index, kind });
+    }
+
+    /// Closes the durable scope opened at `start_index`. Durable scopes are strictly nested, so the
+    /// closed scope must be the innermost (top of the stack); anything else means the scope stack
+    /// got out of sync and is treated as a hard error rather than silently corrupting the nesting.
+    fn pop_durable_scope(&mut self, start_index: OplogIndex) -> Result<(), WorkerExecutorError> {
+        match self.active_durable_scopes.last() {
+            Some(scope) if scope.start_index == start_index => {
+                self.active_durable_scopes.pop();
+                Ok(())
+            }
+            other => Err(WorkerExecutorError::runtime(format!(
+                "Tried to close durable scope {start_index} but the innermost open scope is {:?}",
+                other.map(|s| s.start_index)
+            ))),
+        }
+    }
+
+    /// The retry point to associate with an error, with priority `atomic region > durable scope >
+    /// global`. While an atomic region is active the whole region is retried from its begin index;
+    /// otherwise, while a durable scope is open the error is grouped at the scope `Start`; otherwise
+    /// the last persisted side effect (`current_retry_point`).
+    fn effective_retry_point(&self) -> OplogIndex {
+        if let Some(region) = self.active_atomic_regions.last() {
+            region.begin_index
+        } else if let Some(scope) = self.active_durable_scopes.last() {
+            scope.start_index
+        } else {
+            self.current_retry_point
+        }
     }
 
     pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
@@ -4606,7 +4786,7 @@ impl PrivateDurableWorkerState {
     pub fn at_clean_checkpoint_boundary(&self) -> bool {
         self.is_live()
             && self.active_atomic_regions.is_empty()
-            && self.open_rollback_regions.is_empty()
+            && self.active_durable_scopes.is_empty()
             && self.persistence_level != PersistenceLevel::PersistNothing
             && self.snapshotting_mode.is_none()
     }

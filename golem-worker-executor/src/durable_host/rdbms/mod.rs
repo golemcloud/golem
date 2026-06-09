@@ -945,26 +945,45 @@ where
                 .await;
         }
     } else {
-        let _ = ctx
+        let pre_rollback = ctx
             .state
             .replay_state
             .try_get_oplog_entry(|e| e.is_pre_rollback_remote_transaction(entry.begin_index))
             .await?;
 
-        let rolled_back = ctx
-            .state
-            .replay_state
-            .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(entry.begin_index))
-            .await?;
+        if pre_rollback.is_some() {
+            let rolled_back = ctx
+                .state
+                .replay_state
+                .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(entry.begin_index))
+                .await?;
 
-        // Mirror the live drop path, which closes the region via
-        // `rolled_back_transaction_function`: this replay branch consumes the rollback entries
-        // directly, so it must also remove the region opened in `begin_transaction_function` once
-        // the `RolledBackRemoteTransaction` entry is found. Otherwise the begin index would dangle
-        // in `open_rollback_regions` and disable mid-invocation checkpoints for the rest of this
-        // worker incarnation.
-        if rolled_back.is_some() {
-            ctx.state.open_rollback_regions.remove(&entry.begin_index);
+            if rolled_back.is_some() {
+                // The rollback was recorded in a previous incarnation. The marker and its scope
+                // `End` are written atomically, so consume the matching `End` and close the durable
+                // scope opened in `begin_transaction_function`. Otherwise the begin index would
+                // dangle in `active_durable_scopes` and mis-parent later `Start` entries.
+                let end = ctx
+                    .state
+                    .replay_state
+                    .try_get_oplog_entry(|e| e.is_end_remote_write(entry.begin_index))
+                    .await?;
+                if end.is_none() {
+                    return Err(anyhow!(
+                        "Missing transaction scope End for begin index {} during rollback replay",
+                        entry.begin_index
+                    ));
+                }
+                ctx.state.pop_durable_scope(entry.begin_index)?;
+            } else {
+                // Crashed after `PreRollbackRemoteTransaction` but before the rollback was recorded.
+                // `begin_transaction_function` already confirmed the external rollback (otherwise it
+                // would have restarted), and consuming the pre-marker exhausted the replay, so finish
+                // the durable rollback record live now. This writes the marker plus its scope `End`
+                // and closes the durable scope, mirroring the explicit rollback path.
+                ctx.rolled_back_transaction_function(entry.begin_index)
+                    .await?;
+            }
         }
     }
 
