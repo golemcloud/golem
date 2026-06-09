@@ -90,7 +90,14 @@ fn structured_output_schema(graph: &SchemaGraph, output: &OutputSchema) -> Optio
     if is_unstructured_output(graph, ty) {
         return None;
     }
-    let inner = output_schema_to_json_schema(graph, output, JsonSchemaConfig::MCP)?;
+    let mut inner = output_schema_to_json_schema(graph, output, JsonSchemaConfig::MCP)?;
+    // The rendered output is a self-contained JSON Schema document: any named
+    // definitions live in a `$defs` object at *its* root and every `$ref`
+    // points at `#/$defs/<id>` (document-root relative). Because we re-root the
+    // value under `properties`, those `$defs` must be hoisted up to the wrapper
+    // root, otherwise the refs would dangle. This mirrors
+    // `input_schema_to_json_schema`, which keeps `$defs` at the document root.
+    let defs = inner.as_object_mut().and_then(|obj| obj.remove("$defs"));
     // The new model carries no output element name (§4.7), so the single
     // return value is wrapped under the same synthetic key the response mapper
     // uses after the new→legacy conversion (`FALLBACK_OUTPUT_FIELD_NAME`). This
@@ -101,11 +108,18 @@ fn structured_output_schema(graph: &SchemaGraph, output: &OutputSchema) -> Optio
     } else {
         vec![Value::String(FALLBACK_OUTPUT_FIELD_NAME.to_string())]
     };
-    Some(rmcp::model::object(json!({
+    let mut wrapper = json!({
         "type": "object",
         "properties": { FALLBACK_OUTPUT_FIELD_NAME: inner },
         "required": required,
-    })))
+    });
+    if let Some(defs) = defs {
+        wrapper
+            .as_object_mut()
+            .expect("wrapper is a JSON object literal")
+            .insert("$defs".to_string(), defs);
+    }
+    Some(rmcp::model::object(wrapper))
 }
 
 /// Whether the output type is unstructured (`Text` / `Binary`) or multimodal,
@@ -227,5 +241,152 @@ mod tests {
         let schema = get_mcp_tool_schema(&graph, &ctor, &meth);
         let out = schema.output_schema.expect("output schema");
         assert_eq!(out["required"], json!([]));
+    }
+
+    #[test]
+    fn structured_output_hoists_defs_to_root_so_refs_resolve() {
+        use golem_common::schema::graph::{SchemaGraph as Graph, SchemaTypeDef};
+        use golem_common::schema::metadata::TypeId;
+
+        // An output type that references a named definition forces the
+        // renderer to emit a `$defs` table plus a `$ref` into it. The wrapped
+        // MCP output schema must keep `$defs` at the document root so the
+        // `#/$defs/<id>` ref still resolves.
+        let id = TypeId::new("MyType");
+        let graph = Graph {
+            defs: vec![SchemaTypeDef {
+                id: id.clone(),
+                name: None,
+                body: SchemaType::bool(),
+            }],
+            root: SchemaType::bool(),
+        };
+        let ctor = constructor(vec![]);
+        let meth = method(
+            vec![NamedField::user_supplied("city", SchemaType::string())],
+            OutputSchema::Single(Box::new(SchemaType::ref_to(id))),
+        );
+        let schema = get_mcp_tool_schema(&graph, &ctor, &meth);
+        let out = schema.output_schema.expect("structured output schema");
+
+        // `$defs` hoisted to the wrapper root, and the value is a `$ref`.
+        assert!(
+            out["$defs"].is_object(),
+            "expected $defs at the wrapper root: {out:#?}"
+        );
+        let value_ref = out["properties"]["value"]["$ref"]
+            .as_str()
+            .expect("value property is a $ref");
+        let key = value_ref
+            .strip_prefix("#/$defs/")
+            .expect("ref points into $defs");
+        assert!(
+            out["$defs"][key].is_object(),
+            "ref {value_ref} must resolve against the wrapper-root $defs"
+        );
+    }
+
+    use golem_common::schema::graph::SchemaTypeDef;
+    use golem_common::schema::metadata::TypeId;
+    use golem_common::schema::proptest_strategies::schema_graph_strategy;
+    use golem_common::schema::schema_type::NamedFieldType;
+    use proptest::prelude::*;
+
+    /// Collect every local `$ref` in `doc` that does not resolve against the
+    /// document root (RFC 6901 JSON Pointer semantics via `Value::pointer`).
+    fn unresolved_local_refs(doc: &Value) -> Vec<String> {
+        fn walk(doc: &Value, node: &Value, out: &mut Vec<String>) {
+            match node {
+                Value::Object(obj) => {
+                    if let Some(Value::String(reference)) = obj.get("$ref") {
+                        match reference.strip_prefix('#') {
+                            Some(pointer) if doc.pointer(pointer).is_some() => {}
+                            Some(_) => out.push(reference.clone()),
+                            None => out.push(format!("non-local ref: {reference}")),
+                        }
+                    }
+                    for child in obj.values() {
+                        walk(doc, child, out);
+                    }
+                }
+                Value::Array(items) => {
+                    for child in items {
+                        walk(doc, child, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(doc, doc, &mut out);
+        out
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// The MCP input and output schemas produced by `get_mcp_tool_schema`
+        /// must be self-contained: every `$ref` resolves against the document
+        /// root. This guards the wrapping / re-rooting done by
+        /// `structured_output_schema` and `combined_input_schema`. We force the
+        /// output to be a named ref to a record so the structured-output path
+        /// (which emits `$defs`) always runs.
+        #[test]
+        fn mcp_tool_schemas_are_self_contained(mut graph in schema_graph_strategy()) {
+            let forced_id = TypeId::new("mcp/forced~output");
+            let forced_body = SchemaType::record(vec![NamedFieldType {
+                name: "payload".to_string(),
+                body: graph.root.clone(),
+                metadata: Default::default(),
+            }]);
+            graph.defs.push(SchemaTypeDef {
+                id: forced_id.clone(),
+                name: None,
+                body: forced_body,
+            });
+            let ref_ty = SchemaType::ref_to(forced_id);
+
+            let ctor = constructor(vec![NamedField::user_supplied(
+                "ctor_arg",
+                ref_ty.clone(),
+            )]);
+            let meth = method(
+                vec![NamedField::user_supplied("arg", ref_ty.clone())],
+                OutputSchema::Single(Box::new(ref_ty)),
+            );
+            let schema = get_mcp_tool_schema(&graph, &ctor, &meth);
+
+            let input_doc = Value::Object(schema.input_schema);
+            prop_assert!(
+                input_doc["type"] == json!("object"),
+                "input schema is not an object:\n{input_doc:#}"
+            );
+            let unresolved = unresolved_local_refs(&input_doc);
+            prop_assert!(
+                unresolved.is_empty(),
+                "input schema has unresolved refs {unresolved:?}:\n{input_doc:#}"
+            );
+
+            let output_doc = Value::Object(
+                schema
+                    .output_schema
+                    .expect("forced structured output schema"),
+            );
+            prop_assert!(
+                output_doc["type"] == json!("object"),
+                "output schema is not an object:\n{output_doc:#}"
+            );
+            prop_assert!(
+                output_doc["properties"][FALLBACK_OUTPUT_FIELD_NAME]
+                    .get("$defs")
+                    .is_none(),
+                "inner value schema must have had $defs hoisted to wrapper root:\n{output_doc:#}"
+            );
+            let unresolved = unresolved_local_refs(&output_doc);
+            prop_assert!(
+                unresolved.is_empty(),
+                "output schema has unresolved refs {unresolved:?}:\n{output_doc:#}"
+            );
+        }
     }
 }

@@ -27,7 +27,7 @@ use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, QuantitySpec,
     SchemaType, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
 };
-use crate::schema::tests::strategies::schema_graph_strategy;
+use crate::schema::proptest_strategies::schema_graph_strategy;
 use proptest::prelude::*;
 use std::collections::HashSet;
 

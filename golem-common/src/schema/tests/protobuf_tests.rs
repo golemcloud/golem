@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::strategies;
+use crate::schema::proptest_strategies as strategies;
 use crate::base_model::Empty;
+use crate::base_model::account::AccountId;
 use crate::base_model::agent::{
     AgentMode, AgentTypeName, RegisteredAgentTypeImplementer, Snapshotting,
 };
@@ -134,6 +135,8 @@ fn registered_agent_type_schema_proto_round_trip() {
         implemented_by: RegisteredAgentTypeImplementer {
             component_id: ComponentId(Uuid::nil()),
             component_revision: ComponentRevision::INITIAL,
+            component_name: "test-component".to_string(),
+            account_id: AccountId(Uuid::from_u128(0x1234)),
         },
     };
     let proto: golem_api_grpc::proto::golem::registry::RegisteredAgentTypeSchema =

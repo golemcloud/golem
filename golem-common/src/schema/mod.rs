@@ -37,6 +37,12 @@ pub mod validation;
 #[cfg(feature = "full")]
 pub mod wit;
 
+/// Proptest strategies for `SchemaType` / `SchemaValue` / `SchemaGraph`,
+/// available to this crate's tests and (behind the `proptest` feature) to
+/// downstream crates' test code.
+#[cfg(any(test, feature = "proptest"))]
+pub mod proptest_strategies;
+
 #[cfg(test)]
 mod tests;
 

@@ -21,7 +21,7 @@ use crate::schema::schema_type::{
     UnionBranch, UnionSpec,
 };
 use crate::schema::schema_value::{SchemaValue, TextValuePayload, UnionValuePayload};
-use crate::schema::tests::strategies::schema_values_eq;
+use crate::schema::proptest_strategies::schema_values_eq;
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;

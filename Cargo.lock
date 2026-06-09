@@ -4413,6 +4413,7 @@ dependencies = [
  "poem-openapi",
  "poem-openapi-derive",
  "prometheus",
+ "proptest",
  "prost 0.14.3",
  "prost-types",
  "regex",
