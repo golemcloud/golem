@@ -30,6 +30,7 @@ pub mod docker_mysql;
 pub mod docker_postgres;
 pub mod provided_postgres;
 pub mod sqlite;
+pub mod unavailable;
 
 #[async_trait]
 pub trait Rdb: Send + Sync {
@@ -113,7 +114,7 @@ impl DbInfo {
                 ),
                 (
                     "GOLEM__DB__CONFIG__FOREIGN_KEYS".to_string(),
-                    "false".to_string(),
+                    "true".to_string(),
                 ),
             ]
             .into(),

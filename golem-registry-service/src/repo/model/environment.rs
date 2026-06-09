@@ -52,6 +52,7 @@ pub struct EnvironmentExtRecord {
     pub environment_id: Uuid,
     pub name: String,
     pub application_id: Uuid,
+    pub application_name: String,
     #[sqlx(flatten)]
     pub audit: AuditFields,
     pub current_revision_id: i64,
@@ -132,6 +133,7 @@ impl EnvironmentRevisionRecord {
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentExtRevisionRecord {
     pub application_id: Uuid,
+    pub application_name: String,
 
     #[sqlx(flatten)]
     pub revision: EnvironmentRevisionRecord,
@@ -152,6 +154,7 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
             id: EnvironmentId(value.revision.environment_id),
             revision: value.revision.revision_id.try_into()?,
             application_id: ApplicationId(value.application_id),
+            application_name: ApplicationName(value.application_name),
             name: EnvironmentName(value.revision.name),
             diff_model_version: DIFF_MODEL_VERSION,
             compatibility_check: value.revision.compatibility_check,
@@ -191,6 +194,7 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct OptionalEnvironmentExtRevisionRecord {
     pub application_id: Uuid,
+    pub application_name: String,
     pub environment_id: Option<Uuid>,
     pub revision_id: Option<i64>,
     pub name: Option<String>,
@@ -233,6 +237,7 @@ impl OptionalEnvironmentExtRevisionRecord {
         let security_overrides = self.security_overrides?;
         Some(EnvironmentExtRevisionRecord {
             application_id: self.application_id,
+            application_name: self.application_name,
             revision: EnvironmentRevisionRecord {
                 environment_id,
                 revision_id,

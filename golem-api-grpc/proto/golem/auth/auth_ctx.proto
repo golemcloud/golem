@@ -6,11 +6,24 @@ import "golem/common/account_id.proto";
 import "golem/account/plan_id.proto";
 import "golem/auth/account_role.proto";
 import "golem/common/empty.proto";
+import "golem/common/uuid.proto";
+
+message AuthGrantSurface {
+  repeated bytes positive = 1;
+  repeated bytes negative = 2;
+}
+
+message AuthEffectiveSurface {
+  repeated golem.common.UUID source_card_ids = 1;
+  repeated AuthGrantSurface lower = 2;
+  repeated AuthGrantSurface upper = 3;
+}
 
 message UserAuthCtx {
   golem.common.AccountId account_id = 1;
   golem.account.PlanId plan_id = 2;
   repeated AccountRole account_roles = 3;
+  AuthEffectiveSurface effective_surface = 4;
 }
 
 message AgentAuthCtx {
@@ -22,6 +35,7 @@ message AdminImpersonationAuthCtx {
   golem.common.AccountId target_account_id = 2;
   repeated AccountRole target_account_roles = 3;
   golem.account.PlanId target_account_plan_id = 4;
+  AuthEffectiveSurface effective_surface = 5;
 }
 
 message AuthCtx {

@@ -29,7 +29,6 @@ desert_rust = { workspace = true, optional = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true, optional = true }
 poem-openapi = { workspace = true, optional = true }
-semver = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
@@ -37,11 +36,7 @@ uuid = { workspace = true }
 url = { workspace = true, optional = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
-wasmparser = { workspace = true, optional = true }
 wasm-wave = { workspace = true, optional = true }
-wasm-metadata = { workspace = true, optional = true }
-wit-component = { workspace = true, optional = true }
-wit-parser = { workspace = true, optional = true }
 wasip2 = { workspace = true, optional = true }
 
 proptest = { workspace = true, optional = true }
@@ -74,17 +69,12 @@ host = [
     "dep:prost",
     "dep:prost-build",
     "dep:protox",
-    "dep:semver",
     "dep:serde",
     "dep:serde_json",
     "dep:url",
-    "dep:wasm-metadata",
-    "dep:wasmparser",
     "dep:wasm-wave",
     "dep:wasmtime",
     "dep:wasmtime-wasi",
-    "dep:wit-component",
-    "dep:wit-parser"
 ]
 
 derive = ["dep:golem-wasm-derive"]
@@ -92,15 +82,3 @@ derive = ["dep:golem-wasm-derive"]
 guest = ["dep:wit-bindgen", "dep:wasip2"]
 
 client = ["derive", "dep:serde", "dep:serde_json", "dep:bigdecimal", "dep:bit-vec", "dep:url"]
-
-[[test]]
-name = "exports"
-harness = false
-
-[[test]]
-name = "mems"
-harness = false
-
-[[test]]
-name = "metadata"
-harness = false

@@ -20,6 +20,7 @@ use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
+use crate::worker::status_checkpointer;
 use crate::worker::{
     FinalWorkerState, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
 };
@@ -29,7 +30,7 @@ use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
@@ -367,13 +368,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         // Making sure all pending commits are flushed
         // Make sure all pending commits are done
-        store
-            .lock()
-            .await
-            .data()
-            .get_public_state()
-            .worker()
+        let worker = store.lock().await.data().get_public_state().worker();
+        worker
             .commit_oplog_and_update_state(CommitLevel::Always)
+            .await;
+
+        // The worker is going idle; persist its cached status synchronously now instead of leaving
+        // it for the next background sweep, so reads of an idle worker see an up-to-date blob.
+        worker.force_flush_status().await;
+
+        // Idle is a structurally clean boundary (the invocation loop has exited and committed, so
+        // no jumpable region is open): write a throttled clean status checkpoint so a later
+        // jump-induced recompute can fold forward from here.
+        worker
+            .checkpoint_status(status_checkpointer::CheckpointReason::Idle)
             .await;
     }
 }
@@ -562,8 +570,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
 
             // Then, try to process a pending invocation
-            if let Some(timestamped_invocation) = status.pending_invocations.first() {
-                let idempotency_key = timestamped_invocation.invocation.idempotency_key();
+            if let Some(pending_invocation) = status.pending_invocations.first() {
+                let idempotency_key = pending_invocation.idempotency_key();
                 let invocation_span = if let Some(idempotency_key) = idempotency_key {
                     let spans = self.parent.external_invocation_spans.read().await;
                     spans.get(idempotency_key).cloned()
@@ -572,6 +580,20 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 };
 
                 let invocation_span = invocation_span.unwrap_or(Span::current());
+
+                // The status record only stores a lightweight reference to the pending invocation;
+                // hydrate the full invocation (including its payload) from the oplog before running.
+                let timestamped_invocation = match self
+                    .parent
+                    .hydrate_pending_invocation(pending_invocation)
+                    .await
+                {
+                    Ok(invocation) => invocation,
+                    Err(error) => {
+                        warn!("Failed to hydrate pending invocation from oplog: {error}");
+                        break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
+                    }
+                };
 
                 let outcome = async {
                     let mut store = self.store.lock().await;
@@ -582,7 +604,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         store: store.deref_mut(),
                     };
                     invocation
-                        .external_invocation(timestamped_invocation.clone(), &invocation_span)
+                        .external_invocation(timestamped_invocation, &invocation_span)
                         .await
                 }
                 .instrument(span!(parent: &invocation_span, Level::INFO, "invocation_queue_pickup"))
@@ -1240,7 +1262,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: &IdempotencyKey,
         invocation: &AgentInvocation,
         agent_id: &AgentId,
-        parsed_agent_id: &Option<ParsedAgentId>,
+        parsed_agent_id: &Option<LegacyParsedAgentId>,
     ) {
         let invocation_span = invocation_context.spans.first().start_span(None);
         invocation_span.set_attribute(
@@ -1359,6 +1381,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                         ))
                                         .await;
                                     debug!("Periodic snapshot saved successfully");
+
+                                    // A snapshot is committed between invocations, so no jumpable
+                                    // region is open: a clean boundary to checkpoint the status,
+                                    // aligning the checkpoint with the snapshot index.
+                                    self.parent
+                                        .checkpoint_status(
+                                            status_checkpointer::CheckpointReason::Snapshot,
+                                        )
+                                        .await;
                                 }
                                 Err(err) => {
                                     warn!("Failed to convert snapshot payload: {err}");

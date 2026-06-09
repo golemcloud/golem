@@ -1,0 +1,5 @@
+error: `#[schema(transparent)]` requires a tuple struct with exactly one field
+  --> tests/compile_fail/transparent_multi_field.rs:19:8
+   |
+19 | struct BadTransparent(u32, String);
+   |        ^^^^^^^^^^^^^^

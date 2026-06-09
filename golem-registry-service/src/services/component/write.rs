@@ -31,9 +31,14 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
+    ComponentVerb, PermissionTarget,
+};
 use golem_common::model::component::{
-    AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentRevision,
-    ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
+    AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
+    ComponentRevision, ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
     PluginInstallationAction,
 };
 use golem_common::model::component::{
@@ -45,8 +50,7 @@ use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
-use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
@@ -113,10 +117,11 @@ impl ComponentWriteService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateComponent,
+        authorize_component_permission(
+            auth,
+            &environment,
+            &component_creation.component_name,
+            ComponentVerb::Create,
         )?;
 
         // Fast path check to avoid processing the component if we are going to reject it anyway
@@ -243,7 +248,12 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into_model(environment.application_id, environment.owner_account_id)?;
+            .try_into_model(
+                environment.application_id,
+                environment.owner_account_id,
+                environment.application_name.clone(),
+                environment.name.clone(),
+            )?;
 
         self.component_compilation
             .enqueue_compilation(environment_id, component_id, stored_component.revision)
@@ -279,25 +289,22 @@ impl ComponentWriteService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
-        )
-        .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
+        let component_name = ComponentName(component_record.name.clone());
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateComponent,
-        )?;
+        authorize_component_permission(auth, &environment, &component_name, ComponentVerb::View)
+            .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
+        authorize_component_permission(auth, &environment, &component_name, ComponentVerb::Update)?;
 
         if component_update.allow_incompatible_config && environment.compatibility_check {
             return Err(ComponentError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
-        let mut component = component_record
-            .try_into_model(environment.application_id, environment.owner_account_id)?;
+        let mut component = component_record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name.clone(),
+            environment.name.clone(),
+        )?;
 
         if component_update.current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?
@@ -446,7 +453,12 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into_model(environment.application_id, environment.owner_account_id)?;
+            .try_into_model(
+                environment.application_id,
+                environment.owner_account_id,
+                environment.application_name.clone(),
+                environment.name.clone(),
+            )?;
 
         self.component_compilation
             .enqueue_compilation(environment_id, component_id, stored_component.revision)
@@ -478,21 +490,17 @@ impl ComponentWriteService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
-        )
-        .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
+        let component_name = ComponentName(component_record.name.clone());
+        authorize_component_permission(auth, &environment, &component_name, ComponentVerb::View)
+            .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
+        authorize_component_permission(auth, &environment, &component_name, ComponentVerb::Delete)?;
 
-        auth.authorize_environment_action(
+        let component = component_record.try_into_model(
+            environment.application_id,
             environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateComponent,
+            environment.application_name,
+            environment.name,
         )?;
-
-        let component = component_record
-            .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         if current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?
@@ -975,6 +983,23 @@ fn validate_component_metadata_invariants(
     }
 
     Ok(())
+}
+
+fn authorize_component_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    component_name: &ComponentName,
+    verb: ComponentVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Component(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_id.to_string(),
+            application: environment.application_name.0.clone(),
+            environment: environment.name.0.clone(),
+        },
+        resource: ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
+    }))
 }
 
 fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), ComponentError> {

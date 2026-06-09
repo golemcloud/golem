@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::bridge_gen::type_naming::TypeName;
-use crate::bridge_gen::type_naming::analyzed_type_ext::AnalysedTypeExt;
-use golem_wasm::analysis::AnalysedType;
+use crate::bridge_gen::type_naming::schema_type_ext::SchemaTypeExt;
+use golem_common::schema::schema_type::SchemaType;
 use heck::ToUpperCamelCase;
 use itertools::Itertools;
 use std::fmt::{Debug, Display, Formatter};
@@ -42,7 +42,7 @@ impl Display for TypeScriptTypeName {
 }
 
 impl TypeName for TypeScriptTypeName {
-    fn from_analysed_type(_typ: &AnalysedType) -> Option<Self> {
+    fn from_schema_type(_typ: &SchemaType) -> Option<Self> {
         None
     }
 
@@ -77,31 +77,49 @@ impl TypeName for TypeScriptTypeName {
             .into()
     }
 
-    fn requires_type_name(typ: &AnalysedType) -> bool {
+    fn requires_type_name(typ: &SchemaType) -> bool {
         match typ {
-            AnalysedType::Variant(variant) => {
-                variant.cases.iter().any(|case| case.typ.can_be_named())
+            // A ref always carries its own generated name.
+            SchemaType::Ref { .. } => true,
+            // Inline variants need a named definition only when at least
+            // one case carries a payload that itself needs a name — this
+            // mirrors the legacy `AnalysedType::Variant` behaviour.
+            SchemaType::Variant { cases, .. } => {
+                cases.iter().any(|case| case.payload.can_be_named())
             }
-            AnalysedType::Flags(_) | AnalysedType::Record(_) => true,
-            AnalysedType::Enum(_)
-            | AnalysedType::Result(_)
-            | AnalysedType::Option(_)
-            | AnalysedType::List(_)
-            | AnalysedType::Tuple(_)
-            | AnalysedType::Str(_)
-            | AnalysedType::Chr(_)
-            | AnalysedType::F64(_)
-            | AnalysedType::F32(_)
-            | AnalysedType::U64(_)
-            | AnalysedType::S64(_)
-            | AnalysedType::U32(_)
-            | AnalysedType::S32(_)
-            | AnalysedType::U16(_)
-            | AnalysedType::S16(_)
-            | AnalysedType::U8(_)
-            | AnalysedType::S8(_)
-            | AnalysedType::Bool(_)
-            | AnalysedType::Handle(_) => false,
+            SchemaType::Flags { .. } | SchemaType::Record { .. } => true,
+            SchemaType::Enum { .. }
+            | SchemaType::Result { .. }
+            | SchemaType::Option { .. }
+            | SchemaType::List { .. }
+            | SchemaType::Tuple { .. }
+            | SchemaType::Bool { .. }
+            | SchemaType::S8 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::S64 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::U64 { .. }
+            | SchemaType::F32 { .. }
+            | SchemaType::F64 { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::String { .. }
+            | SchemaType::FixedList { .. }
+            | SchemaType::Map { .. }
+            | SchemaType::Text { .. }
+            | SchemaType::Binary { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. }
+            | SchemaType::Duration { .. }
+            | SchemaType::Quantity { .. }
+            | SchemaType::Union { .. }
+            | SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { .. } => false,
         }
     }
 }

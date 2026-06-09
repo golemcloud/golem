@@ -20,8 +20,7 @@ use crate::services::token::TokenService;
 use golem_common::model::Empty;
 use golem_common::model::Page;
 use golem_common::model::account::{
-    Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountSetRoles,
-    AccountUpdate,
+    Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
 use golem_common::model::auth::{Token, TokenCreation, TokenWithSecret};
 use golem_common::model::plan::Plan;
@@ -193,44 +192,6 @@ impl AccountsApi {
         auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
         let result = self.account_service.update(account_id, data, &auth).await?;
-        Ok(Json(result))
-    }
-
-    /// Set the roles of an account
-    #[oai(
-        path = "/:account_id/roles",
-        method = "put",
-        operation_id = "set_account_roles"
-    )]
-    async fn set_account_roles(
-        &self,
-        account_id: Path<AccountId>,
-        payload: Json<AccountSetRoles>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Account>> {
-        let record =
-            recorded_http_api_request!("set_account_roles", account_id = account_id.0.to_string());
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .set_account_roles_internal(account_id.0, payload.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn set_account_roles_internal(
-        &self,
-        account_id: AccountId,
-        payload: AccountSetRoles,
-        auth: AuthCtx,
-    ) -> ApiResult<Json<Account>> {
-        let result = self
-            .account_service
-            .set_roles(account_id, payload, &auth)
-            .await?;
         Ok(Json(result))
     }
 

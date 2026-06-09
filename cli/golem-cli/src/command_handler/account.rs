@@ -93,6 +93,7 @@ impl AccountCommandHandler {
             .create_account(&AccountCreation {
                 name: account_name,
                 email: AccountEmail::new(account_email),
+                roles: Vec::new(),
             })
             .await
             .map_service_error()?;

@@ -37,6 +37,8 @@ impl NamespaceRoutedKeyValueStorage {
     ) -> &Arc<dyn KeyValueStorage + Send + Sync> {
         match namespace {
             KeyValueStorageNamespace::Worker { .. } => &self.cache,
+            KeyValueStorageNamespace::AgentStatus { .. } => &self.cache,
+            KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => &self.cache,
             _ => &self.persistent,
         }
     }
@@ -53,7 +55,11 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
-        self.backend_for_namespace(&namespace)
+        let backend = self.backend_for_namespace(&namespace);
+        if Arc::ptr_eq(backend, &self.cache) {
+            crate::metrics::workers::record_worker_kv_cache_value_size(value.len());
+        }
+        backend
             .set(svc_name, api_name, entity_name, namespace, key, value)
             .await
     }
@@ -66,7 +72,13 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String> {
-        self.backend_for_namespace(&namespace)
+        let backend = self.backend_for_namespace(&namespace);
+        if Arc::ptr_eq(backend, &self.cache) {
+            for (_, value) in pairs {
+                crate::metrics::workers::record_worker_kv_cache_value_size(value.len());
+            }
+        }
+        backend
             .set_many(svc_name, api_name, entity_name, namespace, pairs)
             .await
     }
@@ -80,7 +92,11 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<bool, String> {
-        self.backend_for_namespace(&namespace)
+        let backend = self.backend_for_namespace(&namespace);
+        if Arc::ptr_eq(backend, &self.cache) {
+            crate::metrics::workers::record_worker_kv_cache_value_size(value.len());
+        }
+        backend
             .set_if_not_exists(svc_name, api_name, entity_name, namespace, key, value)
             .await
     }
@@ -108,6 +124,18 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
     ) -> Result<Vec<Option<Bytes>>, String> {
         self.backend_for_namespace(&namespace)
             .get_many(svc_name, api_name, entity_name, namespace, keys)
+            .await
+    }
+
+    async fn get_all(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, String> {
+        self.backend_for_namespace(&namespace)
+            .get_all(svc_name, api_name, entity_name, namespace)
             .await
     }
 

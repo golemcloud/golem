@@ -1,0 +1,5 @@
+error: discriminator attributes (`prefix`, `suffix`, `contains`, `regex`, `field_equals`, `field_absent`) require `#[schema(union)]` on the enum
+  --> tests/compile_fail/discriminator_on_non_union_enum.rs:20:5
+   |
+20 |     A(String),
+   |     ^

@@ -45,7 +45,6 @@ pub trait EnvironmentRepo: Send + Sync {
         application_id: Uuid,
         name: &str,
         actor: Uuid,
-        override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn get_by_id(
@@ -53,14 +52,12 @@ pub trait EnvironmentRepo: Send + Sync {
         environment_id: Uuid,
         actor: Uuid,
         include_deleted: bool,
-        override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn list_by_app(
         &self,
         application_id: Uuid,
         actor: Uuid,
-        override_visibility: bool,
     ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn create(
@@ -126,10 +123,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         application_id: Uuid,
         name: &str,
         actor: Uuid,
-        override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
-            .get_by_name(application_id, name, actor, override_visibility)
+            .get_by_name(application_id, name, actor)
             .instrument(Self::span_name(application_id, name))
             .await
     }
@@ -139,10 +135,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         environment_id: Uuid,
         actor: Uuid,
         include_deleted: bool,
-        override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
-            .get_by_id(environment_id, actor, include_deleted, override_visibility)
+            .get_by_id(environment_id, actor, include_deleted)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -151,10 +146,9 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         application_id: Uuid,
         actor: Uuid,
-        override_visibility: bool,
     ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
-            .list_by_app(application_id, actor, override_visibility)
+            .list_by_app(application_id, actor)
             .instrument(Self::span_env(application_id))
             .await
     }
@@ -265,14 +259,13 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         application_id: Uuid,
         name: &str,
         actor: Uuid,
-        override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("get_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name, e.application_id,
+                        e.name, e.application_id, ap.name AS application_name,
                         r.environment_id, r.revision_id, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides,
@@ -316,16 +309,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND a.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
                         AND e.deleted_at IS NULL
-                        AND (
-                            $4
-                            OR a.account_id = $3
-                            OR esr.roles IS NOT NULL
-                        )
                 "# })
                 .bind(application_id)
                 .bind(name)
-                .bind(actor)
-                .bind(override_visibility),
+                .bind(actor),
             )
             .await?;
 
@@ -337,14 +324,13 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         environment_id: Uuid,
         actor: Uuid,
         include_deleted: bool,
-        override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name, e.application_id,
+                        e.name, e.application_id, ap.name AS application_name,
                         r.environment_id, r.revision_id, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides,
@@ -389,16 +375,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND a.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
                         AND ($3 OR e.deleted_at IS NULL)
-                        AND (
-                            $4
-                            OR a.account_id = $2
-                            OR esr.roles IS NOT NULL
-                        )
                 "# })
                 .bind(environment_id)
                 .bind(actor)
-                .bind(include_deleted)
-                .bind(override_visibility),
+                .bind(include_deleted),
             )
             .await?;
 
@@ -409,14 +389,13 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         application_id: Uuid,
         actor: Uuid,
-        override_visibility: bool,
     ) -> Result<Vec<OptionalEnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
             .with_ro("list_by_owner")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        e.name, e.application_id,
+                        e.name, e.application_id, ap.name AS application_name,
                         r.environment_id, r.revision_id, r.hash,
                         r.created_at, r.created_by, r.deleted,
                         r.compatibility_check, r.version_check, r.security_overrides,
@@ -460,16 +439,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     WHERE
                         ap.application_id = $1
                         AND a.deleted_at IS NULL
-                        AND (
-                            $3
-                            OR a.account_id = $2
-                            OR esr.roles IS NOT NULL
-                        )
                     ORDER BY e.name
                 "#})
                 .bind(application_id)
-                .bind(actor)
-                .bind(override_visibility),
+                .bind(actor),
             )
             .await?;
 
@@ -493,6 +466,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                       environment_id,
                       name,
                       application_id,
+                      (SELECT ap.name
+                       FROM applications ap
+                       WHERE ap.application_id = environments.application_id) AS application_name,
                       created_at,
                       updated_at,
                       deleted_at,
@@ -524,6 +500,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
             Ok(EnvironmentExtRevisionRecord {
                 application_id,
+                application_name: environment_record.application_name,
                 revision,
 
                 owner_account_id: environment_record.owner_account_id,
@@ -554,6 +531,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                       environment_id,
                       name,
                       application_id,
+                      (SELECT ap.name
+                       FROM applications ap
+                       WHERE ap.application_id = environments.application_id) AS application_name,
                       created_at,
                       updated_at,
                       deleted_at,
@@ -603,6 +583,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
             Ok(EnvironmentExtRevisionRecord {
                 application_id,
+                application_name: environment_record.application_name,
                 revision,
 
                 owner_account_id: environment_record.owner_account_id,
@@ -622,7 +603,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
-                let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
+                let revision: EnvironmentRevisionRecord =
+                    Self::insert_revision(tx, revision).await?;
 
                 // TODO: atomic:
                 //       should use something like:
@@ -632,7 +614,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 //         )
                 //         SELECT -- with joins...
                 //       so we avoid selecting the same tables multiple times, same goes for logical DELETE
-
 
                 // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
                 let environment_record: EnvironmentExtRecord = tx.fetch_optional_as(
@@ -647,6 +628,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             environment_id,
                             name,
                             application_id,
+                            (SELECT ap.name
+                             FROM applications ap
+                             WHERE ap.application_id = environments.application_id) AS application_name,
                             created_at,
                             updated_at,
                             deleted_at,
@@ -715,7 +699,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
-                    .bind(revision.environment_id)
+                    .bind(revision.environment_id),
                 )
                 .await
                 .to_error_on_unique_violation(EnvironmentRepoError::EnvironmentViolatesUniqueness)?
@@ -723,15 +707,19 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                 Ok(EnvironmentExtRevisionRecord {
                     application_id: environment_record.application_id,
+                    application_name: environment_record.application_name,
                     revision,
 
                     owner_account_id: environment_record.owner_account_id,
                     environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                     current_deployment_revision: environment_record.current_deployment_revision,
-                    current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
-                    current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
-                    current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
+                    current_deployment_deployment_revision: environment_record
+                        .current_deployment_deployment_revision,
+                    current_deployment_deployment_version: environment_record
+                        .current_deployment_deployment_version,
+                    current_deployment_deployment_hash: environment_record
+                        .current_deployment_deployment_hash,
                 })
             }
             .boxed()
@@ -746,7 +734,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     {
         self.with_tx_err("delete", |tx| {
             async move {
-                let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
+                let revision: EnvironmentRevisionRecord =
+                    Self::insert_revision(tx, revision).await?;
 
                 let environment_record: EnvironmentExtRecord = tx.fetch_optional_as(
                     sqlx::query_as(indoc! { r#"
@@ -761,6 +750,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             environment_id,
                             name,
                             application_id,
+                            (SELECT ap.name
+                             FROM applications ap
+                             WHERE ap.application_id = environments.application_id) AS application_name,
                             created_at,
                             updated_at,
                             deleted_at,
@@ -830,7 +822,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     .bind(&revision.audit.created_at)
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
-                    .bind(revision.environment_id)
+                    .bind(revision.environment_id),
                 )
                 .await?
                 .ok_or(EnvironmentRepoError::ConcurrentModification)?;
@@ -856,23 +848,24 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     app_name,
                     revision.name.clone(),
                 );
-                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
-                    tx,
-                    &change_event,
-                )
-                .await?;
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                    .await?;
 
                 Ok(EnvironmentExtRevisionRecord {
                     application_id: environment_record.application_id,
+                    application_name: environment_record.application_name,
                     revision,
 
                     owner_account_id: environment_record.owner_account_id,
                     environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                     current_deployment_revision: environment_record.current_deployment_revision,
-                    current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
-                    current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
-                    current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
+                    current_deployment_deployment_revision: environment_record
+                        .current_deployment_deployment_revision,
+                    current_deployment_deployment_version: environment_record
+                        .current_deployment_deployment_version,
+                    current_deployment_deployment_hash: environment_record
+                        .current_deployment_deployment_hash,
                 })
             }
             .boxed()
@@ -977,10 +970,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
             WHERE
                 a.deleted_at IS NULL
-                AND (
-                    a.account_id = $1
-                    OR esr.roles IS NOT NULL
-                )
                 {account_email_filter}
                 {app_name_filter}
                 {env_name_filter}

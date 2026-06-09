@@ -52,7 +52,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, UntypedDataValue};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal, UntypedDataValue};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -63,7 +63,7 @@ use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAg
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
-    OwnedAgentId, ScanCursor, ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation,
+    OwnedAgentId, PendingUpdateKind, ScanCursor, ScheduledAction, ShardId, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -621,7 +621,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .last_known_status
             .pending_invocations
             .iter()
-            .any(|invocation| invocation.invocation.idempotency_key() == Some(&idempotency_key))
+            .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
         {
             let worker = Worker::get_or_create_suspended(
                 self,
@@ -1117,7 +1117,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
-        if let Ok(agent_id) = ParsedAgentId::parse(
+        if let Ok(agent_id) = LegacyParsedAgentId::parse(
             &owned_agent_id.agent_id.agent_id,
             &component_metadata.metadata,
         ) && let Some(agent_type) = component_metadata
@@ -1143,7 +1143,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .component_service()
             .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
             .await
-            && let Ok(agent_id) = ParsedAgentId::parse(
+            && let Ok(agent_id) = LegacyParsedAgentId::parse(
                 &owned_agent_id.agent_id.agent_id,
                 &target_component_metadata.metadata,
             )
@@ -1177,7 +1177,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .last_known_status
                     .pending_updates
                     .iter()
-                    .any(|update| update.description == update_description)
+                    .any(|update| {
+                        update.kind == PendingUpdateKind::Automatic
+                            && update.target_revision == target_revision
+                    })
                 {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
@@ -1245,9 +1248,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
 
             UpdateMode::Manual => {
-                if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                    matches!(invocation, TimestampedAgentInvocation { invocation: AgentInvocation::ManualUpdate { target_revision: update_target_revision, .. }, ..} if *update_target_revision == target_revision)
-                ) {
+                if metadata
+                    .last_known_status
+                    .pending_invocations
+                    .iter()
+                    .any(|invocation| {
+                        invocation.manual_update_target_revision == Some(target_revision)
+                    })
+                {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
                     ));
@@ -1340,7 +1348,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let agent_type_name =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
         let agent_mode = self
@@ -1444,7 +1452,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let agent_type_name =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
         let agent_mode = self
@@ -1695,7 +1703,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
 
                 let agent_type =
-                    ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+                    LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id)
+                        .ok();
 
                 let installation = agent_type
                     .as_ref()
@@ -1767,7 +1776,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
         let agent_type =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
         let installation = agent_type
             .as_ref()
             .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
@@ -2040,14 +2049,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let latest_status = metadata.last_known_status;
         for pending_invocation in &latest_status.pending_invocations {
-            if let TimestampedAgentInvocation {
-                timestamp,
-                invocation: AgentInvocation::ManualUpdate { target_revision },
-            } = pending_invocation
-            {
+            if let Some(target_revision) = pending_invocation.manual_update_target_revision {
                 updates.push(golem::worker::UpdateRecord {
-                    timestamp: Some((*timestamp).into()),
-                    target_revision: (*target_revision).into(),
+                    timestamp: Some(pending_invocation.timestamp.into()),
+                    target_revision: target_revision.into(),
                     update: Some(golem::worker::update_record::Update::Pending(
                         golem::worker::PendingUpdate {},
                     )),
@@ -2057,7 +2062,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for pending_update in &latest_status.pending_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(pending_update.timestamp.into()),
-                target_revision: (*pending_update.description.target_revision()).into(),
+                target_revision: pending_update.target_revision.into(),
                 update: Some(golem::worker::update_record::Update::Pending(
                     golem::worker::PendingUpdate {},
                 )),

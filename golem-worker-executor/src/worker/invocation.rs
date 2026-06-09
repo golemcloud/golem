@@ -18,7 +18,7 @@ use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::agent::AgentError as AgentInvocationError;
 use golem_common::model::agent::UntypedDataValue;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
 use golem_common::model::agent::{
     DataSchema, ElementSchema, NamedElementSchema, UntypedElementValue,
 };
@@ -614,7 +614,7 @@ pub struct LoweredInvocation {
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&LegacyParsedAgentId>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
     let kind = invocation.kind();
     match invocation {

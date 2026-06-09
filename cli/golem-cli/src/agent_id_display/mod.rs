@@ -30,9 +30,11 @@ mod render_ts;
 #[cfg(test)]
 mod tests;
 
-use golem_common::model::agent::structural_format::parse_structural;
-use golem_common::model::agent::{DataSchema, DataValue, ParsedAgentId};
-use golem_wasm::ValueAndType;
+use golem_common::model::agent::text_utils::write_json_escaped;
+use golem_common::schema::agent::{InputSchema, ParsedAgentId};
+use golem_common::schema::graph::{SchemaGraph, TypedSchemaValue};
+use golem_common::schema::schema_type::SchemaType;
+use golem_common::schema::schema_value::SchemaValue;
 
 pub use parse_common::ParseError;
 
@@ -101,43 +103,63 @@ impl std::fmt::Display for SourceLanguage {
     }
 }
 
-/// Renders a [`DataValue`] as a human-readable string using language-specific syntax.
-///
-/// For [`SourceLanguage::Rust`], produces Rust literal syntax (e.g. `"hello"`, `Some(42)`).
-/// For [`SourceLanguage::TypeScript`], produces TypeScript/JSON-like syntax (e.g. `{ ok: 42 }`).
-/// For other languages, falls back to the canonical TypeScript-based format.
-pub fn render_data_value(data_value: &DataValue, source_language: &SourceLanguage) -> String {
+/// Render a paired schema graph + root type + value using language-specific
+/// syntax. Capability values render as `<redacted>`.
+pub fn render_typed_schema_value(
+    typed: &TypedSchemaValue,
+    source_language: &SourceLanguage,
+) -> String {
+    render_schema_value(
+        typed.graph(),
+        typed.root_type(),
+        typed.value(),
+        source_language,
+    )
+}
+
+/// Render a schema-typed value using the given source language's native
+/// syntax.
+pub fn render_schema_value(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    value: &SchemaValue,
+    source_language: &SourceLanguage,
+) -> String {
     match source_language {
-        SourceLanguage::Rust => render_rust::render_data_value_rust(data_value),
-        SourceLanguage::Scala => render_scala::render_data_value_scala(data_value),
-        SourceLanguage::MoonBit => render_moonbit::render_data_value_moonbit(data_value),
+        SourceLanguage::Rust => render_rust::render_value_rust(graph, ty, value),
+        SourceLanguage::Scala => render_scala::render_value_scala(graph, ty, value),
+        SourceLanguage::MoonBit => render_moonbit::render_value_moonbit(graph, ty, value),
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
-            render_ts::render_data_value_ts(data_value)
+            render_ts::render_value_ts(graph, ty, value)
         }
     }
 }
 
-/// Renders a single [`ValueAndType`] using language-specific syntax.
+/// Render a full agent ID string in the form `TypeName(params)[phantom]`.
 ///
-/// This is useful for displaying individual component model values (a subtree of [`DataValue`])
-/// in the source language's native format. Unknown languages fall back to the canonical
-/// TypeScript-based format.
-pub fn render_value_and_type(vat: &ValueAndType, source_language: &SourceLanguage) -> String {
-    match source_language {
-        SourceLanguage::Rust => render_rust::render_value_and_type_rust(vat),
-        SourceLanguage::Scala => render_scala::render_value_and_type_scala(vat),
-        SourceLanguage::MoonBit => render_moonbit::render_value_and_type_moonbit(vat),
-        SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
-            render_ts::render_value_and_type_ts(vat)
-        }
-    }
-}
-
-/// Renders a full agent ID string in the form `TypeName(params)[phantom]`.
-///
-/// The parameters are rendered using [`render_data_value`] with the given source language.
+/// The parameters are rendered using [`render_schema_value`] over each
+/// `Record` field in declaration order.
 pub fn render_agent_id(parsed: &ParsedAgentId, source_language: &SourceLanguage) -> String {
-    let rendered = render_data_value(&parsed.parameters, source_language);
+    let graph = parsed.parameters.graph();
+    let root = parsed.parameters.root_type();
+    let value = parsed.parameters.value();
+    let rendered = match (root, value) {
+        (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: vs })
+            if fields.len() == vs.len() =>
+        {
+            let mut parts = Vec::with_capacity(fields.len());
+            for (field, val) in fields.iter().zip(vs.iter()) {
+                parts.push(render_schema_value(
+                    graph,
+                    &field.body,
+                    val,
+                    source_language,
+                ));
+            }
+            parts.join(", ")
+        }
+        _ => render_schema_value(graph, root, value, source_language),
+    };
     let mut result = format!("{}({rendered})", parsed.agent_type);
     if let Some(uuid) = &parsed.phantom_id {
         result.push_str(&format!("[{uuid}]"));
@@ -145,34 +167,33 @@ pub fn render_agent_id(parsed: &ParsedAgentId, source_language: &SourceLanguage)
     result
 }
 
-/// Renders an [`AnalysedType`] as a human-readable type expression using language-specific syntax.
-///
-/// When `prefer_name` is true and the type has a name (e.g., named records, variants),
-/// the name is used instead of the inline structural representation. Unknown languages fall back
-/// to the canonical TypeScript-based format.
+/// Renders a [`SchemaType`] as a human-readable type expression using
+/// language-specific syntax.
 pub fn render_type_for_language(
     lang: &SourceLanguage,
-    typ: &golem_wasm::analysis::AnalysedType,
+    graph: &SchemaGraph,
+    ty: &SchemaType,
     prefer_name: bool,
 ) -> String {
     match lang {
-        SourceLanguage::Rust => render_rust::render_type_rust(typ, prefer_name),
-        SourceLanguage::Scala => render_scala::render_type_scala(typ, prefer_name),
-        SourceLanguage::MoonBit => render_moonbit::render_type_moonbit(typ, prefer_name),
+        SourceLanguage::Rust => render_rust::render_type_rust(graph, ty, prefer_name),
+        SourceLanguage::Scala => render_scala::render_type_scala(graph, ty, prefer_name),
+        SourceLanguage::MoonBit => render_moonbit::render_type_moonbit(graph, ty, prefer_name),
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
-            render_ts::render_type_ts(typ, prefer_name)
+            render_ts::render_type_ts(graph, ty, prefer_name)
         }
     }
 }
 
-/// Parses a type string using language-specific syntax into an `AnalysedType`.
+/// Parses a type string using language-specific syntax into a
+/// [`SchemaGraph`] + [`SchemaType`] pair.
 ///
 /// For known source languages, attempts language-specific parsing.
 /// For unknown languages, tries each known parser in turn.
 pub fn parse_type_for_language(
     input: &str,
     source_language: &SourceLanguage,
-) -> Result<golem_wasm::analysis::AnalysedType, ParseError> {
+) -> Result<(SchemaGraph, SchemaType), ParseError> {
     match source_language {
         SourceLanguage::Rust => parse_type_rust::parse_type_rust(input),
         SourceLanguage::TypeScript => parse_type_ts::parse_type_ts(input),
@@ -189,22 +210,21 @@ pub fn parse_type_for_language(
     }
 }
 
-/// Parses a single component-model value using language-specific syntax.
-///
-/// For known source languages, attempts language-specific parsing first.
-/// For unknown languages, tries each known parser in turn.
-/// Falls back to the structural parser if all language-specific parsers fail.
+/// Parses a single value of the given schema type using language-specific
+/// syntax.
 pub fn parse_value_for_language(
     input: &str,
-    typ: &golem_wasm::analysis::AnalysedType,
+    graph: &SchemaGraph,
+    ty: &SchemaType,
     source_language: &SourceLanguage,
-) -> Result<ValueAndType, ParseError> {
+) -> Result<SchemaValue, ParseError> {
     fn try_parse<D: parse_common::Dialect>(
         input: &str,
-        typ: &golem_wasm::analysis::AnalysedType,
-    ) -> Result<ValueAndType, ParseError> {
+        graph: &SchemaGraph,
+        ty: &SchemaType,
+    ) -> Result<SchemaValue, ParseError> {
         let mut lexer = lexer::Lexer::new(input);
-        let result = parse_common::parse_cm_value::<D>(&mut lexer, typ)?;
+        let result = parse_common::parse_cm_value::<D>(&mut lexer, graph, ty)?;
         let (tok, pos, _) = lexer.next_token()?;
         if tok != lexer::Token::Eof {
             return Err(ParseError {
@@ -216,14 +236,14 @@ pub fn parse_value_for_language(
     }
 
     match source_language {
-        SourceLanguage::Rust => try_parse::<parse_rust::RustDialect>(input, typ),
-        SourceLanguage::TypeScript => try_parse::<parse_ts::TsDialect>(input, typ),
-        SourceLanguage::Scala => try_parse::<parse_scala::ScalaDialect>(input, typ),
-        SourceLanguage::MoonBit => try_parse::<parse_moonbit::MoonBitDialect>(input, typ),
-        SourceLanguage::Other(_) => try_parse::<parse_ts::TsDialect>(input, typ)
-            .or_else(|_| try_parse::<parse_rust::RustDialect>(input, typ))
-            .or_else(|_| try_parse::<parse_scala::ScalaDialect>(input, typ))
-            .or_else(|_| try_parse::<parse_moonbit::MoonBitDialect>(input, typ))
+        SourceLanguage::Rust => try_parse::<parse_rust::RustDialect>(input, graph, ty),
+        SourceLanguage::TypeScript => try_parse::<parse_ts::TsDialect>(input, graph, ty),
+        SourceLanguage::Scala => try_parse::<parse_scala::ScalaDialect>(input, graph, ty),
+        SourceLanguage::MoonBit => try_parse::<parse_moonbit::MoonBitDialect>(input, graph, ty),
+        SourceLanguage::Other(_) => try_parse::<parse_ts::TsDialect>(input, graph, ty)
+            .or_else(|_| try_parse::<parse_rust::RustDialect>(input, graph, ty))
+            .or_else(|_| try_parse::<parse_scala::ScalaDialect>(input, graph, ty))
+            .or_else(|_| try_parse::<parse_moonbit::MoonBitDialect>(input, graph, ty))
             .map_err(|_| ParseError {
                 position: 0,
                 message: format!("could not parse value '{input}'"),
@@ -231,62 +251,97 @@ pub fn parse_value_for_language(
     }
 }
 
-/// Parses the parameter portion of an agent ID string into a [`DataValue`].
-///
-/// For known source languages (Rust, TypeScript), first attempts language-specific
-/// parsing. If that fails, falls back to canonical structural parsing. If both fail,
-/// returns a combined error message showing both failures.
-///
-/// For unknown source languages, uses canonical structural parsing directly.
+/// Parses the parameter portion of an agent ID string into a
+/// [`SchemaValue::Record`] aligned with the supplied [`InputSchema`].
 pub fn parse_agent_id_params(
     input: &str,
-    schema: &DataSchema,
+    graph: &SchemaGraph,
+    input_schema: &InputSchema,
     source_language: &SourceLanguage,
-) -> Result<DataValue, ParseError> {
+) -> Result<SchemaValue, ParseError> {
+    let InputSchema::Parameters(fields) = input_schema;
     match source_language {
-        SourceLanguage::Rust => match parse_rust::parse_data_value_rust(input, schema) {
-            Ok(value) => Ok(value),
-            Err(lang_err) => parse_structural(input, schema).map_err(|structural_err| ParseError {
-                position: 0,
-                message: format!(
-                    "Rust parser: {}; Structural parser: {}",
-                    lang_err, structural_err
-                ),
-            }),
-        },
-        SourceLanguage::TypeScript => match parse_ts::parse_data_value_ts(input, schema) {
-            Ok(value) => Ok(value),
-            Err(lang_err) => parse_structural(input, schema).map_err(|structural_err| ParseError {
-                position: 0,
-                message: format!(
-                    "TypeScript parser: {}; Structural parser: {}",
-                    lang_err, structural_err
-                ),
-            }),
-        },
-        SourceLanguage::Scala => match parse_scala::parse_data_value_scala(input, schema) {
-            Ok(value) => Ok(value),
-            Err(lang_err) => parse_structural(input, schema).map_err(|structural_err| ParseError {
-                position: 0,
-                message: format!(
-                    "Scala parser: {}; Structural parser: {}",
-                    lang_err, structural_err
-                ),
-            }),
-        },
-        SourceLanguage::MoonBit => match parse_moonbit::parse_data_value_moonbit(input, schema) {
-            Ok(value) => Ok(value),
-            Err(lang_err) => parse_structural(input, schema).map_err(|structural_err| ParseError {
-                position: 0,
-                message: format!(
-                    "MoonBit parser: {}; Structural parser: {}",
-                    lang_err, structural_err
-                ),
-            }),
-        },
-        SourceLanguage::Other(_) => parse_structural(input, schema).map_err(|e| ParseError {
-            position: 0,
-            message: e.to_string(),
-        }),
+        SourceLanguage::Rust => {
+            parse_common::parse_input_schema_params::<parse_rust::RustDialect>(input, graph, fields)
+        }
+        SourceLanguage::TypeScript => {
+            parse_common::parse_input_schema_params::<parse_ts::TsDialect>(input, graph, fields)
+        }
+        SourceLanguage::Scala => {
+            parse_common::parse_input_schema_params::<parse_scala::ScalaDialect>(
+                input, graph, fields,
+            )
+        }
+        SourceLanguage::MoonBit => parse_common::parse_input_schema_params::<
+            parse_moonbit::MoonBitDialect,
+        >(input, graph, fields),
+        SourceLanguage::Other(_) => {
+            parse_common::parse_input_schema_params::<parse_ts::TsDialect>(input, graph, fields)
+                .or_else(|_| {
+                    parse_common::parse_input_schema_params::<parse_rust::RustDialect>(
+                        input, graph, fields,
+                    )
+                })
+                .or_else(|_| {
+                    parse_common::parse_input_schema_params::<parse_scala::ScalaDialect>(
+                        input, graph, fields,
+                    )
+                })
+                .or_else(|_| {
+                    parse_common::parse_input_schema_params::<parse_moonbit::MoonBitDialect>(
+                        input, graph, fields,
+                    )
+                })
+                .map_err(|_| ParseError {
+                    position: 0,
+                    message: format!("could not parse agent-id parameters '{input}'"),
+                })
+        }
     }
+}
+
+/// Resolve a [`SchemaType::Ref`] against the supplied graph, returning
+/// the def body and the def name when present. Non-ref types pass through
+/// with `None` def name.
+pub(crate) fn resolve_named_ref<'a>(
+    graph: &'a SchemaGraph,
+    ty: &'a SchemaType,
+) -> (&'a SchemaType, Option<&'a str>) {
+    match ty {
+        SchemaType::Ref { id, .. } => match graph.lookup(id) {
+            Some(def) => (&def.body, def.name.as_deref()),
+            None => (ty, None),
+        },
+        _ => (ty, None),
+    }
+}
+
+/// Render a rich-scalar constructor of the form `Name("payload")` (or
+/// `Name("payload", "extra")` when `extra` is `Some`). Bodies are
+/// JSON-escaped so the per-language parsers can absorb arbitrary
+/// canonical text (URLs, base64, RFC 3339 timestamps, paths) via the
+/// shared lexer.
+pub(crate) fn render_rich_constructor(buf: &mut String, name: &str, body: &str) {
+    buf.push_str(name);
+    buf.push_str("(\"");
+    write_json_escaped(buf, body);
+    buf.push_str("\")");
+}
+
+/// Like [`render_rich_constructor`] but with an optional second string
+/// argument (used for `Text("body", "language")`).
+pub(crate) fn render_rich_constructor2(
+    buf: &mut String,
+    name: &str,
+    body: &str,
+    extra: Option<&str>,
+) {
+    buf.push_str(name);
+    buf.push_str("(\"");
+    write_json_escaped(buf, body);
+    if let Some(extra) = extra {
+        buf.push_str("\", \"");
+        write_json_escaped(buf, extra);
+    }
+    buf.push_str("\")");
 }

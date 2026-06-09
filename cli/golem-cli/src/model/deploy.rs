@@ -29,6 +29,7 @@ use golem_common::model::component::{AgentFilePermissions, ComponentName, Compon
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::diff::{self, Hashable};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation};
+use golem_wasm::analysis::AnalysedType as LegacyAnalysedType;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -408,7 +409,7 @@ pub fn build_environment_setup_plan(
                 EnvironmentSetupSecretValueDisplay {
                     secret_type: secret_types_by_path
                         .get(&canonical_path_str)
-                        .map(|typ| render_type_for_language(source_language, typ, true))
+                        .map(|typ| render_legacy_type_for_language(source_language, typ))
                         .unwrap_or_else(|| "unknown".to_string()),
                     value: masked_json_value(&default.secret_value)?,
                 },
@@ -426,10 +427,9 @@ pub fn build_environment_setup_plan(
             Ok((
                 secret.path.to_string(),
                 EnvironmentSetupSecretValueDisplay {
-                    secret_type: render_type_for_language(
+                    secret_type: render_legacy_type_for_language(
                         source_language,
                         &secret.secret_type,
-                        true,
                     ),
                     value,
                 },
@@ -849,11 +849,21 @@ fn display_config_declarations(
         .config
         .iter()
         .map(|config| {
+            // Adapt legacy AnalysedType at the boundary.
+            let value_type = match golem_common::schema::adapters::analysed_type_to_schema_graph(
+                &config.value_type,
+            ) {
+                Ok(graph) => {
+                    let root = graph.root.clone();
+                    render_type_for_language(&lang, &graph, &root, true)
+                }
+                Err(_) => "<unknown>".to_string(),
+            };
             Ok((
                 config.path.join("."),
                 DeploymentDisplayConfigDeclaration {
                     source: render_agent_config_source(config.source).to_string(),
-                    value_type: render_type_for_language(&lang, &config.value_type, true),
+                    value_type,
                 },
             ))
         })
@@ -1305,3 +1315,18 @@ pub enum UpdateStagedComponentError {
 }
 
 pub type UpdateStagedComponentResult<T> = Result<T, UpdateStagedComponentError>;
+
+/// Boundary helper: render a legacy [`LegacyAnalysedType`] via the schema-typed
+/// type renderer by first adapting it into a [`golem_common::schema::SchemaGraph`].
+fn render_legacy_type_for_language(
+    source_language: &SourceLanguage,
+    typ: &LegacyAnalysedType,
+) -> String {
+    match golem_common::schema::adapters::analysed_type_to_schema_graph(typ) {
+        Ok(graph) => {
+            let root = graph.root.clone();
+            render_type_for_language(source_language, &graph, &root, true)
+        }
+        Err(_) => "<unknown>".to_string(),
+    }
+}

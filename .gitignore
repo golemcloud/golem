@@ -41,3 +41,17 @@ golem-skills/**/dist/
 
 # Claude Code local settings
 .claude/
+
+# docs/ (Next.js / Nextra site, imported from golemcloud/docs)
+docs/.next/
+docs/out/
+docs/node_modules/
+docs/.vercel/
+docs/public/_pagefind/
+docs/*.tsbuildinfo
+docs/next-env.d.ts
+docs/coverage/
+docs/build/
+docs/snippets/progress.json
+docs/snippets/loop.log
+

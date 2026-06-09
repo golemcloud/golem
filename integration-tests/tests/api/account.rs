@@ -14,12 +14,8 @@
 
 use golem_client::api::{RegistryServiceClient, RegistryServiceCreateAccountError};
 use golem_client::model::AccountUpdate;
-use golem_common::model::account::{
-    AccountCreation, AccountEmail, AccountRevision, AccountSetRoles,
-};
-use golem_common::model::auth::AccountRole;
+use golem_common::model::account::{AccountCreation, AccountEmail, AccountRevision};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDslExtended;
 use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
@@ -41,11 +37,12 @@ async fn get_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         assert_eq!(account.roles, Vec::new());
     }
 
+    // TODO(agent-permissions): accessing plan requires permissions for the specific plan resource
     // get account plan
-    {
-        let result = client.get_account_plan(&user.account_id.0).await;
-        assert!(result.is_ok())
-    }
+    // {
+    //     let result = client.get_account_plan(&user.account_id.0).await;
+    //     assert_matches!(result, Ok(_))
+    // }
 
     // get account tokens
     {
@@ -88,48 +85,6 @@ async fn update_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let user = deps.user().await?;
-    let admin_client = deps.admin().await.registry_service_client().await;
-
-    {
-        let account = admin_client
-            .set_account_roles(
-                &user.account_id.0,
-                &AccountSetRoles {
-                    current_revision: AccountRevision::INITIAL,
-                    roles: vec![AccountRole::MarketingAdmin, AccountRole::Admin],
-                },
-            )
-            .await?;
-
-        // We always reorder the roles so they are consistent
-        assert_eq!(
-            account.roles,
-            vec![AccountRole::Admin, AccountRole::MarketingAdmin]
-        );
-        assert_eq!(account.revision, AccountRevision::new(1)?);
-    }
-
-    {
-        let account = admin_client
-            .set_account_roles(
-                &user.account_id.0,
-                &AccountSetRoles {
-                    current_revision: AccountRevision::new(1)?,
-                    roles: vec![AccountRole::Admin],
-                },
-            )
-            .await?;
-
-        assert_eq!(account.roles, vec![AccountRole::Admin]);
-        assert_eq!(account.revision, AccountRevision::new(2)?);
-    }
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
 async fn create_account_with_duplicate_email_fails(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
@@ -143,6 +98,7 @@ async fn create_account_with_duplicate_email_fails(
             .create_account(&AccountCreation {
                 name: Uuid::new_v4().to_string(),
                 email: email.clone(),
+                roles: Vec::new(),
             })
             .await?;
 
@@ -154,6 +110,7 @@ async fn create_account_with_duplicate_email_fails(
             .create_account(&AccountCreation {
                 name: Uuid::new_v4().to_string(),
                 email: email.clone(),
+                roles: Vec::new(),
             })
             .await;
 

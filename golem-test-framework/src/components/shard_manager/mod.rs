@@ -14,6 +14,7 @@
 
 pub mod provided;
 pub mod spawned;
+pub mod unavailable;
 
 use super::rdb::Rdb;
 use super::registry_service::RegistryService;

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::model::auth::TokenId;
 use crate::model::card::owner::{
     AccountOwnerPattern, AgentOwnerLeafPattern, AgentOwnerPattern, ApplicationOwnerPattern,
     ComponentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern,
@@ -24,6 +25,8 @@ use crate::model::card::recipient::{
     PolymorphicAgentRecipientPattern, PolymorphicEnvironmentRecipientPattern,
     PolymorphicRecipientPattern, RecipientPattern,
 };
+use crate::model::environment_share::EnvironmentShareId;
+use crate::model::permission_share::PermissionShareName;
 use RecipientPattern as AccountRecipientPattern;
 use RecipientPattern as AgentRecipientPattern;
 use RecipientPattern as EnvironmentRecipientPattern;
@@ -129,8 +132,16 @@ fn environment_agent_secret_key(
     EnvironmentAgentSecretResourcePattern::Key(EnvironmentAgentSecretKeyPathPattern { segments })
 }
 
-fn token_id() -> uuid::Uuid {
+fn fixed_uuid() -> uuid::Uuid {
     uuid::Uuid::from_u128(0x550e8400e29b41d4a716446655440000)
+}
+
+fn token_id() -> TokenId {
+    TokenId(fixed_uuid())
+}
+
+fn environment_share_id() -> EnvironmentShareId {
+    EnvironmentShareId(fixed_uuid())
 }
 
 #[test_gen]
@@ -457,7 +468,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                 ),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "ShoppingCart(*)"),
                 resource: AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Uuid(
-                    token_id(),
+                    fixed_uuid(),
                 )),
             }),
         ),
@@ -707,6 +718,32 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             }),
         ),
         (
+            "account_permission_share",
+            "account.permission-share(acme) @ acme : update : team-access",
+            PermissionPattern::AccountPermissionShare(ClassPermissionPattern::<
+                AccountPermissionShareClass,
+            > {
+                verb: Some(AccountPermissionShareVerb::Update),
+                owner: account_owner("acme"),
+                recipient: account_recipient("acme"),
+                resource: AccountPermissionShareResourcePattern::Name(PermissionShareName(
+                    "team-access".to_string(),
+                )),
+            }),
+        ),
+        (
+            "account_permission_share_create_any",
+            "account.permission-share(acme) @ acme : create : *",
+            PermissionPattern::AccountPermissionShare(ClassPermissionPattern::<
+                AccountPermissionShareClass,
+            > {
+                verb: Some(AccountPermissionShareVerb::Create),
+                owner: account_owner("acme"),
+                recipient: account_recipient("acme"),
+                resource: AccountPermissionShareResourcePattern::Any,
+            }),
+        ),
+        (
             "application",
             "application(acme) @ acme : view : shop",
             PermissionPattern::Application(ClassPermissionPattern::<ApplicationClass> {
@@ -770,7 +807,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                 verb: Some(EnvironmentShareVerb::View),
                 owner: environment_owner("acme", "shop", "prod"),
                 recipient: environment_recipient("acme", "shop", "prod"),
-                resource: EnvironmentShareResourcePattern::Share(token_id()),
+                resource: EnvironmentShareResourcePattern::Share(environment_share_id()),
             }),
         ),
         (

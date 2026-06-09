@@ -25,12 +25,17 @@ use crate::repo::component::ComponentRepo;
 use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
 use futures::stream::BoxStream;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, ComponentName as CardComponentName, ComponentResourcePattern,
+    ComponentVerb, PermissionTarget,
+};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::model::component::Component;
 use std::sync::Arc;
 use tracing::info;
@@ -81,14 +86,20 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
+        authorize_component_permission(
+            auth,
+            &environment,
+            ComponentVerb::View,
+            ComponentResourcePattern::Component(CardComponentName(record.name.clone())),
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?)
     }
 
     pub async fn get_deployed_component(
@@ -118,14 +129,20 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
+        authorize_component_permission(
+            auth,
+            &environment,
+            ComponentVerb::View,
+            ComponentResourcePattern::Component(CardComponentName(record.name.clone())),
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?)
     }
 
     pub async fn get_all_deployed_component_versions(
@@ -158,16 +175,24 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
+        authorize_component_permission(
+            auth,
+            &environment,
+            ComponentVerb::View,
+            ComponentResourcePattern::Any,
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
         let components = records
             .into_iter()
-            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
+            .map(|r| {
+                r.try_into_model(
+                    environment.application_id,
+                    environment.owner_account_id,
+                    environment.application_name.clone(),
+                    environment.name.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(components)
@@ -199,14 +224,23 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
+        authorize_component_permission(
+            auth,
+            &environment,
+            ComponentVerb::View,
+            ComponentResourcePattern::Revision {
+                component: CardComponentName(record.name.clone()),
+                revision: revision.into(),
+            },
         )
         .map_err(|_| ComponentError::ComponentNotFound(component_id))?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?)
     }
 
     pub async fn list_staged_components(
@@ -236,10 +270,11 @@ impl ComponentService {
     ) -> Result<Vec<Component>, ComponentError> {
         info!(environment_id = %environment.id, "Get staged components");
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
+        authorize_component_permission(
+            auth,
+            environment,
+            ComponentVerb::View,
+            ComponentResourcePattern::Any,
         )?;
 
         let result = self
@@ -247,7 +282,14 @@ impl ComponentService {
             .list_staged(environment.id.0)
             .await?
             .into_iter()
-            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
+            .map(|r| {
+                r.try_into_model(
+                    environment.application_id,
+                    environment.owner_account_id,
+                    environment.application_name.clone(),
+                    environment.name.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -276,10 +318,11 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
+        authorize_component_permission(
+            auth,
+            &environment,
+            ComponentVerb::View,
+            ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
         )
         .map_err(|_| ComponentError::ComponentByNameNotFound(component_name.clone()))?;
 
@@ -291,7 +334,12 @@ impl ComponentService {
                 component_name.clone(),
             ))?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?)
     }
 
     pub async fn get_deployed_component_by_name(
@@ -317,10 +365,11 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
+        authorize_component_permission(
+            auth,
+            &environment,
+            ComponentVerb::View,
+            ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
         )
         .map_err(|_| ComponentError::ComponentByNameNotFound(component_name.clone()))?;
 
@@ -332,8 +381,12 @@ impl ComponentService {
                 component_name.clone(),
             ))?;
 
-        let converted =
-            record.try_into_model(environment.application_id, environment.owner_account_id)?;
+        let converted = record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?;
 
         Ok(converted)
     }
@@ -364,10 +417,11 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
+        authorize_component_permission(
+            auth,
+            &environment,
+            ComponentVerb::View,
+            ComponentResourcePattern::Any,
         )?;
 
         let result = self
@@ -375,7 +429,14 @@ impl ComponentService {
             .list_by_deployment(environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
+            .map(|r| {
+                r.try_into_model(
+                    environment.application_id,
+                    environment.owner_account_id,
+                    environment.application_name.clone(),
+                    environment.name.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -409,10 +470,11 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
+        authorize_component_permission(
+            auth,
+            &environment,
+            ComponentVerb::View,
+            ComponentResourcePattern::Component(CardComponentName(component_name.0.clone())),
         )
         .map_err(|_| ComponentError::ComponentByNameNotFound(component_name.clone()))?;
 
@@ -428,7 +490,12 @@ impl ComponentService {
                 component_name.clone(),
             ))?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.application_name,
+            environment.name,
+        )?)
     }
 
     pub async fn download_component_wasm(
@@ -449,4 +516,21 @@ impl ComponentService {
 
         Ok(stream)
     }
+}
+
+fn authorize_component_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    verb: ComponentVerb,
+    resource: ComponentResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Component(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_id.to_string(),
+            application: environment.application_name.0.clone(),
+            environment: environment.name.0.clone(),
+        },
+        resource,
+    }))
 }

@@ -17,7 +17,6 @@ use super::{
 };
 use crate::base_model::account::AccountId;
 use crate::base_model::environment::EnvironmentId;
-use crate::model::auth::TokenId;
 use crate::{declare_revision, newtype_uuid};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -27,17 +26,15 @@ newtype_uuid!(CardId);
 
 declare_revision!(CardRevision);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum CardManagedBy {
     AccountRoot { account_id: AccountId },
-    TokenRoot { account_id: AccountId },
     EnvironmentDefault { environment_id: EnvironmentId },
     PermissionShare { permission_share_id: Uuid },
-    Token { token_id: TokenId },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Card {
     pub card_id: CardId,
     pub parent_ids: Vec<CardId>,
@@ -51,7 +48,7 @@ pub struct Card {
     pub managed_by: Option<CardManagedBy>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PolymorphicCard {
     pub card_id: CardId,
     pub parent_ids: Vec<CardId>,
@@ -64,7 +61,7 @@ pub struct PolymorphicCard {
     pub system_card: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PolymorphicManifestCard {
     pub card_id: CardId,
     pub parent_ids: Vec<CardId>,

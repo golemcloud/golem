@@ -31,11 +31,11 @@ use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
 use crate::services::{HasOplogService, HasWorker};
-use crate::worker::status::calculate_last_known_status;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::{StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::LegacyParsedAgentId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::host_functions::{
     GolemApiCompletePromise, GolemApiCreatePromise, GolemApiFork, GolemApiForkWorker,
@@ -256,9 +256,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api", "get_oplog_index");
         if self.state.is_live() {
             self.state.oplog.add(OplogEntry::no_op()).await;
-            Ok(self.state.current_oplog_index().await.into())
+            let marker = self.state.current_oplog_index().await;
+            // This `NoOp` index is the realistic `set_oplog_index` target; pin the mid-invocation
+            // checkpoint watermark to the earliest one so a checkpoint at `<= marker` survives a
+            // later jump back to it. (No checkpoint is taken here — there is no commit at this
+            // point; the next post-commit boundary at/below the marker takes it.)
+            self.state.min_exposed_marker = Some(match self.state.min_exposed_marker {
+                Some(existing) => existing.min(marker),
+                None => marker,
+            });
+            Ok(marker.into())
         } else {
             let (oplog_index, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::NoOp)?;
+            // The replayed `get_oplog_index` returns this same marker to the guest, which may feed
+            // it to `set_oplog_index` after switching to live. Pin the watermark here too (mirroring
+            // the live branch) so a post-replay mid-invocation checkpoint never advances past it.
+            self.state.min_exposed_marker = Some(match self.state.min_exposed_marker {
+                Some(existing) => existing.min(oplog_index),
+                None => oplog_index,
+            });
             Ok(oplog_index.into())
         }
     }
@@ -646,10 +662,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 if let Some(last_known_status) = &result.last_known_status {
                     metadata.last_known_status = last_known_status.clone();
                 }
-                if let Some(status) = calculate_last_known_status(
+                let agent_mode = metadata.agent_mode;
+                if let Some(status) = calculate_last_known_status_with_checkpoint(
                     &self.state,
                     &owned_agent_id,
-                    metadata.agent_mode,
+                    agent_mode,
                     result.last_known_status,
                 )
                 .await
@@ -905,7 +922,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let forked_phantom_id = Uuid::new_v4();
 
             let new_name = if let Some(agent_id) = self.parsed_agent_id() {
-                ParsedAgentId::new(
+                LegacyParsedAgentId::new(
                     agent_id.agent_type.clone(),
                     agent_id.parameters.clone(),
                     Some(forked_phantom_id),
@@ -1024,7 +1041,8 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
         let agent_type =
-            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id)
+                .ok();
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
@@ -1249,7 +1267,8 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
         let agent_type =
-            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id)
+                .ok();
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
@@ -1392,7 +1411,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
             Uuid::from_u64_pair(environment_id.uuid.high_bits, environment_id.uuid.low_bits),
         );
         let agent_id: AgentId = agent_id.into();
-        let agent_type = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
+        let agent_type = LegacyParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
         let mut current_revision = match ComponentRevision::try_from(component_revision) {

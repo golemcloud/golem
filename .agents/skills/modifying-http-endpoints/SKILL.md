@@ -61,7 +61,9 @@ After any endpoint change, you **must** regenerate and rebuild:
 cargo make generate-openapi
 ```
 
-This builds the services, dumps their OpenAPI YAML, merges them, and stores the result in `openapi/`.
+This builds the services, dumps their OpenAPI YAML, merges them, stores the result in `openapi/`, **and** regenerates the public REST API reference under `docs/src/content/rest-api/*.mdx` (used by the [learn.golem.cloud](https://learn.golem.cloud) site). Commit both the updated `openapi/*.yaml` and the updated `docs/src/content/rest-api/*.mdx` — CI's `check-openapi` task will fail otherwise.
+
+If the in-tree YAML is already up to date and you just need to refresh the docs (e.g., after editing `docs/openapi/gen-openapi.ts` itself), use `cargo make generate-docs-openapi` to skip the service rebuild.
 
 ### Step 2: Clean and rebuild golem-client
 
@@ -95,7 +97,7 @@ Then run the appropriate tests:
 2. New API struct registered in `api/mod.rs` `Apis` tuple and `make_open_api_service` (if applicable)
 3. Request/response types defined in `golem-common` with `poem_openapi::Object`
 4. Type mappings added in `golem-client/build.rs` (if applicable)
-5. `cargo make generate-openapi` run
+5. `cargo make generate-openapi` run — staged changes include both `openapi/*.yaml` **and** `docs/src/content/rest-api/*.mdx`
 6. `cargo clean -p golem-client && cargo build -p golem-client` run
 7. `cargo make build` succeeds
 8. `cargo make fix` run before PR

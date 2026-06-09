@@ -41,12 +41,6 @@ mod extractor;
 #[cfg(any(feature = "host", feature = "client"))]
 pub mod json;
 
-/// The metadata module defines data structures for representing various metadata extracted from WASM binaries.
-///
-/// This module is optional and can be enabled with the `metadata` feature flag. It is enabled by default.
-#[cfg(feature = "host")]
-pub mod metadata;
-
 /// Poem OpenAPI integration for some types
 #[cfg(feature = "host")]
 pub mod poem;
@@ -91,7 +85,11 @@ pub use wasip2 as wasi;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "guest")]
-pub use bindings::golem::core as golem_core_1_5_x;
+pub use bindings::golem::core1_5_0 as golem_core_1_5_x;
+
+#[cfg(not(feature = "host"))]
+#[cfg(feature = "guest")]
+pub use bindings::golem::core2_0_0 as golem_core_2_0_x;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "guest")]
@@ -131,7 +129,10 @@ mod generated {
 pub use generated::wasi;
 
 #[cfg(feature = "host")]
-pub use generated::golem::core as golem_core_1_5_x;
+pub use generated::golem::core1_5_0 as golem_core_1_5_x;
+
+#[cfg(feature = "host")]
+pub use generated::golem::core2_0_0 as golem_core_2_0_x;
 
 #[cfg(feature = "host")]
 pub use golem_core_1_5_x::types::{

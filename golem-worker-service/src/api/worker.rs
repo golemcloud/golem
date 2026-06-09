@@ -21,7 +21,7 @@ use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::LegacyParsedAgentId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::oplog::OplogCursor;
@@ -30,9 +30,7 @@ use golem_common::model::worker::{AgentCreationRequest, AgentMetadataDto, Revert
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::{SafeDisplay, recorded_http_api_request};
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::auth::{
-    AuthCtx, EnvironmentAction, GolemSecurityScheme, WrappedGolemSecuritySchema,
-};
+use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
 use golem_service_base::model::component::Component;
 use golem_service_base::model::*;
 use poem::Body;
@@ -746,19 +744,6 @@ impl WorkerApi {
     ) -> Result<Binary<Body>> {
         let path = make_component_file_path(file_name)?;
 
-        let component = self
-            .component_service
-            .get_current_by_id(agent_id.component_id)
-            .await?;
-
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::ViewWorker,
-                &auth,
-            )
-            .await?;
-
         let bytes = self
             .worker_service
             .get_file_contents(&agent_id, path, auth)
@@ -810,19 +795,6 @@ impl WorkerApi {
         plugin_priority: PluginPriority,
         auth: AuthCtx,
     ) -> Result<Json<ActivatePluginResponse>> {
-        let component = self
-            .component_service
-            .get_current_by_id(agent_id.component_id)
-            .await?;
-
-        self.auth_service
-            .authorize_environment_actions(
-                component.environment_id,
-                EnvironmentAction::UpdateWorker,
-                &auth,
-            )
-            .await?;
-
         self.worker_service
             .activate_plugin(&agent_id, plugin_priority, auth)
             .await?;
@@ -1133,9 +1105,9 @@ fn normalize_agent_name_with_latest_component(
 ) -> Result<AgentId> {
     if latest_component.metadata.is_agent()
         && let Ok((parsed_agent_id, agent_type)) =
-            ParsedAgentId::parse_and_resolve_type(agent_id, &latest_component.metadata)
+            LegacyParsedAgentId::parse_and_resolve_type(agent_id, &latest_component.metadata)
     {
-        let normalized_agent_id = ParsedAgentId::new_auto_phantom(
+        let normalized_agent_id = LegacyParsedAgentId::new_auto_phantom(
             parsed_agent_id.agent_type,
             parsed_agent_id.parameters,
             parsed_agent_id.phantom_id,
@@ -1183,11 +1155,11 @@ mod tests {
         AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
         NamedElementSchemas, Snapshotting,
     };
-    use golem_common::model::application::ApplicationId;
+    use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::diff::Hash;
-    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_service_base::model::component::Component;
     use test_r::test;
     use uuid::Uuid;
@@ -1229,6 +1201,8 @@ mod tests {
             hash: Hash::empty(),
             application_id: ApplicationId(Uuid::new_v4()),
             account_id: AccountId(Uuid::new_v4()),
+            application_name: ApplicationName::try_from("weather-app".to_string()).unwrap(),
+            environment_name: EnvironmentName::try_from("prod").unwrap(),
             component_size: 0,
             metadata: ComponentMetadata::from_parts(
                 KnownExports::default(),

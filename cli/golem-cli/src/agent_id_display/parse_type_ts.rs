@@ -13,40 +13,46 @@
 // limitations under the License.
 
 use super::parse_common::ParseError;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::analysis::analysed_type;
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::SchemaType;
 
-pub(super) fn parse_type_ts(input: &str) -> Result<AnalysedType, ParseError> {
-    let result = parse_type_inner(input.trim())?;
-    Ok(result)
+pub(super) fn parse_type_ts(input: &str) -> Result<(SchemaGraph, SchemaType), ParseError> {
+    let ty = parse_type_inner(input.trim())?;
+    Ok((SchemaGraph::anonymous(ty.clone()), ty))
 }
 
-fn parse_type_inner(s: &str) -> Result<AnalysedType, ParseError> {
+fn parse_type_inner(s: &str) -> Result<SchemaType, ParseError> {
     let s = s.trim();
 
-    // Check for T | undefined (option) — split at top-level pipe
-    if let Some(left) = strip_pipe_undefined(s) {
-        return Ok(analysed_type::option(parse_type_inner(left)?));
+    // `(...)` grouping — the TS renderer wraps union elements in parens
+    // when their element type contains `|` (e.g. `(number | undefined)[]`).
+    if let Some(inner) = strip_balanced_parens(s) {
+        return parse_type_inner(inner);
     }
 
-    // Check for array suffix T[]
+    if let Some(left) = strip_pipe_undefined(s) {
+        return Ok(SchemaType::option(parse_type_inner(left)?));
+    }
+
     if let Some(inner) = s.strip_suffix("[]") {
-        return Ok(analysed_type::list(parse_type_inner(inner)?));
+        return Ok(SchemaType::list(parse_type_inner(inner)?));
     }
 
     match s {
-        "string" => Ok(analysed_type::str()),
-        "boolean" => Ok(analysed_type::bool()),
-        "u8" => Ok(analysed_type::u8()),
-        "u16" => Ok(analysed_type::u16()),
-        "u32" => Ok(analysed_type::u32()),
-        "u64" => Ok(analysed_type::u64()),
-        "s8" => Ok(analysed_type::s8()),
-        "s16" => Ok(analysed_type::s16()),
-        "s32" => Ok(analysed_type::s32()),
-        "s64" => Ok(analysed_type::s64()),
-        "f32" => Ok(analysed_type::f32()),
-        "f64" => Ok(analysed_type::f64()),
+        // `Uint8Array` is the TS renderer's preferred form for `list<u8>`.
+        "Uint8Array" => Ok(SchemaType::list(SchemaType::u8())),
+        "string" => Ok(SchemaType::string()),
+        "boolean" => Ok(SchemaType::bool()),
+        "u8" => Ok(SchemaType::u8()),
+        "u16" => Ok(SchemaType::u16()),
+        "u32" => Ok(SchemaType::u32()),
+        "u64" => Ok(SchemaType::u64()),
+        "s8" => Ok(SchemaType::s8()),
+        "s16" => Ok(SchemaType::s16()),
+        "s32" => Ok(SchemaType::s32()),
+        "s64" => Ok(SchemaType::s64()),
+        "f32" => Ok(SchemaType::f32()),
+        "f64" => Ok(SchemaType::f64()),
         _ => Err(ParseError {
             position: 0,
             message: format!("unrecognized TypeScript type '{s}'"),
@@ -54,8 +60,32 @@ fn parse_type_inner(s: &str) -> Result<AnalysedType, ParseError> {
     }
 }
 
-/// If `s` ends with `| undefined` at the top level (not inside brackets),
-/// returns the left-hand side trimmed.
+/// If `s` is `(inner)` with balanced parentheses surrounding the whole
+/// string, return the trimmed `inner`. Returns `None` otherwise (so
+/// `(a)[]` and `(a) | (b)` are left for the other rules to handle).
+fn strip_balanced_parens(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    if bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (i, ch) in bytes.iter().enumerate() {
+        match ch {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 && i + 1 != bytes.len() {
+                    // closing paren is not the last character → not a
+                    // wrapping grouping (e.g. `(a)[]` or `(a) | (b)`).
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(s[1..bytes.len() - 1].trim())
+}
+
 fn strip_pipe_undefined(s: &str) -> Option<&str> {
     if !s.ends_with("undefined") {
         return None;
@@ -63,8 +93,6 @@ fn strip_pipe_undefined(s: &str) -> Option<&str> {
     let trimmed = s.trim_end();
     let candidate = trimmed.strip_suffix("undefined")?.trim_end();
     let candidate = candidate.strip_suffix('|')?.trim_end();
-
-    // Verify the pipe is at top level by checking bracket depth of candidate
     let mut depth = 0i32;
     for c in candidate.chars() {
         match c {
@@ -76,6 +104,5 @@ fn strip_pipe_undefined(s: &str) -> Option<&str> {
     if depth != 0 {
         return None;
     }
-
     Some(candidate)
 }

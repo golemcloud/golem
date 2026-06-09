@@ -15,9 +15,12 @@
 use crate::config::PrecreatedPlan;
 use crate::repo::model::plan::PlanRecord;
 use crate::repo::plan::PlanRepo;
+use golem_common::model::card::owner::EmptyOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, PermissionTarget, PlanIdPattern, PlanResourcePattern, PlanVerb,
+};
 use golem_common::model::plan::{Plan, PlanId};
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::PlanAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::collections::HashMap;
@@ -125,7 +128,7 @@ impl PlanService {
     }
 
     pub async fn get(&self, plan_id: &PlanId, auth: &AuthCtx) -> Result<Plan, PlanError> {
-        auth.authorize_plan_action(plan_id, PlanAction::ViewPlan)
+        authorize_plan_permission(auth, PlanVerb::View, plan_resource(*plan_id))
             .map_err(|_| PlanError::PlanNotFound(*plan_id))?;
 
         debug!("Getting plan {}", plan_id);
@@ -140,7 +143,7 @@ impl PlanService {
     }
 
     async fn create_or_update_plan(&self, plan: Plan, auth: &AuthCtx) -> Result<(), PlanError> {
-        auth.authorize_plan_action(&plan.plan_id, PlanAction::CreateOrUpdatePlan)?;
+        authorize_plan_permission(auth, PlanVerb::Update, plan_resource(plan.plan_id))?;
 
         let record: PlanRecord = PlanRecord {
             name: plan.name.0,
@@ -167,4 +170,20 @@ impl PlanService {
 
         Ok(())
     }
+}
+
+fn authorize_plan_permission(
+    auth: &AuthCtx,
+    verb: PlanVerb,
+    resource: PlanResourcePattern,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::Plan(ClassPermissionTarget {
+        verb: Some(verb),
+        owner: EmptyOwnerPattern,
+        resource,
+    }))
+}
+
+fn plan_resource(plan_id: PlanId) -> PlanResourcePattern {
+    PlanResourcePattern::Plan(PlanIdPattern::PlanId(plan_id))
 }

@@ -1,0 +1,122 @@
+import { Callout, Tabs } from "nextra/components"
+
+# MCP Server
+
+With Golem 1.5, any Golem application can be automatically exposed through **MCP** (Model Context Protocol). It requires no code — MCP is available for any agent automatically — but it must be enabled in the application manifest.
+
+<Callout type="info">
+The MCP server uses port **9007** by default, separate from the HTTP API gateway on port 9006.
+</Callout>
+
+## Enabling MCP
+
+Add an `mcp` section to `golem.yaml` choosing which agents to deploy to which subdomains per environment:
+
+```yaml
+mcp:
+  deployments:
+    local:
+      - domain: mcp-demo.localhost:9007
+        agents:
+          CounterAgent: {}
+```
+
+After `golem app deploy`, the MCP server is available at `http://mcp-demo.localhost:9007/mcp` using the streamable HTTP protocol.
+
+## Automatic Mapping
+
+Agent methods are automatically mapped to MCP entities based on the agent type and method signature:
+
+| Agent | Method | MCP entity |
+| --- | --- | --- |
+| Singleton | No parameters | Resource |
+| Non-singleton | No parameters | Resource template |
+| Any | Has parameters | Tool |
+
+Singleton agents (those with no constructor parameters) expose parameterless methods as **MCP resources** — static pieces of data that can be read by the client. Non-singleton agents expose parameterless methods as **MCP resource templates**, where the constructor parameters become template variables. Any method that takes parameters is exposed as an **MCP tool** that can be invoked by the AI model.
+
+## Metadata with `@prompt` and `@description`
+
+The `@prompt` and `@description` annotations on agent methods become MCP tool and resource metadata, helping AI models understand what each tool does and how to use it.
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs.Tab>
+```typescript
+@agent({})
+export class CounterAgent extends BaseAgent {
+  @prompt("Increments the counter by the given value and returns the new count")
+  @description("Add a value to the current counter")
+  incrementBy(value: number): number {
+    // ...
+  }
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[agent_definition]
+pub trait CounterAgent {
+    #[prompt("Increments the counter by the given value and returns the new count")]
+    #[description("Add a value to the current counter")]
+    fn increment_by(&mut self, value: u64) -> u64;
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@agentDefinition
+trait CounterAgent extends BaseAgent {
+  @prompt("Increments the counter by the given value and returns the new count")
+  @description("Add a value to the current counter")
+  def incrementBy(value: Int): Future[Int]
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.agent
+#derive.prompt("Increments the counter by the given value and returns the new count")
+#derive.description("Add a value to the current counter")
+pub fn CounterAgent::increment_by(self : Self, value : UInt64) -> UInt64 {
+  // ...
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+## Security
+
+MCP servers can be secured with **OAuth2**. Use the CLI to create a security scheme:
+
+```shell
+golem api security-scheme create mcp-oauth \
+  --provider-type custom \
+  --custom-provider-name "mock-oauth2" \
+  --custom-issuer-url "http://localhost:9099/golem" \
+  --client-id "golem-mcp-client" \
+  --client-secret "golem-mcp-secret" \
+  --scope openid --scope email --scope profile \
+  --redirect-url "http://mcp-demo.localhost:9007/mcp/oauth/callback"
+```
+
+Once the security scheme is created, reference it in the `golem.yaml` deployment to protect your MCP endpoints.
+
+## Special Data Types
+
+Golem provides special data types that map naturally to MCP content types:
+
+- **`UnstructuredBinary`** — for binary blobs and images, mapped to MCP binary content
+- **`UnstructuredText`** — for text with MIME types, mapped to MCP text content
+- **`Multipart`** — for multipart data, supporting mixed content in a single response
+
+These types allow agents to exchange rich content with MCP clients beyond simple JSON values.
+
+## Testing with MCP Inspector
+
+You can test your MCP server using the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
+
+```shell
+npx @modelcontextprotocol/inspector node build/index.js
+```
+
+The inspector provides a web UI to browse available tools and resources, invoke them, and inspect the responses — useful for verifying your agent's MCP interface before connecting it to an AI model.

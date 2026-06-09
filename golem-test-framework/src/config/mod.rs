@@ -32,7 +32,7 @@ pub use env::{
     WorkerExecutorClusterControlStub,
 };
 use golem_client::api::RegistryServiceClient;
-use golem_client::model::{AccountSetRoles, TokenCreation};
+use golem_client::model::TokenCreation;
 use golem_common::model::account::{AccountCreation, AccountEmail};
 use golem_common::model::auth::AccountRole;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
@@ -61,6 +61,13 @@ pub trait TestDependencies: Send + Sync + Clone {
     fn initial_agent_files_service(&self) -> Arc<InitialAgentFilesService>;
     fn registry_service(&self) -> Arc<dyn RegistryService>;
 
+    /// Returns an optional name prefix applied to benchmark-created accounts,
+    /// applications, and environments. Non-`None` in cloud mode, where the
+    /// prefix is `bench-{run_id}-` to make orphaned state traceable.
+    fn bench_name_prefix(&self) -> Option<String> {
+        None
+    }
+
     async fn admin(&self) -> TestUserContext<Self>
     where
         Self: Sized,
@@ -87,10 +94,16 @@ pub trait TestDependencies: Send + Sync + Clone {
             .client(&registry_service.admin_account_token())
             .await;
 
-        let name = Uuid::new_v4().to_string();
+        let uuid = Uuid::new_v4().to_string();
+        let name = if let Some(prefix) = self.bench_name_prefix() {
+            format!("{prefix}{uuid}")
+        } else {
+            uuid
+        };
         let account_data = AccountCreation {
             email: AccountEmail::new(format!("{name}@golem.cloud")),
             name,
+            roles: Vec::new(),
         };
 
         let account = client.create_account(&account_data).await?;
@@ -129,19 +142,10 @@ pub trait TestDependencies: Send + Sync + Clone {
         let account_data = AccountCreation {
             email: AccountEmail::new(format!("{name}@golem.cloud")),
             name,
+            roles: roles.to_vec(),
         };
 
         let account = client.create_account(&account_data).await?;
-
-        client
-            .set_account_roles(
-                &account.id.0,
-                &AccountSetRoles {
-                    current_revision: account.revision,
-                    roles: roles.to_vec(),
-                },
-            )
-            .await?;
 
         let token = client
             .create_token(

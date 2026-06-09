@@ -42,12 +42,17 @@ pub mod bindings {
 }
 
 use crate::model::component_metadata::ComponentMetadata;
+use crate::schema::adapters::value::{
+    typed_schema_value_to_value_and_type, value_and_type_to_typed_schema_value,
+};
+use crate::schema::graph::TypedSchemaValue;
+use crate::schema::render::cli_text::value_to_cli_text;
 use async_trait::async_trait;
 use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
-use golem_wasm::{FromValue, IntoValue, Value, ValueAndType, print_value_and_type};
+use golem_wasm::{FromValue, IntoValue, Value, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -70,13 +75,14 @@ impl TryFrom<i32> for AgentMode {
     }
 }
 
-#[derive(Debug, Clone, BinaryCodec, IntoValue, FromValue)]
+#[derive(Debug, Clone, BinaryCodec)]
+#[allow(clippy::large_enum_variant)]
 pub enum AgentError {
     InvalidInput(String),
     InvalidMethod(String),
     InvalidType(String),
     InvalidAgentId(String),
-    CustomError(ValueAndType),
+    CustomError(TypedSchemaValue),
 }
 
 impl Display for AgentError {
@@ -94,13 +100,124 @@ impl Display for AgentError {
             AgentError::InvalidAgentId(msg) => {
                 write!(f, "Invalid agent id: {msg}")
             }
-            AgentError::CustomError(value_and_type) => {
-                write!(
-                    f,
-                    "{}",
-                    print_value_and_type(value_and_type).unwrap_or("Unprintable error".to_string())
-                )
+            AgentError::CustomError(typed) => {
+                let rendered = value_to_cli_text(typed.graph(), typed.root_type(), typed.value())
+                    .unwrap_or_else(|_| "Unprintable error".to_string());
+                write!(f, "{rendered}")
             }
+        }
+    }
+}
+
+// The WIT-side carrier for `CustomError` is still a `value-and-type` record,
+// so the encoding for the legacy `IntoValue` / `FromValue` traits must
+// continue to produce the same on-the-wire shape (matching what
+// `#[derive(IntoValue, FromValue)]` would have produced for
+// `CustomError(ValueAndType)`). The schema-layer payload is bridged through
+// the value adapters at the boundary.
+const AGENT_ERROR_CASE_INVALID_INPUT: u32 = 0;
+const AGENT_ERROR_CASE_INVALID_METHOD: u32 = 1;
+const AGENT_ERROR_CASE_INVALID_TYPE: u32 = 2;
+const AGENT_ERROR_CASE_INVALID_AGENT_ID: u32 = 3;
+const AGENT_ERROR_CASE_CUSTOM_ERROR: u32 = 4;
+
+impl IntoValue for AgentError {
+    fn into_value(self) -> Value {
+        let (case_idx, case_value): (u32, Option<Box<Value>>) = match self {
+            AgentError::InvalidInput(msg) => (
+                AGENT_ERROR_CASE_INVALID_INPUT,
+                Some(Box::new(msg.into_value())),
+            ),
+            AgentError::InvalidMethod(msg) => (
+                AGENT_ERROR_CASE_INVALID_METHOD,
+                Some(Box::new(msg.into_value())),
+            ),
+            AgentError::InvalidType(msg) => (
+                AGENT_ERROR_CASE_INVALID_TYPE,
+                Some(Box::new(msg.into_value())),
+            ),
+            AgentError::InvalidAgentId(msg) => (
+                AGENT_ERROR_CASE_INVALID_AGENT_ID,
+                Some(Box::new(msg.into_value())),
+            ),
+            AgentError::CustomError(typed) => {
+                // `TypedSchemaValue` can carry rich scalars, unions, and
+                // capability nodes that have no legacy `ValueAndType`
+                // counterpart. `IntoValue` is a boundary encoder used by
+                // oplog and gRPC serialization, so falling back to an
+                // `InvalidType` payload is safer than panicking.
+                match typed_schema_value_to_value_and_type(&typed) {
+                    Ok(vat) => (
+                        AGENT_ERROR_CASE_CUSTOM_ERROR,
+                        Some(Box::new(vat.into_value())),
+                    ),
+                    Err(e) => (
+                        AGENT_ERROR_CASE_INVALID_TYPE,
+                        Some(Box::new(
+                            format!("Invalid custom error payload: {e}").into_value(),
+                        )),
+                    ),
+                }
+            }
+        };
+        Value::Variant {
+            case_idx,
+            case_value,
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        variant(vec![
+            case("InvalidInput", str()),
+            case("InvalidMethod", str()),
+            case("InvalidType", str()),
+            case("InvalidAgentId", str()),
+            case("CustomError", ValueAndType::get_type()),
+        ])
+    }
+}
+
+impl FromValue for AgentError {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Variant {
+                case_idx,
+                case_value,
+            } => match case_idx {
+                AGENT_ERROR_CASE_INVALID_INPUT => {
+                    let payload =
+                        case_value.ok_or_else(|| "Missing payload for InvalidInput".to_string())?;
+                    Ok(AgentError::InvalidInput(String::from_value(*payload)?))
+                }
+                AGENT_ERROR_CASE_INVALID_METHOD => {
+                    let payload = case_value
+                        .ok_or_else(|| "Missing payload for InvalidMethod".to_string())?;
+                    Ok(AgentError::InvalidMethod(String::from_value(*payload)?))
+                }
+                AGENT_ERROR_CASE_INVALID_TYPE => {
+                    let payload =
+                        case_value.ok_or_else(|| "Missing payload for InvalidType".to_string())?;
+                    Ok(AgentError::InvalidType(String::from_value(*payload)?))
+                }
+                AGENT_ERROR_CASE_INVALID_AGENT_ID => {
+                    let payload = case_value
+                        .ok_or_else(|| "Missing payload for InvalidAgentId".to_string())?;
+                    Ok(AgentError::InvalidAgentId(String::from_value(*payload)?))
+                }
+                AGENT_ERROR_CASE_CUSTOM_ERROR => {
+                    let payload =
+                        case_value.ok_or_else(|| "Missing payload for CustomError".to_string())?;
+                    let vat = ValueAndType::from_value(*payload)?;
+                    let typed = value_and_type_to_typed_schema_value(&vat).map_err(|e| {
+                        format!("Failed to promote agent error custom payload to schema layer: {e}")
+                    })?;
+                    Ok(AgentError::CustomError(typed))
+                }
+                other => Err(format!("Unknown AgentError variant index: {other}")),
+            },
+            other => Err(format!(
+                "Expected Variant value for AgentError, got {other:?}"
+            )),
         }
     }
 }
@@ -303,7 +420,7 @@ pub struct AgentTypes {
 // by normal production code paths. Lenient variants skip that check so oversized ids can
 // still be represented temporarily for tests and diagnostics, but they are not intended for
 // general runtime use because AgentId creation still validates the final identifier length.
-impl ParsedAgentId {
+impl LegacyParsedAgentId {
     pub fn new(
         agent_type: AgentTypeName,
         parameters: DataValue,
@@ -469,7 +586,7 @@ impl ParsedAgentId {
     }
 }
 
-impl Display for ParsedAgentId {
+impl Display for LegacyParsedAgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_string)
     }

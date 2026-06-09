@@ -20,19 +20,19 @@ use crate::base_model::card::parsing::CardParseError;
 use crate::model::card::owner::ComponentOwnerPattern;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentInitialFilesResourcePattern {
     Path(EnvironmentInitialFilesPathPattern),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct EnvironmentInitialFilesPathPattern {
     pub segments: Vec<EnvironmentInitialFilesPathSegmentPattern>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentInitialFilesPathSegmentPattern {
     Literal(String),
@@ -84,7 +84,7 @@ impl ResourcePattern for EnvironmentInitialFilesResourcePattern {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum EnvironmentInitialFilesVerb {
     View,
@@ -104,7 +104,7 @@ impl VerbPattern for EnvironmentInitialFilesVerb {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct EnvironmentInitialFilesClass;
 
