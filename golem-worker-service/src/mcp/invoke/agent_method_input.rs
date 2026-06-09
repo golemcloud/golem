@@ -20,7 +20,6 @@ use golem_common::base_model::agent::{
     TextType, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
 };
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::model::JsonObject;
 
 pub fn get_agent_method_input(
@@ -112,12 +111,10 @@ fn extract_single_element_value(
                 }
             };
 
-            let value_and_type =
-                golem_wasm::ValueAndType::parse_with_type(&json_value, element_type).map_err(
-                    |errs| format!("Failed to parse parameter '{}': {}", name, errs.join(", ")),
-                )?;
+            let value = crate::mcp::invoke::parse_component_model_value(&json_value, element_type)
+                .map_err(|e| format!("Failed to parse parameter '{}': {}", name, e))?;
 
-            Ok(UntypedElementValue::ComponentModel(value_and_type.value))
+            Ok(UntypedElementValue::ComponentModel(value))
         }
         ElementSchema::UnstructuredText(descriptor) => {
             let obj = match json_value {

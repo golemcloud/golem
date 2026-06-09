@@ -331,12 +331,8 @@ fn check_type(
         SchemaType::Path { spec, .. } => check_path_spec(spec, errors),
         SchemaType::Url { restrictions, .. } => check_url_spec(restrictions, errors),
 
-        SchemaType::Union { spec, metadata } => {
-            let is_multimodal = matches!(
-                metadata.role,
-                Some(crate::schema::metadata::Role::Multimodal)
-            );
-            validate_union(graph, spec, known, errors, is_multimodal);
+        SchemaType::Union { spec, .. } => {
+            validate_union(graph, spec, known, errors);
         }
 
         SchemaType::Future { inner, .. } => {
@@ -497,7 +493,6 @@ fn validate_union(
     spec: &UnionSpec,
     known: &HashSet<TypeId>,
     errors: &mut Vec<SchemaError>,
-    is_multimodal: bool,
 ) {
     if spec.branches.is_empty() {
         errors.push(SchemaError::EmptyUnion);
@@ -507,29 +502,21 @@ fn validate_union(
         if !seen.insert(branch.tag.as_str()) {
             errors.push(SchemaError::DuplicateUnionTag(branch.tag.clone()));
         }
-        // Multimodal unions carry per-branch tags but are not resolved by the
-        // generic discriminator pipeline (the alternative is carried by the
-        // protocol envelope). Skip the per-branch structural discriminator
-        // check and the cross-branch ambiguity check for those.
-        if !is_multimodal {
-            check_union_branch(graph, branch, errors);
-        }
+        check_union_branch(graph, branch, errors);
         check_type(graph, &branch.body, known, errors);
     }
 
-    if !is_multimodal {
-        // Discriminator ambiguity check.
-        for i in 0..spec.branches.len() {
-            for j in (i + 1)..spec.branches.len() {
-                let a = &spec.branches[i];
-                let b = &spec.branches[j];
-                if let Some(reason) = discriminators_overlap(&a.discriminator, &b.discriminator) {
-                    errors.push(SchemaError::UnionAmbiguousDiscriminators {
-                        tag_a: a.tag.clone(),
-                        tag_b: b.tag.clone(),
-                        reason,
-                    });
-                }
+    // Discriminator ambiguity check.
+    for i in 0..spec.branches.len() {
+        for j in (i + 1)..spec.branches.len() {
+            let a = &spec.branches[i];
+            let b = &spec.branches[j];
+            if let Some(reason) = discriminators_overlap(&a.discriminator, &b.discriminator) {
+                errors.push(SchemaError::UnionAmbiguousDiscriminators {
+                    tag_a: a.tag.clone(),
+                    tag_b: b.tag.clone(),
+                    reason,
+                });
             }
         }
     }

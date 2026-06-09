@@ -15,7 +15,7 @@
 use crate::mcp::schema::field_name_mapping;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::schema::adapters::{
-    is_multimodal_schema_type, multimodal_union_branches, resolve_ref,
+    is_multimodal_schema_type, multimodal_variant_cases, resolve_ref,
 };
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, FieldSource, InputSchema, NamedField, OutputSchema,
@@ -129,16 +129,16 @@ fn describe_input(
         .collect();
 
     // A multimodal method input is carried as a single user field (`parts`)
-    // whose schema is the structural form `list<union<… Role::Multimodal>>`.
+    // whose schema is the structural form `list<variant<… Role::Multimodal>>`.
     let multimodal_field = user_fields
         .iter()
         .find(|f| is_multimodal_schema_type(graph, &f.schema).unwrap_or(false));
 
     if let Some(field) = multimodal_field {
-        let part_names: Vec<String> = multimodal_union_branches(graph, &field.schema)
+        let part_names: Vec<String> = multimodal_variant_cases(graph, &field.schema)
             .ok()
             .flatten()
-            .map(|branches| branches.iter().map(|b| b.tag.clone()).collect())
+            .map(|cases| cases.iter().map(|c| c.name.clone()).collect())
             .unwrap_or_default();
 
         let mut all_property_names: Vec<String> = constructor_arg_names.to_vec();
@@ -201,13 +201,14 @@ fn describe_output(graph: &SchemaGraph, schema: &OutputSchema) -> Option<String>
     match schema {
         OutputSchema::Unit => None,
         OutputSchema::Single(ty) => {
-            if let Some(branches) = multimodal_union_branches(graph, ty).ok().flatten() {
-                if branches.is_empty() {
+            if let Some(cases) = multimodal_variant_cases(graph, ty).ok().flatten() {
+                if cases.is_empty() {
                     return None;
                 }
-                let parts: Vec<String> = branches
+                let parts: Vec<String> = cases
                     .iter()
-                    .map(|b| describe_output_type(graph, &b.body))
+                    .filter_map(|c| c.payload.as_ref())
+                    .map(|body| describe_output_type(graph, body))
                     .collect();
                 Some(format!(
                     "output hint: multimodal response: {}",
@@ -244,7 +245,7 @@ mod tests {
     use super::*;
     use golem_common::schema::metadata::Role;
     use golem_common::schema::schema_type::{
-        BinaryRestrictions, DiscriminatorRule, TextRestrictions, UnionBranch, UnionSpec,
+        BinaryRestrictions, TextRestrictions, VariantCaseType,
     };
     use test_r::test;
 
@@ -275,23 +276,20 @@ mod tests {
     }
 
     /// Build the structural multimodal input form: a single user-supplied
-    /// `parts` field whose schema is `list<union<… Role::Multimodal>>`.
+    /// `parts` field whose schema is `list<variant<… Role::Multimodal>>`.
     fn multimodal_parts_field(branches: Vec<(&str, SchemaType)>) -> NamedField {
-        let mut union = SchemaType::union(UnionSpec {
-            branches: branches
+        let mut variant = SchemaType::variant(
+            branches
                 .into_iter()
-                .map(|(tag, body)| UnionBranch {
-                    tag: tag.to_string(),
-                    body,
-                    discriminator: DiscriminatorRule::FieldAbsent {
-                        field_name: String::new(),
-                    },
+                .map(|(name, body)| VariantCaseType {
+                    name: name.to_string(),
+                    payload: Some(body),
                     metadata: Default::default(),
                 })
                 .collect(),
-        });
-        union.metadata_mut().role = Some(Role::Multimodal);
-        NamedField::user_supplied("parts", SchemaType::list(union))
+        );
+        variant.metadata_mut().role = Some(Role::Multimodal);
+        NamedField::user_supplied("parts", SchemaType::list(variant))
     }
 
     #[test]

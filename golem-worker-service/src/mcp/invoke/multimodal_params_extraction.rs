@@ -17,7 +17,6 @@ use golem_common::base_model::agent::{
     BinaryReference, BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema,
     ElementSchema, TextReference, TextReferenceValue, TextSource, TextType, UntypedElementValue,
 };
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 pub fn extract_multimodal_element_value(
     name: &str,
@@ -27,18 +26,11 @@ pub fn extract_multimodal_element_value(
 ) -> Result<UntypedElementValue, String> {
     match elem_schema {
         ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
-            let value_and_type =
-                golem_wasm::ValueAndType::parse_with_type(value_json, element_type).map_err(
-                    |errs| {
-                        format!(
-                            "parts[{}] '{}': failed to parse value: {}",
-                            index,
-                            name,
-                            errs.join(", ")
-                        )
-                    },
-                )?;
-            Ok(UntypedElementValue::ComponentModel(value_and_type.value))
+            let value = crate::mcp::invoke::parse_component_model_value(value_json, element_type)
+                .map_err(|e| {
+                format!("parts[{}] '{}': failed to parse value: {}", index, name, e)
+            })?;
+            Ok(UntypedElementValue::ComponentModel(value))
         }
         ElementSchema::UnstructuredText(descriptor) => {
             let obj = value_json.as_object().ok_or_else(|| {

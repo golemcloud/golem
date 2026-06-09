@@ -551,7 +551,7 @@ fn data_schema_tuple_input_round_trip() {
 #[test]
 fn data_schema_multimodal_input_round_trip() {
     // Multimodal input is supported generically: it maps to a single
-    // user-supplied `parts` field of type `list<union<… Role::Multimodal>>`
+    // user-supplied `parts` field of type `list<variant<… Role::Multimodal>>`
     // and round-trips back to the original multimodal `DataSchema`.
     let ds = DataSchema::Multimodal(NamedElementSchemas {
         elements: vec![
@@ -576,10 +576,16 @@ fn data_schema_multimodal_input_round_trip() {
     assert!(matches!(fields[0].source, FieldSource::UserSupplied));
     match &fields[0].schema {
         SchemaType::List { element, .. } => match element.as_ref() {
-            SchemaType::Union { metadata, .. } => {
+            SchemaType::Variant { cases, metadata } => {
                 assert_eq!(metadata.role, Some(Role::Multimodal));
+                let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+                assert_eq!(names, vec!["text", "binary"]);
+                assert!(
+                    cases.iter().all(|c| c.payload.is_some()),
+                    "every multimodal variant case carries an element payload"
+                );
             }
-            other => panic!("expected list element to be Union, got {other:?}"),
+            other => panic!("expected list element to be Variant, got {other:?}"),
         },
         other => panic!("expected `parts` to be a List, got {other:?}"),
     }
@@ -702,14 +708,16 @@ fn data_schema_multimodal_output_round_trip() {
         ],
     });
     let output = data_schema_to_output_schema(&ds).unwrap();
-    // Forward should produce `Single(list<union<...> with Role::Multimodal>)`.
+    // Forward should produce `Single(list<variant<...> with Role::Multimodal>)`.
     match &output {
         OutputSchema::Single(boxed) => match boxed.as_ref() {
             SchemaType::List { element, .. } => match element.as_ref() {
-                SchemaType::Union { metadata, .. } => {
+                SchemaType::Variant { cases, metadata } => {
                     assert_eq!(metadata.role, Some(Role::Multimodal));
+                    let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+                    assert_eq!(names, vec!["text", "binary"]);
                 }
-                other => panic!("expected list element to be Union, got {other:?}"),
+                other => panic!("expected list element to be Variant, got {other:?}"),
             },
             other => panic!("expected Single(List(...)), got {other:?}"),
         },

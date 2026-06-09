@@ -24,7 +24,6 @@ use golem_common::model::agent::LegacyParsedAgentId;
 use golem_common::schema::adapters::{
     schema_agent_constructor_to_legacy, schema_agent_method_to_legacy,
 };
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
 use rmcp::model::{
     AnnotateAble, CallToolResult, Content, JsonObject, RawAudioContent, RawContent,
@@ -248,16 +247,16 @@ fn convert_elem_value_to_mcp_tool_response(
     element: &ElementValue,
 ) -> Result<ToolResult, ErrorData> {
     match element {
-        ElementValue::ComponentModel(component_model_value) => component_model_value
-            .value
-            .to_json_value()
-            .map_err(|e| {
-                ErrorData::internal_error(
-                    format!("Failed to serialize component model response: {e}"),
-                    None,
-                )
-            })
-            .map(ToolResult::Default),
+        ElementValue::ComponentModel(component_model_value) => {
+            crate::mcp::invoke::component_model_value_to_json(&component_model_value.value)
+                .map_err(|e| {
+                    ErrorData::internal_error(
+                        format!("Failed to serialize component model response: {e}"),
+                        None,
+                    )
+                })
+                .map(ToolResult::Default)
+        }
 
         ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
             TextReference::Inline(TextSource { data, .. }) => Ok(ToolResult::Content(

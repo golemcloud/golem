@@ -35,7 +35,7 @@
 //!   produce a pair `(InputSchema::Parameters, Vec<SchemaValue>)` where the
 //!   value vector is positionally aligned with the parameter list.
 //!   Multimodal schemas produce a single synthetic `parts` parameter whose
-//!   value is a `list<union<…>>` of one `SchemaValue::Union` per element.
+//!   value is a `list<variant<…>>` of one `SchemaValue::Variant` per element.
 //! - [`untyped_data_value_to_typed_schema_output`] treats the legacy
 //!   `DataSchema` as method output, mirroring
 //!   [`super::data_schema::data_schema_to_output_schema`]:
@@ -45,7 +45,7 @@
 //!   - single tuple element → the element's schema and value inline;
 //!   - multi-element tuple → error. Golem agent methods only ever return 0
 //!     or 1 element, so a multi-element output tuple is rejected;
-//!   - multimodal → `list<union<…>>` with the inner union flagged
+//!   - multimodal → `list<variant<…>>` with the inner variant flagged
 //!     [`Role::Multimodal`].
 //!
 //! For every position:
@@ -69,7 +69,7 @@
 //!   [`TypedSchemaValue`] (only ever an output-shaped value) back into a
 //!   legacy [`UntypedDataValue`]:
 //!   - `Tuple { elements: [] }` → `UntypedDataValue::Tuple(vec![])`.
-//!   - `List { element: Union with Role::Multimodal }` →
+//!   - `List { element: Variant with Role::Multimodal }` →
 //!     `UntypedDataValue::Multimodal(...)`.
 //!   - any other root (including real user-defined records that are
 //!     returned as a single-element method output) →
@@ -98,16 +98,16 @@ use crate::base_model::agent::{
     UntypedNamedElementValue,
 };
 use crate::schema::adapters::data_schema::{
-    as_multimodal_list_union, data_schema_to_input_schema, data_schema_to_output_schema,
+    as_multimodal_list_variant, data_schema_to_input_schema, data_schema_to_output_schema,
 };
 use crate::schema::adapters::error::{SchemaAdapterError, resolve_ref};
 use crate::schema::adapters::value::{schema_value_to_value, value_to_schema_value};
 use crate::schema::agent::{FieldSource, InputSchema, OutputSchema};
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::metadata::Role;
-use crate::schema::schema_type::{SchemaType, UnionBranch};
+use crate::schema::schema_type::{SchemaType, VariantCaseType};
 use crate::schema::schema_value::{
-    BinaryValuePayload, SchemaValue, TextValuePayload, UnionValuePayload,
+    BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
 
 // ===========================================================================
@@ -126,7 +126,7 @@ use crate::schema::schema_value::{
 /// Multimodal inputs are supported: a [`DataSchema::Multimodal`] schema
 /// paired with an [`UntypedDataValue::Multimodal`] value produces a single
 /// `parts` parameter (per [`data_schema_to_input_schema`]) whose value is a
-/// `list<union<…>>` of one [`SchemaValue::Union`] per multimodal element.
+/// `list<variant<…>>` of one [`SchemaValue::Variant`] per multimodal element.
 ///
 /// Fails if:
 /// - the value's shape (tuple/multimodal) does not match the schema's shape;
@@ -181,10 +181,13 @@ pub fn untyped_data_value_to_typed_input(
     }
 }
 
-/// Build the `list<union<…>>` value for a multimodal payload: one
-/// [`SchemaValue::Union`] per element, matching each [`UntypedNamedElementValue`]
-/// to its legacy alternative [`ElementSchema`] by name. Shared by the input
-/// and output multimodal forward conversions.
+/// Build the `list<variant<…>>` value for a multimodal payload: one
+/// [`SchemaValue::Variant`] per element, matching each
+/// [`UntypedNamedElementValue`] to its legacy alternative [`ElementSchema`] by
+/// name. The variant case index is the alternative's position in
+/// `schema_elements` (the same order in which the structural variant is built
+/// by `multimodal_elements_to_list_variant`). Shared by the input and output
+/// multimodal forward conversions.
 fn multimodal_untyped_to_list_value(
     schema_elements: &[NamedElementSchema],
     untyped_elements: Vec<UntypedNamedElementValue>,
@@ -196,19 +199,19 @@ fn multimodal_untyped_to_list_value(
                  name,
                  value: untyped,
              }| {
-                let schema_element =
-                    schema_elements
-                        .iter()
-                        .find(|e| e.name == name)
-                        .ok_or_else(|| {
-                            SchemaAdapterError::ValueShapeMismatch(format!(
-                                "multimodal element `{name}` has no matching schema alternative"
-                            ))
-                        })?;
+                let (index, schema_element) = schema_elements
+                    .iter()
+                    .enumerate()
+                    .find(|(_, e)| e.name == name)
+                    .ok_or_else(|| {
+                        SchemaAdapterError::ValueShapeMismatch(format!(
+                            "multimodal element `{name}` has no matching schema alternative"
+                        ))
+                    })?;
                 let inner = untyped_element_to_schema_value(untyped, &schema_element.schema)?;
-                Ok(SchemaValue::Union(UnionValuePayload {
-                    tag: name,
-                    body: Box::new(inner),
+                Ok(SchemaValue::Variant(VariantValuePayload {
+                    case: index as u32,
+                    payload: Some(Box::new(inner)),
                 }))
             },
         )
@@ -225,7 +228,7 @@ fn multimodal_untyped_to_list_value(
 /// - single tuple element → the element's schema and value inline;
 /// - multi-element tuple → error. Golem agent methods only ever return 0 or
 ///   1 element, so a multi-element output tuple is rejected;
-/// - multimodal → `list<union<…>>` with the inner union flagged
+/// - multimodal → `list<variant<…>>` with the inner variant flagged
 ///   [`Role::Multimodal`].
 ///
 /// Failure modes mirror [`untyped_data_value_to_typed_input`].
@@ -358,7 +361,7 @@ fn untyped_element_to_schema_value(
 /// Project an input parameter list `(InputSchema::Parameters, &[SchemaValue])`
 /// back into a legacy [`UntypedDataValue`].
 ///
-/// A single user-supplied `parts` field of type `list<union<… Role::Multimodal>>`
+/// A single user-supplied `parts` field of type `list<variant<… Role::Multimodal>>`
 /// projects back into [`UntypedDataValue::Multimodal`]; every other parameter
 /// list projects into [`UntypedDataValue::Tuple`].
 ///
@@ -391,18 +394,18 @@ pub fn typed_input_to_untyped_data_value(
     // anonymous graph for `schema_value_to_untyped_element` is sufficient.
     let graph = SchemaGraph::anonymous(SchemaType::tuple(Vec::new()));
     // Structural multimodal input: a single user-supplied `parts` field of
-    // type `list<union<… Role::Multimodal>>` projects back into a legacy
+    // type `list<variant<… Role::Multimodal>>` projects back into a legacy
     // `UntypedDataValue::Multimodal` (one element per list entry).
     if let [field] = fields.as_slice()
         && matches!(field.source, FieldSource::UserSupplied)
-        && let Some(branches) = as_multimodal_list_union(&graph, &field.schema)?
+        && let Some(cases) = as_multimodal_list_variant(&graph, &field.schema)?
         && let [
             SchemaValue::List {
                 elements: list_values,
             },
         ] = values
     {
-        let elements = multimodal_list_value_to_untyped(&graph, branches, list_values)?;
+        let elements = multimodal_list_value_to_untyped(&graph, cases, list_values)?;
         return Ok(UntypedDataValue::Multimodal(elements));
     }
     let elements = fields
@@ -413,32 +416,44 @@ pub fn typed_input_to_untyped_data_value(
     Ok(UntypedDataValue::Tuple(elements))
 }
 
-/// Project a multimodal `list<union<…>>` value back into legacy
-/// [`UntypedNamedElementValue`]s, matching each [`SchemaValue::Union`] to its
-/// declared branch by tag. Shared by the input and output multimodal reverse
-/// conversions.
+/// Project a multimodal `list<variant<…>>` value back into legacy
+/// [`UntypedNamedElementValue`]s, matching each [`SchemaValue::Variant`] to its
+/// declared case by index. Shared by the input and output multimodal reverse
+/// conversions. A payload-less case cannot occur in a well-formed multimodal
+/// value (each alternative carries an element value), so it is rejected.
 fn multimodal_list_value_to_untyped(
     graph: &SchemaGraph,
-    branches: &[UnionBranch],
+    cases: &[VariantCaseType],
     list_values: &[SchemaValue],
 ) -> Result<Vec<UntypedNamedElementValue>, SchemaAdapterError> {
     list_values
         .iter()
         .map(|elem| match elem {
-            SchemaValue::Union(UnionValuePayload { tag, body }) => {
-                let branch = branches.iter().find(|b| &b.tag == tag).ok_or_else(|| {
+            SchemaValue::Variant(VariantValuePayload { case, payload }) => {
+                let case_ty = cases.get(*case as usize).ok_or_else(|| {
                     SchemaAdapterError::ValueShapeMismatch(format!(
-                        "multimodal element tag `{tag}` does not match any branch"
+                        "multimodal element case index `{case}` is out of range \
+                         (variant has {} cases)",
+                        cases.len()
                     ))
                 })?;
-                let untyped = schema_value_to_untyped_element(graph, &branch.body, body)?;
+                let (body_ty, body) = match (&case_ty.payload, payload) {
+                    (Some(body_ty), Some(body)) => (body_ty, body),
+                    _ => {
+                        return Err(SchemaAdapterError::ValueShapeMismatch(format!(
+                            "multimodal element case `{}` must carry a payload",
+                            case_ty.name
+                        )));
+                    }
+                };
+                let untyped = schema_value_to_untyped_element(graph, body_ty, body)?;
                 Ok(UntypedNamedElementValue {
-                    name: tag.clone(),
+                    name: case_ty.name.clone(),
                     value: untyped,
                 })
             }
             other => Err(SchemaAdapterError::ValueShapeMismatch(format!(
-                "multimodal list element must be a Union value, got: {other:?}"
+                "multimodal list element must be a Variant value, got: {other:?}"
             ))),
         })
         .collect::<Result<Vec<_>, SchemaAdapterError>>()
@@ -452,7 +467,7 @@ fn multimodal_list_value_to_untyped(
 /// [`UntypedDataValue::Multimodal`] is taken from the root [`SchemaType`]:
 ///
 /// - `Tuple { elements: [] }` → `Tuple(vec![])` (canonical empty output).
-/// - `List { element: Union { metadata.role = Multimodal } }` →
+/// - `List { element: Variant { metadata.role = Multimodal } }` →
 ///   `Multimodal(...)` with one [`UntypedNamedElementValue`] per list
 ///   element.
 /// - any other root, including real user-defined records that are returned
@@ -482,11 +497,10 @@ pub fn typed_schema_value_to_untyped_data_value(
             },
         ) => {
             let resolved_element = resolve_ref(graph, element)?;
-            if let SchemaType::Union { spec, metadata } = resolved_element
+            if let SchemaType::Variant { cases, metadata } = resolved_element
                 && metadata.role == Some(Role::Multimodal)
             {
-                let elements =
-                    multimodal_list_value_to_untyped(graph, &spec.branches, list_values)?;
+                let elements = multimodal_list_value_to_untyped(graph, cases, list_values)?;
                 Ok(UntypedDataValue::Multimodal(elements))
             } else {
                 // Non-multimodal list → single-element tuple carrying the

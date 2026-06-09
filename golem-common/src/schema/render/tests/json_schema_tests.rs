@@ -16,7 +16,7 @@ use crate::schema::graph::SchemaGraph;
 use crate::schema::render::json_schema::to_json_schema;
 use crate::schema::schema_type::{
     DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaType, TextRestrictions,
-    UnionBranch, UnionSpec,
+    UnionBranch, UnionSpec, VariantCaseType,
 };
 use serde_json::{Value, json};
 use test_r::test;
@@ -555,95 +555,71 @@ fn unions_with_structurally_identical_branches_dedupe() {
 }
 
 #[test]
-fn multimodal_union_does_not_emit_discriminator_or_constraints() {
-    // Multimodal unions carry placeholder per-branch discriminator rules
-    // (`FieldAbsent { field_name: "" }`); the renderer must NOT lift those
-    // into the branch schemas as constraints and must NOT emit an
-    // OpenAPI-style `discriminator` block on the parent union schema.
-    let mut union = SchemaType::union(UnionSpec {
-        branches: vec![
-            UnionBranch {
-                tag: "caption".to_string(),
-                body: SchemaType::string(),
-                discriminator: DiscriminatorRule::FieldAbsent {
-                    field_name: String::new(),
-                },
-                metadata: Default::default(),
-            },
-            UnionBranch {
-                tag: "image_url".to_string(),
-                body: SchemaType::string(),
-                discriminator: DiscriminatorRule::FieldAbsent {
-                    field_name: String::new(),
-                },
-                metadata: Default::default(),
-            },
-        ],
-    });
-    union.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
-    let graph = SchemaGraph::anonymous(union.clone());
-    let schema = to_json_schema(&graph, &union);
-    // Parent: no `discriminator` block.
+fn multimodal_variant_canonical_renders_inline_tagged_oneof() {
+    // Multimodal is modelled as a tagged `variant` with `Role::Multimodal`.
+    // Under the canonical config it renders like any other variant: an
+    // inline `oneOf` of `{ <case>: <payload> }` objects, with no `$defs`
+    // indirection and no OpenAPI `discriminator` block.
+    let mut variant = SchemaType::variant(vec![
+        VariantCaseType {
+            name: "caption".to_string(),
+            payload: Some(SchemaType::string()),
+            metadata: Default::default(),
+        },
+        VariantCaseType {
+            name: "image_url".to_string(),
+            payload: Some(SchemaType::string()),
+            metadata: Default::default(),
+        },
+    ]);
+    variant.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
+    let graph = SchemaGraph::anonymous(variant.clone());
+    let schema = to_json_schema(&graph, &variant);
+
     assert!(
         schema.get("discriminator").is_none(),
-        "multimodal union must not emit a `discriminator` block: {schema}"
+        "multimodal variant must not emit a `discriminator` block: {schema}"
     );
-    // The parent `oneOf` must still resolve via `$ref` into branch defs.
     let one_of = schema["oneOf"]
         .as_array()
-        .expect("multimodal union renders as `oneOf`");
+        .expect("multimodal variant renders as `oneOf`");
     assert_eq!(one_of.len(), 2);
-    let defs = schema["$defs"].as_object().expect("$defs object");
-    // The branch defs must NOT carry a record-shaped `properties`/`required`
-    // / `not` clause synthesised from the placeholder discriminator: they
-    // are just `{ "type": "string" }` (no extra constraints).
-    for branch_ref in one_of {
-        let ptr = branch_ref["$ref"].as_str().expect("oneOf entry is a $ref");
-        let key = ptr.strip_prefix("#/$defs/").expect("ref points into $defs");
-        let def = defs[key].as_object().expect("def is an object");
-        assert_eq!(def["type"], json!("string"));
+    // Each entry is the inline tagged-object shape; no `$ref`.
+    for (entry, name) in one_of.iter().zip(["caption", "image_url"]) {
         assert!(
-            def.get("properties").is_none(),
-            "multimodal branch def must not synthesise object constraints from placeholder discriminator: {def:?}"
+            entry.get("$ref").is_none(),
+            "canonical multimodal variant entries are inline, not $ref: {entry}"
         );
-        assert!(
-            def.get("required").is_none(),
-            "multimodal branch def must not synthesise `required`: {def:?}"
-        );
-        assert!(
-            def.get("not").is_none(),
-            "multimodal branch def must not synthesise `not`: {def:?}"
-        );
+        assert_eq!(entry["required"], json!([name]));
+        assert_eq!(entry["properties"][name]["type"], json!("string"));
     }
 }
 
 #[test]
-fn multimodal_branch_does_not_collide_with_normal_branch_in_defs() {
-    // The same `UnionBranch` value renders differently when the parent
-    // union is multimodal (no discriminator constraint) vs. normal (with
-    // discriminator constraint). The synthesised `$defs` key must therefore
-    // distinguish the two render modes, otherwise whichever union is
-    // emitted last would silently overwrite the other.
-    let shared_branch = UnionBranch {
-        tag: "left".to_string(),
-        body: SchemaType::record(vec![NamedFieldType {
-            name: "kind".to_string(),
-            body: SchemaType::string(),
-            metadata: Default::default(),
-        }]),
-        discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
-            field_name: "kind".to_string(),
-            literal: Some("L".to_string()),
-        }),
+fn multimodal_variant_does_not_pollute_union_defs() {
+    // A multimodal variant renders inline, so it must not contribute any
+    // `$defs` entries; a sibling normal union still gets its branch defs.
+    let mut multimodal_variant = SchemaType::variant(vec![VariantCaseType {
+        name: "caption".to_string(),
+        payload: Some(SchemaType::string()),
         metadata: Default::default(),
-    };
+    }]);
+    multimodal_variant.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
     let normal_union = SchemaType::union(UnionSpec {
-        branches: vec![shared_branch.clone()],
+        branches: vec![UnionBranch {
+            tag: "left".to_string(),
+            body: SchemaType::record(vec![NamedFieldType {
+                name: "kind".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            }]),
+            discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                field_name: "kind".to_string(),
+                literal: Some("L".to_string()),
+            }),
+            metadata: Default::default(),
+        }],
     });
-    let mut multimodal_union = SchemaType::union(UnionSpec {
-        branches: vec![shared_branch.clone()],
-    });
-    multimodal_union.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
     let root = SchemaType::record(vec![
         NamedFieldType {
             name: "normal".to_string(),
@@ -652,43 +628,32 @@ fn multimodal_branch_does_not_collide_with_normal_branch_in_defs() {
         },
         NamedFieldType {
             name: "multimodal".to_string(),
-            body: multimodal_union,
+            body: SchemaType::list(multimodal_variant),
             metadata: Default::default(),
         },
     ]);
     let graph = SchemaGraph::anonymous(root.clone());
     let schema = to_json_schema(&graph, &root);
-    let defs = schema["$defs"].as_object().expect("$defs object");
 
+    // The normal union still resolves through `$defs` via `$ref`.
     let normal_ref = schema["properties"]["normal"]["oneOf"][0]["$ref"]
         .as_str()
-        .expect("normal ref");
-    let multimodal_ref = schema["properties"]["multimodal"]["oneOf"][0]["$ref"]
-        .as_str()
-        .expect("multimodal ref");
-    assert_ne!(
-        normal_ref, multimodal_ref,
-        "shared branch must produce distinct $defs keys in normal vs. multimodal mode"
-    );
+        .expect("normal union renders via $ref");
     let normal_key = normal_ref.strip_prefix("#/$defs/").unwrap();
-    let multimodal_key = multimodal_ref.strip_prefix("#/$defs/").unwrap();
-
-    // Normal union: branch def carries the discriminator constraint
-    // (`const` on the field).
+    let defs = schema["$defs"].as_object().expect("$defs object");
     assert_eq!(
         defs[normal_key]["properties"]["kind"]["const"],
         json!("L"),
         "normal branch def must carry the discriminator constraint"
     );
-    // Multimodal union: branch def does NOT carry a `const` constraint
-    // on the discriminator field.
-    let multimodal_def = defs[multimodal_key].as_object().expect("def is object");
-    let multimodal_kind = multimodal_def["properties"]["kind"]
-        .as_object()
-        .expect("kind is object");
+    // The multimodal variant list renders inline (array of inline `oneOf`).
+    let item = &schema["properties"]["multimodal"]["items"];
+    let one_of = item["oneOf"]
+        .as_array()
+        .expect("multimodal items are `oneOf`");
     assert!(
-        multimodal_kind.get("const").is_none(),
-        "multimodal branch def must NOT carry the discriminator `const`: {multimodal_def:?}"
+        one_of[0].get("$ref").is_none(),
+        "multimodal variant entries are inline, not $ref: {item}"
     );
 }
 
@@ -785,7 +750,6 @@ mod agent_entry_points {
         JsonSchemaConfig, input_schema_to_json_schema, output_schema_to_json_schema,
         to_json_schema_with_config,
     };
-    use crate::schema::schema_type::UnionBranch;
     use test_r::test;
 
     #[test]
@@ -875,32 +839,24 @@ mod agent_entry_points {
     #[test]
     fn input_schema_multimodal_renders_parts_array() {
         // A multimodal input is a single user-supplied `parts` field of type
-        // list<union<… Role::Multimodal>>; it renders as a `parts` array.
-        let mut union = SchemaType::union(UnionSpec {
-            branches: vec![
-                UnionBranch {
-                    tag: "text".to_string(),
-                    body: SchemaType::string(),
-                    discriminator: DiscriminatorRule::FieldAbsent {
-                        field_name: String::new(),
-                    },
-                    metadata: Default::default(),
-                },
-                UnionBranch {
-                    tag: "image".to_string(),
-                    body: SchemaType::string(),
-                    discriminator: DiscriminatorRule::FieldAbsent {
-                        field_name: String::new(),
-                    },
-                    metadata: Default::default(),
-                },
-            ],
-        });
-        union.metadata_mut().role = Some(Role::Multimodal);
+        // list<variant<… Role::Multimodal>>; it renders as a `parts` array.
+        let mut variant = SchemaType::variant(vec![
+            VariantCaseType {
+                name: "text".to_string(),
+                payload: Some(SchemaType::string()),
+                metadata: Default::default(),
+            },
+            VariantCaseType {
+                name: "image".to_string(),
+                payload: Some(SchemaType::string()),
+                metadata: Default::default(),
+            },
+        ]);
+        variant.metadata_mut().role = Some(Role::Multimodal);
         let input = InputSchema::Parameters(vec![NamedField {
             name: "parts".to_string(),
             source: FieldSource::UserSupplied,
-            schema: SchemaType::list(union),
+            schema: SchemaType::list(variant),
             metadata: Default::default(),
         }]);
         let graph = SchemaGraph::empty();
@@ -979,30 +935,22 @@ mod agent_entry_points {
 
     #[test]
     fn mcp_multimodal_parts_items_are_inline_name_value_objects() {
-        let mut union = SchemaType::union(UnionSpec {
-            branches: vec![
-                UnionBranch {
-                    tag: "description".to_string(),
-                    body: SchemaType::string(),
-                    discriminator: DiscriminatorRule::FieldAbsent {
-                        field_name: String::new(),
-                    },
-                    metadata: Default::default(),
-                },
-                UnionBranch {
-                    tag: "photo".to_string(),
-                    body: SchemaType::binary(Default::default()),
-                    discriminator: DiscriminatorRule::FieldAbsent {
-                        field_name: String::new(),
-                    },
-                    metadata: Default::default(),
-                },
-            ],
-        });
-        union.metadata_mut().role = Some(Role::Multimodal);
+        let mut variant = SchemaType::variant(vec![
+            VariantCaseType {
+                name: "description".to_string(),
+                payload: Some(SchemaType::string()),
+                metadata: Default::default(),
+            },
+            VariantCaseType {
+                name: "photo".to_string(),
+                payload: Some(SchemaType::binary(Default::default())),
+                metadata: Default::default(),
+            },
+        ]);
+        variant.metadata_mut().role = Some(Role::Multimodal);
         let input = InputSchema::Parameters(vec![NamedField::user_supplied(
             "parts",
-            SchemaType::list(union),
+            SchemaType::list(variant),
         )]);
         let graph = SchemaGraph::empty();
         let doc = input_schema_to_json_schema(&graph, &input, JsonSchemaConfig::MCP);

@@ -41,14 +41,15 @@ pub enum RichScalarShape {
     McpLegacy,
 }
 
-/// JSON shape used for a multimodal `list<union<… Role::Multimodal>>` node.
+/// JSON shape used for a multimodal `list<variant<… Role::Multimodal>>` node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MultimodalShape {
-    /// Render like any other `list<union<…>>`: an array whose items are a
-    /// `oneOf` of per-branch `$ref`s.
+    /// Render like any other `list<variant<…>>`: an array whose items are a
+    /// `oneOf` of inline `{ <case name>: <case payload schema> }` objects
+    /// (or a bare `const` for a payload-less case).
     Canonical,
     /// MCP "parts" encoding: an array whose items are a `oneOf` of inline
-    /// `{ name: <const>, value: <branch schema> }` objects.
+    /// `{ name: <const case>, value: <case payload schema> }` objects.
     McpParts,
 }
 
@@ -65,7 +66,7 @@ pub struct JsonSchemaConfig {
     pub include_draft_marker: bool,
     /// JSON shape for `Text` / `Binary` nodes.
     pub rich_scalar_shape: RichScalarShape,
-    /// JSON shape for multimodal `list<union<… Role::Multimodal>>` nodes.
+    /// JSON shape for multimodal `list<variant<… Role::Multimodal>>` nodes.
     pub multimodal_shape: MultimodalShape,
 }
 
@@ -280,36 +281,20 @@ fn collect_union_branch_defs(
     config: JsonSchemaConfig,
 ) {
     match ty {
-        SchemaType::Union { spec, metadata } => {
-            // Multimodal unions carry placeholder per-branch discriminators
-            // (the actual tag lives positionally in the outer envelope), so
-            // those rules must not be lifted into the branch schemas.
-            let multimodal = matches!(
-                metadata.role,
-                Some(crate::schema::metadata::Role::Multimodal)
-            );
-            // In MCP "parts" mode a multimodal union is rendered inline as a
-            // `oneOf` of `{ name, value }` objects (see `union_schema`), so no
-            // per-branch `$defs` entries are synthesised for it.
-            let inline_multimodal =
-                multimodal && config.multimodal_shape == MultimodalShape::McpParts;
+        SchemaType::Union { spec, .. } => {
             for branch in spec.branches.iter() {
-                if !inline_multimodal {
-                    let key = table.name_for(branch, multimodal).to_string();
-                    if emitted.insert(key.clone()) {
-                        let mut body = render_type(graph, &branch.body, false, table, config);
-                        attach_metadata(&mut body, &branch.metadata);
-                        if let Some(obj) = body.as_object_mut()
-                            && !multimodal
-                        {
-                            // Constrain the branch schema further with the
-                            // discriminator. For record-shaped rules this adds
-                            // an extra constraint on the discriminator field;
-                            // for string rules it adds a `pattern`/`const`.
-                            apply_discriminator_constraint(obj, &branch.discriminator);
-                        }
-                        defs.insert(key, body);
+                let key = table.name_for(branch).to_string();
+                if emitted.insert(key.clone()) {
+                    let mut body = render_type(graph, &branch.body, false, table, config);
+                    attach_metadata(&mut body, &branch.metadata);
+                    if let Some(obj) = body.as_object_mut() {
+                        // Constrain the branch schema further with the
+                        // discriminator. For record-shaped rules this adds
+                        // an extra constraint on the discriminator field;
+                        // for string rules it adds a `pattern`/`const`.
+                        apply_discriminator_constraint(obj, &branch.discriminator);
                     }
+                    defs.insert(key, body);
                 }
                 collect_union_branch_defs(graph, &branch.body, defs, emitted, table, config);
             }
@@ -376,19 +361,16 @@ fn collect_union_branch_defs(
 /// canonical structural key used internally is a `blake3` hash of the
 /// branch's deterministic JSON serialisation.
 pub(super) struct BranchNameTable {
-    names: HashMap<(String, bool), String>,
+    names: HashMap<String, String>,
 }
 
 impl BranchNameTable {
-    pub(super) fn name_for(&self, branch: &UnionBranch, multimodal: bool) -> &str {
+    pub(super) fn name_for(&self, branch: &UnionBranch) -> &str {
         let key = canonical_branch_key(branch);
-        self.names
-            .get(&(key, multimodal))
-            .map(String::as_str)
-            .expect(
-                "BranchNameTable must contain every union branch reachable from the render root \
+        self.names.get(&key).map(String::as_str).expect(
+            "BranchNameTable must contain every union branch reachable from the render root \
                  — `build_branch_name_table` is the source of truth for this invariant",
-            )
+        )
     }
 }
 
@@ -426,11 +408,11 @@ fn canonical_branch_key(branch: &UnionBranch) -> String {
 
 #[derive(Default)]
 struct BranchCollector {
-    /// `(canonical-key, multimodal)` for every encountered branch, in
-    /// walk order, with no duplicates. Used both for membership and for
-    /// deterministic iteration during name resolution.
-    keys: Vec<(String, bool)>,
-    occurrences: HashMap<(String, bool), Occurrence>,
+    /// Canonical key for every encountered branch, in walk order, with no
+    /// duplicates. Used both for membership and for deterministic iteration
+    /// during name resolution.
+    keys: Vec<String>,
+    occurrences: HashMap<String, Occurrence>,
     /// Path of segments describing the current position in the schema
     /// graph (record-field names, variant-case names, "key"/"value",
     /// "ok"/"err", outer branch tags, …).
@@ -445,9 +427,8 @@ struct Occurrence {
 }
 
 impl BranchCollector {
-    fn record(&mut self, branch: &UnionBranch, multimodal: bool) {
-        let canonical = canonical_branch_key(branch);
-        let key = (canonical, multimodal);
+    fn record(&mut self, branch: &UnionBranch) {
+        let key = canonical_branch_key(branch);
         if let std::collections::hash_map::Entry::Vacant(slot) = self.occurrences.entry(key.clone())
         {
             slot.insert(Occurrence {
@@ -467,13 +448,9 @@ impl BranchCollector {
     /// occurrences and pollute the disambiguation path.
     fn walk_type(&mut self, ty: &SchemaType) {
         match ty {
-            SchemaType::Union { spec, metadata } => {
-                let multimodal = matches!(
-                    metadata.role,
-                    Some(crate::schema::metadata::Role::Multimodal)
-                );
+            SchemaType::Union { spec, .. } => {
                 for branch in &spec.branches {
-                    self.record(branch, multimodal);
+                    self.record(branch);
                     self.path.push(branch.tag.clone());
                     self.walk_type(&branch.body);
                     self.path.pop();
@@ -545,24 +522,18 @@ impl BranchCollector {
 
     fn into_table(self, mut taken: HashSet<String>) -> BranchNameTable {
         // Compute each occurrence's preferred name (from its `tag`) and
-        // group by it. A `Multimodal` suffix is appended to a multimodal
-        // occurrence's preferred name iff the same structural branch
-        // also appears in a non-multimodal context — that's the only
-        // case where the two would otherwise collide.
-        let mut groups: Vec<(String, Vec<(String, bool)>)> = Vec::new();
+        // group by it.
+        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
         for key in &self.keys {
             let occ = &self.occurrences[key];
-            let mut preferred = sanitise_to_upper_camel(&occ.tag);
-            if key.1 && self.occurrences.contains_key(&(key.0.clone(), false)) {
-                preferred.push_str("Multimodal");
-            }
+            let preferred = sanitise_to_upper_camel(&occ.tag);
             match groups.iter_mut().find(|(name, _)| name == &preferred) {
                 Some((_, members)) => members.push(key.clone()),
                 None => groups.push((preferred, vec![key.clone()])),
             }
         }
 
-        let mut names = HashMap::<(String, bool), String>::new();
+        let mut names = HashMap::<String, String>::new();
         for (preferred, members) in groups {
             if members.len() == 1 && !taken.contains(&preferred) {
                 // Unique preferred name and not colliding with a graph
@@ -576,7 +547,7 @@ impl BranchCollector {
                 // assigned names are symmetric.
                 for key in members {
                     let occ = &self.occurrences[&key];
-                    let assigned = disambiguate(&preferred, &occ.path, &taken, &key.0);
+                    let assigned = disambiguate(&preferred, &occ.path, &taken, &key);
                     taken.insert(assigned.clone());
                     names.insert(key, assigned);
                 }
@@ -742,8 +713,12 @@ pub(super) fn render_type(
             ])
         }
 
-        SchemaType::Variant { cases, .. } => {
-            Value::Object(variant_schema(graph, cases, table, config))
+        SchemaType::Variant { cases, metadata } => {
+            let multimodal = matches!(
+                metadata.role,
+                Some(crate::schema::metadata::Role::Multimodal)
+            );
+            Value::Object(variant_schema(graph, cases, multimodal, table, config))
         }
 
         SchemaType::Enum { cases, .. } => obj([
@@ -857,9 +832,7 @@ pub(super) fn render_type(
         ]),
         SchemaType::Quantity { spec, .. } => Value::Object(quantity_schema(spec)),
 
-        SchemaType::Union { spec, metadata } => {
-            Value::Object(union_schema(graph, spec, metadata, table, config))
-        }
+        SchemaType::Union { spec, .. } => Value::Object(union_schema(graph, spec, table, config)),
 
         SchemaType::Secret { spec, .. } => Value::Object(secret_schema(spec)),
         SchemaType::QuotaToken { spec, .. } => Value::Object(quota_token_schema(spec)),
@@ -912,9 +885,54 @@ fn unsigned_64_schema() -> Value {
 fn variant_schema(
     graph: &SchemaGraph,
     cases: &[VariantCaseType],
+    multimodal: bool,
     table: &BranchNameTable,
     config: JsonSchemaConfig,
 ) -> Map<String, Value> {
+    // MCP "parts" mode renders a multimodal variant inline as a `oneOf` of
+    // `{ name: <const case>, value: <case payload schema> }` objects,
+    // matching the historical worker-service MCP renderer. The carried tag
+    // (the case name) is advertised as the `name` const.
+    if multimodal && config.multimodal_shape == MultimodalShape::McpParts {
+        let one_of: Vec<Value> = cases
+            .iter()
+            .map(|case| {
+                let value_schema = match &case.payload {
+                    Some(payload_ty) => render_type(graph, payload_ty, false, table, config),
+                    None => Map::new().into(),
+                };
+                obj([
+                    ("type", Value::String("object".to_string())),
+                    (
+                        "properties",
+                        Value::Object({
+                            let mut props = Map::new();
+                            props.insert(
+                                "name".to_string(),
+                                obj([
+                                    ("type", Value::String("string".to_string())),
+                                    ("const", Value::String(case.name.clone())),
+                                ]),
+                            );
+                            props.insert("value".to_string(), value_schema);
+                            props
+                        }),
+                    ),
+                    (
+                        "required",
+                        Value::Array(vec![
+                            Value::String("name".to_string()),
+                            Value::String("value".to_string()),
+                        ]),
+                    ),
+                    ("additionalProperties", Value::Bool(false)),
+                ])
+            })
+            .collect();
+        let mut out = Map::new();
+        out.insert("oneOf".to_string(), Value::Array(one_of));
+        return out;
+    }
     let one_of: Vec<Value> = cases
         .iter()
         .map(|case| match &case.payload {
@@ -1343,7 +1361,6 @@ fn quota_token_schema(_spec: &QuotaTokenSpec) -> Map<String, Value> {
 fn union_schema(
     graph: &SchemaGraph,
     spec: &UnionSpec,
-    metadata: &MetadataEnvelope,
     table: &BranchNameTable,
     config: JsonSchemaConfig,
 ) -> Map<String, Value> {
@@ -1351,63 +1368,11 @@ fn union_schema(
     // by `add_union_branch_defs`), so the `oneOf` and any discriminator
     // mapping resolves against schemas the renderer actually emits. The
     // branch key is resolved through `BranchNameTable` so two unrelated
-    // unions sharing a tag get disambiguated names; the same lookup also
-    // distinguishes a normal-mode and a multimodal-mode occurrence of
-    // the same structural branch.
-    let multimodal = matches!(
-        metadata.role,
-        Some(crate::schema::metadata::Role::Multimodal)
-    );
-    // MCP "parts" mode renders a multimodal union inline as a `oneOf` of
-    // `{ name: <const tag>, value: <branch schema> }` objects (no `$defs`
-    // indirection), matching the historical worker-service MCP renderer.
-    if multimodal && config.multimodal_shape == MultimodalShape::McpParts {
-        let one_of: Vec<Value> = spec
-            .branches
-            .iter()
-            .map(|b| {
-                let value_schema = render_type(graph, &b.body, false, table, config);
-                obj([
-                    ("type", Value::String("object".to_string())),
-                    (
-                        "properties",
-                        Value::Object({
-                            let mut props = Map::new();
-                            props.insert(
-                                "name".to_string(),
-                                obj([
-                                    ("type", Value::String("string".to_string())),
-                                    ("const", Value::String(b.tag.clone())),
-                                ]),
-                            );
-                            props.insert("value".to_string(), value_schema);
-                            props
-                        }),
-                    ),
-                    (
-                        "required",
-                        Value::Array(vec![
-                            Value::String("name".to_string()),
-                            Value::String("value".to_string()),
-                        ]),
-                    ),
-                    ("additionalProperties", Value::Bool(false)),
-                ])
-            })
-            .collect();
-        let mut m = Map::new();
-        m.insert("oneOf".to_string(), Value::Array(one_of));
-        return m;
-    }
+    // unions sharing a tag get disambiguated names.
     let one_of: Vec<Value> = spec
         .branches
         .iter()
-        .map(|b| {
-            obj([(
-                "$ref",
-                Value::String(ref_to_def_key(table.name_for(b, multimodal))),
-            )])
-        })
+        .map(|b| obj([("$ref", Value::String(ref_to_def_key(table.name_for(b))))]))
         .collect();
     let mut m = Map::new();
     m.insert("oneOf".to_string(), Value::Array(one_of));
@@ -1419,10 +1384,7 @@ fn union_schema(
                 _ => None,
             };
             if let Some(lit) = literal {
-                mapping.insert(
-                    lit,
-                    Value::String(ref_to_def_key(table.name_for(branch, multimodal))),
-                );
+                mapping.insert(lit, Value::String(ref_to_def_key(table.name_for(branch))));
             }
         }
         let mut d = Map::new();
@@ -1433,6 +1395,7 @@ fn union_schema(
         m.insert("discriminator".to_string(), Value::Object(d));
     }
     let _ = graph;
+    let _ = config;
     m
 }
 

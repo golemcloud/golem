@@ -70,7 +70,7 @@ impl InputSchema {
 /// Output schema of an agent method.
 ///
 /// Multimodal outputs are expressed as
-/// `Single(list<union<…>> with role = Multimodal)`, not as a separate enum
+/// `Single(list<variant<…>> with role = Multimodal)`, not as a separate enum
 /// case.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "tag", content = "value", rename_all = "kebab-case")]

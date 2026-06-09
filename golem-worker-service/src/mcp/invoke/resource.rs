@@ -22,7 +22,6 @@ use golem_common::model::agent::LegacyParsedAgentId;
 use golem_common::schema::adapters::{
     schema_agent_constructor_to_legacy, schema_agent_method_to_legacy,
 };
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
 use std::sync::Arc;
@@ -189,12 +188,13 @@ fn convert_to_resource_content(
 ) -> Result<ResourceContents, ErrorData> {
     match element {
         ElementValue::ComponentModel(v) => {
-            let json_value = v.value.to_json_value().map_err(|e| {
-                ErrorData::internal_error(
-                    format!("Failed to serialize component model response: {e}"),
-                    None,
-                )
-            })?;
+            let json_value =
+                crate::mcp::invoke::component_model_value_to_json(&v.value).map_err(|e| {
+                    ErrorData::internal_error(
+                        format!("Failed to serialize component model response: {e}"),
+                        None,
+                    )
+                })?;
             Ok(ResourceContents::TextResourceContents {
                 uri: uri.to_string(),
                 mime_type: Some("application/json".to_string()),

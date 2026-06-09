@@ -17,7 +17,6 @@ use golem_common::base_model::agent::{
     NamedElementSchema,
 };
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::model::JsonObject;
 
 /// Validate that a (legacy) constructor `DataSchema` can be supplied through
@@ -83,18 +82,14 @@ pub fn extract_constructor_input_values(
                             }
                         };
 
-                        let value_and_type =
-                            golem_wasm::ValueAndType::parse_with_type(&json_value, element_type)
-                                .map_err(|errs| {
-                                    format!(
-                                        "Failed to parse parameter '{}': {}",
-                                        name,
-                                        errs.join(", ")
-                                    )
-                                })?;
+                        let value = crate::mcp::invoke::parse_component_model_value(
+                            &json_value,
+                            element_type,
+                        )
+                        .map_err(|e| format!("Failed to parse parameter '{}': {}", name, e))?;
 
                         params.push(ComponentModelElementValue {
-                            value: value_and_type,
+                            value: golem_wasm::ValueAndType::new(value, element_type.clone()),
                         });
                     }
                     ElementSchema::UnstructuredText(_) => {
