@@ -211,9 +211,7 @@ pub fn format_stderr(stderr: &str) -> String {
                 || line.starts_with("Error:")
             {
                 line.red().bold().to_string()
-            } else if is_wasm_frame(line) {
-                line.bright_black().to_string()
-            } else if line.contains("RUST_BACKTRACE=1") {
+            } else if is_wasm_frame(line) || line.contains("RUST_BACKTRACE=1") {
                 line.bright_black().to_string()
             } else {
                 line.yellow().to_string()
