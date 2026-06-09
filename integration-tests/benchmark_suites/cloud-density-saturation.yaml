@@ -41,7 +41,7 @@ benchmarks:
   - name: throughput-saturation-counters
     iterations: 1
     clusterSize: [2]
-    size: [50, 100, 150, 200, 300, 500]
+    size: [50, 100, 150, 200, 300]
     length: [16777216]
 
   # Rust echo agents — lean per-instance linear memory (the ~900 KB module is
