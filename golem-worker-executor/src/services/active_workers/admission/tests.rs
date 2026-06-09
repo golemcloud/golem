@@ -435,72 +435,144 @@ async fn usable_ratio_caps_admission_below_full_limit() {
     );
 }
 
-// ── Concurrency: the simultaneous-big-start race ─────────────────────────────
+// ── Concurrency ──────────────────────────────────────────────────────────────
+//
+// In production, each admission reads headroom (`try_admit`) and then separately
+// commits to the upstream atomic permit (modeled here as `pinned_usage +=
+// request`). The two steps are not serialised across concurrent admissions, so
+// several admissions can read the same pre-commit snapshot, all pass the check,
+// and all commit. The `reserve` margin accounts for this instead of a lock:
+// concurrent admissions may push usage above the carve-out ceiling into the
+// reserve, but must not push it above the true `limit`.
+//
+// These tests force the maximum-overlap case with a barrier: every admission
+// completes its headroom check before any admission commits. This makes the
+// maximum overshoot deterministic rather than dependent on task scheduling, so
+// an undersized reserve is reliably detected and a correctly sized one is
+// actually exercised.
+
+/// Run `racers` admissions of `request` bytes against a fresh environment with
+/// the given `reserve`, forcing all headroom checks to complete before any
+/// commit (maximum overlap). Returns the final environment usage and the number
+/// of admits granted.
+async fn race_admissions_worst_case(
+    limit: u64,
+    initial_pinned: u64,
+    reserve: u64,
+    racers: usize,
+    request: u64,
+) -> (u64, usize) {
+    let state = Arc::new(Mutex::new(EnvState {
+        limit,
+        pinned_usage: initial_pinned,
+        residents: vec![],
+        ..Default::default()
+    }));
+    let ctrl = Arc::new(controller_with_ratio(state.clone(), 1.0, reserve));
+    // All racers check before any commits: the maximum-overlap schedule.
+    let barrier = Arc::new(tokio::sync::Barrier::new(racers));
+
+    let mut handles = Vec::new();
+    for _ in 0..racers {
+        let ctrl = ctrl.clone();
+        let state = state.clone();
+        let barrier = barrier.clone();
+        handles.push(tokio::spawn(async move {
+            let source = FakeEvictionSource {
+                state: state.clone(),
+            };
+            let decision = ctrl.try_admit(request, &source).await;
+            // Hold every racer here until all have decided against the same
+            // pre-commit snapshot, then let the commits run together.
+            barrier.wait().await;
+            if decision == AdmissionDecision::Admit {
+                state.lock().unwrap().pinned_usage += request;
+                true
+            } else {
+                false
+            }
+        }));
+    }
+    let mut admitted = 0;
+    for h in handles {
+        if h.await.unwrap() {
+            admitted += 1;
+        }
+    }
+    let usage = state.lock().unwrap().usage();
+    (usage, admitted)
+}
 
 proptest! {
-    /// The contract for the safety invariant under concurrency.
+    /// A reserve sized for the maximum concurrent overshoot keeps real usage
+    /// under the limit even when every racer checks before any commits, with a
+    /// non-trivial near-ceiling pinned base.
     ///
-    /// Many admissions race at once with no external serialisation across the
-    /// headroom check and the commit (the commit models the upstream atomic
-    /// permit grant; the check is a separate prior read, so a genuine
-    /// time-of-check/time-of-use window exists between concurrent tasks).
-    ///
-    /// The invariant: real usage must never exceed the true `limit`. Admissions
-    /// may collectively overshoot the carve-out ceiling into the reserve — that
-    /// is what the reserve is for — but never past `limit` itself. The reserve
-    /// is sized here to cover the worst-case concurrent overshoot (number of
-    /// racers × max request), so a passing test means the reserve margin is a
-    /// sufficient substitute for serialising the gate. If this ever fails, the
-    /// margin is insufficient for the chosen concurrency and the gate's
-    /// correctness depends on stronger synchronisation.
+    /// Sizing: at most all `racers` can pass against the same pre-commit
+    /// snapshot, so the reserve must cover `racers × request` landing in the
+    /// window between check and commit. With that margin, usage stays
+    /// `<= limit`.
     #[test]
-    fn concurrent_admissions_never_exceed_limit(
+    fn sufficient_reserve_holds_under_worst_case_overlap(
         racers in 2usize..16,
         request in 50u64..400,
+        base_fill in 0u64..2000,
     ) {
-        // Worst case: every racer passes the check against the same snapshot and
-        // commits. The reserve must cover (racers - 1) extra in-flight requests
-        // beyond the one the headroom was actually sized for.
         let reserve = request * racers as u64;
-        // Ceiling must leave room for at least one request above the reserve.
-        let limit = reserve + request + 1000;
+        // Limit leaves room for the pre-existing fill, the reserve, and at least
+        // one request's worth of admissible headroom above the reserve.
+        let limit = base_fill + reserve + request + 500;
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
             .build()
             .unwrap();
         rt.block_on(async move {
-            let state = Arc::new(Mutex::new(EnvState {
-                limit,
-                pinned_usage: 0,
-                residents: vec![],
-                ..Default::default()
-            }));
-            let ctrl = Arc::new(controller_with_ratio(state.clone(), 1.0, reserve));
-
-            let mut handles = Vec::new();
-            for _ in 0..racers {
-                let ctrl = ctrl.clone();
-                let state = state.clone();
-                handles.push(tokio::spawn(async move {
-                    let source = FakeEvictionSource { state: state.clone() };
-                    let decision = ctrl.try_admit(request, &source).await;
-                    if decision == AdmissionDecision::Admit {
-                        // Models the atomic permit grant: a single locked
-                        // fetch-add, separate from the (already-completed) check.
-                        state.lock().unwrap().pinned_usage += request;
-                    }
-                }));
-            }
-            for h in handles {
-                h.await.unwrap();
-            }
-
-            let s = state.lock().unwrap();
+            let (usage, _) =
+                race_admissions_worst_case(limit, base_fill, reserve, racers, request).await;
             prop_assert!(
-                s.usage() <= s.limit,
-                "concurrent admissions drove usage {} past limit {}",
-                s.usage(), s.limit
+                usage <= limit,
+                "maximum overlap drove usage {usage} past limit {limit}"
+            );
+            Ok(())
+        }).unwrap();
+    }
+
+    /// With no reserve and maximum overlap forced, several racers admitting at
+    /// once must push usage above the carve-out ceiling. This confirms the race
+    /// the design tolerates is real and this harness reproduces it; without it,
+    /// the safety test above could pass without ever exercising a concurrent
+    /// overshoot. Usage may still stay under `limit`; the assertion is on the
+    /// overshoot past the ceiling.
+    #[test]
+    fn worst_case_overlap_overshoots_ceiling_without_reserve(
+        racers in 2usize..12,
+        request in 50u64..400,
+    ) {
+        // Ceiling headroom sized for exactly one request; no reserve cushion.
+        let ceiling = request;
+        let limit = request * racers as u64 + 1000;
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            // pinned = limit - ceiling so admissible headroom is exactly one
+            // request; with reserve 0, every racer sees room for itself.
+            let pinned = limit - ceiling;
+            let (usage, admitted) =
+                race_admissions_worst_case(limit, pinned, 0, racers, request).await;
+            // More than one admit means the gate let concurrent racers through
+            // on the same snapshot.
+            prop_assert!(
+                admitted >= 2,
+                "expected concurrent over-admission with no reserve, got {admitted} admits"
+            );
+            prop_assert!(
+                usage > ceiling + pinned,
+                "usage {usage} did not overshoot the ceiling {}",
+                ceiling + pinned
             );
             Ok(())
         }).unwrap();
