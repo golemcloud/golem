@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{ConcurrentReplayResolver, ReplayCallHandle, Resolution};
+use crate::durable_host::concurrent::{
+    ConcurrentReplayResolver, ReplayCallHandle, Resolution, ResolutionOutcome,
+};
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -798,12 +800,39 @@ impl ReplayState {
         &mut self,
         handle: ReplayCallHandle,
     ) -> Result<Resolution, WorkerExecutorError> {
+        let start_idx = handle.start_idx();
+        match self.await_resolution_outcome(handle).await? {
+            ResolutionOutcome::Resolved(resolution) => Ok(resolution),
+            ResolutionOutcome::Incomplete => Err(WorkerExecutorError::unexpected_oplog_entry(
+                "End or Cancelled",
+                format!(
+                    "end of replay: durable call Start at {start_idx} has no matching End/Cancelled"
+                ),
+            )),
+        }
+    }
+
+    /// Like [`Self::await_resolution`], but reports a lone committed `Start` (replay reached the end
+    /// of the oplog without the matching `End`/`Cancelled`) as [`ResolutionOutcome::Incomplete`]
+    /// rather than a hard error, so the caller can decide whether to re-execute the call. A genuine
+    /// interleaving (a non-`End`/`Cancelled` entry encountered mid-await) is still a hard error.
+    pub async fn await_resolution_outcome(
+        &mut self,
+        handle: ReplayCallHandle,
+    ) -> Result<ResolutionOutcome, WorkerExecutorError> {
         let (start_idx, mut receiver) = handle.into_parts();
         loop {
             match receiver.try_recv() {
-                Ok(resolution) => return Ok(resolution),
+                Ok(resolution) => return Ok(ResolutionOutcome::Resolved(resolution)),
                 Err(oneshot::error::TryRecvError::Empty) => {}
                 Err(oneshot::error::TryRecvError::Closed) => {
+                    // The sender was dropped without resolving (anomalous). Drop any lingering
+                    // registration so it cannot be matched by a later resolution.
+                    self.internal
+                        .write()
+                        .await
+                        .concurrent_resolver
+                        .unregister(start_idx);
                     return Err(WorkerExecutorError::runtime(format!(
                         "concurrent replay resolver channel closed for Start at {start_idx}"
                     )));
@@ -811,14 +840,16 @@ impl ReplayState {
             }
 
             if self.is_live() {
-                // Reached the end of the oplog without ever seeing the matching End/Cancelled:
-                // a dangling `Start` (e.g. crashed after the eager Start but before completion).
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "End or Cancelled",
-                    format!(
-                        "end of replay: durable call Start at {start_idx} has no matching End/Cancelled"
-                    ),
-                ));
+                // Reached the end of the oplog without ever seeing the matching End/Cancelled: a
+                // committed lone `Start` (a forced commit flushed it before its `End`, or a crash
+                // happened in between). Drop the now-stale registration and report Incomplete so the
+                // caller can re-execute the side effect and complete the existing `Start`.
+                self.internal
+                    .write()
+                    .await
+                    .concurrent_resolver
+                    .unregister(start_idx);
+                return Ok(ResolutionOutcome::Incomplete);
             }
 
             let consumed = self
@@ -829,7 +860,13 @@ impl ReplayState {
             if consumed.is_none() {
                 // The next non-hint entry is not an End/Cancelled (e.g. an unclaimed `Start` or a
                 // scope/persistence marker). Crossing it would corrupt the cursor shared with
-                // legacy positional readers, so we refuse rather than advance past it.
+                // legacy positional readers, so we refuse rather than advance past it. Drop the
+                // stale registration first so it cannot be matched by a later resolution.
+                self.internal
+                    .write()
+                    .await
+                    .concurrent_resolver
+                    .unregister(start_idx);
                 return Err(WorkerExecutorError::runtime(format!(
                     "concurrent replay interleaving is not supported: encountered a non-End/Cancelled entry while awaiting resolution of Start at {start_idx}"
                 )));
@@ -1110,6 +1147,32 @@ mod tests {
         assert!(
             message.contains("no matching End/Cancelled"),
             "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    async fn lone_start_reports_incomplete_outcome_and_unregisters() {
+        // [NoOp, Start] — same crash window as above, but via the outcome-returning API: the lone
+        // committed Start (no End) must be reported as Incomplete (not an error), and the stale
+        // resolver registration must be dropped so it cannot leak.
+        let mut rs = replay_state_over(vec![noop(), start_now()]).await;
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        let start_idx = handle.start_idx();
+
+        match rs.await_resolution_outcome(handle).await.unwrap() {
+            ResolutionOutcome::Incomplete => {}
+            other => panic!("expected Incomplete, got {other:?}"),
+        }
+        let internal = rs.internal.read().await;
+        assert!(
+            !internal.concurrent_resolver.is_pending(start_idx),
+            "incomplete outcome must unregister the awaiter"
         );
     }
 

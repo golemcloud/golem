@@ -14,7 +14,7 @@
 
 use wasmtime::component::Resource;
 
-use crate::durable_host::concurrent::{CallHandle, Cancellable};
+use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
@@ -25,6 +25,32 @@ use golem_common::model::oplog::{
 };
 use wasmtime_wasi::clocks::WasiClocksView as _;
 use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
+
+/// Reads the monotonic clock and completes the given live (or incomplete-turned-live) call handle.
+/// On a host error it explicitly records a cancellation (rather than relying on `Drop`) and
+/// surfaces the original error.
+async fn complete_monotonic_now<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: CallHandle<host_functions::MonotonicClockNow, Cancellable>,
+) -> wasmtime::Result<HostResponseMonotonicClockTimestamp> {
+    let nanos = {
+        let mut view = ctx.as_wasi_view();
+        match Host::now(&mut view.clocks()).await {
+            Ok(nanos) => nanos,
+            Err(err) => {
+                if let Err(cancel_err) = handle.cancel(ctx, None).await {
+                    tracing::warn!(
+                        "failed to record cancellation for monotonic_clock::now: {cancel_err}"
+                    );
+                }
+                return Err(err);
+            }
+        }
+    };
+    Ok(handle
+        .complete(ctx, HostResponseMonotonicClockTimestamp { nanos })
+        .await?)
+}
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> wasmtime::Result<Instant> {
@@ -39,28 +65,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if handle.is_live() {
-            let nanos = {
-                let mut view = self.as_wasi_view();
-                match Host::now(&mut view.clocks()).await {
-                    Ok(nanos) => nanos,
-                    Err(err) => {
-                        // Explicit error path (don't rely on Drop): record the cancellation and
-                        // surface the original host error, not the cancellation's outcome.
-                        if let Err(cancel_err) = handle.cancel(self, None).await {
-                            tracing::warn!(
-                                "failed to record cancellation for monotonic_clock::now: {cancel_err}"
-                            );
-                        }
-                        return Err(err);
-                    }
-                }
-            };
-            handle
-                .complete(self, HostResponseMonotonicClockTimestamp { nanos })
-                .await
+            complete_monotonic_now(self, handle).await?
         } else {
-            handle.replay(self).await
-        }?;
+            match handle.replay(self).await? {
+                CallReplayOutcome::Replayed(response) => response,
+                // The eager `Start` was committed but its `End` was not: `now()` is a re-executable
+                // `ReadLocal`, so read the clock again and complete the existing `Start`.
+                CallReplayOutcome::Incomplete(handle) => {
+                    complete_monotonic_now(self, handle).await?
+                }
+            }
+        };
 
         Ok(result.nanos)
     }

@@ -1123,36 +1123,41 @@ pub enum OplogEntryVersion {
     V2,
 }
 
-pub struct Durability<Pair: HostPayloadPair> {
+/// Holds the in-function retry decision logic for a single durable host call, decoupled from how
+/// the call's request/response is persisted or replayed. Both the legacy [`Durability`] and the
+/// concurrent [`crate::durable_host::concurrent::CallHandle`] own one and route their
+/// `try_trigger_retry*` methods through it, so the retry logic has a single home.
+///
+/// Every method takes `&mut impl DurabilityHost`, so the controller stays unit-testable against
+/// `MockDurabilityHost` without a real `DurableWorkerCtx`.
+pub struct InFunctionRetryController {
     function_type: DurableFunctionType,
-    begin_index: OplogIndex,
     durable_execution_state: DurableExecutionState,
     retry_state: InFunctionRetryState,
-    _phantom: std::marker::PhantomData<Pair>,
+    /// Fully-qualified host-function name used as the retry decision's function label.
+    function_label: &'static str,
 }
 
-impl<Pair: HostPayloadPair> Durability<Pair> {
-    pub async fn new(
-        ctx: &mut impl DurabilityHost,
+impl InFunctionRetryController {
+    pub fn new(
         function_type: DurableFunctionType,
-    ) -> Result<Self, WorkerExecutorError> {
-        ctx.observe_function_call(Pair::INTERFACE, Pair::FUNCTION);
-
-        // The generic read-only side-effect trap lives in `begin_durable_function`; we just
-        // forward the fully qualified host-function name so it can be surfaced in the
-        // resulting `WorkerExecutorError::ReadOnlyViolation` for diagnostics.
-        let begin_index = ctx
-            .begin_durable_function(&function_type, Pair::FQFN)
-            .await?;
-        let durable_execution_state = ctx.durable_execution_state();
-
-        Ok(Self {
+        durable_execution_state: DurableExecutionState,
+        function_label: &'static str,
+    ) -> Self {
+        Self {
             function_type,
-            begin_index,
             durable_execution_state,
             retry_state: InFunctionRetryState::new(),
-            _phantom: std::marker::PhantomData,
-        })
+            function_label,
+        }
+    }
+
+    pub fn function_type(&self) -> &DurableFunctionType {
+        &self.function_type
+    }
+
+    pub fn durable_execution_state(&self) -> &DurableExecutionState {
+        &self.durable_execution_state
     }
 
     pub fn is_live(&self) -> bool {
@@ -1266,7 +1271,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
 
         let decision = self
             .retry_state
-            .decide_retry_with_properties(ctx, Pair::FQFN, &properties)
+            .decide_retry_with_properties(ctx, self.function_label, &properties)
             .await;
 
         match decision {
@@ -1308,6 +1313,97 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         }
     }
 
+    /// Whether a call of this function type may be safely re-executed when replay finds its
+    /// host-call `Start` committed but its `End` missing (see
+    /// [`crate::durable_host::concurrent::CallReplayOutcome::Incomplete`]). This is exactly the set
+    /// that is eligible for in-function retry: reads and local/idempotent writes can be re-run
+    /// without duplicating an external side effect; non-idempotent / batched / transaction writes
+    /// cannot, and rely on durable-scope recovery instead.
+    pub fn can_reexecute_on_incomplete_replay(&self) -> bool {
+        self.is_eligible_for_internal_retry()
+    }
+}
+
+pub struct Durability<Pair: HostPayloadPair> {
+    begin_index: OplogIndex,
+    retry: InFunctionRetryController,
+    _phantom: std::marker::PhantomData<Pair>,
+}
+
+impl<Pair: HostPayloadPair> Durability<Pair> {
+    pub async fn new(
+        ctx: &mut impl DurabilityHost,
+        function_type: DurableFunctionType,
+    ) -> Result<Self, WorkerExecutorError> {
+        ctx.observe_function_call(Pair::INTERFACE, Pair::FUNCTION);
+
+        // The generic read-only side-effect trap lives in `begin_durable_function`; we just
+        // forward the fully qualified host-function name so it can be surfaced in the
+        // resulting `WorkerExecutorError::ReadOnlyViolation` for diagnostics.
+        let begin_index = ctx
+            .begin_durable_function(&function_type, Pair::FQFN)
+            .await?;
+        let durable_execution_state = ctx.durable_execution_state();
+
+        Ok(Self {
+            begin_index,
+            retry: InFunctionRetryController::new(
+                function_type,
+                durable_execution_state,
+                Pair::FQFN,
+            ),
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.retry.is_live()
+    }
+
+    pub async fn try_trigger_retry<Ok, Err: Display>(
+        &self,
+        ctx: &mut impl DurabilityHost,
+        result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
+    ) -> anyhow::Result<()> {
+        self.retry.try_trigger_retry(ctx, result, classify).await
+    }
+
+    pub async fn try_trigger_retry_with_properties<Ok, Err: Display>(
+        &self,
+        ctx: &mut impl DurabilityHost,
+        result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
+        properties: RetryProperties,
+    ) -> anyhow::Result<()> {
+        self.retry
+            .try_trigger_retry_with_properties(ctx, result, classify, properties)
+            .await
+    }
+
+    pub async fn try_trigger_retry_or_loop<Ok, Err: Display>(
+        &mut self,
+        ctx: &mut (impl DurabilityHost + Sync),
+        result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
+    ) -> anyhow::Result<InternalRetryResult> {
+        self.retry
+            .try_trigger_retry_or_loop(ctx, result, classify)
+            .await
+    }
+
+    pub async fn try_trigger_retry_or_loop_with_properties<Ok, Err: Display>(
+        &mut self,
+        ctx: &mut (impl DurabilityHost + Sync),
+        result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
+        properties: RetryProperties,
+    ) -> anyhow::Result<InternalRetryResult> {
+        self.retry
+            .try_trigger_retry_or_loop_with_properties(ctx, result, classify, properties)
+            .await
+    }
+
     pub async fn persist(
         &self,
         ctx: &mut impl DurabilityHost,
@@ -1330,16 +1426,21 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         request: HostRequest,
         response: HostResponse,
     ) -> Result<HostResponse, WorkerExecutorError> {
-        if self.durable_execution_state.snapshotting_mode.is_none() {
+        if self
+            .retry
+            .durable_execution_state()
+            .snapshotting_mode
+            .is_none()
+        {
             ctx.mark_atomic_region_side_effect();
             ctx.persist_durable_function_invocation(
                 Pair::HOST_FUNCTION_NAME,
                 &request,
                 &response,
-                self.function_type.clone(),
+                self.retry.function_type().clone(),
             )
             .await;
-            ctx.end_durable_function(&self.function_type, self.begin_index, false)
+            ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
                 .await?;
         }
         Ok(response)
@@ -1364,7 +1465,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         let function_name = Pair::FQFN;
         Self::validate_oplog_entry(&oplog_entry, function_name)?;
 
-        ctx.end_durable_function(&self.function_type, self.begin_index, false)
+        ctx.end_durable_function(self.retry.function_type(), self.begin_index, false)
             .await?;
 
         Ok(oplog_entry.response)
@@ -1863,7 +1964,7 @@ mod tests {
 
         assert_eq!(action, InternalRetryResult::RetryInternally);
         assert_eq!(ctx.retry_entries_appended, 1);
-        assert_eq!(durability.retry_state.retry_count(), 1);
+        assert_eq!(durability.retry.retry_state.retry_count(), 1);
         assert_eq!(ctx.trap_triggered_count, 0, "should NOT fall back to trap");
     }
 
@@ -1886,7 +1987,7 @@ mod tests {
 
         assert_eq!(action, InternalRetryResult::Persist);
         assert_eq!(ctx.retry_entries_appended, 0);
-        assert_eq!(durability.retry_state.retry_count(), 0);
+        assert_eq!(durability.retry.retry_state.retry_count(), 0);
     }
 
     // Test 1c: Permanent errors return Persist (no retry)
@@ -1958,7 +2059,7 @@ mod tests {
             .expect("should not propagate error");
         assert_eq!(action, InternalRetryResult::Persist);
         assert_eq!(ctx.retry_entries_appended, 3);
-        assert_eq!(durability.retry_state.retry_count(), 3);
+        assert_eq!(durability.retry.retry_state.retry_count(), 3);
     }
 
     #[test]
@@ -2549,15 +2650,13 @@ mod tests {
                 assume_idempotence: idempotent,
                 ..MockDurabilityHost::new()
             };
-            let durability: Durability<KeyvalueEventualGet> = Durability {
-                function_type: ft.clone(),
-                begin_index: OplogIndex::from_u64(1),
-                durable_execution_state: ctx.durable_execution_state(),
-                retry_state: InFunctionRetryState::new(),
-                _phantom: std::marker::PhantomData,
-            };
+            let controller = InFunctionRetryController::new(
+                ft.clone(),
+                ctx.durable_execution_state(),
+                KeyvalueEventualGet::FQFN,
+            );
             assert_eq!(
-                durability.is_eligible_for_internal_retry(),
+                controller.is_eligible_for_internal_retry(),
                 expected,
                 "ft={ft:?}, idempotent={idempotent}"
             );

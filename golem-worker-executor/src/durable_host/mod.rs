@@ -1187,12 +1187,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
-            || matches!(
-                *function_type,
-                DurableFunctionType::WriteRemoteBatched(None)
-            )
-        {
+        if self.state.opens_durable_scope(function_type) {
             let result = if self.is_live() {
                 let parent_start_index = self.state.current_parent_start_index();
                 let entry = OplogEntry::Start {
@@ -1347,12 +1342,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
-            || matches!(
-                *function_type,
-                DurableFunctionType::WriteRemoteBatched(None)
-            )
-        {
+        if self.state.opens_durable_scope(function_type) {
             if self.is_live() {
                 let entry = OplogEntry::End {
                     timestamp: Timestamp::now_utc(),
@@ -4327,9 +4317,17 @@ struct PrivateDurableWorkerState {
     // Map from resource_id to the dyn_pollables that wrap it
     promise_dyn_pollables: TRwLock<HashMap<u32, HashSet<u32>>>,
 
-    /// Marks a retry point in the oplog to be attached to an Error entry in case a failure happens.
-    /// As the error can happen both in the host or in the user code, we attach the last known value every time,
-    /// which normally points to the last persisted side effect or the beginning of a region.
+    /// The **global fallback** retry point: the index attached to an `Error` entry when no atomic
+    /// region and no durable scope is active. It is overwritten every time a side effect is
+    /// persisted (and pointed at a call's `Start` while that call is in flight), so it normally
+    /// tracks the last persisted side effect.
+    ///
+    /// This is *not* what is read directly at error time. Errors use
+    /// [`PrivateDurableWorkerState::effective_retry_point`], which layers priority on top of this
+    /// field: an active atomic region (whole region retried from its begin index) wins, then an open
+    /// durable scope (error grouped at the scope `Start`), and only otherwise does it fall back to
+    /// `current_retry_point`. Keep them distinct: write `current_retry_point`, read
+    /// `effective_retry_point()`.
     current_retry_point: OplogIndex,
 
     /// Tracks the active atomic regions by their begin index. This is used together with `current_retry_point` to
@@ -4605,6 +4603,26 @@ impl PrivateDurableWorkerState {
     /// innermost currently open durable scope, or `None` at the top level.
     fn current_parent_start_index(&self) -> Option<OplogIndex> {
         self.active_durable_scopes.last().map(|s| s.start_index)
+    }
+
+    /// Whether a durable function of this `function_type` opens a durable scope — a first-class
+    /// `Start`/`End` pair, opened by [`DurableWorkerCtx::begin_function`] and closed by
+    /// [`DurableWorkerCtx::end_function`] — namely a non-idempotent remote write or the first
+    /// (`None`) call of a batched remote write.
+    ///
+    /// Snapshotting turns off persistence entirely, and `persist`/`replay` skip `end_function`
+    /// while snapshotting, so no scope must be opened either: otherwise the scope `Start` (written
+    /// through `add_and_commit_oplog`, which commits with `CommitLevel::Always` and therefore
+    /// ignores `PersistNothing`) would be committed with no matching `End`, corrupting later replay.
+    /// A snapshotting region never straddles a single scope's begin/end, so guarding both ends with
+    /// the same predicate keeps the durable-scope stack balanced.
+    fn opens_durable_scope(&self, function_type: &DurableFunctionType) -> bool {
+        self.snapshotting_mode.is_none()
+            && ((*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
+                || matches!(
+                    *function_type,
+                    DurableFunctionType::WriteRemoteBatched(None)
+                ))
     }
 
     /// Opens a durable scope identified by its `Start` index. Must be balanced by
