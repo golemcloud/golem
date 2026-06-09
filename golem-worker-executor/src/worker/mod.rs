@@ -985,19 +985,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     // Should only be called from invocation loop
     pub async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
+        // The instance lock must not be held while acquiring memory permits:
+        // permit acquisition runs the admission eviction scan, which takes other
+        // workers' instance locks. Holding this worker's instance lock across
+        // that scan while another growing worker does the same is an AB-BA
+        // deadlock. So acquire the permit without the lock, then re-lock only to
+        // merge it into the running worker.
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(_) => {}
+            WorkerInstance::Stopping(_)
+            | WorkerInstance::WaitingForPermit(_)
+            | WorkerInstance::Unloaded { .. }
+            | WorkerInstance::Deleting => return Ok(()),
+        }
+
+        let Some(new_permits) = self.active_workers().try_acquire(delta).await else {
+            return Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory));
+        };
+
+        // Re-check state under the lock: the worker may have changed state while
+        // permits were being acquired. If it is no longer running, drop the
+        // permits (returned to the pool on drop) and treat as a no-op, matching
+        // the non-running arms above.
         match &mut *self.instance.lock().await {
             WorkerInstance::Running(running) => {
-                if let Some(new_permits) = self.active_workers().try_acquire(delta).await {
-                    running.merge_extra_permits(new_permits);
-                    Ok(())
-                } else {
-                    Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory))
-                }
+                running.merge_extra_permits(new_permits);
+                Ok(())
             }
-            WorkerInstance::Stopping(_) => Ok(()),
-            WorkerInstance::WaitingForPermit(_) => Ok(()),
-            WorkerInstance::Unloaded { .. } => Ok(()),
-            WorkerInstance::Deleting => Ok(()),
+            WorkerInstance::Stopping(_)
+            | WorkerInstance::WaitingForPermit(_)
+            | WorkerInstance::Unloaded { .. }
+            | WorkerInstance::Deleting => Ok(()),
         }
     }
 

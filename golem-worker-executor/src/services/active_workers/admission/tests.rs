@@ -578,3 +578,166 @@ proptest! {
         }).unwrap();
     }
 }
+
+/// Concurrent memory grows must not deadlock against the admission eviction
+/// scan.
+///
+/// A memory grow acquires a permit while the growing worker holds its own
+/// instance lock, and the admission slow path scans the worker set, taking each
+/// other worker's instance lock to classify it for eviction. With many workers
+/// growing at once under memory pressure these two must not form an AB-BA cycle.
+/// Workloads that never grow memory never exercise this path.
+mod grow_lock_ordering {
+    use super::super::{AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource};
+    use crate::services::active_workers::memory_probe::{MemoryProbe, MemorySnapshot};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use test_r::test;
+    use tokio::sync::Mutex as AsyncMutex;
+
+    /// Per-worker lock, standing in for `Worker::instance`.
+    type WorkerLock = Arc<AsyncMutex<()>>;
+
+    /// Probe pinned to zero admissible headroom so `try_admit` takes the slow
+    /// (scanning) path, modelling the moment a grow's requested delta does not
+    /// fit the current headroom.
+    #[derive(Debug)]
+    struct SaturatedProbe;
+
+    impl MemoryProbe for SaturatedProbe {
+        fn snapshot(&self) -> MemorySnapshot {
+            MemorySnapshot {
+                limit_bytes: 1,
+                current_bytes: u64::MAX,
+            }
+        }
+    }
+
+    /// Probe reporting ample headroom so `try_admit` takes the fast path and
+    /// never scans — the same grow code path, but not under memory pressure.
+    #[derive(Debug)]
+    struct AmpleHeadroomProbe;
+
+    impl MemoryProbe for AmpleHeadroomProbe {
+        fn snapshot(&self) -> MemorySnapshot {
+            MemorySnapshot {
+                limit_bytes: u64::MAX,
+                current_bytes: 0,
+            }
+        }
+    }
+
+    /// Eviction source that, like `evict_at_most_memory`, scans every worker and
+    /// takes each worker's instance lock (via `eviction_class`) to classify it.
+    /// Frees nothing (all workers active). The lock on each worker is held only
+    /// briefly, faithfully — the deadlock comes from the ordering, not hold time.
+    struct ScanningEvictionSource {
+        workers: Vec<WorkerLock>,
+    }
+
+    #[async_trait::async_trait]
+    impl EvictionSource for ScanningEvictionSource {
+        async fn evict_at_most(&self, _priority: EvictionPriority, _needed_bytes: u64) -> u64 {
+            for worker in &self.workers {
+                let _guard = worker.lock().await;
+            }
+            0
+        }
+    }
+
+    /// Models the grow path's lock interaction: run the admission scan, which
+    /// takes other workers' instance locks, without holding this worker's own
+    /// instance lock, then take it afterwards to merge the permit (as
+    /// `Worker::increase_memory` does).
+    async fn grow_then_lock(
+        controller: &AdmissionController,
+        own: &WorkerLock,
+        workers: Vec<WorkerLock>,
+    ) {
+        let source = ScanningEvictionSource { workers };
+        controller.try_admit(1, &source).await;
+        let _own_guard = own.lock().await;
+    }
+
+    fn workers(n: usize) -> Vec<WorkerLock> {
+        (0..n).map(|_| Arc::new(AsyncMutex::new(()))).collect()
+    }
+
+    fn controller(probe: Box<dyn MemoryProbe>) -> Arc<AdmissionController> {
+        Arc::new(AdmissionController::new(
+            probe,
+            AdmissionPolicy {
+                usable_ratio: 1.0,
+                reserve_bytes: 0,
+            },
+        ))
+    }
+
+    /// Many workers growing concurrently under memory pressure (every grow takes
+    /// the scanning slow path) must all complete without deadlocking.
+    #[test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_grows_do_not_deadlock_under_pressure() {
+        const WORKERS: usize = 32;
+        const DEADLINE: Duration = Duration::from_secs(10);
+
+        let workers = workers(WORKERS);
+        let controller = controller(Box::new(SaturatedProbe));
+
+        let mut grows = Vec::new();
+        for i in 0..WORKERS {
+            let controller = controller.clone();
+            let all = workers.clone();
+            let own = workers[i].clone();
+            grows.push(tokio::spawn(async move {
+                grow_then_lock(&controller, &own, all).await;
+            }));
+        }
+
+        let all_done = async {
+            for task in grows {
+                let _ = task.await;
+            }
+        };
+
+        let result = tokio::time::timeout(DEADLINE, all_done).await;
+        assert!(
+            result.is_ok(),
+            "concurrent grows deadlocked: the scan must not run while a worker holds its own instance lock"
+        );
+    }
+
+    /// With comfortable headroom the gate admits on the fast path without
+    /// scanning, so no worker's instance lock is taken during admission and
+    /// concurrent grows complete. Confirms the deadlock risk is specific to the
+    /// scan-under-pressure path.
+    #[test(flavor = "multi_thread", worker_threads = 4)]
+    async fn no_deadlock_with_ample_headroom() {
+        const WORKERS: usize = 32;
+        const DEADLINE: Duration = Duration::from_secs(10);
+
+        let workers = workers(WORKERS);
+        let controller = controller(Box::new(AmpleHeadroomProbe));
+
+        let mut grows = Vec::new();
+        for i in 0..WORKERS {
+            let controller = controller.clone();
+            let all = workers.clone();
+            let own = workers[i].clone();
+            grows.push(tokio::spawn(async move {
+                grow_then_lock(&controller, &own, all).await;
+            }));
+        }
+
+        let all_done = async {
+            for task in grows {
+                let _ = task.await;
+            }
+        };
+
+        let result = tokio::time::timeout(DEADLINE, all_done).await;
+        assert!(
+            result.is_ok(),
+            "grows with ample headroom should not scan and should not deadlock"
+        );
+    }
+}
