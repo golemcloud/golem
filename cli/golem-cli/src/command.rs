@@ -984,15 +984,15 @@ pub mod shared_args {
 
     #[derive(Debug, Args)]
     pub struct StreamArgs {
-        /// Hide log levels in stream output
+        /// Hide log levels in text stream output. Structured formats still include the `level` field.
         #[clap(long)]
         pub stream_no_log_level: bool,
-        /// Hide timestamp in stream output
+        /// Hide timestamps in text stream output. Structured formats still include the `timestamp` field.
         #[clap(long)]
         pub stream_no_timestamp: bool,
-        /// Only show entries coming from the agent, no output about invocation markers
-        /// and stream status. Does NOT change the process exit code: the exit code
-        /// reflects whether the invocation could be placed and (for non-`--trigger`
+        /// Only show entries coming from the agent, suppressing invocation markers
+        /// and stream status events. Does NOT change the process exit code: the exit
+        /// code reflects whether the invocation could be placed and (for non-`--trigger`
         /// calls) completed at the protocol level. A function-level error returned by
         /// the agent itself is reported in the result payload, not in the exit code.
         #[clap(long)]
