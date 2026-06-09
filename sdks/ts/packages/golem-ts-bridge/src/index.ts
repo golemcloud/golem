@@ -166,6 +166,199 @@ export interface CreateAgentResponse {
   componentRevision: number;
 }
 
+export interface GolemAgentErrorDetails {
+  cause: string;
+  stderr: string;
+}
+
+export type GolemErrorBody =
+  | { code: string; error: string; agentError?: GolemAgentErrorDetails }
+  | { code: string; errors: string[] };
+
+export class GolemServiceError extends Error {
+  readonly operation: 'createAgent' | 'invokeAgent';
+  readonly status: number;
+  readonly statusText: string;
+  readonly bodyText?: string;
+  readonly body?: GolemErrorBody;
+
+  constructor(params: {
+    operation: 'createAgent' | 'invokeAgent';
+    status: number;
+    statusText: string;
+    bodyText?: string;
+    body?: GolemErrorBody;
+  }) {
+    super(formatGolemServiceErrorMessage(params));
+    this.operation = params.operation;
+    this.status = params.status;
+    this.statusText = params.statusText;
+    this.bodyText = params.bodyText;
+    this.body = params.body;
+
+    Object.defineProperties(this, {
+      name: { value: 'GolemServiceError', enumerable: false, configurable: true },
+      operation: { value: params.operation, enumerable: false, configurable: true },
+      status: { value: params.status, enumerable: false, configurable: true },
+      statusText: { value: params.statusText, enumerable: false, configurable: true },
+      bodyText: { value: params.bodyText, enumerable: false, configurable: true },
+      body: { value: params.body, enumerable: false, configurable: true },
+    });
+  }
+}
+
+function formatGolemServiceErrorMessage(params: {
+  operation: 'createAgent' | 'invokeAgent';
+  status: number;
+  statusText: string;
+  bodyText?: string;
+  body?: GolemErrorBody;
+}): string {
+  const action = params.operation === 'createAgent' ? 'Agent creation' : 'Agent invocation';
+  const status = [params.status, params.statusText].filter(Boolean).join(' ');
+  const lines = [`${action} failed: ${status}`];
+
+  if (params.body) {
+    if ('errors' in params.body) {
+      lines.push(`Code: ${params.body.code}`);
+      lines.push('Messages:');
+      lines.push(...params.body.errors.map((error) => `- ${error}`));
+      return lines.join('\n');
+    }
+
+    lines.push(`Code: ${params.body.code}`);
+    lines.push(`Message: ${params.body.error}`);
+    appendAgentErrorMessage(lines, params.body.agentError);
+    return lines.join('\n');
+  }
+
+  if (params.bodyText) {
+    lines.push(...formatResponseBodyFallback(params.bodyText));
+  }
+
+  return lines.join('\n');
+}
+
+function formatResponseBodyFallback(bodyText: string): string[] {
+  const trimmed = bodyText.trim();
+  if (!trimmed) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return ['', 'Response body:', trimmed];
+  }
+
+  if (isRecord(parsed)) {
+    if (typeof parsed.message === 'string') {
+      return ['', `Response message: ${parsed.message}`];
+    }
+    if (typeof parsed.error === 'string') {
+      return ['', `Response message: ${parsed.error}`];
+    }
+    if (Array.isArray(parsed.errors) && parsed.errors.every((error) => typeof error === 'string')) {
+      return ['', 'Response messages:', ...parsed.errors.map((error) => `- ${error}`)];
+    }
+
+    const title = typeof parsed.title === 'string' ? parsed.title : undefined;
+    const detail = typeof parsed.detail === 'string' ? parsed.detail : undefined;
+    if (title || detail) {
+      return [
+        '',
+        ...(title ? [`Response title: ${title}`] : []),
+        ...(detail ? [`Response detail: ${detail}`] : []),
+      ];
+    }
+  }
+
+  return ['', 'Response body:', JSON.stringify(parsed, null, 2)];
+}
+
+function appendAgentErrorMessage(lines: string[], agentError: GolemAgentErrorDetails | undefined) {
+  if (!agentError) return;
+
+  const stderr = trimEmptyLines(agentError.stderr.split('\n'));
+  if (stderr.length > 0) {
+    lines.push('');
+    lines.push('Stderr:');
+    lines.push(...stderr);
+  }
+
+  const trap = extractWasmTrap(agentError.cause);
+  if (trap) {
+    lines.push('');
+    lines.push(`Wasm trap: ${trap}`);
+  }
+}
+
+function extractWasmTrap(cause: string): string | undefined {
+  const trapLine = trimEmptyLines(cause.split('\n'))
+    .reverse()
+    .find((line) => line.includes('wasm trap:'));
+  return trapLine?.split('wasm trap:').pop()?.trim();
+}
+
+function trimEmptyLines(lines: string[]): string[] {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && lines[start].trim() === '') start += 1;
+  while (end > start && lines[end - 1].trim() === '') end -= 1;
+  return lines.slice(start, end);
+}
+
+async function throwGolemServiceError(
+  operation: 'createAgent' | 'invokeAgent',
+  response: Response,
+): Promise<never> {
+  const bodyText = await response.text().catch(() => undefined);
+  throw new GolemServiceError({
+    operation,
+    status: response.status,
+    statusText: response.statusText,
+    bodyText,
+    body: parseGolemErrorBody(bodyText),
+  });
+}
+
+function parseGolemErrorBody(bodyText: string | undefined): GolemErrorBody | undefined {
+  if (!bodyText) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return undefined;
+  }
+
+  if (!isRecord(parsed) || typeof parsed.code !== 'string') {
+    return undefined;
+  }
+
+  if (Array.isArray(parsed.errors) && parsed.errors.every((error) => typeof error === 'string')) {
+    return { code: parsed.code, errors: parsed.errors };
+  }
+
+  if (typeof parsed.error !== 'string') {
+    return undefined;
+  }
+
+  const agentError = parseAgentErrorDetails(parsed.workerError);
+  return agentError
+    ? { code: parsed.code, error: parsed.error, agentError }
+    : { code: parsed.code, error: parsed.error };
+}
+
+function parseAgentErrorDetails(value: unknown): GolemAgentErrorDetails | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.cause !== 'string' || typeof value.stderr !== 'string') return undefined;
+  return { cause: value.cause, stderr: value.stderr };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 export async function createAgent(
   server: GolemServer,
   request: CreateAgentRequest,
@@ -203,12 +396,7 @@ export async function createAgent(
   });
 
   if (!rawResponse.ok) {
-    const body = await rawResponse.text().catch(() => undefined);
-    if (body) {
-      throw new Error(`Agent creation failed: ${rawResponse.statusText}, ${body}`);
-    } else {
-      throw new Error(`Agent creation failed: ${rawResponse.statusText}`);
-    }
+    await throwGolemServiceError('createAgent', rawResponse);
   }
 
   return await (rawResponse.json() as Promise<CreateAgentResponse>);
@@ -279,12 +467,7 @@ export async function invokeAgent(
     });
 
     if (!rawResponse.ok) {
-      const body = await rawResponse.text().catch(() => undefined);
-      if (body) {
-        throw new Error(`Agent invocation failed: ${rawResponse.statusText}, ${body}`);
-      } else {
-        throw new Error(`Agent invocation failed: ${rawResponse.statusText}`);
-      }
+      await throwGolemServiceError('invokeAgent', rawResponse);
     }
 
     let response = await (rawResponse.json() as Promise<AgentInvocationResult>);

@@ -13,7 +13,13 @@
 // limitations under the License.
 
 import { describe, expect, it } from 'vitest';
-import { wrapSnippetInfoLine } from '../src/format';
+import util from 'node:util';
+import { GolemServiceError } from '@golemcloud/golem-ts-bridge';
+import {
+  formatEvalError,
+  installGolemServiceErrorInspect,
+  wrapSnippetInfoLine,
+} from '../src/format';
 
 describe('wrapSnippetInfoLine', () => {
   it('does not wrap short callable signatures', () => {
@@ -96,5 +102,177 @@ describe('wrapSnippetInfoLine', () => {
       '    y: string',
       '  ) => Promise<number>;',
     ]);
+  });
+});
+
+describe('formatEvalError', () => {
+  it('formats structured Golem worker errors without raw JSON', () => {
+    const error = new GolemServiceError({
+      operation: 'invokeAgent',
+      status: 500,
+      statusText: 'Internal Server Error',
+      bodyText: JSON.stringify({
+        code: 'INTERNAL_AGENT_EXECUTION_FAILED',
+        error: 'Invocation Failed',
+        workerError: {
+          cause:
+            'error while executing at wasm backtrace:\n    0: 0x56570e - agent_guest.wasm!abort\n    1: 0x1e09ed - agent_guest.wasm!golem:agent/guest@1.5.0#invoke: wasm trap: wasm `unreachable` instruction executed',
+          stderr:
+            "\nthread '<unnamed>' (1) panicked at src/internal.rs:2106:41:\nException during awaiting call result for guest.invoke:\nJavaScript error: BOOM!\nStack:\n    at boom (user:91:19)\n    at invoke (@golemcloud/golem-ts-sdk:2:75626)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+        },
+      }),
+      body: {
+        code: 'INTERNAL_AGENT_EXECUTION_FAILED',
+        error: 'Invocation Failed',
+        agentError: {
+          cause:
+            'error while executing at wasm backtrace:\n    0: 0x56570e - agent_guest.wasm!abort\n    1: 0x1e09ed - agent_guest.wasm!golem:agent/guest@1.5.0#invoke: wasm trap: wasm `unreachable` instruction executed',
+          stderr:
+            "\nthread '<unnamed>' (1) panicked at src/internal.rs:2106:41:\nException during awaiting call result for guest.invoke:\nJavaScript error: BOOM!\nStack:\n    at boom (user:91:19)\n    at invoke (@golemcloud/golem-ts-sdk:2:75626)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+        },
+      },
+    });
+    error.stack = `${error.message}\n    at invokeAgent (bridge/index.mjs:139:23)\n    at async REPL1:1:33`;
+
+    const formatted = util.stripVTControlCharacters(formatEvalError(error));
+
+    expect(formatted).toContain('Service response:');
+    expect(formatted).toContain('Status: 500 Internal Server Error');
+    expect(formatted).toContain('Code: INTERNAL_AGENT_EXECUTION_FAILED');
+    expect(formatted).toContain('Message: Invocation Failed');
+    expect(formatted).toContain('Stderr:');
+    expect(formatted).toContain('JavaScript error: BOOM!');
+    expect(formatted).toContain('at boom (user:91:19)');
+    expect(formatted).toContain('Wasm trap: wasm `unreachable` instruction executed');
+    expect(formatted).toContain('Cause:');
+    expect(formatted).toContain('agent_guest.wasm!abort');
+    expect(formatted).toContain('Bridge stack:');
+    expect(formatted).not.toContain('{"code"');
+    expect(formatted).not.toContain('Worker stderr:');
+    expect(formatted).not.toContain('Worker cause:');
+
+    expect(error.message).toContain('Message: Invocation Failed');
+    expect(error.message).toContain('Stderr:');
+    expect(error.message).toContain('JavaScript error: BOOM!');
+    expect(error.message).toContain('Wasm trap: wasm `unreachable` instruction executed');
+    expect(error.message).not.toContain('{"code"');
+    expect(error.message).not.toContain('agent_guest.wasm!abort');
+  });
+
+  it('keeps ordinary JavaScript errors unchanged', () => {
+    const error = new Error('plain failure');
+    error.stack = 'Error: plain failure\n    at user.ts:1:1';
+
+    expect(formatEvalError(error)).toBe(error.stack);
+  });
+
+  it('does not expose structured Golem error fields to object inspection', () => {
+    const error = new GolemServiceError({
+      operation: 'invokeAgent',
+      status: 500,
+      statusText: 'Internal Server Error',
+      bodyText: '{"code":"INTERNAL_AGENT_EXECUTION_FAILED"}',
+      body: { code: 'INTERNAL_AGENT_EXECUTION_FAILED', error: 'Invocation Failed' },
+    });
+
+    expect(Object.keys(error)).toEqual([]);
+  });
+
+  it('uses compact structured output for Node object inspection', () => {
+    installGolemServiceErrorInspect();
+
+    const error = new GolemServiceError({
+      operation: 'invokeAgent',
+      status: 500,
+      statusText: 'Internal Server Error',
+      bodyText: '{"code":"INTERNAL_AGENT_EXECUTION_FAILED"}',
+      body: {
+        code: 'INTERNAL_AGENT_EXECUTION_FAILED',
+        error: 'Invocation Failed',
+        agentError: {
+          cause:
+            'error while executing at wasm backtrace:\n    0: 0x56570e - agent_guest.wasm!abort\n    1: 0x1e09ed - agent_guest.wasm!golem:agent/guest@1.5.0#invoke: wasm trap: wasm `unreachable` instruction executed',
+          stderr: 'JavaScript error: BOOM!\nStack:\n    at boom (user:91:19)',
+        },
+      },
+    });
+    error.stack = `${error.message}\n    at invokeAgent (bridge/index.mjs:139:23)`;
+
+    const inspected = util.stripVTControlCharacters(util.inspect(error));
+
+    expect(inspected).toContain('Service response:');
+    expect(inspected).toContain('Status: 500 Internal Server Error');
+    expect(inspected).toContain('Message: Invocation Failed');
+    expect(inspected).toContain('JavaScript error: BOOM!');
+    expect(inspected).toContain('Wasm trap: wasm `unreachable` instruction executed');
+    expect(inspected).toContain('Cause:');
+    expect(inspected).toContain('Bridge stack:');
+    expect(inspected).not.toContain('bodyText');
+    expect(inspected).not.toContain('{"code"');
+    expect(inspected).toContain('agent_guest.wasm!abort');
+    expect(inspected).not.toContain('Worker cause:');
+  });
+
+  it('formats non-json proxy response bodies in base and inspect output', () => {
+    installGolemServiceErrorInspect();
+
+    const error = new GolemServiceError({
+      operation: 'invokeAgent',
+      status: 502,
+      statusText: 'Bad Gateway',
+      bodyText: '<html>Bad Gateway</html>',
+    });
+
+    expect(error.message).toContain('Agent invocation failed: 502 Bad Gateway');
+    expect(error.message).toContain('Response body:');
+    expect(error.message).toContain('<html>Bad Gateway</html>');
+
+    const inspected = util.stripVTControlCharacters(util.inspect(error));
+    expect(inspected).toContain('Service response:');
+    expect(inspected).toContain('Status: 502 Bad Gateway');
+    expect(inspected).toContain('<html>Bad Gateway</html>');
+    expect(inspected).not.toContain('bodyText');
+  });
+
+  it('formats unknown json response message fields without raw json', () => {
+    const error = new GolemServiceError({
+      operation: 'invokeAgent',
+      status: 502,
+      statusText: 'Bad Gateway',
+      bodyText: JSON.stringify({ message: 'upstream unavailable' }),
+    });
+
+    expect(error.message).toContain('Agent invocation failed: 502 Bad Gateway');
+    expect(error.message).toContain('Response message: upstream unavailable');
+    expect(error.message).not.toContain('{"message"');
+  });
+
+  it('formats unknown json response error arrays without raw json', () => {
+    const error = new GolemServiceError({
+      operation: 'createAgent',
+      status: 502,
+      statusText: 'Bad Gateway',
+      bodyText: JSON.stringify({ errors: ['proxy failed', 'upstream timeout'] }),
+    });
+
+    expect(error.message).toContain('Agent creation failed: 502 Bad Gateway');
+    expect(error.message).toContain('Response messages:');
+    expect(error.message).toContain('- proxy failed');
+    expect(error.message).toContain('- upstream timeout');
+    expect(error.message).not.toContain('{"errors"');
+  });
+
+  it('pretty prints unknown json response bodies as fallback', () => {
+    const error = new GolemServiceError({
+      operation: 'invokeAgent',
+      status: 502,
+      statusText: 'Bad Gateway',
+      bodyText: JSON.stringify({ foo: 'bar' }),
+    });
+
+    expect(error.message).toContain('Response body:');
+    expect(error.message).toContain(`{
+  "foo": "bar"
+}`);
   });
 });
