@@ -26,7 +26,7 @@ use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, ValueEnum)]
 #[clap(rename_all = "lower")]
 pub enum ReplLanguage {
     #[value(alias = "ts")]
@@ -41,7 +41,11 @@ impl ReplLanguage {
         }
     }
 
-    pub fn to_guest_language(&self) -> GuestLanguage {
+    pub fn recommended_for_guest_language(_guest_language: GuestLanguage) -> ReplLanguage {
+        ReplLanguage::TypeScript
+    }
+
+    pub fn bridge_sdk_target(&self) -> GuestLanguage {
         match self {
             ReplLanguage::TypeScript => GuestLanguage::TypeScript,
         }
@@ -73,19 +77,6 @@ impl FromStr for ReplLanguage {
                 .join(", ");
             format!("Unknown guest language: {s}. Expected one of {all}")
         })
-    }
-}
-
-impl TryFrom<GuestLanguage> for ReplLanguage {
-    type Error = anyhow::Error;
-
-    fn try_from(guest_language: GuestLanguage) -> Result<Self, Self::Error> {
-        match guest_language {
-            GuestLanguage::TypeScript => Ok(ReplLanguage::TypeScript),
-            GuestLanguage::Rust => Ok(ReplLanguage::TypeScript),
-            GuestLanguage::Scala => Ok(ReplLanguage::TypeScript),
-            GuestLanguage::MoonBit => Ok(ReplLanguage::TypeScript),
-        }
     }
 }
 
