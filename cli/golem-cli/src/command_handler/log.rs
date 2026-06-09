@@ -26,44 +26,6 @@ use toon_format::encode_default;
 pub const TOON_FRAME_START: &str = "@toon";
 pub const TOON_FRAME_END: &str = "@end";
 
-pub fn render_toon_document<S: Serialize>(value: &S) -> String {
-    format!(
-        "{TOON_FRAME_START}\n{}\n{TOON_FRAME_END}",
-        encode_default(value).unwrap()
-    )
-}
-
-pub fn render_structured_document<S: Serialize>(
-    format: Format,
-    colorize: bool,
-    value: &S,
-) -> String {
-    match format {
-        Format::Json => serde_json::to_string(value).unwrap(),
-        Format::PrettyJson => {
-            if colorize {
-                to_colored_json(value).unwrap()
-            } else {
-                serde_json::to_string_pretty(value).unwrap()
-            }
-        }
-        Format::Yaml => format!("---\n{}", serde_yaml::to_string(value).unwrap()),
-        Format::PrettyYaml => {
-            if colorize {
-                format!("---\n{}", to_colored_yaml(value).unwrap())
-            } else {
-                format!("---\n{}", serde_yaml::to_string(value).unwrap())
-            }
-        }
-        Format::Toon => render_toon_document(value),
-        Format::Text => unreachable!("text is not a structured output format"),
-    }
-}
-
-pub fn print_structured_document<S: Serialize>(format: Format, colorize: bool, value: &S) {
-    println!("{}", render_structured_document(format, colorize, value));
-}
-
 pub struct LogHandler {
     ctx: Arc<Context>,
 }
@@ -132,6 +94,44 @@ impl LogHandler {
     pub fn decorated_indent_secondary(&self) -> DecoratedIndent {
         DecoratedIndent::new_secondary(self.ctx.format())
     }
+}
+
+pub fn render_toon_document<S: Serialize>(value: &S) -> String {
+    format!(
+        "{TOON_FRAME_START}\n{}\n{TOON_FRAME_END}",
+        encode_default(value).unwrap()
+    )
+}
+
+pub fn render_structured_document<S: Serialize>(
+    format: Format,
+    colorize: bool,
+    value: &S,
+) -> String {
+    match format {
+        Format::Json => serde_json::to_string(value).unwrap(),
+        Format::PrettyJson => {
+            if colorize {
+                to_colored_json(value).unwrap()
+            } else {
+                serde_json::to_string_pretty(value).unwrap()
+            }
+        }
+        Format::Yaml => format!("---\n{}", serde_yaml::to_string(value).unwrap()),
+        Format::PrettyYaml => {
+            if colorize {
+                format!("---\n{}", to_colored_yaml(value).unwrap())
+            } else {
+                format!("---\n{}", serde_yaml::to_string(value).unwrap())
+            }
+        }
+        Format::Toon => render_toon_document(value),
+        Format::Text => unreachable!("text is not a structured output format"),
+    }
+}
+
+pub fn print_structured_document<S: Serialize>(format: Format, colorize: bool, value: &S) {
+    println!("{}", render_structured_document(format, colorize, value));
 }
 
 #[cfg(test)]
