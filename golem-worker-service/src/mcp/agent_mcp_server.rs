@@ -156,16 +156,10 @@ pub async fn get_agent_capabilities(
         }
 
         for method in &agent_type.methods {
-            if let Some(prompt_hint) = &method.prompt_hint {
-                prompts.push(AgentMcpPrompt::from_method_hint(
-                    &agent_type.type_name,
-                    &schema_graph,
-                    method,
-                    &agent_type.constructor,
-                    prompt_hint,
-                ));
-            }
-
+            // Validate (project to the legacy invoke model) before advertising
+            // anything for this method. If the capability cannot be projected,
+            // invoking it would always fail, so we skip both the tool/resource
+            // and its prompt instead of exposing a broken method.
             let agent_method_mcp = McpAgentCapability::from_agent_method(
                 &account_id,
                 &environment_id,
@@ -185,9 +179,6 @@ pub async fn get_agent_capabilities(
                     resources.push(*agent_mcp_resource);
                 }
                 Err(e) => {
-                    // The capability cannot be projected to the MCP invoke
-                    // model, so invoking it would always fail. Skip advertising
-                    // it instead of exposing a broken tool/resource.
                     tracing::warn!(
                         "Skipping method {} of agent type {} for domain {}: {:#}",
                         method.name,
@@ -195,7 +186,18 @@ pub async fn get_agent_capabilities(
                         domain.0,
                         e
                     );
+                    continue;
                 }
+            }
+
+            if let Some(prompt_hint) = &method.prompt_hint {
+                prompts.push(AgentMcpPrompt::from_method_hint(
+                    &agent_type.type_name,
+                    &schema_graph,
+                    method,
+                    &agent_type.constructor,
+                    prompt_hint,
+                ));
             }
         }
     }
