@@ -30,16 +30,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
-<<<<<<< HEAD
-use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, UntypedDataValue};
-||||||| parent of 74d47ab91 (stored created by email in create oplog entry)
-use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, UntypedDataValue};
-=======
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId, UntypedDataValue};
->>>>>>> 74d47ab91 (stored created by email in create oplog entry)
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, UntypedDataValue};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::ComponentRevision;
