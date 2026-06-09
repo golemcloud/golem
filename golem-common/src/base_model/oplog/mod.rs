@@ -43,7 +43,7 @@ mod raw_imports {
     pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
     pub use crate::model::worker::UntypedAgentConfigEntry;
     pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
-    pub use golem_wasm::resource_runtime::ResourceTypeId;
+    pub use crate::resource_runtime::ResourceTypeId;
 
     pub use std::collections::HashSet;
 }

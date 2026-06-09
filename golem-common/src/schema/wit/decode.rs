@@ -88,6 +88,46 @@ pub fn decode_graph(wire_graph: &wire::SchemaGraph) -> Result<SchemaGraph, Decod
     Ok(SchemaGraph { defs, root })
 }
 
+/// Decoder for a single flat [`wire::SchemaGraph`] that holds several
+/// independent root types (the agent-layer carrier produced by
+/// [`crate::schema::wit::GraphEncoder`]). Decodes the shared `defs` once and
+/// then any `type-node-index` into a recursive [`SchemaType`].
+pub struct GraphDecoder<'a> {
+    ctx: GraphCtx<'a>,
+}
+
+impl<'a> GraphDecoder<'a> {
+    pub fn new(wire_graph: &'a wire::SchemaGraph) -> Result<Self, DecodeError> {
+        Ok(Self {
+            ctx: GraphCtx::new(wire_graph)?,
+        })
+    }
+
+    /// Decode the graph's named definitions. The resulting [`SchemaGraph`] uses
+    /// these `defs` together with a placeholder root (matching
+    /// [`SchemaGraph::empty`]); the agent-layer carriers never consult `root`.
+    pub fn decode_defs(&self) -> Result<Vec<SchemaTypeDef>, DecodeError> {
+        self.ctx
+            .wire
+            .defs
+            .iter()
+            .map(|d| {
+                let body = self.ctx.decode_type(d.body, &mut HashSet::new())?;
+                Ok(SchemaTypeDef {
+                    id: TypeId(d.id.clone()),
+                    name: d.name.clone(),
+                    body,
+                })
+            })
+            .collect()
+    }
+
+    /// Decode the (possibly recursive) schema type rooted at `idx`.
+    pub fn decode_type_at(&self, idx: wire::TypeNodeIndex) -> Result<SchemaType, DecodeError> {
+        self.ctx.decode_type(idx, &mut HashSet::new())
+    }
+}
+
 pub fn decode_value(wire_tree: &wire::SchemaValueTree) -> Result<SchemaValue, DecodeError> {
     decode_value_at(wire_tree, wire_tree.root, &mut HashSet::new())
 }
@@ -515,7 +555,7 @@ fn datetime_from_wire(d: &wire::Datetime) -> Result<DateTime<Utc>, DecodeError> 
         })
 }
 
-fn decode_metadata(m: &wire::MetadataEnvelope) -> MetadataEnvelope {
+pub fn decode_metadata(m: &wire::MetadataEnvelope) -> MetadataEnvelope {
     MetadataEnvelope {
         doc: m.doc.clone(),
         aliases: m.aliases.clone(),

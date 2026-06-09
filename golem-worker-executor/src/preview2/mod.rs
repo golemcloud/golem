@@ -33,8 +33,8 @@ wasmtime::component::bindgen!({
         "wasi:keyvalue/types.bucket": super::durable_host::keyvalue::types::BucketEntry,
         "wasi:keyvalue/types.incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
         "wasi:keyvalue/types.outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
-        "golem:agent/common": golem_common::model::agent::bindings::golem::agent::common,
-        "golem:api/retry": golem_common::model::agent::bindings::golem::api::retry,
+        "golem:agent/common": golem_common::schema::agent::bindings::golem::agent::common,
+        "golem:api/retry": golem_common::schema::agent::bindings::golem::api::retry,
         "golem:api/context.span": super::durable_host::golem::invocation_context_api::SpanEntry,
         "golem:api/context.invocation-context": super::durable_host::golem::invocation_context_api::InvocationContextEntry,
         "golem:api/host.get-agents": super::durable_host::golem::v1x::GetAgentsEntry,
@@ -42,7 +42,8 @@ wasmtime::component::bindgen!({
         "golem:api/oplog.get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
         "golem:api/oplog.search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
         "golem:durability/durability.lazy-initialized-pollable": super::durable_host::durability::LazyInitializedPollableEntry,
-        "golem:core": golem_wasm::golem_core_1_5_x,
+        "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
+        "golem:core/types@2.0.0": golem_wasm::golem_core_2_0_x::types,
         "golem:agent/host.wasm-rpc": golem_wasm::WasmRpcEntry,
         "golem:agent/host.future-invoke-result": golem_wasm::FutureInvokeResultEntry,
         "golem:agent/host.cancellation-token": golem_wasm::CancellationTokenEntry,
@@ -66,6 +67,32 @@ wasmtime::component::bindgen!({
     },
 });
 
+/// Second bindgen for the oplog-processor plugin component shape. It generates
+/// only the `golem:api/oplog-processor` export accessor (`call_process`); every
+/// type its signature references is `with:`-mapped to the modules the primary
+/// `golem` world bindgen already produced (or the same external crates), so no
+/// host/value/identity binding is regenerated.
+pub mod oplog_processor_plugin {
+    wasmtime::component::bindgen!({
+        path: r"../wit",
+        world: "golem:api/oplog-processor-plugin",
+        exports: { default: async },
+        require_store_data_send: true,
+        anyhow: true,
+        wasmtime_crate: ::wasmtime,
+        with: {
+            "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
+            "golem:api/host": crate::preview2::golem::api1_5_0::host,
+            "golem:api/oplog": crate::preview2::golem::api1_5_0::oplog,
+            "golem:api/context": crate::preview2::golem::api1_5_0::context,
+            "golem:api/retry": golem_common::schema::agent::bindings::golem::api::retry,
+            "wasi:io/poll": wasmtime_wasi::p2::bindings::io::poll,
+            "wasi:clocks/wall-clock": wasmtime_wasi::p2::bindings::clocks::wall_clock,
+            "wasi:clocks/monotonic-clock": wasmtime_wasi::p2::bindings::clocks::monotonic_clock,
+        },
+    });
+}
+
 pub type InputStream = wasmtime_wasi::DynInputStream;
 pub type OutputStream = wasmtime_wasi::DynOutputStream;
 
@@ -75,4 +102,4 @@ pub type Pollable = wasmtime_wasi::p2::bindings::io::poll::Pollable;
 pub use self::golem::api1_5_0 as golem_api_1_x;
 pub use self::golem::durability as golem_durability;
 pub use self::golem::quota as golem_quota;
-pub use golem_common::model::agent::bindings::golem::agent as golem_agent;
+pub use golem_common::schema::agent::bindings::golem::agent as golem_agent;

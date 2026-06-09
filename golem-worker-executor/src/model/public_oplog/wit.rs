@@ -402,7 +402,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
             }),
             PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams { timestamp, policy }) => {
                 let named: golem_common::model::retry_policy::NamedRetryPolicy = policy.into();
-                let wit_named: golem_common::model::agent::bindings::golem::api::retry::NamedRetryPolicy = named.into();
+                let wit_named: golem_common::schema::agent::bindings::golem::api::retry::NamedRetryPolicy = named.into();
                 Self::SetRetryPolicy(oplog::SetRetryPolicyParameters {
                     timestamp: timestamp.into(),
                     policy: wit_named,
@@ -1004,7 +1004,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::CreateResource(params) => Ok(Self::CreateResource {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 id: golem_common::model::oplog::AgentResourceId(params.id),
-                resource_type_id: golem_wasm::resource_runtime::ResourceTypeId {
+                resource_type_id: golem_common::resource_runtime::ResourceTypeId {
                     name: params.resource_type_id.name,
                     owner: params.resource_type_id.owner,
                 },
@@ -1012,7 +1012,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::DropResource(params) => Ok(Self::DropResource {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 id: golem_common::model::oplog::AgentResourceId(params.id),
-                resource_type_id: golem_wasm::resource_runtime::ResourceTypeId {
+                resource_type_id: golem_common::resource_runtime::ResourceTypeId {
                     name: params.resource_type_id.name,
                     owner: params.resource_type_id.owner,
                 },
@@ -1307,5 +1307,578 @@ fn build_wit_state_from_index(
             Box::new(build_wit_state_from_index(nodes, *left)?),
             Box::new(build_wit_state_from_index(nodes, *right)?),
         )),
+    }
+}
+
+// ============================================================================
+// Forward conversions: golem_common model -> bindgen WIT (oplog) types.
+// These mirror the reverse conversions above, field-for-field inverted.
+// ============================================================================
+
+/// Forward of `oplog_payload_from_wit`. Serializes inline payloads to bytes
+/// (fallible) and maps to the WIT `oplog-payload` variant.
+fn oplog_payload_to_wit<T: desert_rust::BinaryCodec + std::fmt::Debug + Clone + PartialEq>(
+    payload: golem_common::model::oplog::payload::OplogPayload<T>,
+) -> Result<oplog::OplogPayload, String> {
+    match payload.try_into_raw()? {
+        golem_common::model::oplog::payload::RawOplogPayload::SerializedInline(bytes) => {
+            Ok(oplog::OplogPayload::Inline(bytes))
+        }
+        golem_common::model::oplog::payload::RawOplogPayload::External {
+            payload_id,
+            md5_hash,
+        } => Ok(oplog::OplogPayload::External(oplog::OplogExternalPayload {
+            payload_id: payload_id.0.into(),
+            md5_hash,
+        })),
+    }
+}
+
+impl From<golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId>
+    for oplog::EnvironmentPluginGrantId
+{
+    fn from(
+        value: golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
+    ) -> Self {
+        Self {
+            uuid: value.0.into(),
+        }
+    }
+}
+
+impl From<golem_common::model::oplog::AgentError> for oplog::WorkerError {
+    fn from(err: golem_common::model::oplog::AgentError) -> Self {
+        use golem_common::model::oplog::AgentError;
+        match err {
+            AgentError::Unknown(msg) => Self::Unknown(msg),
+            AgentError::InvalidRequest(msg) => Self::InvalidRequest(msg),
+            AgentError::StackOverflow => Self::StackOverflow,
+            AgentError::OutOfMemory => Self::OutOfMemory,
+            AgentError::ExceededMemoryLimit => Self::ExceededMemoryLimit,
+            AgentError::InternalError(msg) => Self::InternalError(msg),
+            AgentError::DeterministicTrap(msg) => Self::DeterministicTrap(msg),
+            AgentError::TransientError(msg) => Self::TransientError(msg),
+            AgentError::PermanentError(msg) => Self::PermanentError(msg),
+            AgentError::ExceededTableLimit => Self::ExceededTableLimit,
+            AgentError::ExceededHttpCallLimit => Self::ExceededHttpCallLimit,
+            AgentError::ExceededRpcCallLimit => Self::ExceededRpcCallLimit,
+            AgentError::NodeOutOfFilesystemStorage => Self::NodeOutOfFilesystemStorage,
+            AgentError::AgentExceededFilesystemStorageLimit => {
+                Self::AgentExceededFilesystemStorageLimit
+            }
+            AgentError::AgentTerminatedByQuota(inner) => {
+                Self::AgentTerminatedByQuota(oplog::AgentTerminatedByQuotaError {
+                    environment_id: inner.environment_id.into(),
+                    resource_name: inner.resource_name.0,
+                })
+            }
+            AgentError::EphemeralSleepTooLong(inner) => {
+                Self::EphemeralSleepTooLong(oplog::EphemeralSleepTooLong {
+                    requested_nanos: inner.requested_nanos,
+                    max_nanos: inner.max_nanos,
+                })
+            }
+            AgentError::EphemeralFuelExhausted(inner) => {
+                Self::EphemeralFuelExhausted(oplog::EphemeralFuelExhausted {
+                    overdraft_limit: inner.overdraft_limit,
+                })
+            }
+            AgentError::EphemeralCannotSuspend(inner) => {
+                Self::EphemeralCannotSuspend(oplog::EphemeralCannotSuspend {
+                    reason: inner.reason,
+                })
+            }
+            AgentError::ReadOnlyViolation(inner) => {
+                Self::ReadOnlyViolation(oplog::ReadOnlyViolation {
+                    method: inner.method,
+                    host_function: inner.host_function,
+                })
+            }
+        }
+    }
+}
+
+// Note: From<DurableFunctionType> for oplog::WrappedFunctionType is already provided in
+// durable_host/durability.rs (as `From<DurableFunctionType> for durability::DurableFunctionType`,
+// where `durability::DurableFunctionType` is the same bindgen type as `oplog::WrappedFunctionType`).
+
+impl From<golem_common::model::oplog::SpanData> for oplog::SpanData {
+    fn from(span: golem_common::model::oplog::SpanData) -> Self {
+        match span {
+            golem_common::model::oplog::SpanData::LocalSpan {
+                span_id,
+                start,
+                parent_id,
+                // The raw model carries `Option<Vec<SpanData>>`, but the WIT
+                // `local-span-data.linked-context` is `option<u64>` (an index into the
+                // agent-invocation's invocation-context list). There is no value to map
+                // into at this conversion boundary, so it is dropped here exactly as the
+                // reverse `TryFrom<oplog::SpanData> for SpanData` does (it sets `None`).
+                linked_context: _,
+                attributes,
+                inherited,
+            } => Self::LocalSpan(oplog::LocalSpanData {
+                span_id: span_id.to_string(),
+                start: start.into(),
+                parent: parent_id.map(|id| id.to_string()),
+                linked_context: None,
+                attributes: attributes
+                    .into_iter()
+                    .map(|(key, value)| oplog::Attribute {
+                        key,
+                        value: value.into(),
+                    })
+                    .collect(),
+                inherited,
+            }),
+            golem_common::model::oplog::SpanData::ExternalSpan { span_id } => {
+                Self::ExternalSpan(oplog::ExternalSpanData {
+                    span_id: span_id.to_string(),
+                })
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_common::model::oplog::UpdateDescription> for oplog::RawUpdateDescription {
+    type Error = String;
+
+    fn try_from(desc: golem_common::model::oplog::UpdateDescription) -> Result<Self, String> {
+        use golem_common::model::oplog::UpdateDescription;
+        match desc {
+            UpdateDescription::Automatic { target_revision } => {
+                Ok(Self::Automatic(target_revision.into()))
+            }
+            UpdateDescription::SnapshotBased {
+                target_revision,
+                payload,
+                mime_type,
+            } => Ok(Self::SnapshotBased(oplog::RawSnapshotBasedUpdate {
+                target_revision: target_revision.into(),
+                payload: oplog_payload_to_wit(payload)?,
+                mime_type,
+            })),
+        }
+    }
+}
+
+impl From<RawSnapshotData> for crate::preview2::golem_api_1_x::host::Snapshot {
+    fn from(value: RawSnapshotData) -> Self {
+        Self {
+            payload: value.data,
+            mime_type: value.mime_type,
+        }
+    }
+}
+
+impl From<crate::preview2::golem_api_1_x::host::Snapshot> for RawSnapshotData {
+    fn from(value: crate::preview2::golem_api_1_x::host::Snapshot) -> Self {
+        Self {
+            data: value.payload,
+            mime_type: value.mime_type,
+        }
+    }
+}
+
+impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
+    type Error = String;
+
+    fn try_from(value: golem_common::model::oplog::OplogEntry) -> Result<Self, String> {
+        use golem_common::model::oplog::OplogEntry as M;
+        match value {
+            M::Create {
+                timestamp,
+                agent_id,
+                agent_mode,
+                component_revision,
+                env,
+                environment_id,
+                created_by,
+                parent,
+                component_size,
+                initial_total_linear_memory_size,
+                initial_active_plugins,
+                local_agent_config,
+                original_phantom_id,
+                instance_id,
+            } => Ok(Self::Create(oplog::RawCreateParameters {
+                timestamp: timestamp.into(),
+                agent_id: agent_id.into(),
+                agent_mode: match agent_mode {
+                    golem_common::model::agent::AgentMode::Durable => oplog::AgentMode::Durable,
+                    golem_common::model::agent::AgentMode::Ephemeral => oplog::AgentMode::Ephemeral,
+                },
+                component_revision: component_revision.into(),
+                env,
+                environment_id: environment_id.into(),
+                created_by: created_by.into(),
+                parent: parent.map(|id| id.into()),
+                component_size,
+                initial_total_linear_memory_size,
+                initial_active_plugins: initial_active_plugins
+                    .into_iter()
+                    .map(|g| g.into())
+                    .collect(),
+                local_agent_config: local_agent_config
+                    .into_iter()
+                    .map(|entry| oplog::RawLocalAgentConfigEntry {
+                        path: entry.path,
+                        value: entry.value.into(),
+                    })
+                    .collect(),
+                original_phantom_id: original_phantom_id.map(|id| id.into()),
+                instance_id: instance_id.into(),
+            })),
+            M::HostCall {
+                timestamp,
+                function_name,
+                request,
+                response,
+                durable_function_type,
+            } => Ok(Self::HostCall(oplog::RawHostCallParameters {
+                timestamp: timestamp.into(),
+                function_name: function_name.to_string(),
+                request: oplog_payload_to_wit(request)?,
+                response: oplog_payload_to_wit(response)?,
+                durable_function_type: durable_function_type.into(),
+            })),
+            M::AgentInvocationStarted {
+                timestamp,
+                idempotency_key,
+                payload,
+                trace_id,
+                trace_states,
+                invocation_context,
+            } => Ok(Self::AgentInvocationStarted(
+                oplog::RawAgentInvocationStartedParameters {
+                    timestamp: timestamp.into(),
+                    idempotency_key: idempotency_key.value,
+                    payload: oplog_payload_to_wit(payload)?,
+                    trace_id: trace_id.to_string(),
+                    trace_states,
+                    invocation_context: invocation_context
+                        .into_iter()
+                        .map(|s| s.into())
+                        .collect(),
+                },
+            )),
+            M::AgentInvocationFinished {
+                timestamp,
+                result,
+                consumed_fuel,
+                component_revision,
+            } => Ok(Self::AgentInvocationFinished(
+                oplog::RawAgentInvocationFinishedParameters {
+                    timestamp: timestamp.into(),
+                    result: oplog_payload_to_wit(result)?,
+                    consumed_fuel,
+                    component_revision: component_revision.get(),
+                },
+            )),
+            M::Suspend { timestamp } => Ok(Self::Suspend(timestamp.into())),
+            M::Error {
+                timestamp,
+                error,
+                retry_from,
+                inside_atomic_region,
+                retry_policy_state,
+            } => Ok(Self::Error(oplog::RawErrorParameters {
+                timestamp: timestamp.into(),
+                error: error.into(),
+                retry_from: retry_from.into(),
+                inside_atomic_region,
+                retry_policy_state: retry_policy_state.map(|s| s.into()),
+            })),
+            M::NoOp { timestamp } => Ok(Self::NoOp(timestamp.into())),
+            M::Jump { timestamp, jump } => Ok(Self::Jump(oplog::JumpParameters {
+                timestamp: timestamp.into(),
+                jump: oplog::OplogRegion {
+                    start: jump.start.into(),
+                    end: jump.end.into(),
+                },
+            })),
+            M::Interrupted { timestamp } => Ok(Self::Interrupted(timestamp.into())),
+            M::Exited { timestamp } => Ok(Self::Exited(timestamp.into())),
+            M::BeginAtomicRegion { timestamp } => Ok(Self::BeginAtomicRegion(timestamp.into())),
+            M::EndAtomicRegion {
+                timestamp,
+                begin_index,
+            } => Ok(Self::EndAtomicRegion(oplog::EndAtomicRegionParameters {
+                timestamp: timestamp.into(),
+                begin_index: begin_index.into(),
+            })),
+            M::BeginRemoteWrite { timestamp } => Ok(Self::BeginRemoteWrite(timestamp.into())),
+            M::EndRemoteWrite {
+                timestamp,
+                begin_index,
+            } => Ok(Self::EndRemoteWrite(oplog::EndRemoteWriteParameters {
+                timestamp: timestamp.into(),
+                begin_index: begin_index.into(),
+            })),
+            M::PendingAgentInvocation {
+                timestamp,
+                idempotency_key,
+                payload,
+                trace_id,
+                trace_states,
+                invocation_context,
+            } => Ok(Self::PendingAgentInvocation(
+                oplog::RawPendingAgentInvocationParameters {
+                    timestamp: timestamp.into(),
+                    idempotency_key: idempotency_key.value,
+                    payload: oplog_payload_to_wit(payload)?,
+                    trace_id: trace_id.to_string(),
+                    trace_states,
+                    invocation_context: invocation_context
+                        .into_iter()
+                        .map(|s| s.into())
+                        .collect(),
+                },
+            )),
+            M::PendingUpdate {
+                timestamp,
+                description,
+            } => Ok(Self::PendingUpdate(oplog::RawPendingUpdateParameters {
+                timestamp: timestamp.into(),
+                description: description.try_into()?,
+            })),
+            M::SuccessfulUpdate {
+                timestamp,
+                target_revision,
+                new_component_size,
+                new_active_plugins,
+            } => Ok(Self::SuccessfulUpdate(oplog::RawSuccessfulUpdateParameters {
+                timestamp: timestamp.into(),
+                target_revision: target_revision.into(),
+                new_component_size,
+                new_active_plugins: new_active_plugins
+                    .into_iter()
+                    .map(|g| g.into())
+                    .collect(),
+            })),
+            M::FailedUpdate {
+                timestamp,
+                target_revision,
+                details,
+            } => Ok(Self::FailedUpdate(oplog::FailedUpdateParameters {
+                timestamp: timestamp.into(),
+                target_revision: target_revision.into(),
+                details,
+            })),
+            M::GrowMemory { timestamp, delta } => Ok(Self::GrowMemory(oplog::GrowMemoryParameters {
+                timestamp: timestamp.into(),
+                delta,
+            })),
+            M::FilesystemStorageUsageUpdate { timestamp, delta } => {
+                Ok(Self::FilesystemStorageUsageUpdate(
+                    oplog::FilesystemStorageUsageUpdateParameters {
+                        timestamp: timestamp.into(),
+                        delta,
+                    },
+                ))
+            }
+            M::CreateResource {
+                timestamp,
+                id,
+                resource_type_id,
+            } => Ok(Self::CreateResource(oplog::RawCreateResourceParameters {
+                timestamp: timestamp.into(),
+                id: id.0,
+                resource_type_id: oplog::ResourceTypeId {
+                    name: resource_type_id.name,
+                    owner: resource_type_id.owner,
+                },
+            })),
+            M::DropResource {
+                timestamp,
+                id,
+                resource_type_id,
+            } => Ok(Self::DropResource(oplog::RawDropResourceParameters {
+                timestamp: timestamp.into(),
+                id: id.0,
+                resource_type_id: oplog::ResourceTypeId {
+                    name: resource_type_id.name,
+                    owner: resource_type_id.owner,
+                },
+            })),
+            M::Log {
+                timestamp,
+                level,
+                context,
+                message,
+            } => Ok(Self::Log(oplog::LogParameters {
+                timestamp: timestamp.into(),
+                level: level.into(),
+                context,
+                message,
+            })),
+            M::Restart { timestamp } => Ok(Self::Restart(timestamp.into())),
+            M::ActivatePlugin {
+                timestamp,
+                plugin_grant_id,
+            } => Ok(Self::ActivatePlugin(oplog::RawActivatePluginParameters {
+                timestamp: timestamp.into(),
+                plugin_grant_id: plugin_grant_id.into(),
+            })),
+            M::DeactivatePlugin {
+                timestamp,
+                plugin_grant_id,
+            } => Ok(Self::DeactivatePlugin(
+                oplog::RawDeactivatePluginParameters {
+                    timestamp: timestamp.into(),
+                    plugin_grant_id: plugin_grant_id.into(),
+                },
+            )),
+            M::Revert {
+                timestamp,
+                dropped_region,
+            } => Ok(Self::Revert(oplog::RevertParameters {
+                timestamp: timestamp.into(),
+                dropped_region: oplog::OplogRegion {
+                    start: dropped_region.start.into(),
+                    end: dropped_region.end.into(),
+                },
+            })),
+            M::CancelPendingInvocation {
+                timestamp,
+                idempotency_key,
+            } => Ok(Self::CancelPendingInvocation(
+                oplog::CancelPendingInvocationParameters {
+                    timestamp: timestamp.into(),
+                    idempotency_key: idempotency_key.value,
+                },
+            )),
+            M::StartSpan {
+                timestamp,
+                span_id,
+                parent,
+                linked_context_id,
+                attributes,
+            } => Ok(Self::StartSpan(oplog::StartSpanParameters {
+                timestamp: timestamp.into(),
+                span_id: span_id.to_string(),
+                parent: parent.map(|id| id.to_string()),
+                linked_context_id: linked_context_id.map(|id| id.to_string()),
+                attributes: attributes
+                    .0
+                    .into_iter()
+                    .map(|(key, value)| oplog::Attribute {
+                        key,
+                        value: value.into(),
+                    })
+                    .collect(),
+            })),
+            M::FinishSpan { timestamp, span_id } => {
+                Ok(Self::FinishSpan(oplog::FinishSpanParameters {
+                    timestamp: timestamp.into(),
+                    span_id: span_id.to_string(),
+                }))
+            }
+            M::SetSpanAttribute {
+                timestamp,
+                span_id,
+                key,
+                value,
+            } => Ok(Self::SetSpanAttribute(oplog::SetSpanAttributeParameters {
+                timestamp: timestamp.into(),
+                span_id: span_id.to_string(),
+                key,
+                value: value.into(),
+            })),
+            M::ChangePersistenceLevel {
+                timestamp,
+                persistence_level,
+            } => Ok(Self::ChangePersistenceLevel(
+                oplog::ChangePersistenceLevelParameters {
+                    timestamp: timestamp.into(),
+                    persistence_level: persistence_level.into(),
+                },
+            )),
+            M::BeginRemoteTransaction {
+                timestamp,
+                transaction_id,
+                original_begin_index,
+            } => Ok(Self::BeginRemoteTransaction(
+                oplog::RawBeginRemoteTransactionParameters {
+                    timestamp: timestamp.into(),
+                    transaction_id: transaction_id.to_string(),
+                    original_begin_index: original_begin_index.map(|idx| idx.into()),
+                },
+            )),
+            M::PreCommitRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(Self::PreCommitRemoteTransaction(
+                oplog::RemoteTransactionParameters {
+                    timestamp: timestamp.into(),
+                    begin_index: begin_index.into(),
+                },
+            )),
+            M::PreRollbackRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(Self::PreRollbackRemoteTransaction(
+                oplog::RemoteTransactionParameters {
+                    timestamp: timestamp.into(),
+                    begin_index: begin_index.into(),
+                },
+            )),
+            M::CommittedRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(Self::CommittedRemoteTransaction(
+                oplog::RemoteTransactionParameters {
+                    timestamp: timestamp.into(),
+                    begin_index: begin_index.into(),
+                },
+            )),
+            M::RolledBackRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(Self::RolledBackRemoteTransaction(
+                oplog::RemoteTransactionParameters {
+                    timestamp: timestamp.into(),
+                    begin_index: begin_index.into(),
+                },
+            )),
+            M::Snapshot {
+                timestamp,
+                data,
+                mime_type,
+            } => Ok(Self::Snapshot(oplog::RawSnapshotParameters {
+                timestamp: timestamp.into(),
+                data: oplog_payload_to_wit(data)?,
+                mime_type,
+            })),
+            M::OplogProcessorCheckpoint {
+                timestamp,
+                plugin_grant_id,
+                target_agent_id,
+                confirmed_up_to,
+                sending_up_to,
+                last_batch_start,
+            } => Ok(Self::OplogProcessorCheckpoint(
+                oplog::RawOplogProcessorCheckpointParameters {
+                    timestamp: timestamp.into(),
+                    plugin_grant_id: plugin_grant_id.into(),
+                    target_agent_id: target_agent_id.into(),
+                    confirmed_up_to: confirmed_up_to.into(),
+                    sending_up_to: sending_up_to.into(),
+                    last_batch_start: last_batch_start.into(),
+                },
+            )),
+            M::SetRetryPolicy { timestamp, policy } => {
+                Ok(Self::SetRetryPolicy(oplog::SetRetryPolicyParameters {
+                    timestamp: timestamp.into(),
+                    policy: policy.into(),
+                }))
+            }
+            M::RemoveRetryPolicy { timestamp, name } => {
+                Ok(Self::RemoveRetryPolicy(oplog::RemoveRetryPolicyParameters {
+                    timestamp: timestamp.into(),
+                    name,
+                }))
+            }
+        }
     }
 }

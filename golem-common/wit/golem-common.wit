@@ -1,6 +1,10 @@
 package golem:common;
 
-world golem-common {
-  import golem:agent/common@1.5.0;
+/// Helper world used by `golem_common::schema::agent::bindings` to generate the
+/// shared `golem:agent/common@2.0.0` types (schema-based agent model) together
+/// with the `golem:api/retry@1.5.0` retry-policy types. This is the single
+/// agent bindgen in the workspace; there is no longer a frozen legacy surface.
+world golem-common-schema {
+  import golem:agent/common@2.0.0;
   import golem:api/retry@1.5.0;
 }

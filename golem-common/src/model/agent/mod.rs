@@ -24,23 +24,6 @@ pub mod schema_evolution;
 pub mod structural_format;
 pub mod text_utils;
 
-pub mod bindings {
-    wasmtime::component::bindgen!({
-          path: "wit",
-          world: "golem-common",
-          imports: {
-            default: async | trappable,
-          },
-          exports: { default: async },
-          require_store_data_send: true,
-          anyhow: true,
-          with: {
-            "golem:core/types": golem_wasm::golem_core_1_5_x::types,
-          },
-          wasmtime_crate: ::wasmtime
-    });
-}
-
 use crate::model::component_metadata::ComponentMetadata;
 use crate::schema::adapters::value::{
     typed_schema_value_to_value_and_type, value_and_type_to_typed_schema_value,

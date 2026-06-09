@@ -70,7 +70,7 @@ use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_wasm::Uri;
-use golem_wasm::resource_runtime::{ResourceStore, ResourceTypeId};
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -1693,10 +1693,10 @@ impl HostWasmRpc for TestWorkerCtx {
     async fn new(
         &mut self,
         agent_type_name: String,
-        constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-        phantom_id: Option<golem_wasm::Uuid>,
+        constructor: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
+        phantom_id: Option<golem_wasm::golem_core_2_0_x::types::Uuid>,
         config: Vec<
-            golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
@@ -1708,9 +1708,9 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
     ) -> anyhow::Result<
-        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+        Result<Option<golem_wasm::golem_core_2_0_x::types::SchemaValueTree>, RpcError>,
     > {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
@@ -1721,7 +1721,7 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
     ) -> anyhow::Result<Result<(), RpcError>> {
         self.durable_ctx.invoke(self_, method_name, input).await
     }
@@ -1730,7 +1730,7 @@ impl HostWasmRpc for TestWorkerCtx {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         self.durable_ctx
             .async_invoke_and_await(self_, method_name, input)
@@ -1742,7 +1742,7 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .schedule_invocation(self_, scheduled_time, method_name, input)
@@ -1754,7 +1754,7 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        input: golem_wasm::golem_core_2_0_x::types::SchemaValueTree,
     ) -> anyhow::Result<Resource<CancellationToken>> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
@@ -1778,9 +1778,7 @@ impl HostFutureInvokeResult for TestWorkerCtx {
         &mut self,
         self_: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<
-            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
-        >,
+        Option<Result<Option<golem_wasm::golem_core_2_0_x::types::SchemaValueTree>, RpcError>>,
     > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }

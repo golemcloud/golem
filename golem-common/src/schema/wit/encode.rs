@@ -56,6 +56,53 @@ pub fn encode_graph(graph: &SchemaGraph) -> Result<wire::SchemaGraph, EncodeErro
     })
 }
 
+/// Incremental builder for a single flat [`wire::SchemaGraph`] that holds
+/// several independent root types in one shared `type-nodes` pool.
+///
+/// Used by the agent-layer conversions, where one agent type carries a single
+/// `schema-graph` whose `defs` are shared and whose constructor / method /
+/// config schema roots are `type-node-index` values into that same graph (see
+/// [`crate::schema::agent::wit`]).
+///
+/// Seed the builder with the agent's named definitions via [`GraphEncoder::new`],
+/// then call [`GraphEncoder::encode_type`] for each inline root type (collecting
+/// the returned indices), and finally [`GraphEncoder::finish`] to obtain the
+/// graph with a placeholder root.
+pub struct GraphEncoder {
+    ctx: GraphCtx,
+}
+
+impl GraphEncoder {
+    /// Create a builder seeded with the given named definitions. Each def body
+    /// is encoded eagerly so forward [`SchemaType::Ref`] references resolve.
+    pub fn new(defs: &[SchemaTypeDef]) -> Result<Self, EncodeError> {
+        Ok(Self {
+            ctx: GraphCtx::new(defs)?,
+        })
+    }
+
+    /// Flatten one (possibly recursive) schema type into the shared pool and
+    /// return its `type-node-index`.
+    pub fn encode_type(&mut self, ty: &SchemaType) -> Result<wire::TypeNodeIndex, EncodeError> {
+        self.ctx.encode_type(ty)
+    }
+
+    /// Finish the graph. The `root` field is a structural placeholder (an empty
+    /// record) — agent-layer carriers never consult it; the real roots are the
+    /// indices returned by [`GraphEncoder::encode_type`].
+    pub fn finish(mut self) -> wire::SchemaGraph {
+        let root = self.ctx.push_body(
+            wire::SchemaTypeBody::RecordType(Vec::new()),
+            &MetadataEnvelope::default(),
+        );
+        wire::SchemaGraph {
+            type_nodes: self.ctx.type_nodes,
+            defs: self.ctx.defs,
+            root,
+        }
+    }
+}
+
 pub fn encode_value(value: &SchemaValue) -> wire::SchemaValueTree {
     let mut ctx = ValueCtx::default();
     let root = ctx.encode(value);
@@ -287,7 +334,7 @@ impl GraphCtx {
     }
 }
 
-fn encode_metadata(m: &MetadataEnvelope) -> wire::MetadataEnvelope {
+pub fn encode_metadata(m: &MetadataEnvelope) -> wire::MetadataEnvelope {
     wire::MetadataEnvelope {
         doc: m.doc.clone(),
         aliases: m.aliases.clone(),

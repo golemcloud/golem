@@ -57,7 +57,7 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
-use golem_wasm::resource_runtime::ResourceStore;
+use golem_common::resource_runtime::ResourceStore;
 use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use uuid::Uuid;

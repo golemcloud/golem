@@ -317,5 +317,34 @@ impl AgentTypeSchema {
     }
 }
 
+/// `wasmtime`-generated bindings for the shared `golem:agent/common@2.0.0`
+/// interface (the schema-based agent model) and the `golem:api/retry@1.5.0`
+/// retry-policy types. The worker-executor's `preview2` bindgen remaps
+/// `golem:agent/common@2.0.0` onto these types so the host and `golem-common`
+/// share one definition. This is the single agent bindgen in the workspace.
+#[cfg(feature = "full")]
+pub mod bindings {
+    wasmtime::component::bindgen!({
+          path: "wit",
+          world: "golem-common-schema",
+          imports: {
+            default: async | trappable,
+          },
+          exports: { default: async },
+          require_store_data_send: true,
+          anyhow: true,
+          with: {
+            "golem:core/types@2.0.0": golem_wasm::golem_core_2_0_x::types,
+          },
+          wasmtime_crate: ::wasmtime
+    });
+}
+
+/// Conversions between the recursive in-memory agent schema types in this
+/// module and the flat, index-based `golem:agent/common@2.0.0` wire bindings
+/// in [`bindings`].
+#[cfg(feature = "full")]
+pub mod wit;
+
 #[cfg(test)]
 mod tests;

@@ -57,18 +57,7 @@ pub mod serde;
 #[cfg(feature = "host")]
 mod text;
 
-#[cfg(feature = "host")]
-mod validation;
 mod value_and_type;
-
-/// Conversion to/from wasmtime's value representation
-#[cfg(feature = "host")]
-pub mod wasmtime;
-
-/// Runtime resource helpers (`ResourceStore`, `ResourceTypeId`) extracted from
-/// the value bridge so they survive its deletion.
-#[cfg(feature = "host")]
-pub mod resource_runtime;
 
 #[cfg(any(feature = "host", feature = "guest"))]
 use crate::builder::WitValueBuilder;
@@ -163,6 +152,24 @@ impl From<uuid::Uuid> for Uuid {
     }
 }
 
+#[cfg(any(feature = "host", feature = "guest"))]
+impl From<golem_core_2_0_x::types::Uuid> for uuid::Uuid {
+    fn from(value: golem_core_2_0_x::types::Uuid) -> Self {
+        uuid::Uuid::from_u64_pair(value.high_bits, value.low_bits)
+    }
+}
+
+#[cfg(any(feature = "host", feature = "guest"))]
+impl From<uuid::Uuid> for golem_core_2_0_x::types::Uuid {
+    fn from(uuid: uuid::Uuid) -> Self {
+        let (high_bits, low_bits) = uuid.as_u64_pair();
+        golem_core_2_0_x::types::Uuid {
+            high_bits,
+            low_bits,
+        }
+    }
+}
+
 #[cfg(feature = "host")]
 pub struct WasmRpcEntry {
     pub payload: Box<dyn std::any::Any + Send + Sync>,
@@ -211,8 +218,6 @@ pub struct CancellationTokenEntry {
 #[cfg(feature = "host")]
 pub use text::{parse_value_and_type, print_value_and_type};
 
-#[cfg(feature = "host")]
-pub use validation::validate_value_matches_type;
 pub use value_and_type::*;
 
 #[cfg(feature = "host")]

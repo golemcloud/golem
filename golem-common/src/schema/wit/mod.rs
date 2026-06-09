@@ -26,5 +26,9 @@ mod encode;
 /// Generated `golem:core@2.0.0` types used as the wire shape.
 pub use golem_wasm::golem_core_2_0_x::types as wire;
 
-pub use decode::{DecodeError, decode_graph, decode_typed, decode_value};
-pub use encode::{EncodeError, encode_graph, encode_typed, encode_value};
+pub use decode::{
+    DecodeError, GraphDecoder, decode_graph, decode_metadata, decode_typed, decode_value,
+};
+pub use encode::{
+    EncodeError, GraphEncoder, encode_graph, encode_metadata, encode_typed, encode_value,
+};

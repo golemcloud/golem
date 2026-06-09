@@ -18,11 +18,9 @@ use crate::preview2::golem::agent::host::Host;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::model::PromiseId;
-use golem_common::model::agent::bindings::golem::agent::common::{
-    AgentError, DataValue, RegisteredAgentType,
-};
 use golem_common::model::agent::{
-    AgentConfigDeclaration, AgentConfigSource, AgentTypeName, LegacyParsedAgentId,
+    AgentConfigDeclaration, AgentConfigSource, AgentTypeName, DataSchema, DataValue,
+    LegacyParsedAgentId, RegisteredAgentType,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::oplog::host_functions::{
@@ -35,16 +33,69 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemAgentWebhookUrl,
 };
+use golem_common::schema::adapters::agent::{
+    agent_type_to_schema, legacy_data_value_to_typed_schema_value,
+};
 use golem_common::schema::adapters::analysed_type::{
     analysed_type_to_schema_type_inline, schema_type_to_analysed_type,
 };
-use golem_common::schema::adapters::value::schema_value_to_value;
+use golem_common::schema::adapters::data_schema::data_schema_to_input_schema;
+use golem_common::schema::adapters::untyped::typed_input_to_untyped_data_value;
+use golem_common::schema::adapters::value::{schema_value_to_value, value_to_schema_value};
+use golem_common::schema::agent::RegisteredAgentTypeSchema;
+use golem_common::schema::agent::wit::{encode_registered_agent_type, wire};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::validation::subtyping::is_assignable;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{NodeBuilder, WitType, WitValue, WitValueBuilderExtensions};
+use golem_common::schema::wit::{decode_graph, decode_value, encode_typed, encode_value};
+use golem_wasm::golem_core_2_0_x::types as core_wire;
+
+/// Encode a canonical [`RegisteredAgentType`] into the schema-native
+/// `golem:agent/common@2.0.0` wire form returned across the WIT boundary.
+/// The service/oplog layers stay on the canonical model type; only the
+/// host-import return value is schema-native.
+fn encode_registered_agent_type_wire(
+    registered: RegisteredAgentType,
+) -> anyhow::Result<wire::RegisteredAgentType> {
+    let agent_type = agent_type_to_schema(&registered.agent_type)
+        .map_err(|e| anyhow!("Failed to convert agent type to schema form: {e}"))?;
+    let schema = RegisteredAgentTypeSchema {
+        agent_type,
+        implemented_by: registered.implemented_by,
+    };
+    encode_registered_agent_type(&schema)
+        .map_err(|e| anyhow!("Failed to encode agent type to wire form: {e}"))
+}
+
+/// Convert a guest-supplied `golem:core/types@2.0.0` `schema-value-tree`
+/// (whose root encodes the constructor's parameter list) into the legacy
+/// canonical [`DataValue`] used by the agent-id / service / oplog layers.
+///
+/// The chain is `SchemaValueTree -> SchemaValue::Record fields ->
+/// UntypedDataValue -> DataValue`, driven by the constructor's declared
+/// [`DataSchema`]. Failures are returned as a plain `String` so callers can
+/// surface them as the agent-domain [`wire::AgentError::InvalidInput`]
+/// (matching the previous `try_from_bindings` behaviour) rather than trapping.
+pub(crate) fn schema_value_tree_to_data_value(
+    input: &core_wire::SchemaValueTree,
+    data_schema: &DataSchema,
+) -> Result<DataValue, String> {
+    let schema_value =
+        decode_value(input).map_err(|e| format!("invalid input value tree: {e}"))?;
+    let fields = match schema_value {
+        SchemaValue::Record { fields } => fields,
+        other => {
+            return Err(format!(
+                "expected a record-valued parameter list as input, got {other:?}"
+            ));
+        }
+    };
+    let input_schema = data_schema_to_input_schema(data_schema).map_err(|e| e.to_string())?;
+    let untyped =
+        typed_input_to_untyped_data_value(&input_schema, &fields).map_err(|e| e.to_string())?;
+    DataValue::try_from_untyped(untyped, data_schema.clone())
+}
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Resolve a local agent-config value.
@@ -54,7 +105,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         key_str: &str,
         expected_type: &SchemaType,
         declared_type: &SchemaType,
-    ) -> anyhow::Result<WitValue> {
+    ) -> anyhow::Result<SchemaValue> {
         let config_value = self.state.agent_config.get(key);
 
         // Future automatic-update transforms belong here, where both
@@ -66,13 +117,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ));
         }
 
-        let result = match (expected_type, config_value) {
-            (SchemaType::Option { .. }, None) => WitValue::builder().option_none(),
-            (_, Some(value)) => value.value.clone().into(),
-            (_, None) => return Err(anyhow!("required config key {key_str} is missing value")),
-        };
-
-        Ok(result)
+        match (expected_type, config_value) {
+            (SchemaType::Option { .. }, None) => Ok(SchemaValue::Option { inner: None }),
+            // The stored local config is a legacy typed value (its storage is
+            // migrated in a later wave); project it into the schema-native
+            // value the agent surface works in, driven by its stored type.
+            (_, Some(stored)) => {
+                value_to_schema_value(&stored.value, &stored.typ).map_err(|e| {
+                    anyhow!(
+                        "Local config value for key {key_str} is not representable as a schema value: {e}"
+                    )
+                })
+            }
+            (_, None) => Err(anyhow!("required config key {key_str} is missing value")),
+        }
     }
 
     /// Resolve a secret-backed agent-config value. The stored
@@ -88,7 +146,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         path_str: &str,
         expected_type: SchemaType,
         declared_type: &SchemaType,
-    ) -> anyhow::Result<WitValue> {
+    ) -> anyhow::Result<SchemaValue> {
         // Future automatic-update transforms belong here, where both
         // the component-declared type and the guest-expected type are
         // available together with the resolved secret metadata/value.
@@ -155,30 +213,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             };
 
-            // The oplog payload and guest return value cross the
-            // durability / WIT-bindgen boundary as `Value` /
-            // `AnalysedType`. When the secret has its own graph it is
-            // used directly; otherwise the inline expected type stands
+            // The oplog payload still stores the resolved value in the legacy
+            // typed form owned by the (later-wave) oplog subsystem. When the
+            // secret has its own graph it is used directly to lower the
+            // schema-native value; otherwise the inline expected type stands
             // in as a self-contained anonymous graph.
-            let (boundary_graph, expected_type_legacy);
+            let (boundary_graph, boundary_type);
             if let Some(sec) = agent_secret {
                 boundary_graph = sec.secret_type.clone();
-                expected_type_legacy = schema_type_to_analysed_type(
+                boundary_type = schema_type_to_analysed_type(
                     &boundary_graph,
                     &boundary_graph.root,
                 )
                 .map_err(|e| {
                     anyhow!(
-                        "Agent secret for key {path_str} has a type not representable as AnalysedType: {e}"
+                        "Agent secret for key {path_str} has a type not representable in the legacy oplog form: {e}"
                     )
                 })?;
             } else {
                 boundary_graph = SchemaGraph::anonymous(expected_type.clone());
-                expected_type_legacy =
+                boundary_type =
                     schema_type_to_analysed_type(&boundary_graph, &boundary_graph.root).map_err(
                         |e| {
                             anyhow!(
-                                "Expected secret type for key {path_str} is not representable as AnalysedType: {e}"
+                                "Expected secret type for key {path_str} is not representable in the legacy oplog form: {e}"
                             )
                         },
                     )?;
@@ -190,7 +248,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .map_err(|e| {
                 anyhow!(
-                    "Resolved secret value for key {path_str} is not representable as Value: {e}"
+                    "Resolved secret value for key {path_str} is not representable in the legacy oplog form: {e}"
                 )
             })?;
 
@@ -199,29 +257,42 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self,
                     HostRequestGolemAgentGetConfigValue {
                         path,
-                        expected_type: expected_type_legacy,
+                        expected_type: boundary_type.clone(),
                     },
                     HostResponseGolemAgentGetConfigValue { result },
                 )
                 .await?;
 
-            Ok(persisted.result.into())
+            // Lift the persisted (legacy oplog) value back into the
+            // schema-native value the agent surface returns to the guest.
+            value_to_schema_value(&persisted.result, &boundary_type).map_err(|e| {
+                anyhow!(
+                    "Resolved secret value for key {path_str} is not representable as a schema value: {e}"
+                )
+            })
         } else {
-            Ok(durability.replay(self).await?.result.into())
+            let replayed = durability.replay(self).await?;
+            let return_graph = SchemaGraph::anonymous(expected_type);
+            let return_type = schema_type_to_analysed_type(&return_graph, &return_graph.root)
+                .map_err(|e| {
+                    anyhow!(
+                        "Expected secret type for key {path_str} is not representable in the legacy oplog form: {e}"
+                    )
+                })?;
+            value_to_schema_value(&replayed.result, &return_type).map_err(|e| {
+                anyhow!(
+                    "Resolved secret value for key {path_str} is not representable as a schema value: {e}"
+                )
+            })
         }
     }
-}
 
-/// Structural type equality, resolving any [`SchemaType::Ref`] nodes
-/// against `graph`. Bidirectional [`is_assignable`] collapses to type
-/// equality on the same graph; the guest-supplied inline side has no
-/// refs to resolve, while the secret's `Ref`s are followed via `graph`.
-fn schema_types_compatible(graph: &SchemaGraph, left: &SchemaType, right: &SchemaType) -> bool {
-    is_assignable(graph, left, right) && is_assignable(graph, right, left)
-}
-
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
+    /// Durable lookup of all registered agent types, returning the canonical
+    /// [`RegisteredAgentType`] model. The schema-native WIT wire form is
+    /// produced only at the host-import boundary in [`Host::get_all_agent_types`].
+    pub(crate) async fn get_all_agent_types_model(
+        &mut self,
+    ) -> anyhow::Result<Vec<RegisteredAgentType>> {
         let mut durability =
             Durability::<GolemAgentGetAllAgentTypes>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
@@ -256,16 +327,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }?;
 
         match result.result {
-            Ok(result) => Ok(result.into_iter().map(|r| r.into()).collect()),
+            Ok(result) => Ok(result),
             Err(err) => Err(anyhow!(err)),
         }
     }
 
-    async fn get_agent_type(
+    /// Durable lookup of a single registered agent type by name, returning the
+    /// canonical [`RegisteredAgentType`] model. The schema-native WIT wire form
+    /// is produced only at the host-import boundary in [`Host::get_agent_type`].
+    pub(crate) async fn get_agent_type_model(
         &mut self,
-        agent_type_name: String,
+        agent_type_name: AgentTypeName,
     ) -> anyhow::Result<Option<RegisteredAgentType>> {
-        let agent_type_name = AgentTypeName(agent_type_name);
         let mut durability =
             Durability::<GolemAgentGetAgentType>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
@@ -302,23 +375,54 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }?;
 
         match result.result {
-            Ok(result) => Ok(result.map(|r| r.into())),
+            Ok(result) => Ok(result),
             Err(err) => Err(anyhow!(err)),
         }
+    }
+}
+
+/// Structural type equality, resolving any [`SchemaType::Ref`] nodes
+/// against `graph`. Bidirectional [`is_assignable`] collapses to type
+/// equality on the same graph; the guest-supplied inline side has no
+/// refs to resolve, while the secret's `Ref`s are followed via `graph`.
+fn schema_types_compatible(graph: &SchemaGraph, left: &SchemaType, right: &SchemaType) -> bool {
+    is_assignable(graph, left, right) && is_assignable(graph, right, left)
+}
+
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<wire::RegisteredAgentType>> {
+        self.get_all_agent_types_model()
+            .await?
+            .into_iter()
+            .map(encode_registered_agent_type_wire)
+            .collect()
+    }
+
+    async fn get_agent_type(
+        &mut self,
+        agent_type_name: String,
+    ) -> anyhow::Result<Option<wire::RegisteredAgentType>> {
+        self.get_agent_type_model(AgentTypeName(agent_type_name))
+            .await?
+            .map(encode_registered_agent_type_wire)
+            .transpose()
     }
 
     async fn make_agent_id(
         &mut self,
         agent_type_name: String,
-        input: DataValue,
-        phantom_id: Option<golem_wasm::Uuid>,
-    ) -> anyhow::Result<Result<String, AgentError>> {
+        input: core_wire::SchemaValueTree,
+        phantom_id: Option<core_wire::Uuid>,
+    ) -> anyhow::Result<Result<String, wire::AgentError>> {
         DurabilityHost::observe_function_call(self, "golem_agent", "make_agent_id");
 
-        if let Some(agent_type) = self.get_agent_type(agent_type_name.clone()).await? {
-            match golem_common::model::agent::DataValue::try_from_bindings(
-                input,
-                agent_type.agent_type.constructor.input_schema,
+        if let Some(agent_type) = self
+            .get_agent_type_model(AgentTypeName(agent_type_name.clone()))
+            .await?
+        {
+            match schema_value_tree_to_data_value(
+                &input,
+                &agent_type.agent_type.constructor.input_schema,
             ) {
                 Ok(input) => {
                     let agent_id = LegacyParsedAgentId::new(
@@ -329,33 +433,41 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                     Ok(Ok(agent_id.to_string()))
                 }
-                Err(err) => Ok(Err(AgentError::InvalidInput(err))),
+                Err(err) => Ok(Err(wire::AgentError::InvalidInput(err))),
             }
         } else {
-            Ok(Err(AgentError::InvalidType(agent_type_name)))
+            Ok(Err(wire::AgentError::InvalidType(agent_type_name)))
         }
     }
 
     async fn parse_agent_id(
         &mut self,
         agent_id: String,
-    ) -> anyhow::Result<Result<(String, DataValue, Option<golem_wasm::Uuid>), AgentError>> {
+    ) -> anyhow::Result<
+        Result<(String, core_wire::TypedSchemaValue, Option<core_wire::Uuid>), wire::AgentError>,
+    > {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
         let component_metadata = &self.component_metadata().metadata;
         match LegacyParsedAgentId::parse(agent_id, component_metadata) {
-            Ok(agent_id) => Ok(Ok((
-                agent_id.agent_type.to_string(),
-                agent_id.parameters.into(),
-                agent_id.phantom_id.map(|id| id.into()),
-            ))),
-            Err(error) => Ok(Err(AgentError::InvalidAgentId(error))),
+            Ok(agent_id) => {
+                let typed = legacy_data_value_to_typed_schema_value(&agent_id.parameters)
+                    .map_err(|e| anyhow!("Failed to convert agent id parameters to schema: {e}"))?;
+                let wire_typed = encode_typed(&typed)
+                    .map_err(|e| anyhow!("Failed to encode agent id parameters: {e}"))?;
+                Ok(Ok((
+                    agent_id.agent_type.to_string(),
+                    wire_typed,
+                    agent_id.phantom_id.map(|id| id.into()),
+                )))
+            }
+            Err(error) => Ok(Err(wire::AgentError::InvalidAgentId(error))),
         }
     }
 
     async fn create_webhook(
         &mut self,
-        promise_id: crate::preview2::golem_api_1_x::host::PromiseId,
+        promise_id: core_wire::PromiseId,
     ) -> anyhow::Result<String> {
         let durability =
             Durability::<GolemAgentCreateWebhook>::new(self, DurableFunctionType::ReadRemote)
@@ -427,8 +539,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_config_value(
         &mut self,
         path: Vec<String>,
-        expected_type: WitType,
-    ) -> anyhow::Result<WitValue> {
+        expected: core_wire::SchemaGraph,
+    ) -> anyhow::Result<core_wire::SchemaValueTree> {
         let path_str = path.join(".");
         tracing::debug!("Agent getting config value for key {path_str}");
 
@@ -436,14 +548,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .parsed_agent_id()
             .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
 
-        // The guest passes the expected type as a `WitType` through
-        // wit-bindgen. Lift it to a `SchemaType` once so the resolvers
-        // below operate on a single type representation.
-        let expected_type_legacy = AnalysedType::from(expected_type);
-        let expected_type = analysed_type_to_schema_type_inline(&expected_type_legacy)
-            .map_err(|e| anyhow!(
-                "Expected config type for path {path_str} is not representable as SchemaType: {e}"
-            ))?;
+        // The guest passes the expected type as a `schema-graph`. Lift its
+        // root to a single inline `SchemaType` (flattening any refs) so the
+        // resolvers below operate on one schema-native type representation.
+        let expected_graph = decode_graph(&expected).map_err(|e| {
+            anyhow!("Expected config type for path {path_str} is not a valid schema graph: {e}")
+        })?;
+        let expected_type_flattened =
+            schema_type_to_analysed_type(&expected_graph, &expected_graph.root).map_err(|e| {
+                anyhow!(
+                    "Expected config type for path {path_str} is not representable as a flat type: {e}"
+                )
+            })?;
+        let expected_type =
+            analysed_type_to_schema_type_inline(&expected_type_flattened).map_err(|e| {
+                anyhow!(
+                    "Expected config type for path {path_str} is not representable as SchemaType: {e}"
+                )
+            })?;
 
         let agent_type = self
             .component_metadata()
@@ -463,13 +585,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .transpose()?;
 
-        match declaration {
+        let schema_value: SchemaValue = match declaration {
             // Allow reading undeclared optional config keys so that
             // newer agents can run against older component schemas.
             None if matches!(expected_type, SchemaType::Option { .. }) => {
-                Ok(WitValue::builder().option_none())
+                SchemaValue::Option { inner: None }
             }
-            None => Err(anyhow!("No config declared for path {path_str}")),
+            None => return Err(anyhow!("No config declared for path {path_str}")),
             Some(AgentConfigDeclaration {
                 source: AgentConfigSource::Local,
                 ..
@@ -480,7 +602,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 declaration_value_type
                     .as_ref()
                     .expect("existing config declaration must have converted value type"),
-            ),
+            )?,
             Some(AgentConfigDeclaration {
                 source: AgentConfigSource::Secret,
                 ..
@@ -493,8 +615,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .as_ref()
                         .expect("existing config declaration must have converted value type"),
                 )
-                .await
+                .await?
             }
-        }
+        };
+
+        // Encode the schema-native value into the wire value tree returned
+        // across the `golem:agent/host@2.0.0` boundary.
+        Ok(encode_value(&schema_value))
     }
 }

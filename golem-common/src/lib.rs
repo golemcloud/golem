@@ -51,6 +51,8 @@ pub mod read_only_lock;
 #[cfg(feature = "full")]
 pub mod redis;
 #[cfg(feature = "full")]
+pub mod resource_runtime;
+#[cfg(feature = "full")]
 pub mod retriable_error;
 #[cfg(feature = "full")]
 pub mod retries;

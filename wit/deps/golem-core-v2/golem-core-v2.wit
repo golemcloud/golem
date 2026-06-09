@@ -61,6 +61,44 @@ interface types {
     }
 
     // ============================================================
+    // Platform identifiers
+    // ============================================================
+    //
+    // Duplicated from `golem:core/types@1.5.0` so the agent surface depends on
+    // a single core version (`@2.0.0`). The old `@1.5.0` copies survive only
+    // for packages not yet migrated (e.g. `golem:api@1.5.0`) and are removed in
+    // the final cleanup wave.
+
+    /// Represents a Golem component
+    record component-id {
+        uuid: uuid,
+    }
+
+    /// Represents a Golem agent
+    record agent-id {
+        /// Identifies the component the agent belongs to
+        component-id: component-id,
+        /// String representation of the agent ID (agent type and constructor parameters)
+        agent-id: string,
+    }
+
+    /// Represents a Golem account
+    record account-id {
+        uuid: uuid,
+    }
+
+    /// An index into the persistent log storing all performed operations of an agent
+    type oplog-index = u64;
+
+    /// A promise ID is a value that can be passed to an external Golem API to
+    /// complete that promise from an arbitrary external source, while Golem
+    /// agents can await for this completion.
+    record promise-id {
+        agent-id: agent-id,
+        oplog-idx: oplog-index,
+    }
+
+    // ============================================================
     // Schema graph (self-contained type carrier)
     // ============================================================
 

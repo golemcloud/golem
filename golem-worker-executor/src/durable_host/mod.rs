@@ -120,7 +120,7 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use golem_wasm::Uri;
-use golem_wasm::resource_runtime::{ResourceStore, ResourceTypeId};
+use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use replay_state::ReplayEvent;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;

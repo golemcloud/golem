@@ -181,6 +181,55 @@ pub fn untyped_data_value_to_typed_input(
     }
 }
 
+/// Build the guest-facing input value tree for the `golem:agent@2.0.0`
+/// `initialize` / `invoke` exports from a legacy `(UntypedDataValue,
+/// DataSchema)` input pair.
+///
+/// Per the guest contract the input `schema-value-tree` root "encodes the
+/// parameter list (one record field per declared `named-field`, in declaration
+/// order)", so this wraps the positional `Vec<SchemaValue>` produced by
+/// [`untyped_data_value_to_typed_input`] into a single
+/// [`SchemaValue::Record`]. The record's fields are positional and align with
+/// the parameter list, matching how the guest interprets it against its own
+/// declared `input-schema`.
+///
+/// Failure modes are exactly those of [`untyped_data_value_to_typed_input`].
+pub fn untyped_data_value_to_input_value(
+    value: UntypedDataValue,
+    schema: &DataSchema,
+) -> Result<SchemaValue, SchemaAdapterError> {
+    let (_input_schema, values) = untyped_data_value_to_typed_input(value, schema)?;
+    Ok(SchemaValue::Record { fields: values })
+}
+
+/// Reconstruct a legacy [`UntypedDataValue`] from a guest-returned output
+/// value tree (the `some(value)` payload of the `golem:agent@2.0.0` `invoke`
+/// result) and the method's declared output [`DataSchema`].
+///
+/// The wire value tree carries no type information, so the output schema
+/// supplies the driving [`SchemaType`] needed to rebuild component-model
+/// values. This is the inverse of [`untyped_data_value_to_typed_schema_output`]
+/// starting from a bare [`SchemaValue`]: it rebuilds the same
+/// [`TypedSchemaValue`] (root type from [`data_schema_to_output_schema`],
+/// anonymous graph) and projects it via
+/// [`typed_schema_value_to_untyped_data_value`].
+///
+/// The `none` result of `invoke` (declared `unit` output) is handled by the
+/// caller and never reaches this function.
+pub fn typed_output_value_to_untyped_data_value(
+    value: SchemaValue,
+    schema: &DataSchema,
+) -> Result<UntypedDataValue, SchemaAdapterError> {
+    let root_type = match data_schema_to_output_schema(schema)? {
+        // `unit` has no `SchemaType`; use the canonical empty tuple so a
+        // guest-returned empty-tuple value still round-trips to `Tuple([])`.
+        OutputSchema::Unit => SchemaType::tuple(Vec::new()),
+        OutputSchema::Single(root_type) => *root_type,
+    };
+    let typed = TypedSchemaValue::new(SchemaGraph::anonymous(root_type), value);
+    typed_schema_value_to_untyped_data_value(&typed)
+}
+
 /// Build the `list<variant<…>>` value for a multimodal payload: one
 /// [`SchemaValue::Variant`] per element, matching each
 /// [`UntypedNamedElementValue`] to its legacy alternative [`ElementSchema`] by
