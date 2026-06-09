@@ -23,11 +23,11 @@
 
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
+use crate::schema::proptest_strategies::schema_graph_strategy;
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, QuantitySpec,
     SchemaType, TextRestrictions, UnionBranch, UnionSpec, VariantCaseType,
 };
-use crate::schema::proptest_strategies::schema_graph_strategy;
 use proptest::prelude::*;
 use std::collections::HashSet;
 

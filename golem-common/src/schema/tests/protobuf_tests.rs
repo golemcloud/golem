@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::schema::proptest_strategies as strategies;
 use crate::base_model::Empty;
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::{
@@ -26,6 +25,7 @@ use crate::schema::agent::{
 };
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
+use crate::schema::proptest_strategies as strategies;
 use crate::schema::schema_type::SchemaType;
 use proptest::prelude::*;
 use strategies::schema_graph_strategy;

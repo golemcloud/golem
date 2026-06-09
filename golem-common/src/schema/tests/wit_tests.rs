@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::schema::proptest_strategies as strategies;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::TypeId;
+use crate::schema::proptest_strategies as strategies;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::wit::{
     DecodeError, EncodeError, decode_graph, decode_typed, decode_value, encode_graph, encode_typed,

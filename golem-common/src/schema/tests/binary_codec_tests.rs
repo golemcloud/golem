@@ -15,10 +15,10 @@
 //! Round-trip tests for the `desert_rust::BinaryCodec` derives on the
 //! schema-graph types reachable from [`TypedSchemaValue`].
 
+use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::proptest_strategies::{
     schema_graph_strategy, schema_value_strategy, schema_values_eq, typed_schema_value_strategy,
 };
-use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::schema_value::SchemaValue;
 use proptest::prelude::*;
 use test_r::test;
