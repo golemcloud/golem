@@ -563,6 +563,55 @@ CREATE UNIQUE INDEX plugins_name_version_uk ON plugins (account_id, name, versio
 
 CREATE INDEX plugins_component_idx ON plugins (component_id, component_revision_id);
 
+CREATE TABLE environment_shares
+(
+    environment_share_id UUID      NOT NULL,
+    environment_id       UUID      NOT NULL,
+    grantee_account_id   UUID      NOT NULL,
+
+    created_at           TIMESTAMP NOT NULL,
+    updated_at           TIMESTAMP NOT NULL,
+    deleted_at           TIMESTAMP,
+    modified_by          UUID      NOT NULL,
+
+    current_revision_id  BIGINT    NOT NULL,
+
+    CONSTRAINT environment_shares_pk
+        PRIMARY KEY (environment_share_id),
+    CONSTRAINT environment_shares_environments_fk
+        FOREIGN KEY (environment_id) REFERENCES environments,
+    CONSTRAINT environment_shares_accounts_fk
+        FOREIGN KEY (grantee_account_id) REFERENCES accounts (account_id)
+);
+
+CREATE UNIQUE INDEX environment_shares_environment_grantee_uk
+    ON environment_shares (environment_id, grantee_account_id)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX environment_shares_environment_idx
+    ON environment_shares (environment_id);
+
+CREATE INDEX environment_shares_grantee_idx
+    ON environment_shares (grantee_account_id);
+
+CREATE TABLE environment_share_revisions
+(
+    environment_share_id UUID      NOT NULL,
+    revision_id          BIGINT    NOT NULL,
+
+    -- Bitvector of roles
+    roles                INT       NOT NULL,
+
+    created_at           TIMESTAMP NOT NULL,
+    created_by           UUID      NOT NULL,
+    deleted              BOOLEAN   NOT NULL,
+
+    CONSTRAINT environment_share_revisions_pk
+        PRIMARY KEY (environment_share_id, revision_id),
+    CONSTRAINT environment_share_revisions_environment_shares_fk
+        FOREIGN KEY (environment_share_id) REFERENCES environment_shares
+);
+
 CREATE TABLE environment_plugin_grants
 (
     environment_plugin_grant_id UUID      NOT NULL,
