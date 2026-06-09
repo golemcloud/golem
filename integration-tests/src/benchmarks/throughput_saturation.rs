@@ -127,9 +127,9 @@ const COUNTERS_VARIANT: SaturationVariant = SaturationVariant {
     wasm_name: "it_agent_counters_release",
     component_name: "it:agent-counters",
     agent_type: "Counter",
-    active_method: "busy-for",
+    active_method: "busy_for",
     active_params: || data_value!(BUSY_MILLIS),
-    allocate_method: Some("allocate-memory"),
+    allocate_method: Some("allocate_memory"),
 };
 
 const ECHO_RUST_VARIANT: SaturationVariant = SaturationVariant {
