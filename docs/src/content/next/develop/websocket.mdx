@@ -1,0 +1,117 @@
+import { Tabs } from "nextra/components"
+
+# WebSocket Client
+
+Golem agents use **WASI HTTP** for outgoing HTTP requests, but WASI HTTP does not support WebSocket upgrades.
+Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) that complements WASI HTTP and allows agents to open WebSocket connections, send and receive messages, and handle connection lifecycle events.
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs.Tab>
+    The TypeScript SDK exposes the standard browser `WebSocket` and `WebSocketStream` APIs,
+    so existing code and patterns work out of the box.
+
+    ```typescript
+    @agent()
+    class ExampleAgent extends BaseAgent {
+      async run(): Promise<void> {
+        return new Promise((resolve, reject) => {
+          const ws = new WebSocket("wss://example.com/chat");
+          ws.onopen = () => { console.log("Connected"); ws.send("Hello, server!"); };
+          ws.onmessage = (event: MessageEvent) => {
+            if (typeof event.data === "string") { console.log("Text:", event.data); }
+            else { console.log("Binary:", new Uint8Array(event.data)); }
+          };
+          ws.onerror = () => reject(new Error("WebSocket error"));
+          ws.onclose = (event: CloseEvent) => { console.log(`Closed [${event.code}] "${event.reason}"`); resolve(); };
+        });
+      }
+    }
+    ```
+</Tabs.Tab>
+
+<Tabs.Tab>
+    The Golem Rust SDK provides its own WebSocket API inspired by the `tungstenite` library.
+    The main types are `WebsocketConnection`, `WebSocketMessage`, and `WebSocketError`.
+
+    ```rust
+    #[agent_implementation]
+    impl ExampleAgent for ExampleAgentImpl {
+        async fn run() -> Result<(), WebSocketError> {
+            let ws = WebsocketConnection::connect("wss://example.com/chat", None)?;
+            println!("Connected");
+            ws.send(&WebSocketMessage::Text("Hello, server!".to_string()))?;
+            loop {
+                match ws.receive().await {
+                    Ok(WebSocketMessage::Text(text)) => println!("Text: {text}"),
+                    Ok(WebSocketMessage::Binary(data)) => println!("Binary: {data:?}"),
+                    Err(WebSocketError::Closed(info)) => {
+                        if let Some(info) = info { println!("Closed [{}] \"{}\"", info.code, info.reason); }
+                        break;
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+            Ok(())
+        }
+    }
+    ```
+</Tabs.Tab>
+
+<Tabs.Tab>
+    Scala compiles to JavaScript via Scala.js, so the standard browser `WebSocket` and `WebSocketStream` APIs
+    are available through Scala.js interop.
+
+    ```scala
+    case class ExampleAgentImpl() extends ExampleAgent {
+      def run(): Future[Unit] = {
+        val done = Promise[Unit]()
+        val ws = new WebSocket("wss://example.com/chat")
+        ws.onopen = { (_: Event) => println("Connected"); ws.send("Hello, server!") }
+        ws.onmessage = { (event: MessageEvent) =>
+          event.data match {
+            case text: String => println(s"Text: $text")
+            case other        => println(s"Binary: $other")
+          }
+        }
+        ws.onerror = { (_: Event) => done.tryFailure(new Exception("WebSocket error")) }
+        ws.onclose = { (event: CloseEvent) => println(s"Closed [${event.code}] \"${event.reason}\""); done.trySuccess(()) }
+        done.future
+      }
+    }
+    ```
+
+</Tabs.Tab>
+
+<Tabs.Tab>
+    MoonBit uses the low-level WIT interface directly through generated bindings.
+    Assuming your generated `golem:websocket` bindings are imported as `@websocket_client`
+    and the common agent types are imported as `@common`:
+
+    ```moonbit
+    pub fn ExampleAgent::run(self: Self) -> Unit raise @common.AgentError {
+      let conn = match @websocket_client.WebsocketConnection::connect("wss://example.com/chat", None) {
+        Ok(c) => c
+        Err(e) => raise @common.AgentError::InvalidInput("Connect failed: \{e}")
+      }
+      println("Connected")
+      match conn.send(Text("Hello, server!")) {
+        Ok(_) => ()
+        Err(e) => raise @common.AgentError::InvalidInput("Send failed: \{e}")
+      }
+      // receive loop...
+    }
+    ```
+
+</Tabs.Tab>
+</Tabs>
+
+## WIT interface reference
+
+The underlying WIT interface is `golem:websocket@1.5.0`. It defines the `websocket-connection` resource type with the following methods:
+
+- **`connect`** — opens a WebSocket connection to the given URL, with optional headers
+- **`send`** — sends a text or binary message
+- **`receive`** — blocks until the next message arrives
+- **`receive-with-timeout`** — same as `receive` but with a timeout
+- **`close`** — initiates a graceful close handshake
+- **`subscribe`** — returns a pollable that resolves when a message is available

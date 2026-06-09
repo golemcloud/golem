@@ -130,13 +130,13 @@ impl GetRoutingTablePersistence for SqliteRoutingTablePersistence {
     }
 }
 
-#[test_dep(tagged_as = "sqlite")]
+#[test_dep(scope = Shared, tagged_as = "sqlite")]
 async fn sqlite_persistence() -> Arc<dyn GetRoutingTablePersistence> {
     let temp_dir = TempDir::new().expect("Cannot create temp dir");
     Arc::new(SqliteRoutingTablePersistence { temp_dir })
 }
 
-#[test_dep(tagged_as = "postgres")]
+#[test_dep(scope = Shared, tagged_as = "postgres")]
 async fn postgres_persistence() -> Arc<dyn GetRoutingTablePersistence> {
     let unique_network_id = Uuid::new_v4().to_string();
     let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;

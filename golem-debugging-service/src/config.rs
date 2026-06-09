@@ -76,6 +76,8 @@ impl DebugConfig {
             oplog: self.oplog,
             suspend: self.suspend,
             active_workers: self.active_workers,
+            agent_status_flush: Default::default(),
+            agent_status_checkpoint: Default::default(),
             scheduler: self.scheduler,
             public_worker_api: self.public_worker_api,
             memory: self.memory,
@@ -86,6 +88,7 @@ impl DebugConfig {
             agent_types_service: self.agent_types_service,
             environment_state_service: self.agent_deployments_service,
             direct_invocation_auth_cache: Default::default(),
+            read_only_cache: Default::default(),
             agent_webhooks_service: self.agent_webhooks_service,
             engine: self.engine,
             // unused

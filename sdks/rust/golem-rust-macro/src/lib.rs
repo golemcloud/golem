@@ -88,6 +88,11 @@ pub fn endpoint(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+#[proc_macro_attribute]
+pub fn read_only(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
 /// Defines a function as an `Operation` that can be used in transactions
 #[proc_macro_attribute]
 pub fn golem_operation(attr: TokenStream, item: TokenStream) -> TokenStream {

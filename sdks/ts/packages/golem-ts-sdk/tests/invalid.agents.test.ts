@@ -299,6 +299,14 @@ test('Agent with with http endpoint path variables referring to Principal is rej
   );
 });
 
+test('Ephemeral agent with a read-only method is rejected at registration', async () => {
+  await expect(async () => {
+    await import('./agentWithEphemeralReadOnly');
+  }).rejects.toThrowError(
+    /Agent 'AgentWithEphemeralReadOnly' is ephemeral but method 'getValue' is marked as read-only/,
+  );
+});
+
 test('Agent with unsupported type in config field is rejected with path in error message', async () => {
   await expect(async () => {
     await import('./agentWithInvalidConfig');

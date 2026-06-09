@@ -18,7 +18,7 @@ use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::*;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::LegacyParsedAgentId;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
@@ -53,7 +53,7 @@ pub async fn invoke_resource(
         }
     };
 
-    let parsed_agent_id = ParsedAgentId::new_auto_phantom(
+    let parsed_agent_id = LegacyParsedAgentId::new_auto_phantom(
         mcp_resource.agent_type_name.clone(),
         DataValue::Tuple(ElementValues {
             elements: constructor_params
@@ -429,6 +429,8 @@ mod tests {
             consumed_fuel: None,
             invocation_status: None,
             component_revision: None,
+            oplog_index: None,
+            agent_fingerprint: None,
         });
         let resource = AgentMcpResource {
             kind: AgentMcpResourceKind::Static(Annotated::new(
@@ -459,6 +461,7 @@ mod tests {
                 input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
                 output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
                 http_endpoint: vec![],
+                read_only: None,
             },
             component_id: harness.component_id,
             agent_type_name: AgentTypeName("mcp-agent".to_string()),

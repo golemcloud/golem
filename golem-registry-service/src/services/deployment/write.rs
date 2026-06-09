@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::DeployValidationError;
+use super::authorize_environment_permission;
 use super::deployment_context::DeploymentContext;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
@@ -30,6 +31,7 @@ use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
 use futures::TryFutureExt;
 use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
 use golem_common::model::environment::Environment;
@@ -39,7 +41,6 @@ use golem_common::model::{
     environment::EnvironmentId,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::collections::HashMap;
@@ -161,11 +162,7 @@ impl DeploymentWriteService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeployEnvironment,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
 
         if data.current_revision
             != environment
@@ -185,7 +182,7 @@ impl DeploymentWriteService {
             });
 
         let latest_deployment = self
-            .get_latest_deployment_for_environment(&environment, auth)
+            .get_latest_deployment_for_environment(&environment, &AuthCtx::System)
             .await?;
 
         let compatibility_check_enabled = environment.compatibility_check;
@@ -207,22 +204,22 @@ impl DeploymentWriteService {
             retry_policies_in_environment,
         ) = tokio::try_join!(
             self.component_service
-                .list_staged_components_for_environment(&environment, auth)
+                .list_staged_components_for_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
             self.http_api_deployment_service
-                .list_staged_for_environment(&environment, auth)
+                .list_staged_for_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
             self.mcp_deployment_service
-                .list_staged_for_environment(&environment, auth)
+                .list_staged_for_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
             self.agent_secrets_service
-                .list_in_fetched_environment(&environment, auth)
+                .list_in_fetched_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
             self.resource_definition_service
-                .list_in_fetched_environment(&environment, auth)
+                .list_in_fetched_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
             self.retry_policy_service
-                .list_in_fetched_environment(&environment, auth)
+                .list_in_fetched_environment(&environment, &AuthCtx::System)
                 .map_err(DeploymentWriteError::from),
         )?;
 
@@ -255,16 +252,18 @@ impl DeploymentWriteService {
         }
 
         let mut errors = Vec::new();
+        let mut warnings: Vec<super::DeployValidationWarning> = Vec::new();
 
         if data.replace_incompatible_agent_secrets && compatibility_check_enabled {
             errors.push(DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
-        let compiled_routes = deployment_context.compile_http_api_routes(&mut errors);
+        let compiled_routes =
+            deployment_context.compile_http_api_routes(&mut errors, &mut warnings);
 
         let security_schemes_list = self
             .security_scheme_service
-            .get_security_schemes_in_environment(environment_id, auth)
+            .get_security_schemes_in_environment(environment_id, &AuthCtx::System)
             .await
             .unwrap_or_default();
 
@@ -384,7 +383,8 @@ impl DeploymentWriteService {
             })?
             .signal_new_events_available(&self.registry_change_notifier);
 
-        let deployment: CurrentDeployment = ext_revision.try_into()?;
+        let mut deployment: CurrentDeployment = ext_revision.try_into()?;
+        deployment.validation_warnings = warnings;
 
         Ok(deployment)
     }
@@ -406,11 +406,7 @@ impl DeploymentWriteService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeployEnvironment,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
 
         let current_deployment = environment
             .current_deployment
@@ -461,11 +457,7 @@ impl DeploymentWriteService {
         environment: &Environment,
         auth: &AuthCtx,
     ) -> Result<Option<Deployment>, DeploymentWriteError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeployment,
-        )?;
+        authorize_environment_permission(auth, environment, EnvironmentVerb::ViewDeployment)?;
 
         let deployment: Option<Deployment> = self
             .deployment_repo

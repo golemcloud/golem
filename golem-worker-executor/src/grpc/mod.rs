@@ -52,7 +52,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, UntypedDataValue};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal, UntypedDataValue};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -63,7 +63,7 @@ use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAg
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
-    OwnedAgentId, ScanCursor, ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation,
+    OwnedAgentId, PendingUpdateKind, ScanCursor, ScheduledAction, ShardId, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -621,7 +621,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .last_known_status
             .pending_invocations
             .iter()
-            .any(|invocation| invocation.invocation.idempotency_key() == Some(&idempotency_key))
+            .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
         {
             let worker = Worker::get_or_create_suspended(
                 self,
@@ -1117,7 +1117,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
-        if let Ok(agent_id) = ParsedAgentId::parse(
+        if let Ok(agent_id) = LegacyParsedAgentId::parse(
             &owned_agent_id.agent_id.agent_id,
             &component_metadata.metadata,
         ) && let Some(agent_type) = component_metadata
@@ -1143,7 +1143,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .component_service()
             .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
             .await
-            && let Ok(agent_id) = ParsedAgentId::parse(
+            && let Ok(agent_id) = LegacyParsedAgentId::parse(
                 &owned_agent_id.agent_id.agent_id,
                 &target_component_metadata.metadata,
             )
@@ -1177,7 +1177,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .last_known_status
                     .pending_updates
                     .iter()
-                    .any(|update| update.description == update_description)
+                    .any(|update| {
+                        update.kind == PendingUpdateKind::Automatic
+                            && update.target_revision == target_revision
+                    })
                 {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
@@ -1245,9 +1248,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
 
             UpdateMode::Manual => {
-                if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                    matches!(invocation, TimestampedAgentInvocation { invocation: AgentInvocation::ManualUpdate { target_revision: update_target_revision, .. }, ..} if *update_target_revision == target_revision)
-                ) {
+                if metadata
+                    .last_known_status
+                    .pending_invocations
+                    .iter()
+                    .any(|invocation| {
+                        invocation.manual_update_target_revision == Some(target_revision)
+                    })
+                {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
                     ));
@@ -1340,7 +1348,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let agent_type_name =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
         let agent_mode = self
@@ -1444,7 +1452,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let agent_type_name =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
         let agent_mode = self
@@ -1695,7 +1703,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
 
                 let agent_type =
-                    ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+                    LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id)
+                        .ok();
 
                 let installation = agent_type
                     .as_ref()
@@ -1767,7 +1776,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
         let agent_type =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+            LegacyParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
         let installation = agent_type
             .as_ref()
             .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
@@ -1839,6 +1848,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     consumed_fuel: None,
                     invocation_status: Some(inv_status),
                     component_revision: None,
+                    oplog_index: None,
+                    agent_fingerprint: None,
                 }),
                 None,
             ));
@@ -1903,7 +1914,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match mode {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
-                let worker = self.get_or_create(&request).await?;
+                // Use the `pending` variant so we do NOT start the wasmtime instance
+                // up front. `Worker::invoke_and_await` checks the read-only cache first;
+                // on a cache hit (`ResultOrSubscription::Finished`) it returns without
+                // loading the agent. The Pending path starts the instance lazily so
+                // queued invocations still get processed.
+                let worker = self.get_or_create_pending(&request).await?;
                 let invocation_output = worker.invoke_and_await(invocation).await?;
                 Ok((Some(invocation_output), None))
             }
@@ -2033,14 +2049,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let latest_status = metadata.last_known_status;
         for pending_invocation in &latest_status.pending_invocations {
-            if let TimestampedAgentInvocation {
-                timestamp,
-                invocation: AgentInvocation::ManualUpdate { target_revision },
-            } = pending_invocation
-            {
+            if let Some(target_revision) = pending_invocation.manual_update_target_revision {
                 updates.push(golem::worker::UpdateRecord {
-                    timestamp: Some((*timestamp).into()),
-                    target_revision: (*target_revision).into(),
+                    timestamp: Some(pending_invocation.timestamp.into()),
+                    target_revision: target_revision.into(),
                     update: Some(golem::worker::update_record::Update::Pending(
                         golem::worker::PendingUpdate {},
                     )),
@@ -2050,7 +2062,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for pending_update in &latest_status.pending_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(pending_update.timestamp.into()),
-                target_revision: (*pending_update.description.target_revision()).into(),
+                target_revision: pending_update.target_revision.into(),
                 update: Some(golem::worker::update_record::Update::Pending(
                     golem::worker::PendingUpdate {},
                 )),
@@ -2124,6 +2136,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .into_regions()
                 .map(|region| region.into())
                 .collect(),
+            oplog_idx: u64::from(latest_status.oplog_idx),
+            fingerprint: Some(metadata.fingerprint.0.into()),
         })
     }
 }
@@ -2962,28 +2976,35 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await
         {
             Ok((result, _status)) => {
-                let (result_value, fuel_consumed, component_revision, invocation_status) =
-                    match result {
-                        Some(output) => {
-                            let value = match &output.result {
-                                AgentInvocationResult::AgentMethod { output } => {
-                                    Some(output.clone().into())
-                                }
-                                _ => None,
-                            };
-                            let proto_status = output.invocation_status.map(|s| {
-                                golem_api_grpc::proto::golem::worker::InvocationStatus::from(s)
-                                    as i32
-                            });
-                            (
-                                value,
-                                output.consumed_fuel,
-                                output.component_revision.map(|r| r.get()),
-                                proto_status,
-                            )
-                        }
-                        None => (None, None, None, None),
-                    };
+                let (
+                    result_value,
+                    fuel_consumed,
+                    component_revision,
+                    invocation_status,
+                    oplog_index,
+                    agent_fingerprint,
+                ) = match result {
+                    Some(output) => {
+                        let value = match &output.result {
+                            AgentInvocationResult::AgentMethod { output } => {
+                                Some(output.clone().into())
+                            }
+                            _ => None,
+                        };
+                        let proto_status = output.invocation_status.map(|s| {
+                            golem_api_grpc::proto::golem::worker::InvocationStatus::from(s) as i32
+                        });
+                        (
+                            value,
+                            output.consumed_fuel,
+                            output.component_revision.map(|r| r.get()),
+                            proto_status,
+                            output.oplog_index.map(u64::from),
+                            output.agent_fingerprint.map(|fp| fp.0.into()),
+                        )
+                    }
+                    None => (None, None, None, None, None, None),
+                };
                 record.succeed(Ok(Response::new(InvokeAgentResponse {
                     result: Some(
                         golem::workerexecutor::v1::invoke_agent_response::Result::Success(
@@ -2992,6 +3013,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 fuel_consumed,
                                 component_revision,
                                 status: invocation_status,
+                                oplog_index,
+                                agent_fingerprint,
                             },
                         ),
                     ),

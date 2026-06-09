@@ -13,13 +13,14 @@
 // limitations under the License.
 
 import { TypeInfoInternal } from '../typeInfoInternal';
-import { HttpEndpointDetails } from 'golem:agent/common@1.5.0';
+import { CachePolicy, HttpEndpointDetails } from 'golem:agent/common@1.5.0';
 
 export interface AgentMethodMetadata {
   prompt?: string;
   description?: string;
   returnType?: TypeInfoInternal;
   httpEndpoint?: HttpEndpointDetails[];
+  readOnly?: CachePolicy;
 }
 
 /**
@@ -74,6 +75,12 @@ class AgentMethodRegistryImpl {
     const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(method)!.httpEndpoint = classMeta.get(method)!.httpEndpoint || [];
     classMeta.get(method)!.httpEndpoint!.push(endpoint);
+  }
+
+  setReadOnly(agentClassName: string, method: string, cachePolicy: CachePolicy): void {
+    this.ensureMeta(agentClassName, method);
+    const classMeta = this.registry.get(agentClassName)!;
+    classMeta.get(method)!.readOnly = cachePolicy;
   }
 
   debugDump(): void {

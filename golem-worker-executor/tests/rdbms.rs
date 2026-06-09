@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 use golem_common::base_model::AgentId;
-use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::base_model::agent::LegacyParsedAgentId;
 use golem_common::model::agent::DataValue;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
@@ -48,13 +48,13 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn postgres() -> DockerPostgresRdb {
     let unique_network_id = Uuid::new_v4().to_string();
     DockerPostgresRdb::new(&unique_network_id, false).await
 }
 
-#[test_dep]
+#[test_dep(scope = Shared)]
 async fn mysql() -> DockerMysqlRdb {
     let unique_network_id = Uuid::new_v4().to_string();
     DockerMysqlRdb::new(&unique_network_id).await
@@ -1659,7 +1659,7 @@ async fn rdbms_component_test<T: RdbmsType>(
 async fn rdbms_workers_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    workers: Vec<(AgentId, ParsedAgentId)>,
+    workers: Vec<(AgentId, LegacyParsedAgentId)>,
     test: RdbmsTest,
 ) -> anyhow::Result<()> {
     let mut workers_results: HashMap<AgentId, DataValue> = HashMap::new();
@@ -1706,7 +1706,7 @@ async fn rdbms_workers_test<T: RdbmsType>(
 async fn execute_worker_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &LegacyParsedAgentId,
     idempotency_key: &IdempotencyKey,
     test: RdbmsTest,
 ) -> anyhow::Result<DataValue> {
@@ -1811,8 +1811,8 @@ async fn start_workers<T: RdbmsType>(
     db_address: &str,
     name_suffix: &str,
     n_workers: u8,
-) -> anyhow::Result<Vec<(AgentId, ParsedAgentId)>> {
-    let mut workers: Vec<(AgentId, ParsedAgentId)> = Vec::new();
+) -> anyhow::Result<Vec<(AgentId, LegacyParsedAgentId)>> {
+    let mut workers: Vec<(AgentId, LegacyParsedAgentId)> = Vec::new();
     let db_type = T::default().to_string();
 
     let mut env = HashMap::new();

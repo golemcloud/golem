@@ -3,7 +3,7 @@ title: "The Emerging Landscape of Durable Computing"
 date: "2023-08-24"
 # date sourced from site-deploy timestamp "Thu Aug 24 2023" embedded in first wayback snapshot of post (web.archive.org/web/20230922132236/https://www.golem.cloud/post/the-emerging-landscape-of-durable-computing); post absent from earliest blog snapshot 20230811 (which had 3 posts), present in /post/ wayback snapshot dated 2023-09-22
 author: "John A. De Goes"
-tags: ["durable computing", "cloud infrastructure", "workflow orchestration", "distributed systems"]
+tags: ["Durable Computing", "Cloud Infrastructure", "Workflow Orchestration", "Distributed Systems"]
 slug: "the-emerging-landscape-of-durable-computing"
 originalUrl: "https://golem.cloud/post/the-emerging-landscape-of-durable-computing"
 ---

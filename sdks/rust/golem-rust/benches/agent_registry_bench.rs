@@ -66,6 +66,7 @@ mod bench {
                 "result".to_string(),
                 EnrichedElementSchema::ElementSchema(make_element_schema()),
             )]),
+            read_only: None,
         }
     }
 

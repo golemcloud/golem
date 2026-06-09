@@ -37,7 +37,9 @@ use golem_common::model::{
     NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState, RetryProperties,
     RetryVerdict, ThreadRng, Timestamp,
 };
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::{
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
+};
 use golem_wasm::{FromValue, IntoValueAndType};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display};
@@ -506,10 +508,20 @@ pub trait DurabilityHost: InFunctionRetryHost {
     ///
     /// There must be a corresponding call to `end_durable_function` after the function has
     /// performed its work (it can be ended in a different context, for example, after an async
-    /// pollable operation has been completed)
+    /// pollable operation has been completed).
+    ///
+    /// `host_function` is the fully qualified name of the host function that is being started.
+    /// Implementations use it to surface diagnostic information when the call is refused —
+    /// notably for the read-only side-effect guard that fires on every `Write*` function type
+    /// when the worker is executing a read-only agent method. This is the single, central
+    /// place where that guard lives: every host call that wants to perform a write side
+    /// effect funnels through `begin_durable_function` (either directly or via
+    /// `Durability::new`), so the read-only trap is uniformly enforced here without any
+    /// per-callsite checks.
     async fn begin_durable_function(
         &mut self,
         function_type: &DurableFunctionType,
+        host_function: &str,
     ) -> Result<OplogIndex, WorkerExecutorError>;
 
     /// Marks the end of a durable function
@@ -560,6 +572,26 @@ pub trait DurabilityHost: InFunctionRetryHost {
 
     /// Creates an interrupt signal future that resolves when the worker is interrupted/suspended/etc.
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>>;
+
+    /// Returns `Ok(())` if the worker is in normal (write-capable) invocation strictness mode,
+    /// or `Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation)` if the worker is currently
+    /// executing a read-only agent method. This is invoked from `Durability::new` for every
+    /// `Write*` durable function type so that any host call carrying a side effect is rejected
+    /// before any oplog entry is written.
+    fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap>;
+}
+
+/// Returns `true` when the given durable function type represents a write side-effect of any
+/// kind (local or remote, single, batched, or transactional). These are exactly the function
+/// types that must be refused when the current invocation is in read-only strictness mode.
+fn is_write_side_effect(function_type: &DurableFunctionType) -> bool {
+    matches!(
+        function_type,
+        DurableFunctionType::WriteLocal
+            | DurableFunctionType::WriteRemote
+            | DurableFunctionType::WriteRemoteBatched(_)
+            | DurableFunctionType::WriteRemoteTransaction(_)
+    )
 }
 
 impl From<durability::DurableFunctionType> for DurableFunctionType {
@@ -682,7 +714,14 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<durability::OplogIndex> {
-        let oplog_idx = DurabilityHost::begin_durable_function(self, &function_type.into()).await?;
+        // Called from guest code via the durability WIT binding; the guest is the "host
+        // function" identity for diagnostic purposes here.
+        let oplog_idx = DurabilityHost::begin_durable_function(
+            self,
+            &function_type.into(),
+            "golem::durability::begin-durable-function",
+        )
+        .await?;
         Ok(oplog_idx.into())
     }
 
@@ -803,7 +842,30 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     async fn begin_durable_function(
         &mut self,
         function_type: &DurableFunctionType,
+        host_function: &str,
     ) -> Result<OplogIndex, WorkerExecutorError> {
+        // Generic read-only side-effect trap. For any `Write*` durable function type, refuse
+        // the call up front when the worker is executing a read-only agent method. This is the
+        // single, central place that enforces the read-only contract — outgoing HTTP, RPC,
+        // KV/blobstore writes, RDBMS queries/transactions, worker-management calls, websocket
+        // writes, etc. all funnel through `begin_durable_function` (directly or via
+        // `Durability::new`) and are uniformly rejected here before any oplog entry is
+        // appended. The `GolemSpecificWasmTrap` is folded into
+        // `WorkerExecutorError::ReadOnlyViolation` so the trap survives the conversion chain
+        // (anyhow → wasmtime::Error → StreamError / SocketError) and can later be recognised
+        // by `TrapType::from_error` as `AgentError::ReadOnlyViolation`.
+        if is_write_side_effect(function_type)
+            && let Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+                method,
+                host_function,
+            }) = DurableWorkerCtx::check_read_only_allows(self, host_function)
+        {
+            return Err(WorkerExecutorError::ReadOnlyViolation {
+                method,
+                host_function,
+            });
+        }
+
         self.process_pending_replay_events().await?;
         let oplog_index = self.begin_function(function_type).await?;
         Ok(oplog_index)
@@ -828,6 +890,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::DurableOnly)
                 .await;
+            // Just committed at a durable-op boundary: this is the single safe place to advance the
+            // mid-invocation clean status checkpoint (status now reflects the committed tip).
+            self.maybe_mid_invocation_checkpoint().await;
         }
         Ok(())
     }
@@ -1018,6 +1083,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             .unwrap()
             .create_await_interrupt_signal()
     }
+
+    fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
+        DurableWorkerCtx::check_read_only_allows(self, host_function)
+    }
 }
 
 #[derive(Debug)]
@@ -1041,7 +1110,12 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
     ) -> Result<Self, WorkerExecutorError> {
         ctx.observe_function_call(Pair::INTERFACE, Pair::FUNCTION);
 
-        let begin_index = ctx.begin_durable_function(&function_type).await?;
+        // The generic read-only side-effect trap lives in `begin_durable_function`; we just
+        // forward the fully qualified host-function name so it can be surfaced in the
+        // resulting `WorkerExecutorError::ReadOnlyViolation` for diagnostics.
+        let begin_index = ctx
+            .begin_durable_function(&function_type, Pair::FQFN)
+            .await?;
         let durable_execution_state = ctx.durable_execution_state();
 
         Ok(Self {
@@ -1555,6 +1629,10 @@ mod tests {
         interrupt_armed: Arc<AtomicBool>,
         /// Tracks the latest retry policy state written via `append_retry_error_entry`.
         current_retry_policy_state: Option<RetryPolicyState>,
+        /// When `Some`, `check_read_only_allows` fails with a `WorkerReadOnlyViolation`
+        /// using the contained method name. Mirrors the real
+        /// `DurableWorkerCtx::check_read_only_allows` behaviour.
+        read_only_method: Option<String>,
     }
 
     impl MockDurabilityHost {
@@ -1570,6 +1648,7 @@ mod tests {
                 interrupt_signal: None,
                 interrupt_armed: Arc::new(AtomicBool::new(false)),
                 current_retry_policy_state: None,
+                read_only_method: None,
             }
         }
 
@@ -1634,8 +1713,22 @@ mod tests {
 
         async fn begin_durable_function(
             &mut self,
-            _function_type: &DurableFunctionType,
+            function_type: &DurableFunctionType,
+            host_function: &str,
         ) -> Result<OplogIndex, WorkerExecutorError> {
+            // Mirror the production read-only side-effect trap so tests can exercise the
+            // single central enforcement point.
+            if is_write_side_effect(function_type)
+                && let Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+                    method,
+                    host_function,
+                }) = self.check_read_only_allows(host_function)
+            {
+                return Err(WorkerExecutorError::ReadOnlyViolation {
+                    method,
+                    host_function,
+                });
+            }
             Ok(OplogIndex::from_u64(1))
         }
 
@@ -1674,6 +1767,17 @@ mod tests {
         }
 
         fn mark_atomic_region_side_effect(&mut self) {}
+
+        fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
+            if let Some(method) = &self.read_only_method {
+                Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+                    method: method.clone(),
+                    host_function: host_function.to_string(),
+                })
+            } else {
+                Ok(())
+            }
+        }
 
         fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
             if let Some(kind) = self.interrupt_signal {
@@ -2613,5 +2717,95 @@ mod tests {
 
         let with_context = bare.context("escalated to trap");
         assert!(find_semantic_trap_retry_override(&with_context).is_none());
+    }
+
+    // ---------------------------------------------------------------------
+    // Generic read-only side-effect trap (Durability::new)
+    // ---------------------------------------------------------------------
+
+    /// Read function types must always succeed, regardless of whether the
+    /// mock currently models a read-only agent method. Only `Write*`
+    /// variants must be gated by `check_read_only_allows`.
+    #[test]
+    async fn read_only_check_does_not_trip_for_read_function_types() {
+        for ft in [
+            DurableFunctionType::ReadLocal,
+            DurableFunctionType::ReadRemote,
+        ] {
+            let mut ctx = MockDurabilityHost::new();
+            ctx.read_only_method = Some("read-only-method".to_string());
+            let result = Durability::<KeyvalueEventualGet>::new(&mut ctx, ft.clone()).await;
+            assert!(
+                result.is_ok(),
+                "read-only check must not trip for {ft:?}, got {:?}",
+                result.err()
+            );
+        }
+    }
+
+    /// When the worker is NOT in read-only mode, every `Write*` function
+    /// type must construct `Durability` successfully — the new generic
+    /// check must be a strict precondition added on top of the existing
+    /// behaviour, not a new constraint that always fires.
+    #[test]
+    async fn write_function_types_succeed_when_not_in_read_only_mode() {
+        for ft in [
+            DurableFunctionType::WriteLocal,
+            DurableFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemoteBatched(None),
+            DurableFunctionType::WriteRemoteTransaction(None),
+        ] {
+            let mut ctx = MockDurabilityHost::new();
+            // read_only_method left as None.
+            let result = Durability::<KeyvalueEventualGet>::new(&mut ctx, ft.clone()).await;
+            assert!(
+                result.is_ok(),
+                "non-read-only worker must accept {ft:?}, got {:?}",
+                result.err()
+            );
+        }
+    }
+
+    /// In read-only mode, every `Write*` function type must be refused via
+    /// `WorkerExecutorError::ReadOnlyViolation`, carrying:
+    ///   - the agent method name supplied by the host context, and
+    ///   - the fully qualified host-function name (`Pair::FQFN`) of the
+    ///     attempted host call.
+    /// This is the core property the generic check is supposed to enforce
+    /// uniformly across every side-effecting host function path.
+    #[test]
+    async fn write_function_types_trap_with_read_only_violation_in_read_only_mode() {
+        for ft in [
+            DurableFunctionType::WriteLocal,
+            DurableFunctionType::WriteRemote,
+            DurableFunctionType::WriteRemoteBatched(None),
+            DurableFunctionType::WriteRemoteTransaction(None),
+        ] {
+            let mut ctx = MockDurabilityHost::new();
+            ctx.read_only_method = Some("agent::read-only-method".to_string());
+
+            let result = Durability::<KeyvalueEventualGet>::new(&mut ctx, ft.clone()).await;
+            let err = match result {
+                Ok(_) => panic!("read-only worker must refuse {ft:?} via Durability::new"),
+                Err(e) => e,
+            };
+
+            match err {
+                WorkerExecutorError::ReadOnlyViolation {
+                    method,
+                    host_function,
+                } => {
+                    assert_eq!(method, "agent::read-only-method");
+                    assert_eq!(
+                        host_function,
+                        <KeyvalueEventualGet as HostPayloadPair>::FQFN,
+                        "host_function must be Pair::FQFN (got {host_function})"
+                    );
+                }
+                other => panic!(
+                    "expected WorkerExecutorError::ReadOnlyViolation for {ft:?}, got {other:?}"
+                ),
+            }
+        }
     }
 }

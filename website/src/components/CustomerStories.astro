@@ -21,6 +21,15 @@ const logosByFile = Object.fromEntries(
 
 const { eyebrow, heading, testimonials, showAtLaunch } = customerStories;
 const isFeatured = testimonials.length === 1;
+// 2 testimonials → 2-up grid (avoids an empty slot in a 3-col).
+// 4 testimonials → reuses the 2-col grid, producing a clean 2x2 layout.
+// 5 testimonials → 3 on top, 2 centered on bottom row.
+const gridClass =
+  testimonials.length === 2 || testimonials.length === 4
+    ? "stories-grid stories-grid-2"
+    : testimonials.length === 5
+      ? "stories-grid stories-grid-5"
+      : "stories-grid";
 ---
 
 {
@@ -31,7 +40,7 @@ const isFeatured = testimonials.length === 1;
           <span class="eyebrow">{eyebrow}</span>
           <h2 class="section-heading">{heading}</h2>
         </header>
-        <div class={isFeatured ? "featured-wrap" : "stories-grid"}>
+        <div class={isFeatured ? "featured-wrap" : gridClass}>
           {testimonials.map((s) => (
             <article class={isFeatured ? "story-card story-featured" : "story-card"}>
               <blockquote>
@@ -51,9 +60,8 @@ const isFeatured = testimonials.length === 1;
                 )}
                 <div class="attribution-text">
                   <div class="story-name">{s.name}</div>
-                  <div class="story-role muted">
-                    {s.role} · {s.company}
-                  </div>
+                  <div class="story-role muted">{s.role}</div>
+                  <div class="story-company muted">{s.company}</div>
                 </div>
                 {s.productLogo && (
                   <Image
@@ -87,9 +95,32 @@ const isFeatured = testimonials.length === 1;
     grid-template-columns: 1fr;
     gap: 1.25rem;
   }
+  /* 2 cards: 2-column on desktop, centered with a sensible max-width. */
+  @media (min-width: 760px) {
+    .stories-grid-2 {
+      grid-template-columns: repeat(2, 1fr);
+      max-width: 980px;
+      margin: 0 auto;
+    }
+  }
+  /* 3+ cards: 3-column. */
   @media (min-width: 900px) {
-    .stories-grid {
+    .stories-grid:not(.stories-grid-2):not(.stories-grid-5) {
       grid-template-columns: repeat(3, 1fr);
+    }
+    /* 5 cards: 6-col grid where row 1 = 3 cards (span 2 each), row 2 = 2
+       cards (span 2 each) centered via offset placement. */
+    .stories-grid-5 {
+      grid-template-columns: repeat(6, 1fr);
+    }
+    .stories-grid-5 > article:nth-child(-n + 3) {
+      grid-column: span 2;
+    }
+    .stories-grid-5 > article:nth-child(4) {
+      grid-column: 2 / span 2;
+    }
+    .stories-grid-5 > article:nth-child(5) {
+      grid-column: 4 / span 2;
     }
   }
 
@@ -162,13 +193,16 @@ const isFeatured = testimonials.length === 1;
     font-size: 0.88rem;
     font-weight: 500;
   }
-  .story-role {
+  .story-role,
+  .story-company {
     font-size: 0.78rem;
+    line-height: 1.3;
   }
   .story-featured .story-name {
     font-size: 0.98rem;
   }
-  .story-featured .story-role {
+  .story-featured .story-role,
+  .story-featured .story-company {
     font-size: 0.85rem;
   }
 

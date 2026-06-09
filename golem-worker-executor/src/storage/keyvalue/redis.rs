@@ -34,6 +34,16 @@ impl RedisKeyValueStorage {
     fn use_hash(namespace: &KeyValueStorageNamespace) -> Option<String> {
         match namespace {
             KeyValueStorageNamespace::Worker { .. } => None,
+            // Per-agent hash: each agent's split status fields live in their own hash so that
+            // `hkeys`/`hdel` operate on a single agent's fields and multi-field writes are atomic.
+            KeyValueStorageNamespace::AgentStatus { agent_id } => {
+                Some(format!("agent-status:{}", agent_id.to_redis_key()))
+            }
+            // Per-agent clean checkpoint hash; same per-agent isolation as `AgentStatus`.
+            KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => Some(format!(
+                "agent-status-checkpoint:{}",
+                agent_id.to_redis_key()
+            )),
             KeyValueStorageNamespace::RunningWorkers => None,
             KeyValueStorageNamespace::Promise { .. } => Some("promises".to_string()),
             KeyValueStorageNamespace::Schedule => None,
@@ -197,6 +207,34 @@ impl KeyValueStorage for RedisKeyValueStorage {
         }
 
         Ok(serialized)
+    }
+
+    async fn get_all(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<Vec<(String, Bytes)>, String> {
+        let pairs: Vec<(String, Bytes)> = match Self::use_hash(&namespace) {
+            // `HGETALL` returns every field/value of the hash in a single atomic command.
+            Some(ns) => {
+                let map: HashMap<String, Bytes> = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .hgetall(ns)
+                    .await
+                    .map_err(|redis_err| redis_err.to_string())?;
+                map.into_iter().collect()
+            }
+            None => return Err("get_all is only supported for Redis hash namespaces".to_string()),
+        };
+
+        for (_, value) in &pairs {
+            record_redis_deserialized_size(svc_name, entity_name, value.len());
+        }
+
+        Ok(pairs)
     }
 
     async fn del(

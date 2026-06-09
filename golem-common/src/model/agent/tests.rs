@@ -20,8 +20,8 @@ use crate::model::agent::{
     AgentConstructor, AgentMode, AgentType, AgentTypeName, AgentTypeResolver, BinaryDescriptor,
     BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
     ComponentModelElementValue, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    JsonComponentModelValue, NamedElementSchema, NamedElementSchemas, NamedElementValue,
-    NamedElementValues, ParsedAgentId, TextDescriptor, TextReference, TextReferenceValue,
+    JsonComponentModelValue, LegacyParsedAgentId, NamedElementSchema, NamedElementSchemas,
+    NamedElementValue, NamedElementValues, TextDescriptor, TextReference, TextReferenceValue,
     TextSource, TextType, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
     UntypedJsonDataValue, UntypedJsonElementValue, UntypedJsonElementValues, Url,
 };
@@ -44,14 +44,14 @@ use uuid::Uuid;
 fn agent_id_structural_normalization() {
     {
         let agent_id =
-            ParsedAgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new())
+            LegacyParsedAgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new())
                 .unwrap();
         assert_eq!(agent_id.to_string(), "agent-7([12,13,14])");
     }
 
     {
         // Structural format: record is positional `(x,y,flags)`, flags are `f(indices...)`
-        let agent_id = ParsedAgentId::parse(
+        let agent_id = LegacyParsedAgentId::parse(
             "agent-3(  32 ,( 12, 32, f(0,    1  , 2   ) ))",
             TestAgentTypes::new(),
         )
@@ -191,10 +191,10 @@ proptest! {
                 ]
             }
         );
-        let id = ParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None).unwrap();
+        let id = LegacyParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None).unwrap();
         let s = id.to_string();
         println!("{s}");
-        let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
+        let id2 = LegacyParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
         prop_assert_eq!(id, id2);
     }
 
@@ -216,10 +216,10 @@ proptest! {
                 ]
             }
         );
-        let id = ParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None).unwrap();
+        let id = LegacyParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None).unwrap();
         let s = id.to_string();
         println!("{s}");
-        let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
+        let id2 = LegacyParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
         prop_assert_eq!(id, id2);
     }
 }
@@ -538,7 +538,7 @@ fn snapshotting_enabled_every_n_invocation_serde_poem_roundtrip() {
 #[test]
 fn normalize_strips_whitespace_in_wave_values() {
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-7(  [  12,     13 , 14 ]   )").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-7(  [  12,     13 , 14 ]   )").unwrap(),
         "agent-7([12,13,14])"
     );
 }
@@ -546,7 +546,7 @@ fn normalize_strips_whitespace_in_wave_values() {
 #[test]
 fn normalize_strips_whitespace_in_records() {
     assert_eq!(
-        ParsedAgentId::normalize_text(
+        LegacyParsedAgentId::normalize_text(
             r#"agent-3(  32 ,{ x  : 12, y: 32, properties: {a,    b  , c   } })"#
         )
         .unwrap(),
@@ -557,7 +557,7 @@ fn normalize_strips_whitespace_in_records() {
 #[test]
 fn normalize_preserves_already_compact() {
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-1()").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-1()").unwrap(),
         "agent-1()"
     );
 }
@@ -565,7 +565,7 @@ fn normalize_preserves_already_compact() {
 #[test]
 fn normalize_preserves_strings() {
     assert_eq!(
-        ParsedAgentId::normalize_text(r#"agent-2("hello world")"#).unwrap(),
+        LegacyParsedAgentId::normalize_text(r#"agent-2("hello world")"#).unwrap(),
         r#"agent-2("hello world")"#
     );
 }
@@ -573,31 +573,34 @@ fn normalize_preserves_strings() {
 #[test]
 fn normalize_handles_phantom_id() {
     let result =
-        ParsedAgentId::normalize_text("agent-1()[550e8400-e29b-41d4-a716-446655440000]").unwrap();
+        LegacyParsedAgentId::normalize_text("agent-1()[550e8400-e29b-41d4-a716-446655440000]")
+            .unwrap();
     assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
 }
 
 #[test]
 fn normalize_handles_phantom_id_with_whitespace() {
     let result =
-        ParsedAgentId::normalize_text("agent-1()[ 550e8400-e29b-41d4-a716-446655440000 ]").unwrap();
+        LegacyParsedAgentId::normalize_text("agent-1()[ 550e8400-e29b-41d4-a716-446655440000 ]")
+            .unwrap();
     assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
 }
 
 #[test]
 fn normalize_rejects_invalid_format() {
-    assert!(ParsedAgentId::normalize_text("not-an-agent-id").is_err());
+    assert!(LegacyParsedAgentId::normalize_text("not-an-agent-id").is_err());
 }
 
 #[test]
 fn normalize_rejects_invalid_phantom_id() {
-    assert!(ParsedAgentId::normalize_text("agent-1()[not-a-uuid]").is_err());
+    assert!(LegacyParsedAgentId::normalize_text("agent-1()[not-a-uuid]").is_err());
 }
 
 #[test]
 fn normalize_handles_urls() {
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-4(https://url1.com/,https://url2.com/)").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-4(https://url1.com/,https://url2.com/)")
+            .unwrap(),
         "agent-4(https://url1.com/,https://url2.com/)"
     );
 }
@@ -605,7 +608,7 @@ fn normalize_handles_urls() {
 #[test]
 fn normalize_handles_inline_text() {
     assert_eq!(
-        ParsedAgentId::normalize_text(r#"agent-4("hello, world!","goodbye")"#).unwrap(),
+        LegacyParsedAgentId::normalize_text(r#"agent-4("hello, world!","goodbye")"#).unwrap(),
         r#"agent-4("hello, world!","goodbye")"#
     );
 }
@@ -613,7 +616,7 @@ fn normalize_handles_inline_text() {
 #[test]
 fn normalize_handles_multimodal_elements() {
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-6(x(  42  ),y(https://example.com/))").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-6(x(  42  ),y(https://example.com/))").unwrap(),
         "agent-6(x(42),y(https://example.com/))"
     );
 }
@@ -621,7 +624,7 @@ fn normalize_handles_multimodal_elements() {
 #[test]
 fn normalize_handles_nested_records_with_whitespace() {
     assert_eq!(
-        ParsedAgentId::normalize_text(
+        LegacyParsedAgentId::normalize_text(
             r#"non-kebab-agent({ agent-id : { component-id : { uuid : { high-bits : 115746831381919841 , low-bits : 13556493125794766855 } } , agent-id : "some-agent-id(\"hello\")" } , oplog-idx : 1234 })"#
         )
         .unwrap(),
@@ -632,19 +635,19 @@ fn normalize_handles_nested_records_with_whitespace() {
 #[test]
 fn normalize_handles_options_and_results() {
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-x( some( 42 ) )").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-x( some( 42 ) )").unwrap(),
         "agent-x(some(42))"
     );
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-x( none )").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-x( none )").unwrap(),
         "agent-x(none)"
     );
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-x( ok( 1 ) )").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-x( ok( 1 ) )").unwrap(),
         "agent-x(ok(1))"
     );
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-x( err( 2 ) )").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-x( err( 2 ) )").unwrap(),
         "agent-x(err(2))"
     );
 }
@@ -652,7 +655,7 @@ fn normalize_handles_options_and_results() {
 #[test]
 fn normalize_handles_empty_record() {
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-x( {  :  } )").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-x( {  :  } )").unwrap(),
         "agent-x({:})"
     );
 }
@@ -660,7 +663,7 @@ fn normalize_handles_empty_record() {
 #[test]
 fn normalize_handles_empty_flags() {
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-x( {  } )").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-x( {  } )").unwrap(),
         "agent-x({})"
     );
 }
@@ -668,7 +671,7 @@ fn normalize_handles_empty_flags() {
 #[test]
 fn normalize_handles_char_values() {
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-x( 'a' , 'b' )").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-x( 'a' , 'b' )").unwrap(),
         "agent-x('a','b')"
     );
 }
@@ -676,7 +679,7 @@ fn normalize_handles_char_values() {
 #[test]
 fn normalize_handles_variant_with_percent_prefix() {
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-x( %true( 42 ) )").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-x( %true( 42 ) )").unwrap(),
         "agent-x(%true(42))"
     );
 }
@@ -684,7 +687,7 @@ fn normalize_handles_variant_with_percent_prefix() {
 #[test]
 fn normalize_trims_outer_whitespace() {
     assert_eq!(
-        ParsedAgentId::normalize_text("  agent-7(  [  12, 13 ]  )  ").unwrap(),
+        LegacyParsedAgentId::normalize_text("  agent-7(  [  12, 13 ]  )  ").unwrap(),
         "agent-7([12,13])"
     );
 }
@@ -692,7 +695,7 @@ fn normalize_trims_outer_whitespace() {
 #[test]
 fn normalize_phantom_id_with_casing_and_whitespace() {
     let result =
-        ParsedAgentId::normalize_text("agent-1(  )[ 550E8400-E29B-41D4-A716-446655440000 ]")
+        LegacyParsedAgentId::normalize_text("agent-1(  )[ 550E8400-E29B-41D4-A716-446655440000 ]")
             .unwrap();
     assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
 }
@@ -700,7 +703,7 @@ fn normalize_phantom_id_with_casing_and_whitespace() {
 #[test]
 fn normalize_empty_params_stays_empty() {
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-1(   )").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-1(   )").unwrap(),
         "agent-1()"
     );
 }
@@ -709,7 +712,7 @@ fn normalize_empty_params_stays_empty() {
 fn normalize_preserves_double_comma() {
     // normalize_structural only strips whitespace, it does not validate structure
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-x(1,,2)").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-x(1,,2)").unwrap(),
         "agent-x(1,,2)"
     );
 }
@@ -718,20 +721,20 @@ fn normalize_preserves_double_comma() {
 fn normalize_preserves_leading_comma() {
     // normalize_structural only strips whitespace, it does not validate structure
     assert_eq!(
-        ParsedAgentId::normalize_text("agent-x(,1)").unwrap(),
+        LegacyParsedAgentId::normalize_text("agent-x(,1)").unwrap(),
         "agent-x(,1)"
     );
 }
 
 #[test]
 fn normalize_rejects_empty_agent_type() {
-    assert!(ParsedAgentId::normalize_text("()").is_err());
+    assert!(LegacyParsedAgentId::normalize_text("()").is_err());
 }
 
 proptest! {
     #[test]
     fn normalize_text_idempotent_for_simple_agent(x in 0u32..10000) {
-        let agent_id = ParsedAgentId::new(
+        let agent_id = LegacyParsedAgentId::new(
             AgentTypeName("agent-2".to_string()),
             DataValue::Tuple(ElementValues {
                 elements: vec![
@@ -741,7 +744,7 @@ proptest! {
             None,
         ).unwrap();
         let canonical = agent_id.to_string();
-        let normalized = ParsedAgentId::normalize_text(&canonical).unwrap();
+        let normalized = LegacyParsedAgentId::normalize_text(&canonical).unwrap();
         prop_assert_eq!(&normalized, &canonical);
     }
 
@@ -751,7 +754,7 @@ proptest! {
         b in 0u32..100,
         c in 0u32..100,
     ) {
-        let agent_id = ParsedAgentId::new(
+        let agent_id = LegacyParsedAgentId::new(
             AgentTypeName("agent-7".to_string()),
             DataValue::Tuple(ElementValues {
                 elements: vec![
@@ -764,14 +767,14 @@ proptest! {
             None,
         ).unwrap();
         let canonical = agent_id.to_string();
-        let normalized = ParsedAgentId::normalize_text(&canonical).unwrap();
+        let normalized = LegacyParsedAgentId::normalize_text(&canonical).unwrap();
         prop_assert_eq!(&normalized, &canonical);
     }
 
     #[test]
     fn normalize_text_strips_whitespace_for_simple_agent(x in 0u32..10000) {
         let with_spaces = format!("agent-2(  {x}  )");
-        let normalized = ParsedAgentId::normalize_text(&with_spaces).unwrap();
+        let normalized = LegacyParsedAgentId::normalize_text(&with_spaces).unwrap();
         prop_assert_eq!(normalized, format!("agent-2({x})"));
     }
 
@@ -782,21 +785,22 @@ proptest! {
         c in 0u32..100,
     ) {
         let with_spaces = format!("agent-7( [ {a} , {b} , {c} ] )");
-        let normalized = ParsedAgentId::normalize_text(&with_spaces).unwrap();
+        let normalized = LegacyParsedAgentId::normalize_text(&with_spaces).unwrap();
         prop_assert_eq!(normalized, format!("agent-7([{a},{b},{c}])"));
     }
 }
 
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
-    let id = ParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None).unwrap();
+    let id =
+        LegacyParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None).unwrap();
     let s = id.to_string();
     println!("{s}");
-    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
+    let id2 = LegacyParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
     assert_eq!(id, id2);
 }
 
 fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: Option<Uuid>) {
-    let id = ParsedAgentId::new(
+    let id = LegacyParsedAgentId::new(
         AgentTypeName(agent_type.to_string()),
         parameters,
         phantom_id,
@@ -804,22 +808,23 @@ fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: O
     .unwrap();
     let s = id.to_string();
     println!("{s}");
-    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
+    let id2 = LegacyParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
     assert_eq!(id, id2);
     assert_eq!(id.phantom_id, phantom_id);
 }
 
 fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
-    let id = ParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None).unwrap();
+    let id =
+        LegacyParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None).unwrap();
     let s = id.to_string();
-    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new())
+    let id2 = LegacyParsedAgentId::parse(s, TestAgentTypes::new())
         .err()
         .unwrap();
     assert_eq!(id2, expected_failure.to_string());
 }
 
 fn failure_test_with_string(agent_id_str: &str, expected_failure: &str) {
-    let id2 = ParsedAgentId::parse(agent_id_str, TestAgentTypes::new())
+    let id2 = LegacyParsedAgentId::parse(agent_id_str, TestAgentTypes::new())
         .err()
         .unwrap();
     assert_eq!(id2, expected_failure.to_string());
@@ -1356,15 +1361,15 @@ fn agent_id_too_long_rejected() {
         })],
     });
 
-    let err = ParsedAgentId::new(AgentTypeName("t".to_string()), parameters.clone(), None)
-        .expect_err("ParsedAgentId::new should reject too-long ids");
+    let err = LegacyParsedAgentId::new(AgentTypeName("t".to_string()), parameters.clone(), None)
+        .expect_err("LegacyParsedAgentId::new should reject too-long ids");
     assert!(
         err.contains("too long"),
         "Error should mention 'too long', got: {err}"
     );
 
-    let parsed = ParsedAgentId::new_lenient(AgentTypeName("t".to_string()), parameters, None)
-        .expect("ParsedAgentId::new_lenient should succeed");
+    let parsed = LegacyParsedAgentId::new_lenient(AgentTypeName("t".to_string()), parameters, None)
+        .expect("LegacyParsedAgentId::new_lenient should succeed");
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(result.is_err(), "Expected error for too-long agent ID");
     let err = result.unwrap_err();
@@ -1390,21 +1395,21 @@ fn auto_phantom_lenient_allows_too_long_id_but_agent_id_still_rejects() {
         })],
     });
 
-    let err = ParsedAgentId::new_auto_phantom(
+    let err = LegacyParsedAgentId::new_auto_phantom(
         agent_type.clone(),
         params.clone(),
         None,
         AgentMode::Durable,
     )
-    .expect_err("ParsedAgentId::new_auto_phantom should reject too-long ids");
+    .expect_err("LegacyParsedAgentId::new_auto_phantom should reject too-long ids");
     assert!(
         err.contains("too long"),
         "Error should mention 'too long', got: {err}"
     );
 
     let parsed =
-        ParsedAgentId::new_auto_phantom_lenient(agent_type, params, None, AgentMode::Durable)
-            .expect("ParsedAgentId::new_auto_phantom_lenient should succeed");
+        LegacyParsedAgentId::new_auto_phantom_lenient(agent_type, params, None, AgentMode::Durable)
+            .expect("LegacyParsedAgentId::new_auto_phantom_lenient should succeed");
 
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(result.is_err(), "Expected error for too-long agent ID");
@@ -1423,7 +1428,7 @@ fn agent_id_at_max_length_accepted() {
     let component_id = ComponentId(Uuid::nil());
     // Format is: t("aaa...aaa") → 1 + 1 + 1 + N + 1 + 1 = N + 5, so N = 507 for total 512
     let content = "a".repeat(507);
-    let parsed = ParsedAgentId::new(
+    let parsed = LegacyParsedAgentId::new(
         AgentTypeName("t".to_string()),
         DataValue::Tuple(ElementValues {
             elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
@@ -1435,11 +1440,11 @@ fn agent_id_at_max_length_accepted() {
         }),
         None,
     )
-    .expect("ParsedAgentId::new should succeed");
+    .expect("LegacyParsedAgentId::new should succeed");
     assert_eq!(
         parsed.to_string().len(),
         512,
-        "ParsedAgentId string should be exactly 512 chars"
+        "LegacyParsedAgentId string should be exactly 512 chars"
     );
     let result = AgentId::from_agent_id(component_id, &parsed);
     assert!(
@@ -1484,7 +1489,8 @@ fn source_language_protobuf_roundtrip() {
 fn new_auto_phantom_durable_none() {
     let agent_type = AgentTypeName("test-agent".to_string());
     let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id = ParsedAgentId::new_auto_phantom(agent_type, params, None, AgentMode::Durable).unwrap();
+    let id = LegacyParsedAgentId::new_auto_phantom(agent_type, params, None, AgentMode::Durable)
+        .unwrap();
     assert_eq!(
         id.phantom_id, None,
         "Durable agent with no phantom_id should remain None"
@@ -1496,9 +1502,13 @@ fn new_auto_phantom_durable_some() {
     let supplied = Uuid::new_v4();
     let agent_type = AgentTypeName("test-agent".to_string());
     let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id =
-        ParsedAgentId::new_auto_phantom(agent_type, params, Some(supplied), AgentMode::Durable)
-            .unwrap();
+    let id = LegacyParsedAgentId::new_auto_phantom(
+        agent_type,
+        params,
+        Some(supplied),
+        AgentMode::Durable,
+    )
+    .unwrap();
     assert_eq!(
         id.phantom_id,
         Some(supplied),
@@ -1510,8 +1520,8 @@ fn new_auto_phantom_durable_some() {
 fn new_auto_phantom_ephemeral_none() {
     let agent_type = AgentTypeName("test-agent".to_string());
     let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id =
-        ParsedAgentId::new_auto_phantom(agent_type, params, None, AgentMode::Ephemeral).unwrap();
+    let id = LegacyParsedAgentId::new_auto_phantom(agent_type, params, None, AgentMode::Ephemeral)
+        .unwrap();
     assert!(
         id.phantom_id.is_some(),
         "Ephemeral agent with no phantom_id should auto-generate one"
@@ -1529,12 +1539,274 @@ fn new_auto_phantom_ephemeral_some() {
     let supplied = Uuid::new_v4();
     let agent_type = AgentTypeName("test-agent".to_string());
     let params = DataValue::Tuple(ElementValues { elements: vec![] });
-    let id =
-        ParsedAgentId::new_auto_phantom(agent_type, params, Some(supplied), AgentMode::Ephemeral)
-            .unwrap();
+    let id = LegacyParsedAgentId::new_auto_phantom(
+        agent_type,
+        params,
+        Some(supplied),
+        AgentMode::Ephemeral,
+    )
+    .unwrap();
     assert_eq!(
         id.phantom_id,
         Some(supplied),
         "Ephemeral agent should preserve supplied phantom_id"
     );
+}
+
+mod read_only_config_roundtrip {
+    use crate::base_model::Empty;
+    use crate::base_model::agent::{CachePolicy, CachePolicyTtl, ReadOnlyConfig};
+    use crate::model::agent::bindings;
+    use pretty_assertions::assert_eq;
+    use test_r::test;
+
+    fn all_cache_policies() -> Vec<CachePolicy> {
+        vec![
+            CachePolicy::NoCache(Empty {}),
+            CachePolicy::UntilWrite(Empty {}),
+            CachePolicy::Ttl(CachePolicyTtl {
+                duration_nanos: 1_234_567_890,
+            }),
+        ]
+    }
+
+    #[test]
+    fn cache_policy_protobuf_roundtrip() {
+        for policy in all_cache_policies() {
+            let proto: golem_api_grpc::proto::golem::component::CachePolicy = policy.clone().into();
+            let back: CachePolicy = proto.try_into().expect("protobuf decode");
+            assert_eq!(policy, back);
+        }
+    }
+
+    #[test]
+    fn cache_policy_wit_roundtrip() {
+        for policy in all_cache_policies() {
+            let wit: bindings::golem::agent::common::CachePolicy = policy.clone().into();
+            let back: CachePolicy = wit.into();
+            assert_eq!(policy, back);
+        }
+    }
+
+    #[test]
+    fn read_only_config_protobuf_roundtrip() {
+        for cache_policy in all_cache_policies() {
+            for uses_principal in [false, true] {
+                let cfg = ReadOnlyConfig {
+                    cache_policy: cache_policy.clone(),
+                    uses_principal,
+                };
+                let proto: golem_api_grpc::proto::golem::component::ReadOnlyConfig =
+                    cfg.clone().into();
+                let back: ReadOnlyConfig = proto.try_into().expect("protobuf decode");
+                assert_eq!(cfg, back);
+            }
+        }
+    }
+
+    #[test]
+    fn read_only_config_wit_roundtrip() {
+        for cache_policy in all_cache_policies() {
+            for uses_principal in [false, true] {
+                let cfg = ReadOnlyConfig {
+                    cache_policy: cache_policy.clone(),
+                    uses_principal,
+                };
+                let wit: bindings::golem::agent::common::ReadOnlyConfig = cfg.clone().into();
+                let back: ReadOnlyConfig = wit.into();
+                assert_eq!(cfg, back);
+            }
+        }
+    }
+
+    #[test]
+    fn read_only_config_protobuf_missing_cache_policy_errors() {
+        let proto = golem_api_grpc::proto::golem::component::ReadOnlyConfig {
+            cache_policy: None,
+            uses_principal: false,
+        };
+        let result: Result<ReadOnlyConfig, _> = proto.try_into();
+        assert!(result.is_err());
+    }
+}
+
+mod agent_error_tests {
+    use crate::model::agent::AgentError;
+    use crate::schema::adapters::value::{
+        typed_schema_value_to_value_and_type, value_and_type_to_typed_schema_value,
+    };
+    use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
+    use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, TextRestrictions};
+    use crate::schema::schema_value::{SchemaValue, SecretValuePayload, TextValuePayload};
+    use golem_wasm::analysis::AnalysedType;
+    use golem_wasm::analysis::analysed_type::{case, str, variant};
+    use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Value, ValueAndType};
+    use pretty_assertions::assert_eq;
+    use test_r::test;
+
+    fn agent_error_legacy_get_type() -> AnalysedType {
+        variant(vec![
+            case("InvalidInput", str()),
+            case("InvalidMethod", str()),
+            case("InvalidType", str()),
+            case("InvalidAgentId", str()),
+            case("CustomError", ValueAndType::get_type()),
+        ])
+    }
+
+    #[test]
+    fn get_type_matches_legacy_variant_shape() {
+        assert_eq!(AgentError::get_type(), agent_error_legacy_get_type());
+    }
+
+    #[test]
+    fn round_trip_invalid_input() {
+        let err = AgentError::InvalidInput("bad thing".to_string());
+        let v = err.clone().into_value();
+        let back = AgentError::from_value(v).expect("decode");
+        match (err, back) {
+            (AgentError::InvalidInput(a), AgentError::InvalidInput(b)) => assert_eq!(a, b),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn round_trip_custom_error_preserves_payload() {
+        // Build a custom error from a legacy `ValueAndType` so we can compare
+        // pre- and post-roundtrip in the legacy shape.
+        let original_vat = "boom".to_string().into_value_and_type();
+        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
+
+        let err = AgentError::CustomError(typed);
+        let encoded = err.into_value();
+        let decoded = AgentError::from_value(encoded).expect("decode");
+
+        match decoded {
+            AgentError::CustomError(t) => {
+                let round_trip_vat = typed_schema_value_to_value_and_type(&t).expect("lower");
+                assert_eq!(round_trip_vat.value, original_vat.value);
+                assert_eq!(round_trip_vat.typ, original_vat.typ);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encoded_custom_error_wire_shape_matches_value_and_type() {
+        // The wire shape for `CustomError(TypedSchemaValue)` must remain the
+        // same legacy `value-and-type` record as before the variant flip so
+        // that producers and consumers on the WIT boundary keep working.
+        let original_vat = 42u64.into_value_and_type();
+        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
+        let err = AgentError::CustomError(typed);
+
+        let encoded = err.into_value();
+        match encoded {
+            Value::Variant {
+                case_idx,
+                case_value: Some(inner),
+            } => {
+                assert_eq!(case_idx, 4);
+                let decoded_vat = ValueAndType::from_value(*inner).expect("decode VAT");
+                assert_eq!(decoded_vat.value, original_vat.value);
+                assert_eq!(decoded_vat.typ, original_vat.typ);
+            }
+            other => panic!("expected Variant with payload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn display_renders_primitive_payload_exact() {
+        let original_vat = 7u32.into_value_and_type();
+        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
+        let err = AgentError::CustomError(typed);
+        assert_eq!(err.to_string(), "7");
+    }
+
+    #[test]
+    fn display_renders_record_payload_exact() {
+        let original_vat = ValueAndType {
+            value: Value::Record(vec![Value::U32(7), Value::String("Ada".to_string())]),
+            typ: golem_wasm::analysis::analysed_type::record(vec![
+                golem_wasm::analysis::analysed_type::field(
+                    "id",
+                    golem_wasm::analysis::analysed_type::u32(),
+                ),
+                golem_wasm::analysis::analysed_type::field(
+                    "name",
+                    golem_wasm::analysis::analysed_type::str(),
+                ),
+            ]),
+        };
+        let typed = value_and_type_to_typed_schema_value(&original_vat).expect("promote");
+        let err = AgentError::CustomError(typed);
+        assert_eq!(err.to_string(), "{ id: 7, name: \"Ada\" }");
+    }
+
+    #[test]
+    fn display_redacts_secret_payload() {
+        // `Display` is user-facing/loggable; the renderer must redact
+        // capability nodes such as `Secret` so accidental embedding of a
+        // secret in a custom error doesn't leak it into logs.
+        let graph = SchemaGraph::anonymous(SchemaType::record(vec![
+            NamedFieldType {
+                name: "label".to_string(),
+                body: SchemaType::text(TextRestrictions::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "token".to_string(),
+                body: SchemaType::secret(SecretSpec::default()),
+                metadata: Default::default(),
+            },
+        ]));
+        let value = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Text(TextValuePayload {
+                    text: "auth".to_string(),
+                    language: None,
+                }),
+                SchemaValue::Secret(SecretValuePayload {
+                    secret_ref: "shhh".to_string(),
+                }),
+            ],
+        };
+        let typed = TypedSchemaValue::new(graph, value);
+        let err = AgentError::CustomError(typed);
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("<redacted>"),
+            "expected secret to be redacted, got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("shhh"),
+            "secret ref must not leak into Display, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn into_value_falls_back_for_non_legacy_payload() {
+        // `TypedSchemaValue` can carry capability nodes (e.g. `Secret`) that
+        // have no legacy `ValueAndType` counterpart. `IntoValue` is used as
+        // a boundary encoder by oplog and gRPC paths, so it must collapse
+        // such payloads into an `InvalidType` variant rather than panic.
+        let graph = SchemaGraph::anonymous(SchemaType::secret(SecretSpec::default()));
+        let value = SchemaValue::Secret(SecretValuePayload {
+            secret_ref: "shhh".to_string(),
+        });
+        let typed = TypedSchemaValue::new(graph, value);
+        let err = AgentError::CustomError(typed);
+
+        let encoded = err.into_value();
+        let decoded = AgentError::from_value(encoded).expect("decode");
+        match decoded {
+            AgentError::InvalidType(msg) => {
+                assert!(
+                    msg.starts_with("Invalid custom error payload:"),
+                    "expected diagnostic prefix, got: {msg:?}"
+                );
+            }
+            other => panic!("expected InvalidType fallback, got: {other:?}"),
+        }
+    }
 }

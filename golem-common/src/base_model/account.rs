@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::auth::AccountRole;
+use crate::base_model::card::CardId;
 use crate::base_model::plan::PlanId;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use derive_more::Display;
@@ -109,7 +110,8 @@ declare_structs! {
         pub name: String,
         pub email: AccountEmail,
         pub plan_id: PlanId,
-        pub roles: Vec<AccountRole>
+        pub roles: Vec<AccountRole>,
+        pub account_root_card_id: CardId
     }
 
     pub struct AccountSummary {
@@ -121,17 +123,12 @@ declare_structs! {
     pub struct AccountCreation {
         pub name: String,
         pub email: AccountEmail,
+        pub roles: Vec<AccountRole>
     }
 
     pub struct AccountUpdate {
         pub current_revision: AccountRevision,
         pub name: Option<String>,
-        pub email: Option<AccountEmail>,
-    }
-
-    pub struct AccountSetRoles {
-        pub current_revision: AccountRevision,
-        pub roles: Vec<AccountRole>
     }
 
     pub struct AccountSetPlan {

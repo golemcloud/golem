@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::delete_workers;
+use crate::benchmarks::{cleanup_user_state, delete_workers};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::base_model::agent::LegacyParsedAgentId;
 use golem_common::model::AgentId;
 use golem_common::model::component::ComponentDto;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -38,7 +39,8 @@ pub struct SleepBenchmarkContext {
 pub struct SleepIterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
-    agent_ids: Vec<ParsedAgentId>,
+    agent_ids: Vec<LegacyParsedAgentId>,
+    env_id: EnvironmentId,
 }
 
 #[async_trait]
@@ -111,6 +113,7 @@ impl Benchmark for Sleep {
             user,
             component,
             agent_ids,
+            env_id: env.id,
         }
     }
 
@@ -184,6 +187,7 @@ impl Benchmark for Sleep {
             .iter()
             .filter_map(|agent_id| AgentId::from_agent_id(context.component.id, agent_id).ok())
             .collect();
-        delete_workers(&context.user, &agent_ids).await
+        delete_workers(&context.user, &agent_ids).await;
+        cleanup_user_state(&context.user, &context.env_id).await;
     }
 }

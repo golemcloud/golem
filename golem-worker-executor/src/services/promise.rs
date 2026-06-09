@@ -19,11 +19,11 @@ use crate::services::golem_config;
 use crate::services::oplog;
 use crate::services::worker;
 use crate::services::worker_activator::WorkerActivator;
-use crate::services::{HasComponentService, HasConfig, HasOplogService};
+use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
-use crate::worker::status::calculate_last_known_status;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
@@ -145,11 +145,22 @@ impl PromiseService for LazyPromiseService {
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
+        crate::metrics::promises::record_promise_data_size(data.len());
+        let start = std::time::Instant::now();
+
         let lock = self.0.read().await;
-        lock.as_ref().unwrap().complete(promise_id, data).await
+        let result = lock.as_ref().unwrap().complete(promise_id, data).await;
+
+        let outcome = match &result {
+            Ok(true) => "fulfilled",
+            Ok(false) => "already_fulfilled",
+            Err(_) => "failed",
+        };
+        crate::metrics::promises::record_promise_completion(start.elapsed(), outcome);
+
+        result
     }
 
-    // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
     async fn cleanup(&self) {
         let lock = self.0.read().await;
         lock.as_ref().unwrap().cleanup().await
@@ -271,6 +282,7 @@ impl PromiseService for DefaultPromiseService {
             .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
 
         record_promise_created();
+        crate::metrics::promises::inc_promise_pending_count();
 
         // start tracking the promise locally so poll does not need to go to redis
         {
@@ -345,6 +357,11 @@ impl PromiseService for DefaultPromiseService {
             reg.complete(&promise_id, data.clone()).await;
         }
 
+        // Decrement the pending count on the first successful completion.
+        if written {
+            crate::metrics::promises::dec_promise_pending_count();
+        }
+
         // Wake up the worker that owns the promise, ensuring that it resumes its work.
         // We do this unconditionally here as the only reason complete will be called again during replay is if we managed to write
         // the result to redis, but failed before the worker could persist the result.
@@ -391,13 +408,14 @@ impl<Ctx: WorkerCtx> DefaultPromiseWorkerAccess<Ctx> {
     }
 }
 
-/// Adapter to satisfy the `HasOplogService + HasConfig + HasComponentService`
-/// bounds required by `calculate_last_known_status` without pulling in the
+/// Adapter to satisfy the `HasOplogService + HasConfig + HasComponentService + HasWorkerService`
+/// bounds required by `calculate_last_known_status_with_checkpoint` without pulling in the
 /// full `All<Ctx>`.
 struct StatusDeps {
     oplog_service: Arc<dyn oplog::OplogService>,
     config: Arc<golem_config::GolemConfig>,
     component_service: Arc<dyn component::ComponentService>,
+    worker_service: Arc<dyn worker::WorkerService>,
 }
 
 impl HasOplogService for StatusDeps {
@@ -415,6 +433,12 @@ impl HasConfig for StatusDeps {
 impl HasComponentService for StatusDeps {
     fn component_service(&self) -> Arc<dyn component::ComponentService> {
         self.component_service.clone()
+    }
+}
+
+impl HasWorkerService for StatusDeps {
+    fn worker_service(&self) -> Arc<dyn worker::WorkerService> {
+        self.worker_service.clone()
     }
 }
 
@@ -448,11 +472,13 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
                 oplog_service: self.oplog_service.clone(),
                 config: self.config.clone(),
                 component_service: self.component_service.clone(),
+                worker_service: self.worker_service.clone(),
             };
-            let last_known_status = calculate_last_known_status(
+            let agent_mode = initial_worker_metadata.agent_mode;
+            let last_known_status = calculate_last_known_status_with_checkpoint(
                 &status_deps,
                 &owned_agent_id,
-                initial_worker_metadata.agent_mode,
+                agent_mode,
                 last_known_status,
             )
             .await

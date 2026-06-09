@@ -576,14 +576,11 @@ pub const ACCOUNT_GET: &str = "Examples:
   golem-cli account get --account-id acc-12345";
 
 pub const ACCOUNT_UPDATE: &str = "Examples:
-  # Update the current account's name
-  golem-cli account update 'Alice Smith'
+   # Update the current account's name
+   golem-cli account update 'Alice Smith'
 
-  # Update name and email
-  golem-cli account update 'Alice Smith' alice@example.com
-
-  # Update a specific account by ID
-  golem-cli account update 'Alice Smith' alice@example.com --account-id acc-12345";
+   # Update a specific account by ID
+   golem-cli account update 'Alice Smith' --account-id acc-12345";
 
 pub const ACCOUNT_NEW: &str = "Examples:
   # Add a new account

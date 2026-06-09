@@ -14,6 +14,7 @@
 
 use crate::repo::REGISTRY_CHANGE_ADVISORY_LOCK_KEY;
 use async_trait::async_trait;
+use golem_common::serialization;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
@@ -65,6 +66,7 @@ pub enum RegistryEventType {
     AgentSecretChanged = 7,
     ApplicationDeleted = 8,
     EnvironmentDeleted = 9,
+    CardRevoked = 10,
 }
 
 impl TryFrom<i16> for RegistryEventType {
@@ -82,6 +84,7 @@ impl TryFrom<i16> for RegistryEventType {
             7 => Ok(RegistryEventType::AgentSecretChanged),
             8 => Ok(RegistryEventType::ApplicationDeleted),
             9 => Ok(RegistryEventType::EnvironmentDeleted),
+            10 => Ok(RegistryEventType::CardRevoked),
             other => Err(RepoError::InternalError(anyhow::anyhow!(
                 "Unknown registry event type: {other}"
             ))),
@@ -149,6 +152,10 @@ pub enum RegistryChangeEvent {
         app_name: String,
         env_name: String,
     },
+    CardRevoked {
+        event_id: ChangeEventId,
+        card_ids: Vec<Uuid>,
+    },
 }
 
 impl RegistryChangeEvent {
@@ -164,6 +171,7 @@ impl RegistryChangeEvent {
             Self::AgentSecretChanged { event_id, .. } => *event_id,
             Self::ApplicationDeleted { event_id, .. } => *event_id,
             Self::EnvironmentDeleted { event_id, .. } => *event_id,
+            Self::CardRevoked { event_id, .. } => *event_id,
         }
     }
 }
@@ -189,6 +197,7 @@ struct RegistryChangeEventRow {
     environment_ids: Vec<Uuid>,
     /// Set for EnvironmentDeleted: the environment's human-readable name.
     env_name: Option<String>,
+    card_ids: Vec<Uuid>,
 }
 
 impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
@@ -363,6 +372,17 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                     env_name,
                 })
             }
+            RegistryEventType::CardRevoked => {
+                if row.card_ids.is_empty() {
+                    return Err(RepoError::InternalError(anyhow::anyhow!(
+                        "CardRevoked event missing card_ids"
+                    )));
+                }
+                Ok(RegistryChangeEvent::CardRevoked {
+                    event_id: row.event_id,
+                    card_ids: row.card_ids,
+                })
+            }
         }
     }
 }
@@ -406,6 +426,7 @@ pub struct NewRegistryChangeEvent {
     pub app_name: Option<String>,
     pub environment_ids: Vec<Uuid>,
     pub env_name: Option<String>,
+    pub card_ids: Vec<Uuid>,
 }
 
 impl NewRegistryChangeEvent {
@@ -428,6 +449,7 @@ impl NewRegistryChangeEvent {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         }
     }
 
@@ -446,6 +468,7 @@ impl NewRegistryChangeEvent {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         }
     }
 
@@ -464,6 +487,7 @@ impl NewRegistryChangeEvent {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         }
     }
 
@@ -482,6 +506,7 @@ impl NewRegistryChangeEvent {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         }
     }
 
@@ -500,6 +525,7 @@ impl NewRegistryChangeEvent {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         }
     }
 
@@ -518,6 +544,7 @@ impl NewRegistryChangeEvent {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         }
     }
 
@@ -540,6 +567,7 @@ impl NewRegistryChangeEvent {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         }
     }
 
@@ -558,6 +586,7 @@ impl NewRegistryChangeEvent {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         }
     }
 
@@ -581,6 +610,7 @@ impl NewRegistryChangeEvent {
             app_name: Some(app_name),
             environment_ids,
             env_name: None,
+            card_ids: Vec::new(),
         }
     }
 
@@ -599,6 +629,26 @@ impl NewRegistryChangeEvent {
             app_name: Some(app_name),
             environment_ids: Vec::new(),
             env_name: Some(env_name),
+            card_ids: Vec::new(),
+        }
+    }
+
+    pub fn cards_revoked(card_ids: Vec<Uuid>) -> Self {
+        Self {
+            event_type: RegistryEventType::CardRevoked,
+            environment_id: None,
+            deployment_revision_id: None,
+            current_deployment_revision_id: None,
+            account_id: None,
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
+            card_ids,
         }
     }
 }
@@ -677,7 +727,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                            deployment_revision_id, current_deployment_revision_id, account_id,
                            grantee_account_id, domains,
                            resource_definition_id, resource_name,
-                           application_id, environment_ids, app_name, env_name
+                           application_id, environment_ids, app_name, env_name, card_ids
                     FROM registry_change_events
                     WHERE event_id > $1
                     ORDER BY event_id ASC
@@ -714,6 +764,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                 app_name: row.try_get("app_name").map_err(RepoError::from)?,
                 environment_ids: environment_ids.unwrap_or_default(),
                 env_name: row.try_get("env_name").map_err(RepoError::from)?,
+                card_ids: deserialize_card_ids(row.try_get("card_ids").map_err(RepoError::from)?)?,
             };
 
             if let Some(event) = try_map_registry_change_event_row(parsed_row)? {
@@ -774,7 +825,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                            deployment_revision_id, current_deployment_revision_id, account_id,
                            grantee_account_id, domains,
                            resource_definition_id, resource_name,
-                           application_id, environment_ids, app_name, env_name
+                           application_id, environment_ids, app_name, env_name, card_ids
                     FROM registry_change_events
                     WHERE event_id > $1
                     ORDER BY event_id ASC
@@ -838,6 +889,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                 app_name: row.try_get("app_name").map_err(RepoError::from)?,
                 environment_ids,
                 env_name: row.try_get("env_name").map_err(RepoError::from)?,
+                card_ids: deserialize_card_ids(row.try_get("card_ids").map_err(RepoError::from)?)?,
             };
 
             if let Some(event) = try_map_registry_change_event_row(parsed_row)? {
@@ -908,6 +960,7 @@ impl DbRegistryChangeRepo<PostgresPool> {
         let event_type: i16 = event.event_type.into();
         let domains: &[String] = &event.domains;
         let environment_ids: &[Uuid] = &event.environment_ids;
+        let card_ids = serialize_card_ids(&event.card_ids)?;
         let row = tx
             .fetch_one(
                 sqlx::query(indoc! { r#"
@@ -915,8 +968,8 @@ impl DbRegistryChangeRepo<PostgresPool> {
                         (event_type, environment_id, deployment_revision_id, current_deployment_revision_id,
                          account_id, grantee_account_id, domains,
                          resource_definition_id, resource_name,
-                         application_id, environment_ids, app_name, env_name)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9, $10, $11::uuid[], $12, $13)
+                         application_id, environment_ids, app_name, env_name, card_ids)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9, $10, $11::uuid[], $12, $13, $14)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
@@ -931,7 +984,8 @@ impl DbRegistryChangeRepo<PostgresPool> {
                 .bind(event.application_id)
                 .bind(environment_ids)
                 .bind(event.app_name.as_deref())
-                .bind(event.env_name.as_deref()),
+                .bind(event.env_name.as_deref())
+                .bind(card_ids),
             )
             .await?;
 
@@ -950,6 +1004,7 @@ impl DbRegistryChangeRepo<SqlitePool> {
         event: &NewRegistryChangeEvent,
     ) -> RepoResult<ChangeEventId> {
         let event_type: i16 = event.event_type.into();
+        let card_ids = serialize_card_ids(&event.card_ids)?;
         let domains_json = if event.domains.is_empty() {
             None
         } else {
@@ -979,8 +1034,8 @@ impl DbRegistryChangeRepo<SqlitePool> {
                         (event_type, environment_id, deployment_revision_id, current_deployment_revision_id,
                          account_id, grantee_account_id, domains,
                          resource_definition_id, resource_name,
-                         application_id, environment_ids, app_name, env_name)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                         application_id, environment_ids, app_name, env_name, card_ids)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
@@ -995,13 +1050,32 @@ impl DbRegistryChangeRepo<SqlitePool> {
                 .bind(event.application_id)
                 .bind(environment_ids_json.as_deref())
                 .bind(event.app_name.as_deref())
-                .bind(event.env_name.as_deref()),
+                .bind(event.env_name.as_deref())
+                .bind(card_ids),
             )
             .await?;
 
         Ok(ChangeEventId(
             row.try_get("event_id").map_err(RepoError::from)?,
         ))
+    }
+}
+
+fn serialize_card_ids(card_ids: &[Uuid]) -> RepoResult<Option<Vec<u8>>> {
+    if card_ids.is_empty() {
+        Ok(None)
+    } else {
+        serialization::serialize(&card_ids.to_vec())
+            .map(Some)
+            .map_err(|e| RepoError::InternalError(anyhow::anyhow!(e)))
+    }
+}
+
+fn deserialize_card_ids(bytes: Option<Vec<u8>>) -> RepoResult<Vec<Uuid>> {
+    match bytes {
+        Some(bytes) => serialization::deserialize(&bytes)
+            .map_err(|e| RepoError::InternalError(anyhow::anyhow!(e))),
+        None => Ok(Vec::new()),
     }
 }
 
@@ -1037,6 +1111,7 @@ mod tests {
                 app_name: None,
                 environment_ids: Vec::new(),
                 env_name: None,
+                card_ids: Vec::new(),
             },
             RegistryChangeEventRow {
                 event_id,
@@ -1053,6 +1128,7 @@ mod tests {
                 app_name: None,
                 environment_ids: Vec::new(),
                 env_name: None,
+                card_ids: Vec::new(),
             },
             RegistryChangeEventRow {
                 event_id,
@@ -1069,6 +1145,7 @@ mod tests {
                 app_name: None,
                 environment_ids: Vec::new(),
                 env_name: None,
+                card_ids: Vec::new(),
             },
             RegistryChangeEventRow {
                 event_id,
@@ -1085,6 +1162,7 @@ mod tests {
                 app_name: None,
                 environment_ids: Vec::new(),
                 env_name: None,
+                card_ids: Vec::new(),
             },
             RegistryChangeEventRow {
                 event_id,
@@ -1101,6 +1179,7 @@ mod tests {
                 app_name: None,
                 environment_ids: Vec::new(),
                 env_name: None,
+                card_ids: Vec::new(),
             },
             RegistryChangeEventRow {
                 event_id,
@@ -1117,6 +1196,7 @@ mod tests {
                 app_name: None,
                 environment_ids: Vec::new(),
                 env_name: None,
+                card_ids: Vec::new(),
             },
             RegistryChangeEventRow {
                 event_id,
@@ -1133,6 +1213,7 @@ mod tests {
                 app_name: None,
                 environment_ids: Vec::new(),
                 env_name: None,
+                card_ids: Vec::new(),
             },
             RegistryChangeEventRow {
                 event_id,
@@ -1149,6 +1230,7 @@ mod tests {
                 app_name: None,
                 environment_ids: Vec::new(),
                 env_name: None,
+                card_ids: Vec::new(),
             },
             RegistryChangeEventRow {
                 event_id,
@@ -1165,6 +1247,7 @@ mod tests {
                 application_id: Some(application_id),
                 environment_ids: vec![environment_id],
                 env_name: None,
+                card_ids: Vec::new(),
             },
             RegistryChangeEventRow {
                 event_id,
@@ -1181,6 +1264,7 @@ mod tests {
                 app_name: Some(app_name.clone()),
                 environment_ids: Vec::new(),
                 env_name: Some(env_name.clone()),
+                card_ids: Vec::new(),
             },
         ];
 
@@ -1210,6 +1294,7 @@ mod tests {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         };
 
         let valid_row = RegistryChangeEventRow {
@@ -1227,6 +1312,7 @@ mod tests {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         };
 
         let skipped = try_map_registry_change_event_row(legacy_row).expect("row mapping failed");
@@ -1253,6 +1339,7 @@ mod tests {
             app_name: None,
             environment_ids: Vec::new(),
             env_name: None,
+            card_ids: Vec::new(),
         };
 
         let result = try_map_registry_change_event_row(malformed_row);

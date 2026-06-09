@@ -123,16 +123,19 @@ impl SecretCommandHandler {
         let clients = self.ctx.golem_clients().await?;
 
         let source_language = self.guess_source_language().await;
+        // The new schema-typed parser returns `(SchemaGraph, SchemaType)`; the
+        // legacy REST DTO still carries an `AnalysedType` for the secret type,
+        // so adapt at the boundary here.
         let secret_type: AnalysedType =
             match parse_type_for_language(&secret_type, &source_language) {
-                Ok(res) => res,
+                Ok((graph, ty)) => schema_to_analysed_type_at_boundary(&graph, &ty)?,
                 Err(_) => {
                     // If the detected language parser fails, try all other parsers
                     match parse_type_for_language(
                         &secret_type,
                         &SourceLanguage::Other(String::new()),
                     ) {
-                        Ok(res) => res,
+                        Ok((graph, ty)) => schema_to_analysed_type_at_boundary(&graph, &ty)?,
                         Err(_) => match serde_json::from_str(&secret_type) {
                             Ok(res) => res,
                             Err(json_err) => {
@@ -316,15 +319,36 @@ fn parse_secret_value_to_json(
     secret_type: &AnalysedType,
     source_language: &SourceLanguage,
 ) -> Result<serde_json::Value, String> {
-    // Try language-specific parser first
-    if let Ok(vat) = parse_value_for_language(input, secret_type, source_language)
-        && let Ok(json) = vat.to_json_value()
+    // Try the schema-typed language-specific parser first, then fall back to
+    // raw JSON. We convert at the boundary because the REST DTO still
+    // carries the legacy `AnalysedType` form.
+    let graph = golem_common::schema::adapters::analysed_type_to_schema_graph(secret_type)
+        .map_err(|err| format!("schema adapter error while parsing secret value: {err}"))?;
+    if let Ok(parsed_value) = parse_value_for_language(input, &graph, &graph.root, source_language)
+        && let Ok(legacy_value) = golem_common::schema::adapters::schema_value_to_value(
+            &graph,
+            &graph.root,
+            &parsed_value,
+        )
+        && let Ok(json) =
+            golem_wasm::ValueAndType::new(legacy_value, secret_type.clone()).to_json_value()
     {
         return Ok(json);
     }
-    // Fall back to raw JSON
-    match serde_json::from_str(input) {
-        Ok(json) => Ok(json),
+    // Fall back to raw JSON, but only accept it if it coerces into
+    // `secret_type`. Without this validation a user could store any JSON
+    // for any secret type and the mismatch would only surface much later
+    // at the consumer.
+    match serde_json::from_str::<serde_json::Value>(input) {
+        Ok(json) => {
+            golem_wasm::ValueAndType::parse_with_type(&json, secret_type).map_err(|errs| {
+                format!(
+                    "Secret value does not match the expected type: {}",
+                    errs.join("; ")
+                )
+            })?;
+            Ok(json)
+        }
         Err(err) => {
             // If the expected type is a plain string and the input is not valid JSON,
             // treat the raw input as the string value (ergonomic fallback).
@@ -333,6 +357,23 @@ fn parse_secret_value_to_json(
             } else {
                 Err(format!("Secret value is not valid: {err}"))
             }
+        }
+    }
+}
+
+/// Boundary helper: convert a parsed `(SchemaGraph, SchemaType)` back to
+/// the legacy `AnalysedType` for the REST DTO. Logs and bails on failure.
+fn schema_to_analysed_type_at_boundary(
+    graph: &golem_common::schema::graph::SchemaGraph,
+    ty: &golem_common::schema::schema_type::SchemaType,
+) -> anyhow::Result<AnalysedType> {
+    match golem_common::schema::adapters::schema_type_to_analysed_type(graph, ty) {
+        Ok(ty) => Ok(ty),
+        Err(err) => {
+            log_error(format!(
+                "Unsupported secret type (cannot map to legacy AnalysedType): {err}"
+            ));
+            bail!(NonSuccessfulExit);
         }
     }
 }

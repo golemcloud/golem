@@ -9,3 +9,6 @@ See [Golem Cloud](https://golem.cloud) for more information, and [the Golem Deve
 
 ## Developing Golem
 Find details in the [contribution guide](CONTRIBUTING.md) about how to compile the Golem services locally.
+
+## Documentation
+The source for [learn.golem.cloud](https://learn.golem.cloud) lives in [`docs/`](docs/) (Next.js / Nextra, see [`docs/AGENTS.md`](docs/AGENTS.md)). It is built and deployed by [`.github/workflows/docs.yaml`](.github/workflows/docs.yaml).

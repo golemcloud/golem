@@ -30,6 +30,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{
     AgentFingerprint, AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction, ShardId,
 };
+use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::future::Future;
 use std::ops::{Add, Deref};
@@ -125,7 +126,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
             )
             .await?;
 
-        worker.invoke(invocation).await?;
+        worker.clone().invoke(invocation).await?;
 
         Worker::start_if_needed(worker).await?;
 
@@ -212,6 +213,7 @@ impl SchedulerServiceDefault {
     }
 
     async fn process(&self, now: DateTime<Utc>) -> Result<(), String> {
+        let tick_start = std::time::Instant::now();
         let assignment = self
             .shard_service
             .current_assignment()
@@ -228,9 +230,18 @@ impl SchedulerServiceDefault {
                 break;
             }
 
+            crate::metrics::scheduler::set_scheduler_queue_depth(claimed_count);
+
             // ! Do not exit early from this loop because of failed actions, as it will cause all other actions to be skipped.
             // ! Retryable failures are left unacknowledged and retried after lease expiry.
             for claimed_action in claimed {
+                // Observe the lag between scheduled_at (due_at) and actual fire time.
+                let lag = now.signed_duration_since(claimed_action.due_at);
+                let lag_secs = lag.num_milliseconds().max(0) as f64 / 1000.0;
+                crate::metrics::scheduler::record_scheduled_action_lag(Duration::from_secs_f64(
+                    lag_secs,
+                ));
+
                 if self
                     .process_claimed_action(claimed_action.clone(), now)
                     .await
@@ -254,6 +265,7 @@ impl SchedulerServiceDefault {
             }
         }
 
+        crate::metrics::scheduler::record_scheduler_tick_duration(tick_start.elapsed());
         Ok(())
     }
 
@@ -504,6 +516,15 @@ impl SchedulerService for SchedulerServiceDefault {
         });
         let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
         let shard_id = ShardId::from_routing_hash(routing_hash, assignment.number_of_shards);
+
+        // Observe the serialized size of the action before inserting.
+        if let Ok(serialized) = serialize(&action) {
+            crate::metrics::scheduler::record_scheduled_action_size(
+                crate::metrics::scheduler::action_kind_label(&action),
+                serialized.len(),
+            );
+        }
+
         self.scheduler_storage
             .insert(schedule_id, time, shard_id, &action)
             .await
@@ -641,7 +662,33 @@ mod tests {
             None
         }
 
-        async fn update_cached_status(
+        async fn write_cached_status(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _previous_status: Option<&AgentStatusRecord>,
+            status_value: AgentStatusRecord,
+        ) -> Result<AgentStatusRecord, String> {
+            Ok(status_value)
+        }
+
+        async fn read_status_checkpoint(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) -> Option<AgentStatusRecord> {
+            None
+        }
+
+        async fn write_status_checkpoint(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _previous_checkpoint: Option<&AgentStatusRecord>,
+            checkpoint: AgentStatusRecord,
+        ) -> Result<AgentStatusRecord, String> {
+            Ok(checkpoint)
+        }
+
+        async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
             _status_value: &AgentStatusRecord,

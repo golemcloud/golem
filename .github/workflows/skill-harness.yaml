@@ -1,7 +1,8 @@
 name: Skill Harness
 on:
-  schedule:
-    - cron: '0 6 * * 1'  # Weekly on Monday at 06:00 UTC
+  # Scheduled runs are disabled; this workflow can still be triggered manually.
+  # schedule:
+  #   - cron: '0 6 * * 1'  # Weekly on Monday at 06:00 UTC
   workflow_dispatch:
 
 concurrency:
@@ -116,18 +117,6 @@ jobs:
             language: scala
           - agent: claude-code
             language: moonbit
-          - agent: opencode
-            language: ts
-            model: anthropic/claude-opus-4-6
-          - agent: opencode
-            language: rust
-            model: anthropic/claude-opus-4-6
-          - agent: opencode
-            language: scala
-            model: anthropic/claude-opus-4-6
-          - agent: opencode
-            language: moonbit
-            model: anthropic/claude-opus-4-6
     steps:
       - uses: actions/checkout@v5
         with:
@@ -164,18 +153,6 @@ jobs:
             language: scala
           - agent: codex
             language: moonbit
-          - agent: opencode
-            language: ts
-            model: openai/gpt-5.4
-          - agent: opencode
-            language: rust
-            model: openai/gpt-5.4
-          - agent: opencode
-            language: scala
-            model: openai/gpt-5.4
-          - agent: opencode
-            language: moonbit
-            model: openai/gpt-5.4
     steps:
       - uses: actions/checkout@v5
         with:

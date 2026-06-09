@@ -58,7 +58,7 @@ impl GetKeyValueStorage for InMemoryKeyValueStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "in_memory")]
+#[test_dep(scope = Shared, tagged_as = "in_memory")]
 async fn in_memory_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
@@ -98,7 +98,7 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "redis")]
+#[test_dep(scope = Shared, tagged_as = "redis")]
 async fn redis_storage(
     deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
@@ -173,14 +173,14 @@ impl GetKeyValueStorage for MultiSqliteKeyValueStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "sqlite")]
+#[test_dep(scope = Shared, tagged_as = "sqlite")]
 async fn sqlite_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
     Arc::new(SqliteKeyValueStorageWrapper::new())
 }
 
-#[test_dep(tagged_as = "multi_sqlite")]
+#[test_dep(scope = Shared, tagged_as = "multi_sqlite")]
 async fn multi_sqlite_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
@@ -235,7 +235,7 @@ impl GetKeyValueStorage for PostgresKeyValueStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "postgres")]
+#[test_dep(scope = Shared, tagged_as = "postgres")]
 async fn postgres_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
@@ -314,7 +314,7 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
     }
 }
 
-#[test_dep(tagged_as = "namespace_routed")]
+#[test_dep(scope = Shared, tagged_as = "namespace_routed")]
 async fn namespace_routed_storage(
     deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
@@ -335,7 +335,7 @@ struct Namespaces {
     pub ns2: KeyValueStorageNamespace,
 }
 
-#[test_dep(tagged_as = "ns1")]
+#[test_dep(scope = PerWorker, tagged_as = "ns1")]
 fn ns() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::Worker {
@@ -351,7 +351,7 @@ fn ns() -> Namespaces {
     }
 }
 
-#[test_dep(tagged_as = "ns2")]
+#[test_dep(scope = PerWorker, tagged_as = "ns2")]
 fn ns2() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::UserDefined {
@@ -367,10 +367,28 @@ fn ns2() -> Namespaces {
     }
 }
 
+// Exercises the per-agent `AgentStatus` namespace (Redis-hash routed) used by the split agent
+// status cache, across every backend.
+#[test_dep(scope = PerWorker, tagged_as = "ns3")]
+fn ns3() -> Namespaces {
+    Namespaces {
+        ns: KeyValueStorageNamespace::AgentStatus {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "test".to_string(),
+            },
+        },
+        ns2: KeyValueStorageNamespace::UserDefined {
+            environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
+            bucket: "test-bucket-2".to_string(),
+        },
+    }
+}
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres", "namespace_routed");
-define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2");
+define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2", "ns3");
 
 #[test]
 #[tracing::instrument]
@@ -483,6 +501,51 @@ async fn get_set_get_many(
     assert_eq!(
         result2,
         vec![Some(value1.into()), Some(value2.into()), None]
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn get_all_returns_namespace_snapshot(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let kvs = kvs.get_key_value_storage().await;
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "test".to_string(),
+    };
+    let other_agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "other".to_string(),
+    };
+    let ns = KeyValueStorageNamespace::AgentStatus { agent_id };
+    let other_ns = KeyValueStorageNamespace::AgentStatus {
+        agent_id: other_agent_id,
+    };
+
+    kvs.set_many(
+        "test",
+        "api",
+        "entity",
+        ns.clone(),
+        &[("field1", b"value1"), ("field2", b"value2")],
+    )
+    .await
+    .unwrap();
+    kvs.set("test", "api", "entity", other_ns, "field3", b"value3")
+        .await
+        .unwrap();
+
+    let mut result = kvs.get_all("test", "api", "entity", ns).await.unwrap();
+    result.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    assert_eq!(
+        result,
+        vec![
+            ("field1".to_string(), bytes::Bytes::from_static(b"value1")),
+            ("field2".to_string(), bytes::Bytes::from_static(b"value2")),
+        ]
     );
 }
 

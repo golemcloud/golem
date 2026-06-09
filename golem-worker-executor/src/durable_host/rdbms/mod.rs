@@ -320,7 +320,10 @@ where
     E: From<RdbmsError>,
 {
     let begin_index = ctx
-        .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
+        .begin_durable_function(
+            &DurableFunctionType::WriteRemoteBatched(None),
+            "golem::rdbms::db-connection::query-stream",
+        )
         .await?;
     let durability = Durability::<T::ConnQueryStream>::new(
         ctx,
@@ -948,11 +951,21 @@ where
             .try_get_oplog_entry(|e| e.is_pre_rollback_remote_transaction(entry.begin_index))
             .await?;
 
-        let _ = ctx
+        let rolled_back = ctx
             .state
             .replay_state
             .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(entry.begin_index))
             .await?;
+
+        // Mirror the live drop path, which closes the region via
+        // `rolled_back_transaction_function`: this replay branch consumes the rollback entries
+        // directly, so it must also remove the region opened in `begin_transaction_function` once
+        // the `RolledBackRemoteTransaction` entry is found. Otherwise the begin index would dangle
+        // in `open_rollback_regions` and disable mid-invocation checkpoints for the rest of this
+        // worker incarnation.
+        if rolled_back.is_some() {
+            ctx.state.open_rollback_regions.remove(&entry.begin_index);
+        }
     }
 
     Ok(())

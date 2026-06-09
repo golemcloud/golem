@@ -35,8 +35,8 @@ use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, FallibleResultParameters,
     JsonSnapshotData, MultipartPartData, MultipartSnapshotData, PublicOplogEntry,
-    PublicSnapshotData, PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
-    SnapshotBasedUpdateParameters,
+    PublicSnapshotData, PublicUpdateDescription, RawSnapshotData, ReadOnlyViolationError,
+    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
 };
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{Empty, Timestamp};
@@ -724,6 +724,12 @@ impl From<oplog::WorkerError> for golem_common::model::oplog::AgentError {
             oplog::WorkerError::EphemeralCannotSuspend(inner) => {
                 Self::EphemeralCannotSuspend(EphemeralCannotSuspendError {
                     reason: inner.reason,
+                })
+            }
+            oplog::WorkerError::ReadOnlyViolation(inner) => {
+                Self::ReadOnlyViolation(ReadOnlyViolationError {
+                    method: inner.method,
+                    host_function: inner.host_function,
                 })
             }
         }

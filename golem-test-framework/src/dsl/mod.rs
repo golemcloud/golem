@@ -29,7 +29,7 @@ use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::base_model::{AgentId, PromiseId};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::{DataValue, ParsedAgentId};
+use golem_common::model::agent::{DataValue, LegacyParsedAgentId};
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::{
@@ -255,7 +255,7 @@ pub trait TestDsl {
     async fn try_start_agent(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: LegacyParsedAgentId,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
         self.try_start_agent_with(
             component_id,
@@ -269,7 +269,7 @@ pub trait TestDsl {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: LegacyParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>>;
@@ -277,7 +277,7 @@ pub trait TestDsl {
     async fn start_agent(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: LegacyParsedAgentId,
     ) -> anyhow::Result<AgentId> {
         self.start_agent_with(
             component_id,
@@ -291,7 +291,7 @@ pub trait TestDsl {
     async fn start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: LegacyParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<AgentId> {
@@ -304,7 +304,7 @@ pub trait TestDsl {
     async fn invoke_agent(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<()> {
@@ -321,7 +321,7 @@ pub trait TestDsl {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
@@ -330,18 +330,18 @@ pub trait TestDsl {
     async fn invoke_and_await_agent(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
-        self.invoke_and_await_agent_impl(component, agent_id, None, None, method_name, params)
+        self.invoke_and_await_agent_impl(component, agent_id, None, None, None, method_name, params)
             .await
     }
 
     async fn invoke_and_await_agent_at_deployment(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         deployment_revision: DeploymentRevision,
         method_name: &str,
         params: DataValue,
@@ -351,6 +351,7 @@ pub trait TestDsl {
             agent_id,
             None,
             Some(deployment_revision),
+            None,
             method_name,
             params,
         )
@@ -360,7 +361,7 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
@@ -370,6 +371,33 @@ pub trait TestDsl {
             agent_id,
             Some(idempotency_key),
             None,
+            None,
+            method_name,
+            params,
+        )
+        .await
+    }
+
+    /// Invokes an agent method as the specified `Principal`. Used by the
+    /// read-only cache per-principal partitioning test (issue #3393 T6):
+    /// `uses_principal = true` methods like `get_count_for` must cache
+    /// independently for each principal, while `uses_principal = false`
+    /// methods like `get_count` must share a single cache entry across
+    /// principals.
+    async fn invoke_and_await_agent_as_principal(
+        &self,
+        component: &ComponentDto,
+        agent_id: &LegacyParsedAgentId,
+        principal: golem_common::model::agent::Principal,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue> {
+        self.invoke_and_await_agent_impl(
+            component,
+            agent_id,
+            None,
+            None,
+            Some(principal),
             method_name,
             params,
         )
@@ -379,9 +407,10 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
+        principal: Option<golem_common::model::agent::Principal>,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue>;
@@ -412,6 +441,22 @@ pub trait TestDsl {
         }
 
         Ok(())
+    }
+
+    /// Returns the current maximum oplog index for an agent, or
+    /// `OplogIndex::INITIAL` if the oplog is empty.
+    ///
+    /// Used together with [`count_oplog_entries_since`] to assert that the
+    /// oplog grew by exactly N entries of a given kind between two points in
+    /// the test (covers the "oplog grew by exactly N" assertions in the
+    /// read-only test suite, e.g. issue #3393 T3 / T8 / T10 / T11 / R1 / R3 /
+    /// H2 / H3).
+    async fn oplog_max_index(&self, agent_id: &AgentId) -> anyhow::Result<OplogIndex> {
+        let entries = self.get_oplog(agent_id, OplogIndex::INITIAL).await?;
+        Ok(entries
+            .last()
+            .map(|e| e.oplog_index)
+            .unwrap_or(OplogIndex::INITIAL))
     }
 
     async fn interrupt_with_optional_recovery(
@@ -1145,6 +1190,12 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             format!("File system error: {}", reason)
         }
         WorkerExecutorError::InvocationFailed { .. } => "Invocation failed".to_string(),
+        WorkerExecutorError::ReadOnlyViolation {
+            method,
+            host_function,
+        } => {
+            format!("Read-only agent method '{method}' attempted side effect via '{host_function}'")
+        }
     }
 }
 
@@ -1164,6 +1215,58 @@ pub fn worker_error_logs(error: &WorkerExecutorError) -> Option<String> {
         WorkerExecutorError::PreviousInvocationFailed { stderr, .. } => Some(stderr.clone()),
         _ => None,
     }
+}
+
+/// Count `PublicOplogEntry` entries matching `predicate` that come *strictly
+/// after* the supplied snapshot index.
+///
+/// Pair this with [`TestDsl::oplog_max_index`] to assert that the oplog grew
+/// by exactly N entries of a given kind between two points in the test:
+///
+/// ```ignore
+/// use golem_common::model::oplog::PublicOplogEntry;
+///
+/// let snapshot = executor.oplog_max_index(&agent_id).await?;
+/// /* ... action under test ... */
+/// let entries = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
+/// let started = count_oplog_entries_since(&entries, snapshot, |e| {
+///     matches!(e, PublicOplogEntry::AgentInvocationStarted(_))
+/// });
+/// assert_eq!(started, 1);
+/// ```
+pub fn count_oplog_entries_since(
+    entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    since_exclusive: OplogIndex,
+    predicate: impl Fn(&golem_common::model::oplog::PublicOplogEntry) -> bool,
+) -> usize {
+    entries
+        .iter()
+        .filter(|e| e.oplog_index > since_exclusive)
+        .filter(|e| predicate(&e.entry))
+        .count()
+}
+
+/// Convenience helper for the common "Started/Finished pair" assertion
+///
+/// Returns `(started, finished)` agent-invocation entry counts strictly after
+/// `since_exclusive`.
+pub fn count_agent_invocation_pair_since(
+    entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    since_exclusive: OplogIndex,
+) -> (usize, usize) {
+    let started = count_oplog_entries_since(entries, since_exclusive, |e| {
+        matches!(
+            e,
+            golem_common::model::oplog::PublicOplogEntry::AgentInvocationStarted(_)
+        )
+    });
+    let finished = count_oplog_entries_since(entries, since_exclusive, |e| {
+        matches!(
+            e,
+            golem_common::model::oplog::PublicOplogEntry::AgentInvocationFinished(_)
+        )
+    });
+    (started, finished)
 }
 
 pub async fn build_ifs_archive(

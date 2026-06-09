@@ -1,0 +1,17 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/text_on_non_string.rs:17:10
+   |
+17 | #[derive(IntoSchema)]
+   |          ^^^^^^^^^^
+   |          |
+   |          expected `&String`, found `&i32`
+   |          arguments to this function are incorrect
+   |
+   = note: expected reference `&std::string::String`
+              found reference `&i32`
+note: method defined here
+  --> $RUST/core/src/clone.rs
+   |
+   |     fn clone(&self) -> Self;
+   |        ^^^^^
+   = note: this error originates in the derive macro `IntoSchema` (in Nightly builds, run with -Z macro-backtrace for more info)

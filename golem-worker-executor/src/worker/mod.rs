@@ -15,14 +15,15 @@
 pub mod agent_config;
 pub mod invocation;
 mod invocation_loop;
+pub mod read_only_cache;
 pub mod status;
+pub mod status_checkpointer;
+pub mod status_flusher;
 
 use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
-use self::status::{
-    calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
-};
+use self::status::update_status_with_new_entries;
 use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
@@ -45,28 +46,32 @@ use crate::services::{
     UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
-use crate::worker::status::calculate_last_known_status;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
 use futures::FutureExt;
 use futures::channel::oneshot;
+use golem_common::base_model::agent::CachePolicy;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::cache::SimpleCache;
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
-    AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
+    AgentMode, LegacyParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
+};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
-    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
-    TimestampedAgentInvocation,
+    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, ScheduledAction, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -88,6 +93,93 @@ use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
 
+/// Resolved read-only `AgentMethod` invocation data needed to build the
+/// cache key and entry.
+#[derive(Clone)]
+struct ReadOnlyContext {
+    method_name: String,
+    input: golem_common::model::agent::UntypedDataValue,
+    principal: Principal,
+    cfg: golem_common::base_model::agent::ReadOnlyConfig,
+    component_revision: ComponentRevision,
+}
+
+/// `Ttl(0)` is folded in as it is equivalent to `NoCache`.
+fn is_no_cache(policy: &CachePolicy) -> bool {
+    match policy {
+        CachePolicy::NoCache(_) => true,
+        CachePolicy::Ttl(ttl) => ttl.duration_nanos == 0,
+        CachePolicy::UntilWrite(_) => false,
+    }
+}
+
+/// Inserts `output` into the cache under `epoch`, which must be the value
+/// captured at enqueue (see
+/// [`Worker::enqueue_worker_invocation_with_effect`]).
+///
+/// Performs a final epoch recheck against `read_only_cache_epoch` before
+/// inserting and drops the populate if a mutating invocation has completed
+/// in the meantime. This is the populate-time guard
+/// for the "epoch is bumped on mutating completion, not enqueue" semantics.
+///
+/// Free function so the observer task does not pin the worker.
+async fn populate_read_only_cache(
+    cache: &golem_common::cache::Cache<
+        read_only_cache::ReadOnlyCacheKey,
+        (),
+        Arc<read_only_cache::ReadOnlyCacheEntry>,
+        WorkerExecutorError,
+    >,
+    read_only_cache_epoch: &AtomicU64,
+    ro: &ReadOnlyContext,
+    epoch: u64,
+    output: AgentInvocationOutput,
+) {
+    // Stale-populate guard: if a mutating invocation has completed (and bumped
+    // the epoch) between the read-only enqueue and now, do not store this
+    // result. It would otherwise sit under the pre-mutation epoch and be
+    // unreachable, but storing it would still let a future epoch wrap hit it
+    // (defensive).
+    if read_only_cache_epoch.load(Ordering::SeqCst) != epoch {
+        return;
+    }
+
+    let principal_ref = if ro.cfg.uses_principal {
+        Some(&ro.principal)
+    } else {
+        None
+    };
+    let key = read_only_cache::build_read_only_cache_key(
+        &ro.method_name,
+        &ro.input,
+        principal_ref,
+        ro.component_revision,
+        epoch,
+    );
+    let entry = build_read_only_cache_entry(ro, output);
+    // First-writer-wins.
+    let _ = cache
+        .get_or_insert_simple(&key, async move || Ok::<_, WorkerExecutorError>(entry))
+        .await;
+}
+
+/// Builds a [`ReadOnlyCacheEntry`] for the given [`AgentInvocationOutput`]
+/// using `ro.cfg.cache_policy` to derive the optional TTL expiry. Shared by
+/// the detached observer (see [`populate_read_only_cache`]) and the
+/// `invoke_and_await` coalescing path so both produce identical entries.
+fn build_read_only_cache_entry(
+    ro: &ReadOnlyContext,
+    output: AgentInvocationOutput,
+) -> Arc<read_only_cache::ReadOnlyCacheEntry> {
+    let expires_at = match &ro.cfg.cache_policy {
+        CachePolicy::Ttl(ttl) => {
+            tokio::time::Instant::now().checked_add(Duration::from_nanos(ttl.duration_nanos))
+        }
+        CachePolicy::UntilWrite(_) | CachePolicy::NoCache(_) => None,
+    };
+    Arc::new(read_only_cache::ReadOnlyCacheEntry { output, expires_at })
+}
+
 /// Represents worker that may be running or suspended.
 ///
 /// It is responsible for receiving incoming worker invocations in a non-blocking way,
@@ -102,7 +194,7 @@ use wasmtime::{Store, UpdateDeadline};
 /// Every worker invocation should be done through this service.
 pub struct Worker<Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
-    parsed_agent_id: Option<ParsedAgentId>,
+    parsed_agent_id: Option<LegacyParsedAgentId>,
 
     oplog: Arc<dyn Oplog>,
     worker_event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -117,7 +209,9 @@ pub struct Worker<Ctx: WorkerCtx> {
     registered_concurrent_account: RegisteredConcurrentAccount,
     last_known_status: Arc<RwLock<AgentStatusRecord>>,
     metrics_status: WorkerStatusMetric,
-    last_known_status_detached: AtomicBool,
+    last_known_status_detached: Arc<AtomicBool>,
+    status_flusher: Arc<status_flusher::AgentStatusFlusher>,
+    status_checkpointer: status_checkpointer::StatusCheckpointer,
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     update_state_lock: Mutex<()>,
@@ -135,6 +229,25 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// at least that many bytes from the blocking eviction path, ensuring
     /// enough idle workers are evicted to satisfy the pending write.
     desired_extra_filesystem_storage: AtomicU64,
+
+    /// Snapshot of the active component, refreshed by `create_instance`.
+    /// Used by the read-only cache lookup without taking the wasm `Store`
+    /// lock and while the worker is `Unloaded`.
+    current_component: Arc<arc_swap::ArcSwap<golem_service_base::model::component::Component>>,
+
+    /// Per-worker read-only method result cache. See
+    /// [`crate::worker::read_only_cache`] for the design notes.
+    read_only_cache: golem_common::cache::Cache<
+        read_only_cache::ReadOnlyCacheKey,
+        (),
+        Arc<read_only_cache::ReadOnlyCacheEntry>,
+        WorkerExecutorError,
+    >,
+
+    /// Participates in the read-only cache key. Bumped before any mutating
+    /// invocation's pending oplog entry becomes visible, so stale entries
+    /// are invalidated lazily on the next lookup.
+    read_only_cache_epoch: Arc<AtomicU64>,
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -221,10 +334,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }) = deps.worker_service().get(owned_agent_id).await
         {
             // update with latest data from oplog
-            let last_known_status = calculate_last_known_status(
+            let agent_mode = initial_worker_metadata.agent_mode;
+            let last_known_status = calculate_last_known_status_with_checkpoint(
                 deps,
                 owned_agent_id,
-                initial_worker_metadata.agent_mode,
+                agent_mode,
                 last_known_status,
             )
             .await
@@ -256,6 +370,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             agent_id,
             snapshot_policy,
             oplog,
+            initial_component,
         } = match Self::get_or_create_worker_metadata(
             deps,
             &owned_agent_id,
@@ -282,7 +397,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut spans_map = HashMap::new();
         for inv in initial_pending_invocations {
-            if let Some(idempotency_key) = inv.invocation.idempotency_key() {
+            if let Some(idempotency_key) = inv.idempotency_key() {
                 spans_map.insert(idempotency_key.clone(), Span::current());
             }
         }
@@ -321,6 +436,38 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .register_account_concurrency(owner_account_id, resource_entry)
             .await;
 
+        let read_only_cache_cfg = &deps.config().read_only_cache;
+        let read_only_cache = golem_common::cache::Cache::new(
+            Some(read_only_cache_cfg.cache_capacity),
+            golem_common::cache::FullCacheEvictionMode::LeastRecentlyUsed(1),
+            golem_common::cache::BackgroundEvictionMode::OlderThan {
+                ttl: read_only_cache_cfg.max_entry_age,
+                period: read_only_cache_cfg.cache_eviction_interval,
+            },
+            "worker_read_only_cache",
+        );
+
+        let current_component = Arc::new(arc_swap::ArcSwap::from(initial_component));
+
+        let last_known_status_detached = Arc::new(AtomicBool::new(false));
+        let status_flusher = status_flusher::AgentStatusFlusher::new(
+            owned_agent_id.clone(),
+            initial_worker_metadata.agent_mode == AgentMode::Ephemeral,
+            deps.config().agent_status_flush.enabled,
+            deps.worker_service(),
+            deps.active_workers().status_flush_queue(),
+            current_status.clone(),
+            last_known_status_detached.clone(),
+        );
+
+        let status_checkpointer = status_checkpointer::StatusCheckpointer::new(
+            owned_agent_id.clone(),
+            initial_worker_metadata.agent_mode == AgentMode::Ephemeral,
+            deps.config().agent_status_checkpoint.enabled,
+            deps.config().agent_status_checkpoint.min_oplog_delta,
+            deps.worker_service(),
+        );
+
         let worker = Worker {
             owned_agent_id,
             parsed_agent_id: agent_id.clone(),
@@ -343,10 +490,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
             update_state_lock: Mutex::new(()),
-            last_known_status_detached: AtomicBool::new(false),
+            last_known_status_detached,
+            status_flusher,
+            status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
             desired_extra_filesystem_storage: AtomicU64::new(0),
+            current_component,
+            read_only_cache,
+            read_only_cache_epoch: Arc::new(AtomicU64::new(0)),
         };
 
         // Wire the worker event service into the forwarding oplog so plugin errors
@@ -409,6 +561,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match &*instance_guard {
             WorkerInstance::Unloaded { .. } => {
                 this.mark_as_loading();
+                crate::metrics::workers::inc_worker_waiting_for_memory();
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
                     this.memory_requirement().await?,
@@ -490,6 +643,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Transition the worker into a deleting state.
     /// Rejects all new invocations and stops any running execution.
     pub async fn start_deleting(&self) -> Result<(), WorkerExecutorError> {
+        // Stop any future background flush or clean-checkpoint write from resurrecting the cached
+        // status after the upcoming `WorkerService::remove`/`remove_cached_status` deletes it (the
+        // latter clears both the live cache and the checkpoint). Each awaits any in-flight write so
+        // none can land after the delete.
+        self.status_flusher.begin_delete().await;
+        self.status_checkpointer.begin_delete().await;
         let error = WorkerExecutorError::invalid_request("Worker is being deleted");
         self.stop_internal(false, Some(error), FinalWorkerState::Deleting)
             .await;
@@ -614,8 +773,44 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    /// Extracts the read-only context for `invocation` by looking up the
+    /// method's `read_only` config on the currently-loaded component
+    /// metadata. Returns `None` for non-`AgentMethod` invocations and for
+    /// methods that are not declared `#[read_only]`.
+    fn read_only_context_for(&self, invocation: &AgentInvocation) -> Option<ReadOnlyContext> {
+        let AgentInvocation::AgentMethod {
+            method_name,
+            input,
+            principal,
+            ..
+        } = invocation
+        else {
+            return None;
+        };
+
+        let snapshot = self.current_component.load();
+        let component_revision = snapshot.revision;
+        let metadata = &snapshot.metadata;
+        let agent_type_opt = self.parsed_agent_id.as_ref().map(|p| p.agent_type.clone());
+
+        let agent_type = agent_type_opt.as_ref()?;
+        let method = read_only_cache::resolve_read_only_method(metadata, agent_type, method_name)?;
+        let cfg = method.read_only.as_ref()?;
+
+        Some(ReadOnlyContext {
+            method_name: method_name.clone(),
+            input: input.clone(),
+            principal: principal.clone(),
+            cfg: cfg.clone(),
+            component_revision,
+        })
+    }
+
+    /// Invocation entry point. Returns `Finished(...)` on read-only cache hit,
+    /// otherwise `Pending(subscription)`. `Arc<Self>` is needed to spawn the
+    /// detached observer that fills the read-only cache on completion.
     pub async fn invoke(
-        &self,
+        self: Arc<Self>,
         invocation: AgentInvocation,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
         let idempotency_key = invocation
@@ -625,26 +820,143 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             })?
             .clone();
 
-        // We need to create the subscription before checking whether the result is still pending, otherwise there is a race.
+        // Classification uses the in-memory component snapshot - no metadata
+        // fetch on the hot path.
+        let read_only_ctx = self.read_only_context_for(&invocation);
+
+        let effect = if read_only_ctx.is_some() {
+            read_only_cache::InvocationEffect::ReadOnly
+        } else {
+            read_only_cache::InvocationEffect::Mutating
+        };
+
+        // Cache HIT: still refuse on deleting / startup-failed worker.
+        if let Some(ro) = &read_only_ctx {
+            let no_cache = is_no_cache(&ro.cfg.cache_policy);
+            if !no_cache {
+                let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
+                let principal_ref = if ro.cfg.uses_principal {
+                    Some(&ro.principal)
+                } else {
+                    None
+                };
+                let key = read_only_cache::build_read_only_cache_key(
+                    &ro.method_name,
+                    &ro.input,
+                    principal_ref,
+                    ro.component_revision,
+                    cur_epoch,
+                );
+                if let Some(entry) = self.read_only_cache.try_get(&key).await {
+                    if !entry.is_expired(tokio::time::Instant::now()) {
+                        let instance_guard = self.lock_non_stopping_worker().await;
+                        if instance_guard.is_deleting() {
+                            return Err(WorkerExecutorError::invalid_request(
+                                "Cannot enqueue invocation to a deleting worker",
+                            ));
+                        }
+                        if let Some(err) = instance_guard.startup_failure() {
+                            return Err(err.clone());
+                        }
+                        drop(instance_guard);
+                        return Ok(ResultOrSubscription::Finished(Ok(entry.output.clone())));
+                    } else {
+                        // Only evict if the stored entry is still ours.
+                        let me = entry.clone();
+                        let _ = self
+                            .read_only_cache
+                            .remove_if_cached(&key, move |current| Arc::ptr_eq(current, &me))
+                            .await;
+                    }
+                }
+            }
+        }
+
+        // Subscribe before enqueue/lookup to avoid missing the completion event.
         let subscription = self.events().subscribe();
+        let observer_sub = if let Some(ro) = &read_only_ctx {
+            if is_no_cache(&ro.cfg.cache_policy) {
+                None
+            } else {
+                Some(self.events().subscribe())
+            }
+        } else {
+            None
+        };
 
         let output = async { self.lookup_invocation_result(&idempotency_key).await }
             .instrument(span!(Level::INFO, "lookup_invocation_result"))
             .await;
-        match output {
-            LookupResult::Complete(output) => Ok(ResultOrSubscription::Finished(output)),
-            LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
-            LookupResult::Pending => Ok(ResultOrSubscription::Pending(subscription)),
-            LookupResult::New => {
-                self.enqueue_worker_invocation(invocation).await?;
-                Ok(ResultOrSubscription::Pending(subscription))
+        let (result, enqueue_epoch) = match output {
+            LookupResult::Complete(output) => (ResultOrSubscription::Finished(output), None),
+            LookupResult::Interrupted => {
+                return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
             }
+            LookupResult::Pending => (ResultOrSubscription::Pending(subscription), None),
+            LookupResult::New => {
+                // For ReadOnly the helper returns the epoch captured under the
+                // enqueue lock; using any other epoch could store stale data.
+                let captured = self
+                    .enqueue_worker_invocation_with_effect(invocation, effect)
+                    .await?;
+                (ResultOrSubscription::Pending(subscription), captured)
+            }
+        };
+
+        // Only populate the cache when this call owns the enqueue (only then
+        // do we have a valid epoch).
+        if let Some(ro) = read_only_ctx
+            && let (Some(mut obs_sub), Some(epoch)) = (observer_sub, enqueue_epoch)
+        {
+            // Do not capture `Arc<Self>` - a never-completing invocation would
+            // otherwise pin the worker.
+            let cache = self.read_only_cache.clone();
+            // The observer task does a final epoch recheck before insert
+            // (`populate_read_only_cache`), so it needs the live atomic.
+            let read_only_cache_epoch = self.read_only_cache_epoch.clone();
+            let agent_id = self.owned_agent_id.agent_id.clone();
+            let idem = idempotency_key.clone();
+            tokio::spawn(async move {
+                let wait_result = obs_sub
+                    .wait_for(|event| match event {
+                        Event::InvocationCompleted {
+                            agent_id: ev_agent,
+                            idempotency_key,
+                            result,
+                        } if *ev_agent == agent_id && *idempotency_key == idem => {
+                            Some(result.clone())
+                        }
+                        _ => None,
+                    })
+                    .await;
+                if let Ok(Ok(output)) = wait_result
+                    && matches!(output.result, AgentInvocationResult::AgentMethod { .. })
+                {
+                    populate_read_only_cache(&cache, &read_only_cache_epoch, &ro, epoch, output)
+                        .await;
+                }
+            });
         }
+
+        Ok(result)
     }
 
     /// Invokes the worker and awaits for a result.
+    ///
+    /// For cacheable read-only `AgentMethod` invocations, concurrent Await
+    /// misses for the same `ReadOnlyCacheKey` are *coalesced* via
+    /// [`golem_common::cache::Cache::get_or_insert_simple`] — only the first
+    /// caller runs the underlying invocation and populates the cache; later
+    /// concurrent callers receive the same result without re-enqueueing.
+    ///
+    /// Coalescing is intentionally scoped to the Await path. Fire-and-forget
+    /// (`invoke`) callers must return immediately, so they do not block on
+    /// pending entries and continue to use the detached observer to populate
+    /// the cache. The unified key shape means an Await coalesce and a
+    /// fire-and-forget observer can race; both produce the same
+    /// [`ReadOnlyCacheEntry`] from the same output, so the race is benign.
     pub async fn invoke_and_await(
-        &self,
+        self: Arc<Self>,
         invocation: AgentInvocation,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let idempotency_key = invocation
@@ -654,10 +966,191 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             })?
             .clone();
 
-        match self.invoke(invocation).await? {
+        // Fast path: read-only Await coalescing.
+        //
+        // Coalescing is only safe for genuinely new invocations.
+        // Idempotency replay (`lookup_invocation_result` returns `Complete`)
+        // must return the result that was recorded under whatever epoch the
+        // original invocation ran in — so coalescing the call (and caching
+        // its result under the current epoch's `ReadOnlyCacheKey`) would
+        // poison the cache. `Pending` means another caller is responsible
+        // for completing the invocation, so we just await the existing
+        // result instead of enqueueing a duplicate or caching here.
+        //
+        // For non-`New` results we MUST NOT fall through to
+        // `Worker::invoke`: that path checks the read-only cache HIT before
+        // looking up the idempotency key, which would let a warm
+        // current-epoch entry shadow the recorded idempotency result.
+        // Instead we handle non-`New` results inline below.
+        let lookup_for_coalesce = if let Some(ro) = self.read_only_context_for(&invocation)
+            && !is_no_cache(&ro.cfg.cache_policy)
+        {
+            Some((ro, self.lookup_invocation_result(&idempotency_key).await))
+        } else {
+            None
+        };
+
+        match lookup_for_coalesce {
+            Some((_, LookupResult::Complete(Ok(output)))) => return Ok(output),
+            Some((_, LookupResult::Complete(Err(err)))) => return Err(err),
+            Some((_, LookupResult::Interrupted)) => {
+                return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
+            }
+            Some((_, LookupResult::Pending)) => {
+                // Another caller already enqueued this idempotency key. Wait
+                // for its result without going through `Worker::invoke` (so a
+                // current-epoch read-only cache HIT cannot shadow the
+                // recorded idempotency result), and do not populate the
+                // read-only cache here.
+                let subscription = self.events().subscribe();
+                Worker::start_if_needed(self.clone()).await?;
+                let result = self
+                    .wait_for_invocation_result(&idempotency_key, subscription)
+                    .await;
+                return match result {
+                    Ok(LookupResult::Complete(Ok(output))) => Ok(output),
+                    Ok(LookupResult::Complete(Err(err))) => Err(err),
+                    Ok(LookupResult::Interrupted) => {
+                        Err(InterruptKind::Interrupt(Timestamp::now_utc()).into())
+                    }
+                    Ok(LookupResult::Pending) => Err(WorkerExecutorError::unknown(
+                        "Unexpected pending result after invoke",
+                    )),
+                    Ok(LookupResult::New) => Err(WorkerExecutorError::unknown(
+                        "Unexpected missing result after invoke",
+                    )),
+                    Err(recv_error) => Err(WorkerExecutorError::unknown(format!(
+                        "Failed waiting for invocation result: {recv_error}"
+                    ))),
+                };
+            }
+            _ => {}
+        }
+
+        if let Some((ro, LookupResult::New)) = lookup_for_coalesce {
+            // Use the same key shape as the `invoke` cache HIT path so a hit
+            // there and a coalesced miss here see the same entry.
+            let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
+            let principal_ref = if ro.cfg.uses_principal {
+                Some(&ro.principal)
+            } else {
+                None
+            };
+            let key = read_only_cache::build_read_only_cache_key(
+                &ro.method_name,
+                &ro.input,
+                principal_ref,
+                ro.component_revision,
+                cur_epoch,
+            );
+
+            // Honor TTL up front: a stale entry must miss, not hit (mirrors
+            // the `Worker::invoke` HIT path).
+            if let Some(entry) = self.read_only_cache.try_get(&key).await {
+                if !entry.is_expired(tokio::time::Instant::now()) {
+                    // Apply the same `is_deleting` / `startup_failure` guard
+                    // the HIT path in `invoke` applies, so we don't return a
+                    // cached value for a worker that's about to disappear.
+                    let instance_guard = self.lock_non_stopping_worker().await;
+                    if instance_guard.is_deleting() {
+                        return Err(WorkerExecutorError::invalid_request(
+                            "Cannot enqueue invocation to a deleting worker",
+                        ));
+                    }
+                    if let Some(err) = instance_guard.startup_failure() {
+                        return Err(err.clone());
+                    }
+                    drop(instance_guard);
+                    return Ok(entry.output.clone());
+                } else {
+                    let me = entry.clone();
+                    let _ = self
+                        .read_only_cache
+                        .remove_if_cached(&key, move |current| Arc::ptr_eq(current, &me))
+                        .await;
+                }
+            }
+
+            // Coalesce concurrent first-time misses for this key. Only the
+            // first caller spawns the underlying invocation; subsequent
+            // concurrent callers wait on the same pending entry inside
+            // `get_or_insert_simple_spawned` and receive the same
+            // `ReadOnlyCacheEntry`.
+            //
+            // The spawned closure runs `invoke_and_await_uncoalesced` to
+            // bypass this coalescing path. Returning Err removes the pending
+            // entry so a later caller retries (failures must not poison the
+            // cache).
+            //
+            // The closure is spawned via `tokio::task::spawn` (see
+            // [`Cache::get_or_insert_spawned`]) so that cancellation of any
+            // single Await caller does NOT leave the pending entry stuck
+            // forever — the spawned owner future survives caller drop and
+            // resolves the entry one way or the other.
+            let ro_for_closure = ro.clone();
+            let worker = self.clone();
+            let invocation_for_closure = invocation;
+            let idem_for_closure = idempotency_key.clone();
+            let entry_result = self
+                .read_only_cache
+                .get_or_insert_simple_spawned(&key, move || async move {
+                    let output = Worker::invoke_and_await_uncoalesced(
+                        worker,
+                        invocation_for_closure,
+                        idem_for_closure,
+                    )
+                    .await?;
+                    if !matches!(output.result, AgentInvocationResult::AgentMethod { .. }) {
+                        // Defensive: only `AgentMethod` outputs are cacheable.
+                        return Err(WorkerExecutorError::unknown(
+                            "read-only invocation produced a non-AgentMethod result",
+                        ));
+                    }
+                    Ok(build_read_only_cache_entry(&ro_for_closure, output))
+                })
+                .await;
+
+            // Stale-populate guard: if the epoch bumped while the owner ran,
+            // the entry we just inserted is keyed on the old epoch and is
+            // already unreachable for any future lookup. We could leave it
+            // for the LRU; explicitly removing it keeps the cache tidy.
+            if self.read_only_cache_epoch.load(Ordering::SeqCst) != cur_epoch
+                && let Ok(entry) = &entry_result
+            {
+                let me = entry.clone();
+                let _ = self
+                    .read_only_cache
+                    .remove_if_cached(&key, move |current| Arc::ptr_eq(current, &me))
+                    .await;
+            }
+
+            return entry_result.map(|entry| entry.output.clone());
+        }
+
+        // Non-cacheable path: `NoCache` read-only methods and all
+        // non-read-only invocations skip coalescing entirely.
+        Worker::invoke_and_await_uncoalesced(self, invocation, idempotency_key).await
+    }
+
+    /// Underlying `invoke_and_await` implementation without read-only
+    /// coalescing. Used directly for non-cacheable invocations and as the
+    /// per-key owner future inside the coalesced path above.
+    async fn invoke_and_await_uncoalesced(
+        self: Arc<Self>,
+        invocation: AgentInvocation,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        match self.clone().invoke(invocation).await? {
             ResultOrSubscription::Finished(Ok(output)) => Ok(output),
             ResultOrSubscription::Finished(Err(err)) => Err(err),
             ResultOrSubscription::Pending(subscription) => {
+                // Cache miss / non-read-only path: ensure the wasmtime instance is
+                // running so the queued invocation can be processed. The
+                // `ResultOrSubscription::Finished` arm above short-circuits before
+                // this, which is exactly what makes a read-only cache hit avoid
+                // any agent loading.
+                Worker::start_if_needed(self.clone()).await?;
+
                 debug!("Waiting for idempotency key to complete",);
 
                 let result = async {
@@ -692,8 +1185,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// The update itself is not performed by the invocation queue's processing loop,
     /// it is going to affect how the worker is recovered next time.
     pub async fn enqueue_update(&self, update_description: UpdateDescription) {
+        // Bump + commit under the same instance lock.
+        let instance_guard = self.lock_non_stopping_worker().await;
+        self.bump_read_only_cache_epoch();
         let entry = OplogEntry::pending_update(update_description.clone());
-        self.add_and_commit_oplog(entry).await;
+        self.add_and_commit_oplog_internal(&instance_guard, entry)
+            .await;
+        drop(instance_guard);
     }
 
     /// Enqueues a manual update.
@@ -708,12 +1206,80 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
     }
 
-    pub async fn pending_invocations(&self) -> Vec<TimestampedAgentInvocation> {
+    pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
         self.last_known_status
             .read()
             .await
             .pending_invocations
             .clone()
+    }
+
+    /// Reads the `PendingAgentInvocation` oplog entry referenced by `pending` and reconstructs the
+    /// full invocation, downloading its payload from external storage if needed. The status record
+    /// only keeps a lightweight reference, so callers that need to execute the invocation hydrate
+    /// it on demand.
+    async fn hydrate_pending_invocation(
+        &self,
+        pending: &PendingInvocationRef,
+    ) -> Result<TimestampedAgentInvocation, WorkerExecutorError> {
+        let entry = self.oplog.read(pending.oplog_index).await;
+        match entry {
+            OplogEntry::PendingAgentInvocation {
+                timestamp,
+                idempotency_key,
+                payload,
+                trace_id,
+                trace_states,
+                invocation_context,
+            } => {
+                let agent_payload = self.oplog.download_payload(payload).await.map_err(|e| {
+                    WorkerExecutorError::unknown(format!(
+                        "Failed to download pending agent invocation payload at oplog index {}: {e}",
+                        pending.oplog_index
+                    ))
+                })?;
+                let invocation_context = InvocationContextStack::from_oplog_data(
+                    trace_id,
+                    trace_states,
+                    invocation_context,
+                );
+                let invocation =
+                    AgentInvocation::from_parts(idempotency_key, agent_payload, invocation_context);
+                Ok(TimestampedAgentInvocation {
+                    timestamp,
+                    invocation,
+                })
+            }
+            other => Err(WorkerExecutorError::unknown(format!(
+                "Expected a PendingAgentInvocation oplog entry at index {}, but found {other:?}",
+                pending.oplog_index
+            ))),
+        }
+    }
+
+    /// Reads the `PendingUpdate` oplog entry referenced by `pending` and reconstructs the full
+    /// update description, including any snapshot payload reference. The status record only keeps
+    /// a lightweight reference, so callers that apply the update hydrate it on demand.
+    async fn hydrate_pending_update(
+        &self,
+        pending: &PendingUpdateRef,
+    ) -> Result<TimestampedUpdateDescription, WorkerExecutorError> {
+        let entry = self.oplog.read(pending.oplog_index).await;
+        match entry {
+            OplogEntry::PendingUpdate {
+                timestamp,
+                description,
+                ..
+            } => Ok(TimestampedUpdateDescription {
+                timestamp,
+                oplog_index: pending.oplog_index,
+                description,
+            }),
+            other => Err(WorkerExecutorError::unknown(format!(
+                "Expected a PendingUpdate oplog entry at index {}, but found {other:?}",
+                pending.oplog_index
+            ))),
+        }
     }
 
     pub async fn invocation_results(&self) -> HashMap<IdempotencyKey, OplogIndex> {
@@ -752,7 +1318,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             vec![key],
             pending
                 .iter()
-                .filter_map(|entry| entry.invocation.idempotency_key())
+                .filter_map(|entry| entry.idempotency_key())
                 .collect(),
         ]
         .concat();
@@ -864,6 +1430,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && !has_queued_internal_work
             && !has_resume_replay
             && !has_interrupt
+    }
+
+    /// Returns `true` iff this worker currently has a loaded wasmtime instance
+    /// (i.e. its [`WorkerInstance`] is in the `Running` state).
+    ///
+    /// `Worker` shells can outlive their wasmtime instance — for example after
+    /// memory-pressure eviction unloads the instance but the shell stays alive
+    /// in [`ActiveWorkers`] so its caches (read-only cache, pending
+    /// invocations, …) can keep serving. This accessor lets callers
+    /// distinguish those two states.
+    pub async fn is_loaded(&self) -> bool {
+        matches!(&*self.instance.lock().await, WorkerInstance::Running(_))
     }
 
     /// Classifies the worker for eviction ordering under memory/filesystem
@@ -1079,11 +1657,66 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    /// Enqueue invocation of an exported function
+    /// Bumps the read-only cache epoch, lazily invalidating all cached entries
+    /// (the epoch is part of the cache key). Called from
+    /// `DurableWorkerCtx::on_agent_invocation_success` immediately after a
+    /// mutating invocation's `AgentInvocationFinished` is committed, so a
+    /// cached read-only result keeps serving while the mutation is queued /
+    /// running. Also called from
+    /// `enqueue_update`/`revert` where the change is effectively in flight.
+    pub(crate) fn bump_read_only_cache_epoch(&self) {
+        self.read_only_cache_epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Classifies a just-completed `AgentMethod` invocation by `method_name`
+    /// against the worker's in-memory component snapshot.
+    ///
+    /// Returns `true` for any invocation that should invalidate cached
+    /// read-only results: a non-read-only method, an unknown method (safe
+    /// default), or an `AgentMethod` on a worker with no `parsed_agent_id`.
+    /// Returns `false` only when the method is explicitly `read_only`.
+    ///
+    /// Used by `DurableWorkerCtx::on_agent_invocation_success` to decide
+    /// whether to bump the read-only cache epoch on successful completion
+    pub fn agent_method_invalidates_read_only_cache(&self, method_name: &str) -> bool {
+        let snapshot = self.current_component.load();
+        let metadata = &snapshot.metadata;
+        let Some(parsed) = self.parsed_agent_id.as_ref() else {
+            return true;
+        };
+        match read_only_cache::resolve_read_only_method(metadata, &parsed.agent_type, method_name) {
+            Some(method) => method.read_only.is_none(),
+            None => true,
+        }
+    }
+
+    /// Enqueue invocation of an exported function. Uses
+    /// `UnknownAssumeMutating` as a safe default for callers without
+    /// classification; the epoch is no longer bumped at enqueue time.
     async fn enqueue_worker_invocation(
         &self,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
+        self.enqueue_worker_invocation_with_effect(
+            invocation,
+            read_only_cache::InvocationEffect::UnknownAssumeMutating,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Enqueue invocation, classified by the caller. Passing `ReadOnly` for a
+    /// mutating method would skip cache invalidation and produce stale reads.
+    ///
+    /// For `ReadOnly`, returns the epoch captured under the same instance lock
+    /// that commits the pending entry. Populating the cache later must use
+    /// this captured epoch, not the current one, to avoid storing a stale
+    /// result under a post-mutation epoch.
+    pub(crate) async fn enqueue_worker_invocation_with_effect(
+        &self,
+        invocation: AgentInvocation,
+        read_only_cache_effect: read_only_cache::InvocationEffect,
+    ) -> Result<Option<u64>, WorkerExecutorError> {
         async {
             let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1126,6 +1759,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 timestamp: entry.timestamp(),
                 invocation,
             };
+
+            // Snapshot the epoch under the instance lock that commits the
+            // pending entry. Read-only captures the current epoch for later
+            // cache fill. Mutating invocations no longer bump here — the bump
+            // happens on *successful completion* in
+            // `DurableWorkerCtx::on_agent_invocation_success`, so a cached
+            // read-only result stays serviceable while the mutation is queued
+            // / running. The populate-time recheck in
+            // `populate_read_only_cache` covers the race where the mutation
+            // completes before the read-only observer fills the cache.
+            let read_only_epoch_snapshot = match read_only_cache_effect {
+                read_only_cache::InvocationEffect::ReadOnly => {
+                    Some(self.read_only_cache_epoch.load(Ordering::SeqCst))
+                }
+                read_only_cache::InvocationEffect::Mutating
+                | read_only_cache::InvocationEffect::UnknownAssumeMutating => None,
+            };
+
             self.add_and_commit_oplog_internal(&instance_guard, entry)
                 .await;
 
@@ -1142,7 +1793,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             drop(instance_guard);
 
-            Ok(())
+            Ok(read_only_epoch_snapshot)
         }
         .instrument(span!(Level::INFO, "enqueue_invocation"))
         .await
@@ -1317,6 +1968,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
+        // Plugin activation does not affect invocation results: do not bump
+        // the read-only cache epoch.
         self.add_and_commit_oplog_internal(
             &instance_guard,
             OplogEntry::activate_plugin(plugin_grant_id),
@@ -1339,6 +1992,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
+        // Plugin deactivation does not affect invocation results: do not bump
+        // the read-only cache epoch.
         self.add_and_commit_oplog_internal(
             &instance_guard,
             OplogEntry::deactivate_plugin(plugin_grant_id),
@@ -1459,6 +2114,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 end: region_end,
             };
 
+            // Revert changes observable state, invalidate cached results.
+            self.bump_read_only_cache_epoch();
+
             // this commit will detach the worker status, immediately reattach it so we see the up to date status.
             self.add_and_commit_oplog_internal(&instance_guard, OplogEntry::revert(region))
                 .await;
@@ -1514,14 +2172,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
             result
-                .cache(&self.owned_agent_id, self.agent_mode(), self)
+                .cache(
+                    &self.owned_agent_id,
+                    self.agent_mode(),
+                    self.initial_worker_metadata.fingerprint,
+                    self,
+                )
                 .await;
             lookup_result_from_cached_result(&status, key, result)
         } else {
             let is_pending = status
                 .pending_invocations
                 .iter()
-                .any(|entry| entry.invocation.has_idempotency_key(key));
+                .any(|entry| entry.has_idempotency_key(key));
             let is_current = status.current_idempotency_key.as_ref() == Some(key);
             if is_pending || is_current {
                 LookupResult::Pending
@@ -1572,10 +2235,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         );
 
         match previous_instance_state {
-            WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
+            WorkerInstance::Unloaded { .. } => {
                 if let Some(ref error) = fail_pending_invocations {
                     self.fail_pending_invocations(error.clone()).await;
                 }
+                **instance_guard = final_state.into_instance();
+                StopResult::Stopped
+            }
+            WorkerInstance::WaitingForPermit(_) => {
+                if let Some(ref error) = fail_pending_invocations {
+                    self.fail_pending_invocations(error.clone()).await;
+                }
+                crate::metrics::workers::dec_worker_waiting_for_memory();
                 **instance_guard = final_state.into_instance();
                 StopResult::Stopped
             }
@@ -1615,14 +2286,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Make sure the oplog is committed
                 self.oplog.commit(CommitLevel::Always).await;
 
+                // Persist any pending cached-status changes synchronously before the worker leaves
+                // memory, so a subsequent cold load does not have to re-fold oplog entries that were
+                // only reflected in the (deferred) in-memory status. Best-effort: a failure is
+                // logged/metered inside `flush` and re-queued; the blob is reconstructable from the
+                // oplog, so it must not block the stop.
+                if let Err(err) = self
+                    .status_flusher
+                    .flush(status_flusher::FlushReason::Forced)
+                    .await
+                {
+                    debug!("Forced status flush on stop failed (will retry in background): {err}");
+                }
+
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
+                    crate::metrics::workers::dec_worker_memory_resident();
                     **instance_guard = final_state.into_instance();
                     StopResult::Stopped
                 } else {
                     // drop the running worker, this signals to the invocation loop to start exiting.
+                    // RunningWorker::drop releases the memory permit, so dec resident here.
                     let run_loop_handle = running.stop();
                     let notify = OneShotEvent::new();
+                    crate::metrics::workers::dec_worker_memory_resident();
                     **instance_guard = WorkerInstance::Stopping(StoppingWorker {
                         notify: notify.clone(),
                         final_state,
@@ -1710,7 +2397,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut keys_to_fail: Vec<IdempotencyKey> = status
             .pending_invocations
             .iter()
-            .filter_map(|inv| inv.invocation.idempotency_key().cloned())
+            .filter_map(|inv| inv.idempotency_key().cloned())
             .collect();
         if let Some(current_key) = &status.current_idempotency_key
             && !keys_to_fail.contains(current_key)
@@ -1829,14 +2516,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status,
             }) => {
                 // make sure we are fully up to date on the oplog
-                let current_status = calculate_last_known_status_for_existing_worker(
+                let agent_mode = initial_worker_metadata.agent_mode;
+                let current_status = calculate_last_known_status_with_checkpoint(
                     this,
                     owned_agent_id,
-                    initial_worker_metadata.agent_mode,
+                    agent_mode,
                     last_known_status,
                 )
-                .await;
+                .await
+                .expect("Failed to calculate worker status for existing worker");
 
+                // Use the CREATE-time revision: `agent_id` parsing and
+                // `resolve_agent_properties` must stay tied to the metadata
+                // the oplog was committed against. `current_component` is
+                // refreshed to the live revision by `create_instance`.
                 let initial_component = this
                     .component_service()
                     .get_metadata(
@@ -1848,7 +2541,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let current_status = Arc::new(RwLock::new(current_status));
 
                 let agent_id = if initial_component.metadata.is_agent() {
-                    let agent_id = ParsedAgentId::parse(
+                    let agent_id = LegacyParsedAgentId::parse(
                         &owned_agent_id.agent_id.agent_id,
                         &initial_component.metadata,
                     )
@@ -1895,6 +2588,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_id,
                     snapshot_policy,
                     oplog,
+                    initial_component: Arc::new(initial_component),
                 })
             }
             None => {
@@ -1905,7 +2599,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await?;
 
                 let agent_id = if component.metadata.is_agent() {
-                    let agent_id = ParsedAgentId::parse(
+                    let agent_id = LegacyParsedAgentId::parse(
                         &owned_agent_id.agent_id.agent_id,
                         &component.metadata,
                     )
@@ -2044,8 +2738,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 initial_status.write().await.oplog_idx = oplog.current_oplog_index().await;
 
+                // Cold path (worker creation): no previously cached status to diff against.
+                let initial_status_value = initial_status.read().await.clone();
                 this.worker_service()
-                    .update_cached_status(owned_agent_id, &*initial_status.read().await)
+                    .update_cached_status(owned_agent_id, None, initial_status_value)
                     .await;
 
                 Ok(GetOrCreateWorkerResult {
@@ -2055,6 +2751,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_id,
                     snapshot_policy,
                     oplog,
+                    initial_component: Arc::new(component),
                 })
             }
         }
@@ -2066,22 +2763,38 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.commit_and_update_state_inner(&update_state_lock_guard, CommitLevel::Always)
             .await;
-        if self
-            .last_known_status_detached
-            .swap(false, Ordering::Relaxed)
-        {
-            debug!("Worker status was detached from oplog, reloading it from scratch");
+        if self.last_known_status_detached.load(Ordering::Relaxed) {
+            debug!("Worker status was detached from oplog, recomputing it");
 
-            // reload status from scratch
-            let worker_status = calculate_last_known_status_for_existing_worker(
-                self,
-                &self.owned_agent_id,
-                self.agent_mode(),
-                None,
-            )
-            .await;
+            // The in-memory status is no longer foldable (a jump deleted its index, or a revert
+            // moved the oplog behind it), so we recompute. Prefer folding forward from the clean
+            // checkpoint (which predates any jump region) over a full re-read of the oplog.
+            let agent_mode = self.agent_mode();
+            let owned_agent_id = &self.owned_agent_id;
+            let worker_status =
+                calculate_last_known_status_with_checkpoint(self, owned_agent_id, agent_mode, None)
+                    .await
+                    .expect("Failed to recompute worker status for existing worker");
 
+            // Install the recomputed status while still detached, so a concurrent background sweep
+            // keeps skipping (the in-memory status is not authoritative until it is installed).
             self.update_last_known_status(worker_status.clone()).await;
+
+            // Now the in-memory status is authoritative again; clear the flag and force a flush.
+            self.last_known_status_detached
+                .store(false, Ordering::Relaxed);
+
+            // The status was just recomputed from scratch; persist it synchronously (a full
+            // reconcile write, since the baseline was invalidated on detach) so the cache is
+            // immediately consistent rather than waiting for the next background sweep. Best-effort:
+            // a failure is logged/metered and re-queued inside `flush`.
+            if let Err(err) = self
+                .status_flusher
+                .flush(status_flusher::FlushReason::Forced)
+                .await
+            {
+                debug!("Forced status flush on reattach failed (will retry in background): {err}");
+            }
 
             // ensure we hold mutex for the full duration
             drop(update_state_lock_guard);
@@ -2100,14 +2813,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let old_status = self.last_known_status.read().await.clone();
 
             let updated_status = update_status_with_new_entries(
-                self,
-                &self.owned_agent_id,
                 self.agent_mode(),
                 old_status.clone(),
                 new_entries,
                 &self.config().retry,
-            )
-            .await;
+            );
 
             if let Some(updated_status) = updated_status {
                 if updated_status != old_status {
@@ -2126,6 +2836,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 tracing::debug!("Detaching worker_status from oplog");
                 self.last_known_status_detached
                     .store(true, Ordering::Release);
+                // The in-memory status is no longer authoritative, and after reattach it will be
+                // recomputed from scratch, so the persisted baseline can no longer be trusted: the
+                // next flush must be a full reconcile write.
+                self.status_flusher.invalidate_baseline().await;
                 true
             }
         } else {
@@ -2194,6 +2908,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let Some(sp) = filesystem_storage_permit {
                     running.merge_extra_filesystem_storage_permits(sp);
                 }
+                crate::metrics::workers::dec_worker_waiting_for_memory();
+                crate::metrics::workers::inc_worker_memory_resident();
                 *instance_guard = WorkerInstance::Running(running);
             }
             _ => {
@@ -2202,14 +2918,84 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    /// Writes a *clean* status checkpoint from the current in-memory status if eligible (see
+    /// [`status_checkpointer::StatusCheckpointer::maybe_checkpoint`]).
+    ///
+    /// Must only be called at structurally clean boundaries where no jumpable oplog region is open
+    /// (snapshot save, idle suspend). Skipped while the status is detached, because then the
+    /// in-memory status is not authoritative — checkpointing it could persist a baseline inside a
+    /// region. Best-effort and bounded by the throttle; never blocks meaningfully.
+    pub(crate) async fn checkpoint_status(&self, reason: status_checkpointer::CheckpointReason) {
+        if self.last_known_status_detached.load(Ordering::Acquire) {
+            return;
+        }
+        let status = self.last_known_status.read().await.clone();
+        self.status_checkpointer
+            .maybe_checkpoint(&status, reason)
+            .await;
+    }
+
+    /// Writes a *clean* status checkpoint *during* a long-running invocation, taken from the current
+    /// committed in-memory status (the caller must only invoke this right after a durable commit, so
+    /// `last_known_status` reflects the committed oplog tip).
+    ///
+    /// In addition to the [`Self::checkpoint_status`] guards, this respects the per-invocation
+    /// `get_oplog_index` marker watermark: if the guest captured an oplog index `M` via
+    /// `get_oplog_index`, a later `set_oplog_index(M)` deletes `(M.next()..tip]` but preserves `M`,
+    /// so a checkpoint must not advance past `M` or it would be discarded after such a jump. When a
+    /// marker is present and the committed tip is already beyond it, we skip the checkpoint (a cheap
+    /// no-op) rather than write one that a later jump would invalidate.
+    pub(crate) async fn checkpoint_status_mid_invocation(
+        &self,
+        min_exposed_marker: Option<OplogIndex>,
+    ) {
+        if self.last_known_status_detached.load(Ordering::Acquire) {
+            return;
+        }
+        let status = self.last_known_status.read().await.clone();
+        if let Some(marker) = min_exposed_marker
+            && status.oplog_idx > marker
+        {
+            return;
+        }
+        self.status_checkpointer
+            .maybe_checkpoint(
+                &status,
+                status_checkpointer::CheckpointReason::MidInvocation,
+            )
+            .await;
+    }
+
+    /// Synchronously persists any pending cached-status changes for this worker. Used at lifecycle
+    /// boundaries (e.g. suspend) so the cached blob is up to date when the worker goes idle, rather
+    /// than waiting for the next background sweep.
+    pub(crate) async fn force_flush_status(&self) {
+        // Best-effort: a failure is logged/metered and re-queued inside `flush`; the blob is
+        // reconstructable from the oplog so it must not block the caller (e.g. suspend).
+        if let Err(err) = self
+            .status_flusher
+            .flush(status_flusher::FlushReason::Forced)
+            .await
+        {
+            debug!("Forced status flush failed (will retry in background): {err}");
+        }
+    }
+
     async fn update_last_known_status(&self, new_status: AgentStatusRecord) {
-        let previous_status = self.metrics_status.status();
-        *self.last_known_status.write().await = new_status.clone();
+        let previous_metrics_status = self.metrics_status.status();
+        // The in-memory `last_known_status` is the authoritative live status; the flusher reads it
+        // when it persists the cached blob. We replace it here and hand the (previous, new) pair to
+        // the flusher, which updates the `RunningWorkers` recovery index synchronously and either
+        // marks the worker dirty for the background sweeper or writes the blob inline (when
+        // background flushing is disabled).
+        let previous_status = {
+            let mut guard = self.last_known_status.write().await;
+            std::mem::replace(&mut *guard, new_status.clone())
+        };
         self.metrics_status
-            .update(previous_status, new_status.status);
-        // TODO: We should do this in the background on a timer instead of on every commit.
-        self.worker_service()
-            .update_cached_status(&self.owned_agent_id, &new_status)
+            .update(previous_metrics_status, new_status.status);
+        self.status_flusher
+            .on_status_changed(&previous_status, &new_status)
             .await;
     }
 }
@@ -2547,22 +3333,22 @@ impl RunningWorker {
         let worker_metadata = parent.get_latest_worker_metadata().await;
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
-        let (pending_update, component, _component_metadata) = {
-            let pending_update = worker_metadata
+        let (pending_update, component, component_metadata) = {
+            let pending_update_ref = worker_metadata
                 .last_known_status
                 .pending_updates
                 .front()
                 .cloned();
 
-            let component_revision = pending_update.as_ref().map_or(
+            let component_revision = pending_update_ref.as_ref().map_or(
                 worker_metadata.last_known_status.component_revision,
                 |update| {
-                    let target_revision = *update.description.target_revision();
+                    let target_revision = update.target_revision;
                     info!(
                         "Attempting {} update from {} to revision {target_revision}",
-                        match update.description {
-                            UpdateDescription::Automatic { .. } => "automatic",
-                            UpdateDescription::SnapshotBased { .. } => "snapshot based",
+                        match update.kind {
+                            PendingUpdateKind::Automatic => "automatic",
+                            PendingUpdateKind::SnapshotBased => "snapshot based",
                         },
                         worker_metadata.last_known_status.component_revision
                     );
@@ -2576,6 +3362,15 @@ impl RunningWorker {
                 .await
             {
                 Ok((component, component_metadata)) => {
+                    // The status record only keeps a lightweight reference to the pending update;
+                    // hydrate the full description (including any snapshot payload) from the oplog
+                    // before handing it to the worker context.
+                    let pending_update = match &pending_update_ref {
+                        Some(pending_update_ref) => {
+                            Some(parent.hydrate_pending_update(pending_update_ref).await?)
+                        }
+                        None => None,
+                    };
                     Ok((pending_update, component, component_metadata))
                 }
                 Err(error) => {
@@ -2601,15 +3396,19 @@ impl RunningWorker {
             }?
         };
 
+        // Refresh the snapshot used by the read-only cache key. The component
+        // metadata was already fetched above, so no extra fetch is incurred.
+        parent
+            .current_component
+            .store(Arc::new(component_metadata.clone()));
+
         let component_version_for_replay = worker_metadata
             .last_known_status
             .pending_updates
             .front()
-            .and_then(|update| match update.description {
-                UpdateDescription::SnapshotBased {
-                    target_revision, ..
-                } => Some(target_revision),
-                _ => None,
+            .and_then(|update| match update.kind {
+                PendingUpdateKind::SnapshotBased => Some(update.target_revision),
+                PendingUpdateKind::Automatic => None,
             })
             .unwrap_or(
                 worker_metadata
@@ -2854,6 +3653,7 @@ impl InvocationResult {
         &mut self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        agent_fingerprint: AgentFingerprint,
         services: &T,
     ) {
         if let Self::Lazy { oplog_idx } = self {
@@ -2877,6 +3677,14 @@ impl InvocationResult {
                         consumed_fuel: Some(consumed_fuel as u64),
                         invocation_status: None,
                         component_revision: Some(component_revision),
+                        // `oplog_idx` is the index of the matched
+                        // `AgentInvocationFinished` entry. The fingerprint is
+                        // the current worker's per-instance fingerprint: the
+                        // oplog is owned by a single worker instance, so any
+                        // `AgentInvocationFinished` we read from it was
+                        // necessarily produced by that instance.
+                        oplog_index: Some(oplog_idx),
+                        agent_fingerprint: Some(agent_fingerprint),
                     })
                 }
                 OplogEntry::Error {
@@ -3061,7 +3869,7 @@ struct ResolvedAgentProperties {
 
 fn resolve_agent_properties<T: HasConfig>(
     deps: &T,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&LegacyParsedAgentId>,
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> ResolvedAgentProperties {
     let resolved_agent_type =
@@ -3165,9 +3973,13 @@ struct GetOrCreateWorkerResult {
     initial_worker_metadata: AgentMetadata,
     current_status: Arc<RwLock<AgentStatusRecord>>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    agent_id: Option<ParsedAgentId>,
+    agent_id: Option<LegacyParsedAgentId>,
     snapshot_policy: SnapshotPolicy,
     oplog: Arc<dyn Oplog>,
+    /// Loaded during `get_or_create_worker_metadata` and stored on the
+    /// [`Worker`] so the read-only cache can resolve metadata without a new
+    /// `component_service` lookup.
+    initial_component: Arc<golem_service_base::model::component::Component>,
 }
 
 #[derive(Debug)]

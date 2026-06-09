@@ -18,6 +18,7 @@ use crate::agentic::agent_definition_attributes::{
 use crate::agentic::agent_definition_http_endpoint::{
     ParsedHttpEndpointDetails, extract_http_endpoints,
 };
+use crate::agentic::agent_definition_read_only::extract_read_only;
 use crate::agentic::helpers::{
     AgentConfigAttrRemover, has_agent_config_attr, is_async_trait_attr, is_constructor_method,
     is_static_method,
@@ -248,6 +249,44 @@ fn get_agent_type_with_remote_client(
 
             let method_prompt_hint = extract_prompt_hint(&trait_fn.attrs).unwrap_or_default();
 
+            let parsed_read_only = match extract_read_only(&trait_fn.attrs) {
+                Ok(v) => v,
+                Err(err) => return Some(err.to_compile_error()),
+            };
+
+            if parsed_read_only.is_some() && !agent_is_durable {
+                return Some(
+                    syn::Error::new(
+                        trait_fn.sig.ident.span(),
+                        "read-only methods have no effect on ephemeral agents (no shared state to read). Remove the #[read_only] attribute or make the agent durable."
+                    ).to_compile_error()
+                );
+            }
+
+            let mut uses_principal = false;
+            for input in &trait_fn.sig.inputs {
+                if let syn::FnArg::Typed(pat_type) = input
+                    && let syn::Type::Path(type_path) = &*pat_type.ty
+                    && let Some(last) = type_path.path.segments.last()
+                    && last.ident == "Principal"
+                {
+                    uses_principal = true;
+                    break;
+                }
+            }
+
+            let read_only_tokens = if let Some(parsed) = parsed_read_only {
+                let cache_policy = parsed.cache_policy;
+                quote! {
+                    Some(golem_rust::golem_agentic::golem::agent::common::ReadOnlyConfig {
+                        cache_policy: #cache_policy,
+                        uses_principal: #uses_principal,
+                    })
+                }
+            } else {
+                quote! { None }
+            };
+
             let endpoint_details_tokens = parsed_endpoint_details.iter().map(|parsed| {
                 let method = &parsed.http_method;
                 let path = &parsed.path_suffix;
@@ -404,6 +443,7 @@ fn get_agent_type_with_remote_client(
                     input_schema: #input_schema,
                     output_schema: #output_schema,
                     http_endpoint: #endpoint_details,
+                    read_only: #read_only_tokens,
                 }
             })
         } else {

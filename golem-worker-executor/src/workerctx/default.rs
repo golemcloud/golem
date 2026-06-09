@@ -55,7 +55,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
@@ -416,7 +416,7 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_success(full_function_name, consumed_fuel, output)
@@ -425,6 +425,14 @@ impl InvocationHooks for Context {
 
     async fn get_current_retry_point(&self) -> OplogIndex {
         self.durable_ctx.get_current_retry_point().await
+    }
+
+    fn enter_read_only_mode(&mut self, method_name: String) {
+        self.durable_ctx.enter_read_only_mode(method_name)
+    }
+
+    fn exit_read_only_mode(&mut self) {
+        self.durable_ctx.exit_read_only_mode()
     }
 }
 
@@ -842,7 +850,7 @@ impl WorkerCtx for Context {
     async fn create(
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        agent_id: Option<LegacyParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -939,7 +947,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
     }
 

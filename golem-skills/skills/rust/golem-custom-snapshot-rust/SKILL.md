@@ -168,5 +168,5 @@ async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String>
 A ready-made project with snapshotting can be created using:
 
 ```shell
-golem new --language rust --template snapshotting my-project
+golem new --yes --language rust --template snapshotting my-project
 ```

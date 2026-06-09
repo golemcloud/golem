@@ -1,0 +1,130 @@
+name: Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yaml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+defaults:
+  run:
+    working-directory: docs
+
+jobs:
+  build:
+    name: Build & check docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('docs/bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint / format / typecheck / link-check
+        run: bun run build:check
+
+      - name: Next.js build (+ pagefind index)
+        run: bun run build
+
+  deploy:
+    name: Deploy to Vercel
+    needs: build
+    runs-on: ubuntu-latest
+    # Skip deploy for PRs opened from forks: GitHub Actions does not expose
+    # repo secrets to fork PRs, so `vercel pull` would fail. The `build` job
+    # above still verifies the docs compile on every PR (including forks).
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      IS_PROD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+
+      # Vercel detects docs/bun.lockb and shells out to `bun install`
+      # during `vercel build`, so Bun must be on PATH in this job too.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel environment (production)
+        if: env.IS_PROD == 'true'
+        run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+
+      - name: Pull Vercel environment (preview)
+        if: env.IS_PROD != 'true'
+        run: vercel pull --yes --environment=preview --token=$VERCEL_TOKEN
+
+      - name: Build (Vercel)
+        run: |
+          if [ "$IS_PROD" = "true" ]; then
+            vercel build --prod --token=$VERCEL_TOKEN
+          else
+            vercel build --token=$VERCEL_TOKEN
+          fi
+
+      - name: Deploy (Vercel)
+        id: deploy
+        # `set -o pipefail` so a non-zero exit from `vercel deploy` is not
+        # masked by the success of `tail` in the pipeline.
+        # `--archive=tgz` is required because the built site has >15000 files,
+        # which exceeds Vercel's default upload limit.
+        run: |
+          set -o pipefail
+          if [ "$IS_PROD" = "true" ]; then
+            URL=$(vercel deploy --prebuilt --prod --archive=tgz --token=$VERCEL_TOKEN | tail -n 1)
+          else
+            URL=$(vercel deploy --prebuilt --archive=tgz --token=$VERCEL_TOKEN | tail -n 1)
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Deployed: $URL"
+
+      - name: Comment preview URL on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: vercel-docs-preview
+          message: |
+            📖 **Docs preview**: ${{ steps.deploy.outputs.url }}
+
+            Built from commit `${{ github.event.pull_request.head.sha }}` by [docs.yaml](../actions/runs/${{ github.run_id }}).

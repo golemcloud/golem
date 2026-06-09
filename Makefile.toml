@@ -13,8 +13,12 @@
 # - `cargo make integration-tests`: runs integration tests only
 # - `cargo make sharding-tests-debug`: runs sharding integration tests with file logging enabled, also accepts test name filter arguments
 # - `cargo make test`: runs all unit tests, worker executor tests and integration tests
-# - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
-# - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
+# - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI). Also runs `check-docs-openapi`.
+# - `cargo make generate-openapi`: generates openapi spec from the code, saves it to the openapi directory, and regenerates docs/src/content/next/rest-api/ MDX from the new spec
+# - `cargo make generate-docs-openapi`: regenerates only docs/src/content/next/rest-api/ MDX from the current in-tree openapi/golem-service.yaml (no service rebuild)
+# - `cargo make check-docs-openapi`: regenerates the docs/src/content/next/rest-api/ MDX in place and fails if the checked-in version is stale (for CI)
+# - `cargo make generate-docs-skills`: regenerates docs/src/content/next/how-to-guides/ MDX from golem-skills/skills/
+# - `cargo make check-docs-skills`: regenerates the docs/src/content/next/how-to-guides/ MDX in place and fails if the checked-in version is stale (for CI)
 # - `cargo make check-diff-model-fingerprint`: verifies golem-common diff model fingerprint against goldenfile
 # - `cargo make update-diff-model-fingerprint`: updates golem-common diff model fingerprint goldenfile
 # - `cargo make publish`: publishes packages to crates.io
@@ -34,6 +38,7 @@ skip_core_tasks = true       # we are not using the predefined cargo-make flows,
 [env]
 JUNIT_OPTS = ""
 WORKER_TEST_THREAD_OPTS = ""
+CLI_TEST_THREADS = "2"
 AWS_EC2_METADATA_DISABLED = "true"
 PROFILE = "dev"
 
@@ -43,6 +48,7 @@ CARGO_INCREMENTAL = "false"
 #CARGO_PROFILE_test_STRIP = "debuginfo"
 JUNIT_OPTS = "--format ctrf --logfile target/ctrf.json"
 WORKER_TEST_THREAD_OPTS = ""
+CLI_TEST_THREADS = "4"
 PROFILE = "dev-ci"
 CI = "true"
 # CARGO_LOG="cargo::core::compiler::fingerprint=trace"
@@ -88,6 +94,7 @@ cp wit/deps/io golem-wasm/wit/deps
 cp wit/deps/clocks golem-wasm/wit/deps
 cp wit/deps/golem-1.x golem-wasm/wit/deps
 cp wit/deps/golem-core golem-wasm/wit/deps
+cp wit/deps/golem-core-v2 golem-wasm/wit/deps
 """
 
 [tasks.wit-golem-common]
@@ -100,6 +107,7 @@ cp wit/deps/io golem-common/wit/deps
 cp wit/deps/clocks golem-common/wit/deps
 cp wit/deps/golem-1.x golem-common/wit/deps
 cp wit/deps/golem-core golem-common/wit/deps
+cp wit/deps/golem-core-v2 golem-common/wit/deps
 cp wit/deps/golem-agent golem-common/wit/deps
 """
 
@@ -121,6 +129,13 @@ glob_cp wit/deps/**/* sdks/ts/wit/deps
 glob_cp sdks/ts/wit/golem-ai/**/* sdks/ts/wit/deps
 glob_cp wit/deps/**/* sdks/scala/wit/deps
 glob_cp wit/deps/**/* sdks/moonbit/golem_sdk/wit/deps
+# The SDKs' agent-guest worlds reference golem:core@1.5.0 only.
+# Including golem:core@2.0.0 causes wit-bindgen to emit version-suffixed
+# module paths (e.g. golem::core1_5_0), which breaks downstream code generators.
+rm -r sdks/rust/golem-rust/wit/deps/golem-core-v2
+rm -r sdks/ts/wit/deps/golem-core-v2
+rm -r sdks/scala/wit/deps/golem-core-v2
+rm -r sdks/moonbit/golem_sdk/wit/deps/golem-core-v2
 """
 
 [tasks.wit-golem-cli]
@@ -133,6 +148,7 @@ cp wit/deps/clocks cli/golem-cli/wit/deps
 cp wit/deps/io cli/golem-cli/wit/deps
 cp wit/deps/golem-1.x cli/golem-cli/wit/deps
 cp wit/deps/golem-core cli/golem-cli/wit/deps
+cp wit/deps/golem-core-v2 cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
 cp wit/deps/logging cli/golem-cli/wit/deps
 """
@@ -196,6 +212,47 @@ args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
 private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-bins-all"] }]
+
+[tasks.build-cli-test-bins]
+dependencies = ["wit"]
+description = "Builds the golem and golem-cli binaries used by CLI integration tests"
+script_runner = "@duckscript"
+script = '''
+profile = get_env GOLEM_CLI_TEST_BIN_PROFILE
+profile_empty = is_empty ${profile}
+if ${profile_empty}
+    profile = set debug
+end
+
+debug_profile = eq ${profile} debug
+dev_ci_profile = eq ${profile} dev-ci
+dev_release_profile = eq ${profile} dev-release
+dev_release_ci_profile = eq ${profile} dev-release-ci
+
+if ${debug_profile}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    exec --fail-on-error cargo build -p golem --bin golem
+elseif ${dev_ci_profile}
+    exec --fail-on-error cargo build --profile dev-ci -p golem-cli --bin golem-cli
+    exec --fail-on-error cargo build --profile dev-ci -p golem --bin golem
+elseif ${dev_release_profile}
+    set_env GOLEM_BUILD_SKIP_SHADOW 1
+    exec --fail-on-error cargo build --profile dev-release -p golem-cli --bin golem-cli
+    exec --fail-on-error cargo build --profile dev-release -p golem --bin golem
+elseif ${dev_release_ci_profile}
+    set_env GOLEM_BUILD_SKIP_SHADOW 1
+    exec --fail-on-error cargo build --profile dev-release-ci -p golem-cli --bin golem-cli
+    exec --fail-on-error cargo build --profile dev-release-ci -p golem --bin golem
+else
+    echo "Unsupported GOLEM_CLI_TEST_BIN_PROFILE=${profile}. Expected 'debug', 'dev-ci', 'dev-release', or 'dev-release-ci'."
+    trigger_error unsupported-cli-test-bin-profile
+end
+'''
+
+[tasks.build-cli-test-bins-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-cli-test-bins"] }]
 
 [tasks.build-bins-non-ci]
 private = true
@@ -625,73 +682,21 @@ cargo-test-r run --package integration-tests --test integration :tag:group12 -- 
 '''
 
 [tasks.cli-integration-tests]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
 description = "Runs all CLI integration tests"
-dependencies = [
-    "cli-integration-tests-group1",
-    "cli-integration-tests-group2",
-    "cli-integration-tests-group3",
-    "cli-integration-tests-group4",
-    "cli-integration-tests-group5",
-    "cli-integration-tests-group6",
-]
-
-[tasks.cli-integration-tests-group1]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (1/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
-[tasks.cli-integration-tests-group2]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (2/3)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-group3]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (3)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-group4]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (4)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group4 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-group5]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (5)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group5 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.cli-integration-tests-group6]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (6)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group6 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-'''
+[tasks.cli-integration-tests-dev-release]
+description = "Runs all CLI integration tests with dev-release golem and golem-cli binaries"
+env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
+run_task = "cli-integration-tests"
 
 [tasks.cli-integration-tests-update-golden-files]
-dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1" }
 script_runner = "@duckscript"
 script = '''
@@ -759,8 +764,8 @@ cargo tarpaulin \
 ## ** CHECK-OPENAPI **
 
 [tasks.check-openapi]
-description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
-dependencies = ["merge-openapi", "diff-openapi"]
+description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory; also checks docs MDX drift"
+dependencies = ["merge-openapi", "diff-openapi", "check-docs-openapi"]
 
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
@@ -797,8 +802,8 @@ script = '''
 ## ** GENERATE-OPENAPI **
 
 [tasks.generate-openapi]
-dependencies = ["merge-openapi", "store-openapi"]
-description = "Generates openapi spec from the code and saves it to the openapi directory"
+dependencies = ["merge-openapi", "store-openapi", "generate-docs-openapi"]
+description = "Generates openapi spec from the code, saves it to the openapi directory, and regenerates the REST API docs MDX from the new spec"
 
 [tasks.generate-registry-service-openapi]
 description = "Generates openapi spec for registry service"
@@ -846,6 +851,70 @@ script = [
     "cp -v ./target/golem-registry-service.yaml ./openapi/",
     "cp -v ./target/golem-worker-service.yaml ./openapi/",
 ]
+
+## ** DOCS-SYNC **
+##
+## Regenerates and drift-checks the user-facing learn.golem.cloud docs
+## (docs/src/content/next/rest-api/, docs/src/content/next/how-to-guides/) from
+## the in-tree sources of truth (openapi/golem-service.yaml, golem-skills/skills/).
+## The in-tree sources always describe the unreleased `next` version; older
+## versions under docs/src/content/<vX.Y>/ are frozen snapshots only updated
+## by hand for backports.
+## Requires `bun` to be installed (https://bun.sh).
+
+[tasks.docs-bun-install]
+description = "Installs docs/ dependencies with bun (no-op if up to date)"
+cwd = "./docs"
+command = "bun"
+args = ["install", "--frozen-lockfile"]
+
+[tasks.generate-docs-openapi]
+description = "Regenerates docs/src/content/next/rest-api/ MDX from the in-tree openapi/golem-service.yaml"
+dependencies = ["docs-bun-install"]
+cwd = "./docs"
+command = "bun"
+args = ["run", "generate-local"]
+
+[tasks.check-docs-openapi]
+description = "Fails if docs/src/content/next/rest-api/ is stale vs. the in-tree openapi/golem-service.yaml"
+dependencies = ["generate-docs-openapi"]
+script = '''
+  if git diff --quiet -- docs/src/content/next/rest-api/
+    then
+      echo "docs/src/content/next/rest-api/ is up to date with openapi/golem-service.yaml."
+    else
+      echo "docs/src/content/next/rest-api/ is out of date with openapi/golem-service.yaml." 1>&2
+      echo "Run 'cargo make generate-openapi' (or 'cargo make generate-docs-openapi' if the YAML is already current) and commit the result." 1>&2
+      echo "" 1>&2
+      git --no-pager diff -- docs/src/content/next/rest-api/ 1>&2
+      exit 1
+  fi
+'''
+
+[tasks.generate-docs-skills]
+description = "Regenerates docs/src/content/next/how-to-guides/ MDX from golem-skills/skills/"
+dependencies = ["docs-bun-install"]
+cwd = "./docs"
+script = '''
+  bun run update-skills-local
+  bun run fix
+'''
+
+[tasks.check-docs-skills]
+description = "Fails if docs/src/content/next/how-to-guides/ is stale vs. golem-skills/skills/"
+dependencies = ["generate-docs-skills"]
+script = '''
+  if git diff --quiet -- docs/src/content/next/how-to-guides/ docs/src/content/next/how-to-guides.mdx
+    then
+      echo "docs/src/content/next/how-to-guides/ is up to date with golem-skills/skills/."
+    else
+      echo "docs/src/content/next/how-to-guides/ is out of date with golem-skills/skills/." 1>&2
+      echo "Run 'cargo make generate-docs-skills' and commit the result." 1>&2
+      echo "" 1>&2
+      git --no-pager diff -- docs/src/content/next/how-to-guides/ docs/src/content/next/how-to-guides.mdx 1>&2
+      exit 1
+  fi
+'''
 
 ## ** PUBLISH **
 [tasks.publish]

@@ -19,6 +19,21 @@ declare module 'golem:agent/common@1.5.0' {
   export type DataValue = golemCore150Types.DataValue;
   export type Duration = wasiClocks023MonotonicClock.Duration;
   export type AgentMode = "durable" | "ephemeral";
+  export type CachePolicy = 
+  {
+    tag: 'no-cache'
+  } |
+  {
+    tag: 'until-write'
+  } |
+  {
+    tag: 'ttl'
+    val: Duration
+  };
+  export type ReadOnlyConfig = {
+    cachePolicy: CachePolicy;
+    usesPrincipal: boolean;
+  };
   export type CorsOptions = {
     allowedPatterns: string[];
   };
@@ -109,6 +124,7 @@ declare module 'golem:agent/common@1.5.0' {
     promptHint?: string;
     inputSchema: DataSchema;
     outputSchema: DataSchema;
+    readOnly?: ReadOnlyConfig;
   };
   export type OidcPrincipal = {
     sub: string;

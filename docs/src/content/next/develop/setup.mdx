@@ -1,0 +1,78 @@
+import { Callout, Tabs } from "nextra/components"
+
+## Setting up the development environment
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs.Tab>
+Golem's TypeScript toolchain uses npm as the underlying build tool.
+Install **Node.js** and **npm** on your system by following the official [instructions](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
+</Tabs.Tab>
+
+<Tabs.Tab>
+### Setup Rust
+
+Developing **Golem agents** in **Rust** requires installing the latest stable compiler and enabling the WASM target used by Golem 1.5.
+
+#### Installing Rust
+
+Use the [official guide](https://www.rust-lang.org/learn/get-started) to install the latest **stable** version of the Rust compiler.
+
+<Callout type="info">
+For MacOS the recommended way is using `rustup` by running the following installation script:
+
+```shell
+$ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+</Callout>
+
+#### Enabling WebAssembly targets
+
+With **Rust** and `rustup` installed, the next step is to enable the **WebAssembly** target used by Golem builds:
+
+```shell
+$ rustup target add wasm32-wasip2
+```
+
+To verify if this step was successful, run:
+
+```shell
+$ rustup target list --installed | grep wasm32-wasip2
+wasm32-wasip2
+```
+
+Golem 1.5 uses the standard `cargo build` toolchain, so no additional `cargo` subcommands need to be installed.
+</Tabs.Tab>
+
+<Tabs.Tab>
+### Setup Scala
+
+Developing **Golem agents** in **Scala** requires a Java Development Kit and `sbt`, because Golem 1.5 compiles Scala agents through **Scala.js** using an `sbt` plugin.
+
+#### Installing Java
+
+Install **Java 17 or newer** (JDK) using your preferred distribution.
+
+#### Installing `sbt`
+
+Install `sbt` by following the [official installation guide](https://www.scala-sbt.org/download/).
+
+Once Java and `sbt` are installed, `golem build` will drive the full Scala.js-based build pipeline for Scala components.
+</Tabs.Tab>
+
+<Tabs.Tab>
+### Setup MoonBit
+
+Developing **Golem agents** in **MoonBit** requires the MoonBit toolchain and `wasm-tools`, because Golem 1.5 compiles MoonBit agents to WebAssembly using `moon` and packages them as components with `wasm-tools`.
+
+#### Installing MoonBit
+
+Install the latest stable version of the MoonBit toolchain by following the official [instructions](https://docs.moonbitlang.com/).
+
+#### Installing `wasm-tools`
+
+Install `wasm-tools` by following the [official installation guide](https://github.com/bytecodealliance/wasm-tools?tab=readme-ov-file#installation).
+
+Once `moon` and `wasm-tools` are installed, `golem build` will install the required MoonBit dependencies and drive the full MoonBit-to-WASM build pipeline for MoonBit components.
+</Tabs.Tab>
+</Tabs>

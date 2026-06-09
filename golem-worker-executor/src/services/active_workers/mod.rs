@@ -29,13 +29,17 @@ pub use fs_semaphore::{
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
+use tokio_util::sync::CancellationToken;
 
 use tracing::{Instrument, debug};
 
 use crate::services::HasAll;
-use crate::services::golem_config::{FilesystemStorageConfig, MemoryConfig};
+use crate::services::golem_config::{
+    AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
+};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::Worker;
+use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -70,6 +74,7 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     concurrent_agents: Arc<ConcurrentAgentsScheduler>,
     priority_allocation_lock: Arc<Mutex<()>>,
     acquire_retry_delay: Duration,
+    status_flush_queue: Arc<AgentStatusFlushQueue>,
 }
 
 #[derive(Debug)]
@@ -79,7 +84,7 @@ pub struct WorkerMemoryPermit {
 
 impl WorkerMemoryPermit {
     fn new(permit: OwnedSemaphorePermit) -> Self {
-        crate::metrics::workers::dec_memory_semaphore_available(permit.num_permits());
+        crate::metrics::workers::record_memory_permit_acquired(permit.num_permits());
         Self {
             permit: Some(permit),
         }
@@ -103,12 +108,17 @@ impl WorkerMemoryPermit {
 
 impl Drop for WorkerMemoryPermit {
     fn drop(&mut self) {
-        crate::metrics::workers::inc_memory_semaphore_available(self.num_permits());
+        crate::metrics::workers::record_memory_permit_released(self.num_permits());
     }
 }
 
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
-    pub fn new(memory_config: &MemoryConfig, storage_config: &FilesystemStorageConfig) -> Self {
+    pub fn new(
+        memory_config: &MemoryConfig,
+        storage_config: &FilesystemStorageConfig,
+        agent_status_flush_config: &AgentStatusFlushConfig,
+        shutdown_token: CancellationToken,
+    ) -> Self {
         let worker_memory_size = memory_config.worker_memory();
         let active_workers = Self {
             workers: Cache::new(
@@ -125,9 +135,19 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             concurrent_agents: Arc::new(ConcurrentAgentsScheduler::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
             priority_allocation_lock: Arc::new(Mutex::new(())),
+            status_flush_queue: AgentStatusFlushQueue::new(
+                agent_status_flush_config.interval,
+                agent_status_flush_config.max_concurrency,
+                shutdown_token,
+            ),
         };
-        active_workers.initialize_metrics();
+        active_workers.initialize_metrics(worker_memory_size);
         active_workers
+    }
+
+    /// The per-executor queue used to batch cached agent status blob writes in the background.
+    pub fn status_flush_queue(&self) -> Arc<AgentStatusFlushQueue> {
+        self.status_flush_queue.clone()
     }
 
     pub async fn get_or_add<T>(
@@ -471,13 +491,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     /// Initializes worker gauges. Subsequent changes are recorded inline at the mutation sites.
-    fn initialize_metrics(&self) {
-        crate::metrics::workers::initialize_worker_count_by_status();
-        crate::metrics::workers::set_memory_semaphore_available(
-            self.worker_memory.available_permits(),
-        );
+    fn initialize_metrics(&self, worker_memory_size: usize) {
+        crate::metrics::workers::initialize_worker_metrics();
         crate::metrics::workers::set_filesystem_semaphore_available(
             self.worker_filesystem_storage.available_bytes(),
         );
+        crate::metrics::storage::record_worker_memory_pool_total(worker_memory_size as u64);
     }
 }

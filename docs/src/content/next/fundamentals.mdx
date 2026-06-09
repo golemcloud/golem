@@ -1,0 +1,42 @@
+# Fundamentals
+
+Golem is a serverless computing platform that helps you build and deploy reliable distributed systems with simple code.
+
+In this section, you will learn some key terms and architecture that will help you better understand Golem.
+
+## Key Terms
+
+- **WASM**. [WebAssembly](https://webassembly.org/), or WASM, for short, is a specification for a portable and secure
+  virtual machine. Software compiled to WASM can execute on any platform and architecture using a _WASM Runtime_.
+- **Components**. In WebAssembly, _components_ are the unit of compilation and deployment. A component requires
+  certain capabilities from the host platform (like input/output), exposes a typed public API, and can contain
+  one or more agent types. Golem supports building components in **TypeScript**, **Rust**, **Scala**, and **MoonBit**.
+- **Agents**. In Golem, agents are durable, stateful units of computation. Each agent is identified by its type
+  name and constructor parameters, and has its own resources such as RAM, file system, and environment variables.
+  Agents are created from external events like requests or by other agents.
+- **Invocations**. In Golem, the fundamental unit of work is an invocation of a function that is part of an agent's
+  typed public API. Functions may require typed parameters as input and may return typed values as output.
+- **High-Reliability**. Highly reliable systems must execute critical logic uninterrupted, even through faults,
+  updates, and cloud flakiness. Golem provides transparent high-reliability, regardless of language or technology stack.
+- **WIT**. WIT is a standard of WASM, similar to Protobuf, which allows developers to export a typed public API from
+  components. Through the API Gateway, Golem lets you build HTTP APIs atop these typed public APIs using code-first route definitions.
+
+## Golem Architecture
+
+Golem is architected as a series of independent and modular components, ranging from command-line tools to core systems
+responsible for deployment and execution.
+
+- **CLI**. _Golem CLI_ is a command-line interface to Golem, which has the ability to create and manage components
+  and agents, perform invocations, and even connect to live agents for diagnostics and troubleshooting.
+- **API Gateway**. _API Gateway_ routes HTTP and MCP requests to agents by delegating their processing to specific
+  functions on specified agents.
+- **Agent Executor**. _Agent Executor_ creates and executes the logic of many individual agents, potentially
+  created from different components, exposing their public typed API via the API Gateway.
+- **Component Registry**. _Component Registry_ stores component versions and runs HTTP endpoints that allow
+  programmatic management of all the features of Golem. CLI and Console are both implemented atop it.
+- **Shard Manager**. _Shard Manager_ handles both supervision of individual executor nodes in the Golem cluster and the
+  task of distributing all agents across the available executor nodes in a Golem cluster.
+- **Golem Cloud**. _Golem Cloud_ is the fully managed version of Golem, suitable for companies looking for a true
+  zero-ops approach to building highly-reliable distributed systems with simple code.
+- **Console**. _Console_ is a graphical user-interface designed to help manage accounts, components, and agents on
+  Golem Cloud. It provides high-level ways of performing many of the same tasks that are supported by CLI.

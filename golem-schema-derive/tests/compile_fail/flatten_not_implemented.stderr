@@ -1,0 +1,5 @@
+error: #[schema(flatten)] is parsed but not yet implemented — remove the attribute or wait for follow-up support
+  --> tests/compile_fail/flatten_not_implemented.rs:24:5
+   |
+24 |     #[schema(flatten)]
+   |     ^

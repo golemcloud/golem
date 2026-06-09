@@ -1,0 +1,5 @@
+error: each branch of a `#[schema(union)]` enum must declare a discriminator attribute (`prefix`, `suffix`, `contains`, `regex`, `field_equals`, or `field_absent`)
+  --> tests/compile_fail/missing_discriminator_on_union_branch.rs:20:5
+   |
+20 |     A(String),
+   |     ^

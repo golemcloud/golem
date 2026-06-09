@@ -16,7 +16,7 @@ use crate::app::template::AppTemplateName;
 use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::log::{LogColorize, log_warn, log_warn_action, logln};
+use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln};
 use crate::model::GuestLanguage;
 use crate::model::format::Format;
 use crate::model::worker::RawAgentId;
@@ -278,13 +278,20 @@ impl InteractiveHandler {
         &self,
         component_name: &ComponentName,
         agent_name: &RawAgentId,
-        parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentId>,
+        parsed_agent_id: Option<&golem_common::model::agent::LegacyParsedAgentId>,
         source_language: &crate::agent_id_display::SourceLanguage,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
         let rendered_agent_name = match parsed_agent_id {
             Some(parsed) if source_language.is_known() => {
-                crate::agent_id_display::render_agent_id(parsed, source_language)
+                // Adapt LegacyParsedAgentId at the boundary into the schema-layer
+                // ParsedAgentId before calling the schema-typed renderer.
+                match golem_common::schema::adapters::legacy_parsed_agent_id_to_schema(parsed) {
+                    Ok(parsed_schema) => {
+                        crate::agent_id_display::render_agent_id(&parsed_schema, source_language)
+                    }
+                    Err(_) => agent_name.0.clone(),
+                }
             }
             _ => agent_name.0.clone(),
         };
@@ -743,8 +750,11 @@ fn confirm<M: AsRef<str>>(
         Err(error) => {
             if is_interactive_not_available_inquire_error(&error) {
                 logln("\n\n");
-                log_warn(
-                    "The current input device is not an interactive one, defaulting to \"false\"",
+                log_error(
+                    "This action requires confirmation, but the current shell is non-interactive.",
+                );
+                log_error(
+                    "Re-run the same command with the '--yes' (or '-y') flag to auto-confirm.",
                 );
                 Ok(false)
             } else {

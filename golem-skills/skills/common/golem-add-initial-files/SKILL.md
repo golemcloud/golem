@@ -1,6 +1,6 @@
 ---
 name: golem-add-initial-files
-description: "Adding initial files to Golem agent filesystems. Use when configuring files in golem.yaml at the component template, component, agent type, or preset level, specifying local or remote file sources, setting file permissions, or using merge modes."
+description: "Adding initial files to Golem agent filesystems via the `files:` section in `golem.yaml`. Use when provisioning local or remote files into an agent's virtual filesystem, setting read-only / read-write permissions, or configuring file mounts at the component, agent, template, or preset level."
 ---
 
 # Adding Initial Files to Golem Agent Filesystems

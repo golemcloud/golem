@@ -9,6 +9,15 @@ tracing_file_name_with_port = true
 drop_when_full = 0.25
 ttl = "8h"
 
+[agent_status_checkpoint]
+enabled = true
+min_oplog_delta = 1000
+
+[agent_status_flush]
+enabled = true
+interval = "1s"
+max_concurrency = 128
+
 [agent_types_service]
 type = "Grpc"
 
@@ -194,6 +203,11 @@ max_connections = 20
 [rdbms.query]
 query_batch = 50
 
+[read_only_cache]
+cache_capacity = 256
+cache_eviction_interval = "1m"
+max_entry_age = "2h"
+
 [registry_service]
 connect_timeout = "10s"
 host = "localhost"
@@ -336,6 +350,15 @@ without_time = false
 # [active_workers]
 # drop_when_full = 0.25
 # ttl = "8h"
+# 
+# [agent_status_checkpoint]
+# enabled = true
+# min_oplog_delta = 1000
+# 
+# [agent_status_flush]
+# enabled = true
+# interval = "1s"
+# max_concurrency = 128
 # 
 # [agent_types_service]
 # type = "Grpc"
@@ -525,6 +548,11 @@ without_time = false
 # [rdbms.query]
 # query_batch = 50
 # 
+# [read_only_cache]
+# cache_capacity = 256
+# cache_eviction_interval = "1m"
+# max_entry_age = "2h"
+# 
 # [registry_service]
 # connect_timeout = "10s"
 # host = "localhost"
@@ -666,6 +694,15 @@ without_time = false
 # [active_workers]
 # drop_when_full = 0.25
 # ttl = "8h"
+# 
+# [agent_status_checkpoint]
+# enabled = true
+# min_oplog_delta = 1000
+# 
+# [agent_status_flush]
+# enabled = true
+# interval = "1s"
+# max_concurrency = 128
 # 
 # [agent_types_service]
 # type = "Grpc"
@@ -825,6 +862,11 @@ without_time = false
 # 
 # [rdbms.query]
 # query_batch = 50
+# 
+# [read_only_cache]
+# cache_capacity = 256
+# cache_eviction_interval = "1m"
+# max_entry_age = "2h"
 # 
 # [registry_service]
 # connect_timeout = "10s"

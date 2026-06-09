@@ -154,6 +154,11 @@ impl WorkerProxy for TestWorkerProxy {
             account_id: self.test_ctx.account_id,
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
+            effective_surface: golem_common::model::card::EffectiveSurface {
+                source_card_ids: Vec::new(),
+                lower: Vec::new(),
+                upper: Vec::new(),
+            },
         });
 
         let result = loop {
@@ -209,6 +214,11 @@ impl WorkerProxy for TestWorkerProxy {
             account_id: self.test_ctx.account_id,
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
+            effective_surface: golem_common::model::card::EffectiveSurface {
+                source_card_ids: Vec::new(),
+                lower: Vec::new(),
+                upper: Vec::new(),
+            },
         });
 
         let result = self
@@ -256,6 +266,11 @@ impl WorkerProxy for TestWorkerProxy {
             account_id: self.test_ctx.account_id,
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
+            effective_surface: golem_common::model::card::EffectiveSurface {
+                source_card_ids: Vec::new(),
+                lower: Vec::new(),
+                upper: Vec::new(),
+            },
         });
 
         let result = self

@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::authorize_environment_permission;
+use super::mirror::{DeployedAgentTypeMirror, ResolvedAgentTypeMirror, schema_mirror_error};
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
-use crate::repo::model::environment_share::environment_roles_from_bit_vector;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::account::AccountId;
@@ -22,6 +23,10 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::ResolvedAgentType;
 use golem_common::model::application::ApplicationName;
+use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
+use golem_common::model::card::{
+    AgentResourcePattern, AgentVerb, ClassPermissionTarget, EnvironmentVerb, PermissionTarget,
+};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{
     CurrentDeploymentRevision, DeploymentPlan, DeploymentRevision, DeploymentSummary,
@@ -32,7 +37,6 @@ use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
 };
-use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
@@ -107,11 +111,7 @@ impl DeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeployment,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeployment)?;
 
         let deployments = self
             .deployment_repo
@@ -153,12 +153,8 @@ impl DeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeployment,
-        )
-        .map_err(|_| DeploymentError::DeploymentNotFound(deployment_revision))?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeployment)
+            .map_err(|_| DeploymentError::DeploymentNotFound(deployment_revision))?;
 
         let deployment: Deployment = self
             .deployment_repo
@@ -186,11 +182,7 @@ impl DeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeploymentPlan,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeploymentPlan)?;
 
         let summary: DeploymentPlan = self
             .deployment_repo
@@ -218,11 +210,7 @@ impl DeploymentService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeploymentPlan,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeploymentPlan)?;
 
         let summary: DeploymentSummary = self
             .deployment_repo
@@ -322,11 +310,7 @@ impl DeploymentService {
             .get_deployment_and_environment(environment_id, deployment_revision, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewAgentTypes,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewAgentTypes)?;
 
         let agent_types = self
             .deployment_repo
@@ -354,11 +338,7 @@ impl DeploymentService {
             .get_deployment_and_environment(environment_id, deployment_revision, auth)
             .await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewAgentTypes,
-        )?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewAgentTypes)?;
 
         let agent_types = self
             .deployment_repo
@@ -419,14 +399,19 @@ impl DeploymentService {
 
         let owner_account_id = AccountId(record.owner_account_id);
         let environment_id = EnvironmentId(record.environment_id);
-        let roles = environment_roles_from_bit_vector(record.environment_roles_from_shares);
 
         // Map authorization failure to NotFound to prevent resource enumeration
-        auth.authorize_environment_action(
-            owner_account_id,
-            &roles,
-            EnvironmentAction::ViewAgentTypes,
-        )
+        auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::Agent {
+                account: owner_account_id.to_string(),
+                application: app_name.0.clone(),
+                environment: environment_name.0.clone(),
+                component: record.component_name.clone(),
+                agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name.0.clone()),
+            },
+            verb: Some(AgentVerb::View),
+            resource: AgentResourcePattern::Any,
+        }))
         .map_err(|_| DeploymentError::AgentTypeNotFound(agent_type_name.0.clone()))?;
 
         let deployment_revision: DeploymentRevision = record
@@ -487,5 +472,163 @@ impl DeploymentService {
             .try_into()?;
 
         Ok(agent_type)
+    }
+
+    // -- Schema-mirror methods ------------------------------------------------
+    //
+    // These parallel the methods above and additionally return the
+    // schema-layer [`AgentTypeSchema`] computed from the legacy
+    // `AgentType` via the registry-service mirror. They exist for the
+    // duration of the migration so consumers can read either form
+    // without forcing a wire/persistence change today.
+
+    pub async fn get_deployed_agent_type_with_schema(
+        &self,
+        environment_id: EnvironmentId,
+        agent_type_name: &AgentTypeName,
+    ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
+        let legacy = self
+            .get_deployed_agent_type(environment_id, agent_type_name)
+            .await?;
+        DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
+    }
+
+    pub async fn list_deployed_agent_types_with_schema(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<DeployedAgentTypeMirror>, DeploymentError> {
+        self.list_deployed_agent_types(environment_id)
+            .await?
+            .into_iter()
+            .map(DeployedAgentTypeMirror::from_legacy)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(schema_mirror_error)
+    }
+
+    pub async fn get_latest_deployed_agent_type_by_component_revision_with_schema(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+        agent_type_name: &AgentTypeName,
+    ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
+        let legacy = self
+            .get_latest_deployed_agent_type_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision,
+                agent_type_name,
+            )
+            .await?;
+        DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
+    }
+
+    pub async fn list_latest_deployed_agent_types_by_component_revision_with_schema(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Vec<DeployedAgentTypeMirror>, DeploymentError> {
+        self.list_latest_deployed_agent_types_by_component_revision(
+            environment_id,
+            component_id,
+            component_revision,
+        )
+        .await?
+        .into_iter()
+        .map(DeployedAgentTypeMirror::from_legacy)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(schema_mirror_error)
+    }
+
+    pub async fn get_deployment_agent_type_with_schema(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        agent_type_name: &AgentTypeName,
+        auth: &AuthCtx,
+    ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
+        let legacy = self
+            .get_deployment_agent_type(environment_id, deployment_revision, agent_type_name, auth)
+            .await?;
+        DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
+    }
+
+    pub async fn list_deployment_agent_types_with_schema(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Vec<DeployedAgentTypeMirror>, DeploymentError> {
+        self.list_deployment_agent_types(environment_id, deployment_revision, auth)
+            .await?
+            .into_iter()
+            .map(DeployedAgentTypeMirror::from_legacy)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(schema_mirror_error)
+    }
+
+    pub async fn get_latest_deployed_agent_type_by_names_with_schema(
+        &self,
+        account_id: AccountId,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        auth: &AuthCtx,
+    ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
+        let legacy = self
+            .get_latest_deployed_agent_type_by_names(
+                account_id,
+                app_name,
+                environment_name,
+                agent_type_name,
+                auth,
+            )
+            .await?;
+        DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
+    }
+
+    pub async fn resolve_agent_type_by_names_with_schema(
+        &self,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        deployment_revision: Option<DeploymentRevision>,
+        owner_account_email: Option<&str>,
+        auth: &AuthCtx,
+    ) -> Result<ResolvedAgentTypeMirror, DeploymentError> {
+        let legacy = self
+            .resolve_agent_type_by_names(
+                app_name,
+                environment_name,
+                agent_type_name,
+                deployment_revision,
+                owner_account_email,
+                auth,
+            )
+            .await?;
+        ResolvedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
+    }
+
+    pub async fn get_agent_type_by_names_at_deployment_with_schema(
+        &self,
+        account_id: AccountId,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<DeployedAgentTypeMirror, DeploymentError> {
+        let legacy = self
+            .get_agent_type_by_names_at_deployment(
+                account_id,
+                app_name,
+                environment_name,
+                agent_type_name,
+                deployment_revision,
+                auth,
+            )
+            .await?;
+        DeployedAgentTypeMirror::from_legacy(legacy).map_err(schema_mirror_error)
     }
 }

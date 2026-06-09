@@ -18,12 +18,30 @@ use std::sync::Arc;
 
 pub mod provided;
 pub mod spawned;
+pub mod unavailable;
 
 #[async_trait]
 pub trait WorkerExecutorCluster: Send + Sync {
     fn size(&self) -> usize;
     async fn kill_all(&self);
     async fn restart_all(&self);
+
+    /// Restart every worker executor in the cluster with `extra_env_vars`
+    /// merged into each spawned child process's environment **for this
+    /// restart only**. Implementations must NOT mutate the parent test
+    /// runner's process-wide environment.
+    ///
+    /// Default implementation panics: only `SpawnedWorkerExecutorCluster`
+    /// supports this. The worker-side `Provided*` cluster is a worker-only
+    /// view and can never control parent-owned executor processes anyway.
+    async fn restart_all_with_extra_env_vars(&self, _extra_env_vars: Vec<(String, String)>) {
+        panic!(
+            "WorkerExecutorCluster::restart_all_with_extra_env_vars is only \
+             supported by SpawnedWorkerExecutorCluster; the default \
+             implementation refuses to silently discard the requested env \
+             overrides."
+        );
+    }
 
     async fn stop(&self, index: usize);
     async fn start(&self, index: usize);

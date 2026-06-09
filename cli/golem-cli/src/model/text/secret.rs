@@ -105,7 +105,15 @@ fn secret_view_fields(view: &AgentSecretDto, show_sensitive: bool) -> Vec<(Strin
         .fmt_field("ID", &view.id, format_id)
         .fmt_field("Revision", &view.revision.get(), format_id)
         .fmt_field("Secret Type", &view.secret_type, |st| {
-            render_type_for_language(&SourceLanguage::default(), st, false)
+            // Adapt the legacy AnalysedType at the boundary into a schema graph
+            // before delegating to the schema-typed type renderer.
+            match golem_common::schema::adapters::analysed_type_to_schema_graph(st) {
+                Ok(graph) => {
+                    let root = graph.root.clone();
+                    render_type_for_language(&SourceLanguage::default(), &graph, &root, false)
+                }
+                Err(_) => "<unknown>".to_string(),
+            }
         })
         .fmt_field_option("Secret Value", &view.secret_value, |v| {
             if show_sensitive {

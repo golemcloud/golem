@@ -1091,7 +1091,16 @@ fn format_agent_name(agent_name: &RawAgentId) -> String {
 
 fn log_data_value(pad: &str, value: &DataValue, source_language: &SourceLanguage) {
     if source_language.is_known() {
-        let rendered = crate::agent_id_display::render_data_value(value, source_language);
+        // Adapt at the boundary: walk the legacy DataValue into a
+        // TypedSchemaValue using the element-embedded type info, then call
+        // the schema-typed renderer.
+        let rendered =
+            match golem_common::schema::adapters::legacy_data_value_to_typed_schema_value(value) {
+                Ok(typed) => {
+                    crate::agent_id_display::render_typed_schema_value(&typed, source_language)
+                }
+                Err(err) => format!("<rendering error: {err}>"),
+            };
         logln(format!("{pad}  {rendered}"));
     } else {
         match value {
@@ -1255,7 +1264,15 @@ pub fn format_timestamp(timestamp: u64) -> String {
 pub fn format_agent_name_match(agent_name_match: &AgentNameMatch) -> String {
     let rendered_agent_name = match &agent_name_match.parsed_agent_id {
         Some(parsed) if agent_name_match.source_language.is_known() => {
-            crate::agent_id_display::render_agent_id(parsed, &agent_name_match.source_language)
+            // Adapt LegacyParsedAgentId at the boundary into the schema-layer
+            // ParsedAgentId before calling the schema-typed renderer.
+            match golem_common::schema::adapters::legacy_parsed_agent_id_to_schema(parsed) {
+                Ok(parsed_schema) => crate::agent_id_display::render_agent_id(
+                    &parsed_schema,
+                    &agent_name_match.source_language,
+                ),
+                Err(_) => agent_name_match.agent_name.0.clone(),
+            }
         }
         _ => agent_name_match.agent_name.0.clone(),
     };

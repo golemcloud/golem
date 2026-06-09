@@ -24,4 +24,6 @@ message Component {
   golem.common.ApplicationId application_id = 16;
   golem.common.Hash hash = 17;
   string object_store_key = 18;
+  string application_name = 19;
+  string environment_name = 20;
 }

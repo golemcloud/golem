@@ -897,9 +897,9 @@ fn remove_retry_policy_serialization_poem_serde_equivalence() {
 
 #[test]
 fn oplog_entry_type_matches_wit() {
+    use crate::component_introspection::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
     use crate::model::oplog::OplogEntry;
     use golem_wasm::IntoValue;
-    use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
     use std::path::PathBuf;
 
     let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
@@ -924,8 +924,8 @@ fn oplog_entry_type_matches_wit() {
 
 #[test]
 fn public_oplog_entry_type_matches_wit() {
+    use crate::component_introspection::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
     use golem_wasm::IntoValue;
-    use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
     use std::path::PathBuf;
 
     let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");

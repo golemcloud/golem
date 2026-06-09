@@ -19,10 +19,12 @@ pub mod api;
 pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod card;
 pub mod component;
 #[allow(unused_assignments)]
 // NOTE: from rust 1.92, a `value assigned to `cache` is never read` warning is emitted, most likely from the derived BinaryCodec. To be fixed in desert
 pub mod component_metadata;
+pub mod deploy_validation_warning;
 pub mod deployment;
 pub mod diff;
 pub mod domain_registration;
@@ -38,6 +40,7 @@ pub mod mcp_deployment;
 pub mod oplog;
 pub mod optional_field_update;
 pub mod path;
+pub mod permission_share;
 pub mod plan;
 pub mod plugin_registration;
 pub mod quota;
@@ -51,7 +54,7 @@ pub mod worker_filter;
 pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;
-use crate::declare_structs;
+use crate::{declare_structs, newtype_uuid};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
 use golem_wasm::{FromValue, IntoValue, Value};
@@ -165,38 +168,13 @@ impl FromValue for Timestamp {
     }
 }
 
-/// A stable, per-instance fingerprint for a worker, generated as a random UUID at creation time.
-/// Globally unique across recreations of the same agent ID.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(
-        desert_rust::BinaryCodec,
-        golem_wasm_derive::IntoValue,
-        golem_wasm_derive::FromValue,
-    )
-)]
-#[cfg_attr(feature = "full", desert(transparent))]
-#[serde(transparent)]
-pub struct AgentFingerprint(pub Uuid);
-
-impl Default for AgentFingerprint {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AgentFingerprint {
-    pub fn new() -> Self {
-        AgentFingerprint(Uuid::now_v7())
-    }
-}
-
-impl Display for AgentFingerprint {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+// A stable, per-instance fingerprint for a worker, generated as a random UUID
+// at creation time. Globally unique across recreations of the same agent ID.
+newtype_uuid!(
+    AgentFingerprint,
+    wit_name: "agent-fingerprint",
+    wit_owner: "golem:core@1.5.0/types"
+);
 
 #[cfg(feature = "full")]
 impl From<Timestamp> for golem_wasm::wasi::clocks::wall_clock::Datetime {

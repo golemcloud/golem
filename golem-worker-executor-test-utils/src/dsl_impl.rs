@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
     revert_worker_response, search_oplog_response, update_worker_response,
 };
-use golem_common::base_model::agent::{DataValue, ParsedAgentId, UntypedDataValue};
+use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId, UntypedDataValue};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
@@ -362,7 +362,7 @@ impl TestDsl for TestWorkerExecutor {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentId,
+        id: LegacyParsedAgentId,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
@@ -404,7 +404,7 @@ impl TestDsl for TestWorkerExecutor {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
@@ -447,9 +447,10 @@ impl TestDsl for TestWorkerExecutor {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &ParsedAgentId,
+        agent_id: &LegacyParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         _deployment_revision: Option<DeploymentRevision>,
+        principal: Option<golem_common::model::agent::Principal>,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
@@ -473,7 +474,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 context: None,
-                principal: None,
+                principal: principal.map(Into::into),
             })
             .await;
 

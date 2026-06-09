@@ -495,6 +495,10 @@ pub struct BenchmarkSuiteResult {
     pub environment: String,
     pub version: String,
     pub timestamp: DateTime<Utc>,
+    /// Suite-level run-id. Set in cloud mode to `bench-{run_id}` to allow
+    /// cross-run correlation and garbage collection of orphaned state.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub run_id: Option<String>,
     pub results: Vec<BenchmarkResult>,
 }
 
@@ -530,6 +534,7 @@ impl BenchmarkSuiteResult {
             environment,
             version: golem_common::golem_version().to_string(),
             timestamp: Utc::now(),
+            run_id: None,
             results: vec![],
         }
     }
@@ -606,6 +611,10 @@ pub struct BenchmarkResult {
     pub description: String,
     pub runs: Vec<RunConfig>,
     pub results: Vec<BenchmarkRunResult>,
+    /// Suite-level run-id. Set in cloud mode to `bench-{run_id}` to allow
+    /// cross-run correlation and garbage collection of orphaned state.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub run_id: Option<String>,
 }
 
 impl BenchmarkResult {

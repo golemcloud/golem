@@ -297,3 +297,8 @@ pub fn WeatherAgent::set_temperature(
   "Temperature set to " + temperature.to_string() + " from " + source
 }
 ```
+
+
+## Related Skills
+
+- Load `golem-add-http-endpoint-moonbit` for the high-level workflow of defining and mounting HTTP endpoints on an agent

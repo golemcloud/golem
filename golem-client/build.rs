@@ -46,10 +46,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account::AccountSetPlan",
             ),
             (
-                "AccountSetRoles",
-                "golem_common::model::account::AccountSetRoles",
-            ),
-            (
                 "AccountUpdate",
                 "golem_common::model::account::AccountUpdate",
             ),
@@ -234,6 +230,23 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "EnvironmentShareUpdate",
                 "golem_common::model::environment_share::EnvironmentShareUpdate",
+            ),
+            // permission_share
+            (
+                "PermissionShare",
+                "golem_common::model::permission_share::PermissionShare",
+            ),
+            (
+                "PermissionShareCreation",
+                "golem_common::model::permission_share::PermissionShareCreation",
+            ),
+            (
+                "PermissionShareData",
+                "golem_common::model::permission_share::PermissionShareData",
+            ),
+            (
+                "PermissionShareUpdate",
+                "golem_common::model::permission_share::PermissionShareUpdate",
             ),
             // login
             (

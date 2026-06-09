@@ -22,9 +22,13 @@ mod quota;
 mod worker;
 
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
+#[allow(unused_imports)]
+use golem_test_framework::config::WorkerExecutorClusterControl;
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+    WorkerExecutorClusterControlDispatch, WorkerExecutorClusterControlStub,
 };
+use std::sync::Once;
 use test_r::{tag_suite, test_dep};
 
 test_r::enable!();
@@ -47,21 +51,46 @@ test_r::sequential_suite!(plugins);
 #[derive(Debug)]
 pub struct Tracing;
 
+// `init_tracing_with_default_debug_env_filter` installs a global
+// `tracing` subscriber via `Registry::init()`, which panics on a second
+// invocation. Guard with a `Once` so it's safe to call from both the
+// parent-side `create_deps` body (to capture `ChildProcessLogger` events
+// emitted before any worker exists) and the `PerWorker` `tracing()` dep
+// (which still has to install a subscriber inside each spawned worker
+// subprocess, but in `--nocapture` mode runs in the same process as
+// `create_deps`).
+static TRACING_INIT: Once = Once::new();
+
 impl Tracing {
     pub fn init() -> Self {
-        #[cfg(unix)]
-        unsafe {
-            backtrace_on_stack_overflow::enable()
-        };
-        init_tracing_with_default_debug_env_filter(
-            &TracingConfig::test_pretty_without_time("integration-tests").with_env_overrides(),
-        );
+        TRACING_INIT.call_once(|| {
+            #[cfg(unix)]
+            unsafe {
+                backtrace_on_stack_overflow::enable()
+            };
+            init_tracing_with_default_debug_env_filter(
+                &TracingConfig::test_pretty_without_time("integration-tests").with_env_overrides(),
+            );
+        });
         Self
     }
 }
 
-#[test_dep]
-pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
+#[test_dep(scope = Hosted, worker = both(WorkerExecutorClusterControl))]
+pub async fn create_deps() -> EnvBasedTestDependencies {
+    // Initialise tracing on the parent process before spawning any
+    // dependency services so that `ChildProcessLogger` events emitted
+    // by the parent (e.g. forwarded stdout/stderr of spawned services)
+    // are routed through a registered subscriber rather than dropped.
+    //
+    // Doing this inside the `create_deps` body — instead of via a
+    // separate `scope = Hosted` `Tracing` dep — avoids tripping a
+    // test-r pruning interaction where a second Hosted dep returning
+    // the same type as the `PerWorker` `tracing()` dep causes the
+    // latter to silently be skipped in the `--nocapture`/no-spawn-
+    // workers code path.
+    Tracing::init();
+
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 3,
         ..EnvBasedTestDependenciesConfig::new()
@@ -74,7 +103,7 @@ pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
     deps
 }
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 pub fn tracing() -> Tracing {
     Tracing::init()
 }

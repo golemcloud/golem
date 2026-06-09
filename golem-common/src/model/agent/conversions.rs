@@ -18,7 +18,9 @@ use super::{
     LiteralSegment, PathSegment, PathVariable, QueryVariable, SystemVariable,
     SystemVariableSegment,
 };
-use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
+use crate::base_model::agent::{
+    CachePolicy, CachePolicyTtl, GolemUserPrincipal, OidcPrincipal, Principal, ReadOnlyConfig,
+};
 use crate::model::Empty;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
@@ -30,6 +32,9 @@ use crate::model::agent::{
     TextReferenceValue, TextSource, TextType, UnstructuredBinaryElementValue,
     UnstructuredTextElementValue, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
     Url,
+};
+use crate::schema::adapters::value::{
+    typed_schema_value_to_value_and_type, value_and_type_to_typed_schema_value,
 };
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{Value, ValueAndType};
@@ -112,7 +117,16 @@ impl From<super::bindings::golem::agent::common::AgentError> for AgentError {
                 msg,
             ) => AgentError::InvalidAgentId(msg),
             crate::model::agent::bindings::golem::agent::common::AgentError::CustomError(value) => {
-                AgentError::CustomError(value.into())
+                // Lift the WIT-side `value-and-type` carrier into the schema
+                // layer for the host-side `AgentError`. A malformed or
+                // semantically inconsistent payload from the guest must not
+                // crash the host, so adapter failures degrade to a regular
+                // `InvalidType` variant carrying the adapter diagnostic.
+                let vat: ValueAndType = value.into();
+                match value_and_type_to_typed_schema_value(&vat) {
+                    Ok(typed) => AgentError::CustomError(typed),
+                    Err(e) => AgentError::InvalidType(format!("Invalid custom error payload: {e}")),
+                }
             }
         }
     }
@@ -133,8 +147,21 @@ impl From<AgentError> for super::bindings::golem::agent::common::AgentError {
             AgentError::InvalidAgentId(msg) => {
                 super::bindings::golem::agent::common::AgentError::InvalidAgentId(msg)
             }
-            AgentError::CustomError(value) => {
-                super::bindings::golem::agent::common::AgentError::CustomError(value.into())
+            AgentError::CustomError(typed) => {
+                // Lower the host schema-layer payload back to the WIT-side
+                // `value-and-type` carrier. `TypedSchemaValue` can carry rich
+                // scalars, unions, and capability nodes that have no legacy
+                // counterpart; rather than panicking at the WIT boundary,
+                // collapse such payloads into an `InvalidType` variant so
+                // diagnostics still reach the guest.
+                match typed_schema_value_to_value_and_type(&typed) {
+                    Ok(vat) => {
+                        super::bindings::golem::agent::common::AgentError::CustomError(vat.into())
+                    }
+                    Err(e) => super::bindings::golem::agent::common::AgentError::InvalidType(
+                        format!("Invalid custom error payload: {e}"),
+                    ),
+                }
             }
         }
     }
@@ -149,6 +176,7 @@ impl From<super::bindings::golem::agent::common::AgentMethod> for AgentMethod {
             input_schema: DataSchema::from(value.input_schema),
             output_schema: DataSchema::from(value.output_schema),
             http_endpoint: value.http_endpoint.into_iter().map(|v| v.into()).collect(),
+            read_only: value.read_only.map(ReadOnlyConfig::from),
         }
     }
 }
@@ -162,6 +190,51 @@ impl From<AgentMethod> for super::bindings::golem::agent::common::AgentMethod {
             input_schema: value.input_schema.into(),
             output_schema: value.output_schema.into(),
             http_endpoint: value.http_endpoint.into_iter().map(|v| v.into()).collect(),
+            read_only: value.read_only.map(Into::into),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::ReadOnlyConfig> for ReadOnlyConfig {
+    fn from(value: super::bindings::golem::agent::common::ReadOnlyConfig) -> Self {
+        Self {
+            cache_policy: value.cache_policy.into(),
+            uses_principal: value.uses_principal,
+        }
+    }
+}
+
+impl From<ReadOnlyConfig> for super::bindings::golem::agent::common::ReadOnlyConfig {
+    fn from(value: ReadOnlyConfig) -> Self {
+        Self {
+            cache_policy: value.cache_policy.into(),
+            uses_principal: value.uses_principal,
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::CachePolicy> for CachePolicy {
+    fn from(value: super::bindings::golem::agent::common::CachePolicy) -> Self {
+        match value {
+            super::bindings::golem::agent::common::CachePolicy::NoCache => Self::NoCache(Empty {}),
+            super::bindings::golem::agent::common::CachePolicy::UntilWrite => {
+                Self::UntilWrite(Empty {})
+            }
+            super::bindings::golem::agent::common::CachePolicy::Ttl(nanos) => {
+                Self::Ttl(CachePolicyTtl {
+                    duration_nanos: nanos,
+                })
+            }
+        }
+    }
+}
+
+impl From<CachePolicy> for super::bindings::golem::agent::common::CachePolicy {
+    fn from(value: CachePolicy) -> Self {
+        match value {
+            CachePolicy::NoCache(_) => Self::NoCache,
+            CachePolicy::UntilWrite(_) => Self::UntilWrite,
+            CachePolicy::Ttl(ttl) => Self::Ttl(ttl.duration_nanos),
         }
     }
 }

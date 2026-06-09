@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::component_introspection::wit_parser::{
+    AnalysedTypeResolve, SharedAnalysedTypeResolve,
+};
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
-use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, WorkerExecutorTestDependencies, test_component,
+    LastUniqueId, LastUniqueIdOwner, PrecompiledComponent, WorkerExecutorTestDependencies,
+    test_component,
 };
 use std::fmt::Debug;
 use std::path::Path;
-use std::sync::atomic::AtomicU16;
 use test_r::{sequential_suite, tag_suite, test_dep, timeout_suite};
 
 pub mod agent;
@@ -41,6 +43,7 @@ pub mod observability;
 pub mod oplog_metrics;
 pub mod rdbms;
 pub mod rdbms_service;
+pub mod readonly;
 pub mod resource_limits;
 pub mod retry_policies;
 pub mod revert;
@@ -73,6 +76,7 @@ tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
 tag_suite!(scalability, group3);
 tag_suite!(revert, group3);
+tag_suite!(readonly, group3);
 
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
@@ -89,7 +93,7 @@ timeout_suite!(in_function_retry, "2 minutes");
 #[derive(Debug)]
 pub struct Tracing;
 
-#[test_dep]
+#[test_dep(scope = PerWorker)]
 pub fn tracing() -> Tracing {
     init_tracing_with_default_debug_env_filter(
         &TracingConfig::test_pretty_without_time("worker-executor-tests").with_env_overrides(),
@@ -98,19 +102,31 @@ pub fn tracing() -> Tracing {
     Tracing
 }
 
-#[test_dep]
-pub async fn test_dependencies(_tracing: &Tracing) -> WorkerExecutorTestDependencies {
+// `WorkerExecutorTestDependencies` is a Hosted dep so workers
+// can run in parallel under capture without each spawning its own Redis,
+// TempDirs, and component cache. The parent constructs once and ships a
+// descriptor; each worker reconstructs an equivalent struct that attaches
+// to the parent's resources via `HostedDep::from_descriptor`.
+//
+// Hosted owner constructors cannot depend on other test_deps, so we drop
+// the `&Tracing` parameter here. Tracing remains a separate PerWorker
+// dep installed inside each worker subprocess.
+#[test_dep(scope = Hosted)]
+pub async fn test_dependencies() -> WorkerExecutorTestDependencies {
     WorkerExecutorTestDependencies::new().await
 }
 
-#[test_dep]
-pub fn last_unique_id() -> LastUniqueId {
-    LastUniqueId {
-        id: AtomicU16::new(0),
-    }
+// Globally unique id allocator served by a single AtomicU64 in the
+// parent process. Workers receive a `LastUniqueId` stub that round-trips
+// each `next()` call to the parent — no per-worker partitioning, no
+// `u16` saturation risk, and uniqueness holds across the whole suite
+// regardless of `--test-threads`.
+#[test_dep(scope = HostedRpc, stub = LastUniqueId)]
+pub fn last_unique_id_owner() -> LastUniqueIdOwner {
+    LastUniqueIdOwner::new()
 }
 
-#[test_dep(tagged_as = "golem_host")]
+#[test_dep(scope = PerWorker, tagged_as = "golem_host")]
 pub fn golem_host_analysed_type_resolve() -> SharedAnalysedTypeResolve {
     SharedAnalysedTypeResolve::new(
         AnalysedTypeResolve::from_wit_directory(Path::new("../wit")).unwrap(),
@@ -150,6 +166,12 @@ test_component!(
     "agent_counters",
     "it_agent_counters_release",
     "it:agent-counters"
+);
+test_component!(
+    agent_sdk_rust,
+    "agent_sdk_rust",
+    "golem_it_agent_sdk_rust_release",
+    "golem-it:agent-sdk-rust"
 );
 test_component!(
     http_tests,

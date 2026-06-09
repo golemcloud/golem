@@ -217,6 +217,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
         self.observe_function_call("http::outgoing_handler", "handle");
 
+        // Trap immediately if the invocation is restricted to read-only side effects.
+        // This must run before any durability machinery so that no oplog entry is written
+        // for a denied outgoing HTTP call.
+        self.check_read_only_allows("http::outgoing_handler::handle")
+            .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
+
         // Check the per-invocation HTTP call limit before initiating the call.
         // Only counted in live mode; replay is a no-op.
         self.state
@@ -230,11 +236,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.record_monthly_http_call()
             .map_err(|e| HttpError::trap(wasmtime::Error::from_anyhow(e)))?;
 
-        // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
+        // Durability is handled by the WasiHttpView send_request method and the follow-up
+        // calls to await/poll the response future. The generic read-only side-effect trap
+        // (see `DurabilityHost::begin_durable_function`) refuses this call up front for
+        // read-only agent methods.
         let begin_index = self
-            .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
+            .begin_durable_function(
+                &DurableFunctionType::WriteRemoteBatched(None),
+                "http::outgoing_handler::handle",
+            )
             .await
-            .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
+            .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err.into())))?;
 
         let host_request = self.table().get(&request)?;
         let scheme = match host_request.scheme.as_ref().unwrap_or(&Scheme::Https) {

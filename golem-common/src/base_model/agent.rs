@@ -108,6 +108,8 @@ pub struct JsonComponentModelValue {
 pub struct RegisteredAgentTypeImplementer {
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
+    pub component_name: String,
+    pub account_id: AccountId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -231,6 +233,8 @@ pub enum RegistryInvalidationEvent {
         /// Human-readable environment name (matches AgentResolutionCache key).
         env_name: String,
     },
+    /// A permission card was revoked or deleted.
+    CardRevoked { event_id: u64, card_ids: Vec<Uuid> },
 }
 
 impl RegistryInvalidationEvent {
@@ -247,6 +251,7 @@ impl RegistryInvalidationEvent {
             Self::AgentSecretChanged { event_id, .. } => *event_id,
             Self::ApplicationDeleted { event_id, .. } => *event_id,
             Self::EnvironmentDeleted { event_id, .. } => *event_id,
+            Self::CardRevoked { event_id, .. } => *event_id,
         }
     }
 }
@@ -535,6 +540,49 @@ pub struct AgentMethod {
     pub input_schema: DataSchema,
     pub output_schema: DataSchema,
     pub http_endpoint: Vec<HttpEndpointDetails>,
+    #[serde(default)]
+    pub read_only: Option<ReadOnlyConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ReadOnlyConfig {
+    pub cache_policy: CachePolicy,
+    pub uses_principal: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum CachePolicy {
+    #[unit_case]
+    NoCache(Empty),
+    #[unit_case]
+    UntilWrite(Empty),
+    Ttl(CachePolicyTtl),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct CachePolicyTtl {
+    pub duration_nanos: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -614,6 +662,29 @@ impl AgentType {
     pub fn normalized_vec(mut agent_types: Vec<Self>) -> Vec<Self> {
         agent_types.sort_by(|a, b| a.type_name.cmp(&b.type_name));
         agent_types.into_iter().map(Self::normalized).collect()
+    }
+
+    /// Defensive validation that the agent type respects platform-level invariants
+    /// the SDKs are expected to enforce at build time.
+    ///
+    /// Currently this rejects the combination of `mode = Ephemeral` and any method
+    /// carrying a `read_only` marker: read-only methods only make sense on agents
+    /// with persistent state, so allowing them on ephemeral agents indicates a
+    /// build-time misconfiguration that should be caught at registration.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.mode == AgentMode::Ephemeral {
+            for method in &self.methods {
+                if method.read_only.is_some() {
+                    return Err(format!(
+                        "Agent type '{}' is ephemeral but method '{}' is marked as read-only. \
+                         Read-only methods have no benefit on ephemeral agents (no shared state to read from). \
+                         Remove the read-only marker or make the agent durable.",
+                        self.type_name, method.name
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -938,9 +1009,9 @@ pub struct NamedElementValues {
 
 /// Identifies a deployed, instantiated agent.
 ///
-/// ParsedAgentId is convertible to and from string, and is used as _agent ids_.
+/// LegacyParsedAgentId is convertible to and from string, and is used as _agent ids_.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParsedAgentId {
+pub struct LegacyParsedAgentId {
     pub agent_type: AgentTypeName,
     pub parameters: DataValue,
     pub phantom_id: Option<Uuid>,
@@ -1541,5 +1612,198 @@ impl<MT: AllowedMimeTypes> UnstructuredBinaryExtensions for UnstructuredBinary<M
                     mime_type,
                 }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::*;
+
+    fn mock_method(name: &str, read_only: Option<ReadOnlyConfig>) -> AgentMethod {
+        AgentMethod {
+            name: name.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: Vec::new(),
+            }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: Vec::new(),
+            }),
+            http_endpoint: Vec::new(),
+            read_only,
+        }
+    }
+
+    fn mock_agent_type(mode: AgentMode, methods: Vec<AgentMethod>) -> AgentType {
+        AgentType {
+            type_name: AgentTypeName("Test".to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            constructor: AgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: Vec::new(),
+                }),
+            },
+            methods,
+            dependencies: Vec::new(),
+            mode,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_durable_agent_with_read_only_methods() {
+        let agent = mock_agent_type(
+            AgentMode::Durable,
+            vec![mock_method(
+                "get",
+                Some(ReadOnlyConfig {
+                    cache_policy: CachePolicy::UntilWrite(Empty {}),
+                    uses_principal: false,
+                }),
+            )],
+        );
+        assert!(agent.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_ephemeral_agent_without_read_only_methods() {
+        let agent = mock_agent_type(AgentMode::Ephemeral, vec![mock_method("do", None)]);
+        assert!(agent.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_ephemeral_agent_with_read_only_method() {
+        let agent = mock_agent_type(
+            AgentMode::Ephemeral,
+            vec![mock_method(
+                "get",
+                Some(ReadOnlyConfig {
+                    cache_policy: CachePolicy::UntilWrite(Empty {}),
+                    uses_principal: false,
+                }),
+            )],
+        );
+        let result = agent.validate();
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("ephemeral"));
+        assert!(msg.contains("read-only"));
+        assert!(msg.contains("Test"));
+        assert!(msg.contains("get"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Read-only / cache-policy codec round-trip (issue #3393)
+    //
+    // Read-only metadata is carried inside `AgentMethod.read_only` and uses
+    // every cache-policy variant. The same `AgentMethod` value must travel
+    // unchanged through every codec we expose: `serde`, `desert_rust`
+    // (BinaryCodec), `poem_openapi`, and `golem_wasm::{IntoValue, FromValue}`.
+    //
+    // Also covers the schema-migration case: a legacy payload without the
+    // `read_only` field must deserialize with `read_only == None`.
+    // -----------------------------------------------------------------------
+
+    fn all_cache_policies() -> Vec<CachePolicy> {
+        vec![
+            CachePolicy::NoCache(Empty {}),
+            CachePolicy::UntilWrite(Empty {}),
+            CachePolicy::Ttl(CachePolicyTtl {
+                duration_nanos: 1_234_567,
+            }),
+        ]
+    }
+
+    fn all_read_only_methods() -> Vec<AgentMethod> {
+        let mut out = vec![mock_method("not-read-only", None)];
+        for policy in all_cache_policies() {
+            for uses_principal in [false, true] {
+                out.push(mock_method(
+                    "ro",
+                    Some(ReadOnlyConfig {
+                        cache_policy: policy.clone(),
+                        uses_principal,
+                    }),
+                ));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn agent_method_read_only_roundtrips_through_serde_json() {
+        for method in all_read_only_methods() {
+            let json = serde_json::to_string(&method).expect("serde_json::to_string");
+            let back: AgentMethod = serde_json::from_str(&json).expect("serde_json::from_str");
+            assert_eq!(back, method, "serde JSON round-trip mismatch");
+        }
+    }
+
+    #[test]
+    fn agent_method_read_only_roundtrips_through_desert() {
+        for method in all_read_only_methods() {
+            let bytes =
+                desert_rust::serialize_to_byte_vec(&method).expect("desert_rust serialization");
+            let back: AgentMethod =
+                desert_rust::deserialize(&bytes).expect("desert_rust deserialization");
+            assert_eq!(back, method, "desert (BinaryCodec) round-trip mismatch");
+        }
+    }
+
+    #[test]
+    fn agent_method_read_only_roundtrips_through_poem_openapi() {
+        use poem_openapi::types::{ParseFromJSON, ToJSON};
+
+        for method in all_read_only_methods() {
+            let json = ToJSON::to_json(&method);
+            let back = <AgentMethod as ParseFromJSON>::parse_from_json(json)
+                .expect("poem_openapi parse_from_json");
+            assert_eq!(back, method, "poem_openapi round-trip mismatch");
+        }
+    }
+
+    #[test]
+    fn agent_method_read_only_roundtrips_through_into_from_value() {
+        use golem_wasm::{FromValue, IntoValue};
+
+        for method in all_read_only_methods() {
+            let value = method.clone().into_value();
+            let back =
+                <AgentMethod as FromValue>::from_value(value).expect("FromValue::from_value");
+            assert_eq!(back, method, "IntoValue/FromValue round-trip mismatch");
+        }
+    }
+
+    /// Legacy payload (`AgentMethod` without `read_only`) must deserialize
+    /// with `read_only == None`. We don't have a previously-shipped binary
+    /// to replay, so we verify the `#[serde(default)]` and `desert(evolution)`
+    /// contracts in the simplest possible way: feed both codecs a payload
+    /// missing the `read_only` field and assert the field defaults to `None`.
+    #[test]
+    fn agent_method_without_read_only_field_defaults_to_none_via_serde() {
+        let legacy_json = serde_json::json!({
+            "name": "legacy",
+            "description": "",
+            "promptHint": null,
+            "inputSchema": { "type": "Tuple", "elements": [] },
+            "outputSchema": { "type": "Tuple", "elements": [] },
+            "httpEndpoint": [],
+        });
+        let method: AgentMethod =
+            serde_json::from_value(legacy_json).expect("legacy serde JSON must deserialize");
+        assert_eq!(method.name, "legacy");
+        assert!(
+            method.read_only.is_none(),
+            "missing read_only field must default to None"
+        );
     }
 }

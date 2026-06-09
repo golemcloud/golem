@@ -31,7 +31,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, UntypedDataValue};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, UntypedDataValue};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::ComponentRevision;
@@ -138,7 +138,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -158,7 +158,40 @@ test_r::enable!();
 
 pub use golem_test_framework::dsl::PrecompiledComponent;
 
-/// Defines a `#[test_dep]` function that pre-warms the analysis cache for a
+/// A handle to either an owned `TempDir` (parent process) or a borrowed
+/// on-disk path (worker process).
+///
+/// Phase 3.4 makes [`WorkerExecutorTestDependencies`] a `Hosted` test-dep:
+/// the parent owns the live `TempDir`s and ships only their paths over to
+/// worker subprocesses through the `HostedDep` descriptor. Workers must
+/// **not** delete the parent's directories on drop. This wrapper exposes
+/// the same `path()` API in both cases while constraining `Drop` to the
+/// owner.
+pub enum TestTempDir {
+    /// Parent-owned: dropping this also removes the underlying directory.
+    Owned(TempDir),
+    /// Worker-borrowed: dropping this does NOT remove the underlying
+    /// directory. Lifetime is controlled by whichever process holds the
+    /// matching `Owned` value.
+    Borrowed(PathBuf),
+}
+
+impl TestTempDir {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Owned(td) => td.path(),
+            Self::Borrowed(p) => p.as_path(),
+        }
+    }
+}
+
+impl Debug for TestTempDir {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TestTempDir({:?})", self.path())
+    }
+}
+
+/// Defines a `#[test_dep(scope = Shared)]` function that pre-warms the analysis cache for a
 /// test component during test-r dependency initialization.
 ///
 /// Usage: `test_component!(function_name, "tag_name", "wasm_file_name", "package:name");`
@@ -169,7 +202,7 @@ pub use golem_test_framework::dsl::PrecompiledComponent;
 #[macro_export]
 macro_rules! test_component {
     ($fn_name:ident, $tag:expr, $wasm_name:expr, $package_name:expr) => {
-        #[test_dep(tagged_as = $tag)]
+        #[test_dep(scope = Shared, tagged_as = $tag)]
         pub async fn $fn_name(deps: &WorkerExecutorTestDependencies) -> PrecompiledComponent {
             tracing::info!(
                 "Pre-compiling test component '{}' (package: '{}')",
@@ -200,15 +233,36 @@ pub struct WorkerExecutorTestDependencies {
     pub component_writer: Arc<FileSystemComponentWriter>,
     pub initial_agent_files_service: Arc<InitialAgentFilesService>,
     pub component_directory: PathBuf,
-    pub component_temp_directory: Arc<TempDir>,
+    pub component_temp_directory: Arc<TestTempDir>,
     pub component_service_directory: PathBuf,
-    data_dir: Arc<TempDir>,
+    data_dir: Arc<TestTempDir>,
 }
 
 impl Debug for WorkerExecutorTestDependencies {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "WorkerExecutorTestDependencies")
     }
+}
+
+/// Wire format for the [`HostedDep`] descriptor of
+/// [`WorkerExecutorTestDependencies`].
+///
+/// The parent serialises this once after constructing the live owner;
+/// each spawned worker subprocess deserialises it and reconstructs an
+/// equivalent struct whose handles attach to the parent's resources
+/// (already-running Redis, on-disk caches, etc.) instead of spawning new
+/// ones. See [`WorkerExecutorTestDependencies::from_descriptor`] for the
+/// reconstruction logic.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WorkerExecutorTestDependenciesDescriptor {
+    redis_host: String,
+    redis_port: u16,
+    redis_prefix: String,
+    blob_storage_root: PathBuf,
+    component_directory: PathBuf,
+    component_service_directory: PathBuf,
+    component_temp_directory: PathBuf,
+    data_dir_path: PathBuf,
 }
 
 impl WorkerExecutorTestDependencies {
@@ -252,16 +306,236 @@ impl WorkerExecutorTestDependencies {
         let component_writer: Arc<FileSystemComponentWriter> =
             Arc::new(FileSystemComponentWriter::new(&component_service_directory).await);
 
+        // `FileSystemComponentWriter::new` `remove_dir_all`s the root and
+        // then only re-creates subdirectories lazily on the first component
+        // write. The `HostedDep::descriptor` impl below eagerly
+        // canonicalises `component_service_directory`, so we materialise
+        // the empty root here to keep `descriptor()` valid even before any
+        // test has written a component.
+        tokio::fs::create_dir_all(&component_service_directory)
+            .await
+            .unwrap();
+
         Self {
             redis,
             redis_monitor,
             component_directory,
             component_service_directory,
             component_writer,
-            initial_agent_files_service,
-            component_temp_directory: Arc::new(TempDir::new().unwrap()),
-            data_dir: Arc::new(data_dir),
+            initial_agent_files_service: initial_agent_files_service.clone(),
+            component_temp_directory: Arc::new(TestTempDir::Owned(TempDir::new().unwrap())),
+            data_dir: Arc::new(TestTempDir::Owned(data_dir)),
         }
+    }
+}
+
+impl test_r::core::HostedDep for WorkerExecutorTestDependencies {
+    fn descriptor(&self) -> Vec<u8> {
+        // Canonicalize every on-disk path before shipping it to workers:
+        // worker subprocesses may run with a different cwd than the parent
+        // (e.g. the runner's stamping), so the descriptor must not contain
+        // relative paths like `../test-components` (Phase 3.4 hardening
+        // from the oracle review).
+        fn canonical(path: &Path) -> PathBuf {
+            std::fs::canonicalize(path).unwrap_or_else(|e| {
+                panic!(
+                    "WorkerExecutorTestDependencies::descriptor: \
+                     cannot canonicalize {path:?}: {e}"
+                )
+            })
+        }
+
+        let descriptor = WorkerExecutorTestDependenciesDescriptor {
+            redis_host: self.redis.private_host().to_string(),
+            redis_port: self.redis.private_port(),
+            redis_prefix: self.redis.prefix().to_string(),
+            blob_storage_root: canonical(&self.blob_storage_root()),
+            component_directory: canonical(&self.component_directory),
+            component_service_directory: canonical(&self.component_service_directory),
+            component_temp_directory: canonical(self.component_temp_directory.path()),
+            data_dir_path: canonical(self.data_dir.path()),
+        };
+        serde_json::to_vec(&descriptor)
+            .expect("serializing WorkerExecutorTestDependenciesDescriptor must not fail")
+    }
+
+    fn from_descriptor(bytes: &[u8]) -> Self {
+        // `new()` installs the rustls CryptoProvider on the parent, but worker
+        // subprocesses created by test-r reconstruct the dep via
+        // `from_descriptor` and so never run `new()`. Without a process-level
+        // CryptoProvider, `HttpConnectionPool::new` (called from the executor
+        // bootstrap in every test) panics because the AWS SDK transitively
+        // enables both `aws-lc-rs` and `ring` rustls backends and rustls
+        // refuses to auto-pick one. Install ring here as well; the result is
+        // ignored if another `from_descriptor` call has already installed it
+        // in this worker process.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let descriptor: WorkerExecutorTestDependenciesDescriptor = serde_json::from_slice(bytes)
+            .expect("deserializing WorkerExecutorTestDependenciesDescriptor must not fail");
+
+        let redis: Arc<dyn Redis> = Arc::new(
+            golem_test_framework::components::redis::provided::ProvidedRedis::new(
+                descriptor.redis_host,
+                descriptor.redis_port,
+                descriptor.redis_prefix,
+            ),
+        );
+        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(
+            golem_test_framework::components::redis_monitor::provided::ProvidedRedisMonitor::new(),
+        );
+
+        // Worker side: attach to the parent's on-disk blob storage without
+        // touching its layout. `FileSystemBlobStorage::attach_existing` is
+        // sync (the parent already created the directory tree).
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::attach_existing(&descriptor.blob_storage_root)
+                .expect("attach to parent-prepared blob storage"),
+        );
+        let initial_agent_files_service =
+            Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
+
+        // Worker side: do NOT call `FileSystemComponentWriter::new` here —
+        // it would `remove_dir_all` the parent's already-warmed component
+        // store. Use `attach_existing` to reuse the parent's on-disk cache.
+        let component_writer: Arc<FileSystemComponentWriter> = Arc::new(
+            FileSystemComponentWriter::attach_existing(&descriptor.component_service_directory),
+        );
+
+        Self {
+            redis,
+            redis_monitor,
+            component_directory: descriptor.component_directory,
+            component_service_directory: descriptor.component_service_directory,
+            component_writer,
+            initial_agent_files_service,
+            component_temp_directory: Arc::new(TestTempDir::Borrowed(
+                descriptor.component_temp_directory,
+            )),
+            data_dir: Arc::new(TestTempDir::Borrowed(descriptor.data_dir_path)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod hosted_descriptor_tests {
+    use super::*;
+    use test_r::core::HostedDep;
+    use test_r::test;
+
+    /// Phase 3.4 regression: when a worker reconstructs
+    /// `WorkerExecutorTestDependencies` via `HostedDep::from_descriptor`
+    /// and the resulting struct is dropped, the parent's TempDirs must
+    /// survive. Dropping a borrowed `TestTempDir` is a no-op by
+    /// construction; this test pins that invariant.
+    #[test]
+    fn worker_side_drop_does_not_delete_parent_temp_dirs() {
+        // Stand in for the parent's data + component-temp directories.
+        let parent_data = TempDir::new().unwrap();
+        let parent_component_temp = TempDir::new().unwrap();
+        let blob_storage_root = parent_data.path().join("blobs");
+        let component_service_directory = parent_data.path().join("components");
+        std::fs::create_dir_all(&blob_storage_root).unwrap();
+        std::fs::create_dir_all(&component_service_directory).unwrap();
+
+        let descriptor = WorkerExecutorTestDependenciesDescriptor {
+            redis_host: "localhost".to_string(),
+            redis_port: 6379,
+            redis_prefix: "".to_string(),
+            blob_storage_root: blob_storage_root.clone(),
+            component_directory: Path::new("../test-components").to_path_buf(),
+            component_service_directory: component_service_directory.clone(),
+            component_temp_directory: parent_component_temp.path().to_path_buf(),
+            data_dir_path: parent_data.path().to_path_buf(),
+        };
+        let bytes = serde_json::to_vec(&descriptor).unwrap();
+
+        // Worker reconstructs and immediately drops.
+        {
+            let worker = WorkerExecutorTestDependencies::from_descriptor(&bytes);
+            // Borrowed temp-dir wrappers must point at the parent paths.
+            assert_eq!(worker.data_dir.path(), parent_data.path());
+            assert_eq!(
+                worker.component_temp_directory.path(),
+                parent_component_temp.path()
+            );
+            assert_eq!(worker.blob_storage_root(), blob_storage_root);
+            drop(worker);
+        }
+
+        // After the worker handle drops, the parent's directories must
+        // still exist — Borrowed must not delete on drop.
+        assert!(parent_data.path().exists(), "parent data_dir was removed");
+        assert!(
+            parent_component_temp.path().exists(),
+            "parent component_temp_directory was removed"
+        );
+        assert!(
+            blob_storage_root.exists(),
+            "parent blob storage root was removed"
+        );
+        assert!(
+            component_service_directory.exists(),
+            "parent component service directory was removed"
+        );
+    }
+
+    /// Phase 3.4 regression: `from_descriptor` must NOT call
+    /// `FileSystemComponentWriter::new()` because that would
+    /// `remove_dir_all` the parent's already-warmed component cache.
+    #[test]
+    fn worker_side_attach_does_not_destroy_component_service_directory() {
+        let parent_data = TempDir::new().unwrap();
+        let blob_storage_root = parent_data.path().join("blobs");
+        let component_service_directory = parent_data.path().join("components");
+        std::fs::create_dir_all(&blob_storage_root).unwrap();
+        std::fs::create_dir_all(&component_service_directory).unwrap();
+
+        // Sentinel file written by the "parent" warm-cache step.
+        let sentinel = component_service_directory.join("warmed.txt");
+        std::fs::write(&sentinel, b"warmed").unwrap();
+
+        let descriptor = WorkerExecutorTestDependenciesDescriptor {
+            redis_host: "localhost".to_string(),
+            redis_port: 6379,
+            redis_prefix: "".to_string(),
+            blob_storage_root,
+            component_directory: Path::new("../test-components").to_path_buf(),
+            component_service_directory: component_service_directory.clone(),
+            component_temp_directory: parent_data.path().join("ctemp"),
+            data_dir_path: parent_data.path().to_path_buf(),
+        };
+        std::fs::create_dir_all(&descriptor.component_temp_directory).unwrap();
+        let bytes = serde_json::to_vec(&descriptor).unwrap();
+
+        let _worker = WorkerExecutorTestDependencies::from_descriptor(&bytes);
+        // Sentinel must survive worker-side attach. If `from_descriptor`
+        // ever switches back to calling `FileSystemComponentWriter::new`,
+        // this assertion will fire because `new` deletes the root.
+        assert!(
+            sentinel.exists(),
+            "worker-side attach destroyed the parent's component cache"
+        );
+    }
+
+    /// Phase 3.4 hardening (oracle review): the worker-side
+    /// `FileSystemComponentWriter::attach_existing` must fail fast if the
+    /// parent-prepared directory does not exist, instead of silently
+    /// creating a fresh per-worker store on first write.
+    #[test]
+    fn attach_existing_fails_fast_when_component_dir_missing() {
+        use crate::component_writer::FileSystemComponentWriter;
+
+        let parent_data = TempDir::new().unwrap();
+        let missing = parent_data.path().join("never-prepared");
+
+        let result = std::panic::catch_unwind(|| {
+            FileSystemComponentWriter::attach_existing(&missing);
+        });
+        assert!(
+            result.is_err(),
+            "attach_existing must panic when {missing:?} does not exist"
+        );
     }
 }
 
@@ -275,6 +549,11 @@ pub struct TestWorkerExecutor {
     pub deps: WorkerExecutorTestDependencies,
     pub client: WorkerExecutorClient<OtelGrpcService<Channel>>,
     pub context: TestContext,
+    /// Same `AdditionalTestDeps` instance that the worker context received via
+    /// `Bootstrap::create_additional_deps`. Tests use it to evict a worker's
+    /// wasmtime instance while keeping the `Worker` shell (and its read-only
+    /// cache) alive, and to read per-agent instance load counts.
+    additional_test_deps: AdditionalTestDeps,
     leak_detector: std::sync::Weak<()>,
 }
 
@@ -291,6 +570,11 @@ impl TestWorkerExecutor {
             account_id: self.context.account_id,
             account_plan_id: self.context.account_plan_id,
             account_roles: self.context.account_roles.clone(),
+            effective_surface: golem_common::model::card::EffectiveSurface {
+                source_card_ids: Vec::new(),
+                lower: Vec::new(),
+                upper: Vec::new(),
+            },
         })
     }
 
@@ -313,6 +597,56 @@ impl TestWorkerExecutor {
                 HashSet::new(),
             )
             .await
+    }
+
+    /// Returns `true` iff the `Worker` shell for `owned_agent_id` is currently
+    /// registered in `ActiveWorkers` *and* has a loaded wasmtime instance.
+    /// Returns `false` when:
+    ///   - no `Worker` shell is currently in `ActiveWorkers` for this id, or
+    ///   - the shell is present but the wasmtime instance has been unloaded
+    ///     (e.g. after memory-pressure eviction).
+    ///
+    /// Used by the read-only cache eviction-survival test (#3393 T5).
+    pub async fn worker_is_loaded(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        match self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+        {
+            Some(worker) => worker.is_loaded().await,
+            None => false,
+        }
+    }
+
+    /// Returns the current eviction classification for the worker shell
+    /// registered in `ActiveWorkers`, or `None` if the worker is missing or
+    /// non-evictable. Used by tests to wait until the worker is `LoadedIdle`
+    /// before triggering memory-pressure eviction.
+    pub async fn worker_eviction_class(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<golem_worker_executor::worker::EvictionClass> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await?;
+        worker.eviction_class().await
+    }
+
+    /// Returns the per-worker memory requirement that the executor uses when
+    /// reserving from the worker memory semaphore. Lets tests sanity-check that
+    /// they have constrained the memory budget tightly enough to force
+    /// eviction.
+    pub async fn worker_memory_requirement(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<u64> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveWorkers"))?;
+        Ok(worker.memory_requirement().await?)
     }
 
     pub async fn get_running_workers_metadata(
@@ -347,15 +681,134 @@ impl TestWorkerExecutor {
     }
 }
 
+/// A single global, monotonically-increasing id allocator shared by
+/// every test-r worker in the suite.
+///
+/// Workers parameterise tests on [`LastUniqueId`] (a type alias for the
+/// auto-generated `UniqueIdsStub`); each call to `next()` round-trips via
+/// the IPC HostedRpc transport to the parent-hosted [`LastUniqueIdOwner`]
+/// and returns a fresh id. There is no per-worker partitioning anymore —
+/// uniqueness is enforced by the single shared `AtomicU64` in the parent.
+#[test_r::hosted_rpc]
+pub trait UniqueIds {
+    fn next(&self) -> u64;
+}
+
+/// Parent-side owner: lives in the top-level test process and serves
+/// [`UniqueIds::next`] calls from every worker subprocess.
+///
+/// Intentionally **does not** derive [`Default`]: the derived zero-value
+/// default would silently re-introduce `0` as the first id and break the
+/// "never returns 0" contract preserved from the previous
+/// `AtomicU16`-based shape. The manual `Default` impl below forwards to
+/// [`LastUniqueIdOwner::new`] so callers using either entry point get a
+/// counter that starts at `1`.
 #[derive(Debug)]
-pub struct LastUniqueId {
-    pub id: AtomicU16,
+pub struct LastUniqueIdOwner {
+    next_id: AtomicU64,
+}
+
+impl LastUniqueIdOwner {
+    pub fn new() -> Self {
+        Self {
+            next_id: AtomicU64::new(1),
+        }
+    }
+}
+
+impl Default for LastUniqueIdOwner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UniqueIds for LastUniqueIdOwner {
+    fn next(&self) -> u64 {
+        // Uniqueness is the only requirement — `Relaxed` is sufficient
+        // because every distinct `fetch_add` necessarily yields a
+        // distinct value, and HostedRpc dispatch is already serialised
+        // per-dep at the runtime level.
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+impl test_r::core::HostedRpcDep for LastUniqueIdOwner {
+    type Stub = UniqueIdsStub;
+
+    fn dispatch(&mut self, method_idx: u32, args: &[u8]) -> Result<Vec<u8>, String> {
+        UniqueIdsDispatch::dispatch_unique_ids(self, method_idx, args)
+    }
+
+    fn build_stub(channel: test_r::core::HostedRpcChannel) -> Self::Stub {
+        UniqueIdsStub::new(channel)
+    }
+}
+
+/// Public name kept stable for downstream tests; internally this is the
+/// macro-generated worker-side stub for the [`UniqueIds`] trait.
+///
+/// This is a type alias (not a wrapper), so:
+/// - `&LastUniqueId` parameters and `inherit_test_dep!(LastUniqueId)`
+///   downstream sites continue to compile unchanged.
+/// - `LastUniqueId::next` resolves through the [`UniqueIds`] trait, so
+///   callers in **other** crates that want to invoke it directly need
+///   `use golem_worker_executor_test_utils::UniqueIds;` in scope.
+/// - `Debug` output and panic messages will refer to the value as a
+///   `UniqueIdsStub`, not as `LastUniqueId`.
+pub type LastUniqueId = UniqueIdsStub;
+
+#[cfg(test)]
+mod last_unique_id_owner_tests {
+    use super::{LastUniqueIdOwner, UniqueIds};
+    use test_r::test;
+
+    /// Pin the "never returns 0" contract preserved from the previous
+    /// `AtomicU16`-based shape: the first id allocated by a fresh
+    /// owner must be `1`, not `0`.
+    #[test]
+    fn new_starts_at_one() {
+        let owner = LastUniqueIdOwner::new();
+        assert_eq!(
+            owner.next(),
+            1,
+            "first id from LastUniqueIdOwner::new() must be 1 to preserve the never-returns-0 contract"
+        );
+    }
+
+    /// Pin that the manual `Default` impl forwards to `new()`. If a
+    /// future refactor lets the derived `Default` slip back in, this
+    /// test fires because the derived default would yield `0` first.
+    #[test]
+    fn default_starts_at_one() {
+        let owner = <LastUniqueIdOwner as Default>::default();
+        assert_eq!(
+            owner.next(),
+            1,
+            "first id from LastUniqueIdOwner::default() must be 1; \
+             a derived Default would re-introduce 0 here"
+        );
+    }
+
+    /// Subsequent calls must produce distinct, monotonically increasing
+    /// ids. This is the core uniqueness contract.
+    #[test]
+    fn next_is_strictly_monotonic_and_unique() {
+        let owner = LastUniqueIdOwner::new();
+        let a = owner.next();
+        let b = owner.next();
+        let c = owner.next();
+        assert!(
+            a < b && b < c,
+            "ids must be strictly increasing: got {a}, {b}, {c}"
+        );
+        assert_ne!(a, 0, "no id may be 0");
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct TestContext {
     base_prefix: String,
-    unique_id: u16,
+    unique_id: u64,
 
     // account id to use during tests
     pub account_id: AccountId,
@@ -374,7 +827,7 @@ pub struct TestContext {
 impl TestContext {
     pub fn new(last_unique_id: &LastUniqueId) -> Self {
         let base_prefix = Uuid::new_v4().to_string();
-        let unique_id = last_unique_id.id.fetch_add(1, Ordering::Relaxed);
+        let unique_id = last_unique_id.next();
 
         let account_id = AccountId::new();
         let account_plan_id = PlanId::new();
@@ -622,12 +1075,19 @@ async fn start_executor_with_config(
     let handle = Handle::current();
     let mut join_set = JoinSet::new();
 
+    // Allocate the AdditionalTestDeps here so that the same instance is shared
+    // between the bootstrap (via `create_additional_deps`) and the
+    // `TestWorkerExecutor` returned to the test (so tests can observe and
+    // mutate per-worker test-only state, e.g. eviction).
+    let additional_test_deps = AdditionalTestDeps::new();
+
     let details = run(
         config,
         prometheus,
         handle,
         deps.component_service_directory.clone(),
         overrides,
+        additional_test_deps.clone(),
         &mut join_set,
     )
     .await?;
@@ -656,6 +1116,7 @@ async fn start_executor_with_config(
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
+                additional_test_deps,
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -724,6 +1185,7 @@ async fn run(
     runtime: Handle,
     component_service_directory: PathBuf,
     overrides: TestExecutorOverrides,
+    additional_test_deps: AdditionalTestDeps,
     join_set: &mut JoinSet<Result<(), Error>>,
 ) -> Result<RunDetails, Error> {
     info!("Golem Worker Executor starting up...");
@@ -732,6 +1194,7 @@ async fn run(
         &TestServerBootstrap {
             component_service_directory,
             overrides,
+            additional_test_deps,
         },
         golem_config,
         prometheus_registry,
@@ -912,7 +1375,7 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_success(full_function_name, consumed_fuel, output)
@@ -921,6 +1384,14 @@ impl InvocationHooks for TestWorkerCtx {
 
     async fn get_current_retry_point(&self) -> OplogIndex {
         self.durable_ctx.get_current_retry_point().await
+    }
+
+    fn enter_read_only_mode(&mut self, method_name: String) {
+        self.durable_ctx.enter_read_only_mode(method_name)
+    }
+
+    fn exit_read_only_mode(&mut self) {
+        self.durable_ctx.exit_read_only_mode()
     }
 }
 
@@ -978,6 +1449,10 @@ impl UpdateManagement for TestWorkerCtx {
 struct TestServerBootstrap {
     component_service_directory: PathBuf,
     overrides: TestExecutorOverrides,
+    /// The `AdditionalTestDeps` instance that the worker context will receive
+    /// from `create_additional_deps`. Shared with `TestWorkerExecutor` so tests
+    /// can observe (and mutate) per-worker test-only state.
+    additional_test_deps: AdditionalTestDeps,
 }
 
 #[async_trait]
@@ -989,7 +1464,7 @@ impl WorkerCtx for TestWorkerCtx {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        agent_id: Option<LegacyParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -998,7 +1473,7 @@ impl WorkerCtx for TestWorkerCtx {
         rdbms_service: Arc<dyn rdbms::RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
-        _active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
+        active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<TestWorkerCtx>>,
@@ -1022,6 +1497,11 @@ impl WorkerCtx for TestWorkerCtx {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
+        // Capture the executor's ActiveWorkers handle the first time we see
+        // it, so test helpers (e.g. `worker_is_loaded`) can observe worker
+        // shells under memory-pressure eviction (#3393 T5).
+        extra_deps.set_active_workers(active_workers.clone());
+
         let oplog = Arc::new(TestOplog::new(
             owned_agent_id.clone(),
             oplog.clone(),
@@ -1098,7 +1578,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_agent_id()
     }
 
-    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
     }
 
@@ -1405,7 +1885,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         &self,
         _registry_service: Arc<dyn RegistryService>,
     ) -> AdditionalTestDeps {
-        AdditionalTestDeps::new()
+        self.additional_test_deps.clone()
     }
 
     fn create_direct_invocation_auth_service(
@@ -1672,6 +2152,14 @@ async fn run_production_context_bootstrap(
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
+                // Production-context bootstrap path uses the real `NoAdditionalDeps`
+                // worker context, not `TestWorkerCtx`, so the worker-inspection
+                // helpers do not apply here. We hand the executor a fresh, empty
+                // `AdditionalTestDeps` purely to satisfy the field; calling
+                // `worker_is_loaded` / `worker_eviction_class` / `worker_memory_requirement`
+                // on this path will report "no worker" because no `ActiveWorkers`
+                // handle was ever captured.
+                additional_test_deps: AdditionalTestDeps::new(),
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -2295,6 +2783,12 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
 pub struct AdditionalTestDeps {
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
+    /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
+    /// read-only test helpers (`worker_is_loaded`,
+    /// `worker_eviction_class`, `worker_memory_requirement`) to observe
+    /// live `Worker` state for the memory-pressure-driven eviction test
+    /// (issue #3393 T5).
+    active_workers: Arc<std::sync::OnceLock<Arc<ActiveWorkers<TestWorkerCtx>>>>,
 }
 
 impl Default for AdditionalTestDeps {
@@ -2310,7 +2804,25 @@ impl AdditionalTestDeps {
         Self {
             oplog_failures,
             rdbms_tx_failures,
+            active_workers: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Stores the executor's `ActiveWorkers` registry on first call. Subsequent
+    /// calls are no-ops because they all carry the same `Arc`.
+    pub(crate) fn set_active_workers(&self, workers: Arc<ActiveWorkers<TestWorkerCtx>>) {
+        let _ = self.active_workers.set(workers);
+    }
+
+    /// Look up a `Worker` shell currently registered in `ActiveWorkers`.
+    /// Returns `None` if the executor has not loaded any worker yet (handle
+    /// not captured), or if no `Worker` for `owned_agent_id` is currently
+    /// resident.
+    pub(crate) async fn try_get_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<Arc<Worker<TestWorkerCtx>>> {
+        self.active_workers.get()?.try_get(owned_agent_id).await
     }
 
     pub async fn get_oplog_failures_count(&self, agent_id: AgentId, entry: String) -> usize {

@@ -284,6 +284,9 @@ fn worker_error_variant_name(e: &golem_rust::bindings::golem::api::oplog::Worker
         golem_rust::bindings::golem::api::oplog::WorkerError::EphemeralCannotSuspend(_) => {
             "EphemeralCannotSuspend".to_string()
         }
+        golem_rust::bindings::golem::api::oplog::WorkerError::ReadOnlyViolation(_) => {
+            "ReadOnlyViolation".to_string()
+        }
     }
 }
 

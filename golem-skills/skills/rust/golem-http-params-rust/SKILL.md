@@ -238,3 +238,8 @@ the `Content-Language` response header.
 | Enum (unit variants) | JSON string |
 | Enum (with data) | JSON object with tag |
 | `HashMap<K, V>` | JSON array of `[key, value]` tuples |
+
+
+## Related Skills
+
+- Load `golem-add-http-endpoint-rust` for the high-level workflow of defining and mounting HTTP endpoints on an agent

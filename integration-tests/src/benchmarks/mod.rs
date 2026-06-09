@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::agent::{DataValue, ParsedAgentId};
+use golem_common::base_model::agent::{DataValue, LegacyParsedAgentId};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
@@ -29,15 +29,19 @@ use std::time::{Duration, SystemTime};
 use tracing::{Instrument, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+pub mod cleanup;
 pub mod cold_start_unknown;
 pub mod durability_overhead;
 pub mod latency;
 pub mod sleep;
 pub mod throughput;
 
-/// Injects the current tracing span's OpenTelemetry trace context (traceparent/tracestate)
-/// into a reqwest Request's headers so that downstream services can link their
-/// spans to the benchmark's trace.
+// Re-export cleanup helpers so callers can use the flat `benchmarks::*` path.
+pub use cleanup::{cleanup_account, cleanup_env_and_app, cleanup_user_state};
+
+/// Injects the current tracing span's OpenTelemetry trace context
+/// (traceparent/tracestate) into a reqwest Request's headers so that
+/// downstream services can link their spans to the benchmark's trace.
 fn inject_trace_context(request: &mut Request) {
     let current_span = tracing::Span::current();
     let otel_context = current_span.context();
@@ -103,7 +107,7 @@ impl InvokeResult {
 pub async fn invoke_and_await_agent(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    agent_id: &ParsedAgentId,
+    agent_id: &LegacyParsedAgentId,
     method_name: &str,
     params: DataValue,
 ) -> InvokeResult {

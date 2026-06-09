@@ -18,9 +18,12 @@ use golem_client::api::{
     RegistryServiceGetEnvironmentPluginGrantError, RegistryServiceGetPluginByIdError,
     RegistryServiceListEnvironmentEnvironmentPluginGrantsError,
 };
-use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::account::AccountId;
 use golem_common::model::base64::Base64;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
+use golem_common::model::permission_share::{
+    PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
@@ -30,6 +33,49 @@ use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
+
+async fn create_permission_share(
+    client: &impl RegistryServiceClient,
+    owner_account_id: AccountId,
+    target_account_id: AccountId,
+    name: &str,
+    lower_positive: Vec<String>,
+) -> anyhow::Result<PermissionShare> {
+    Ok(client
+        .create_permission_share(
+            &owner_account_id.0,
+            &PermissionShareCreation {
+                target_account_id,
+                name: PermissionShareName(name.to_string()),
+                data: PermissionShareData {
+                    lower_positive,
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
+        .await?)
+}
+
+fn environment_view_grant(
+    owner: AccountId,
+    app_name: &str,
+    env_name: &str,
+    recipient: &str,
+) -> String {
+    format!("environment({owner}/{app_name}) @ {recipient} : view : {env_name}")
+}
+
+fn environment_plugin_grant_grant(
+    owner: AccountId,
+    app_name: &str,
+    env_name: &str,
+    recipient: &str,
+    verb: &str,
+) -> String {
+    format!("environment.plugin-grant({owner}/{app_name}/{env_name}) @ {recipient} : {verb} : *")
+}
 
 #[test]
 #[tracing::instrument]
@@ -42,13 +88,42 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
 
     let (_, plugin_env) = user_1.app_and_env().await?;
     let (_, shared_env) = user_2.app_and_env().await?;
-    user_2
-        .share_environment(
-            &shared_env.id,
-            &user_1.account_id,
-            &[EnvironmentRole::Admin],
-        )
-        .await?;
+    create_permission_share(
+        &client_2,
+        user_2.account_id,
+        user_1.account_id,
+        "grant-plugin-to-shared-env",
+        vec![
+            environment_view_grant(
+                user_2.account_id,
+                &shared_env.application_name.0,
+                &shared_env.name.0,
+                user_1.account_email.as_str(),
+            ),
+            environment_plugin_grant_grant(
+                user_2.account_id,
+                &shared_env.application_name.0,
+                &shared_env.name.0,
+                user_1.account_email.as_str(),
+                "create",
+            ),
+            environment_plugin_grant_grant(
+                user_2.account_id,
+                &shared_env.application_name.0,
+                &shared_env.name.0,
+                user_1.account_email.as_str(),
+                "view",
+            ),
+            environment_plugin_grant_grant(
+                user_2.account_id,
+                &shared_env.application_name.0,
+                &shared_env.name.0,
+                user_1.account_email.as_str(),
+                "delete",
+            ),
+        ],
+    )
+    .await?;
 
     let plugin_component = user_1
         .component(&plugin_env.id, "oplog_processor_release")
@@ -262,13 +337,28 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
 
     let (_, plugin_env) = user_1.app_and_env().await?;
     let (_, shared_env) = user_2.app_and_env().await?;
-    user_2
-        .share_environment(
-            &shared_env.id,
-            &user_1.account_id,
-            &[EnvironmentRole::Admin],
-        )
-        .await?;
+    create_permission_share(
+        &client_2,
+        user_2.account_id,
+        user_1.account_id,
+        "plugin-member-view-env",
+        vec![
+            environment_view_grant(
+                user_2.account_id,
+                &shared_env.application_name.0,
+                &shared_env.name.0,
+                user_1.account_email.as_str(),
+            ),
+            environment_plugin_grant_grant(
+                user_2.account_id,
+                &shared_env.application_name.0,
+                &shared_env.name.0,
+                user_1.account_email.as_str(),
+                "create",
+            ),
+        ],
+    )
+    .await?;
 
     let plugin_component = user_1
         .component(&plugin_env.id, "oplog_processor_release")
@@ -454,13 +544,19 @@ async fn shared_user_with_readonly_role_cannot_grant_plugin(
     let (_, plugin_env) = user_owner.app_and_env().await?;
     let (_, shared_env) = user_shared.app_and_env().await?;
 
-    user_shared
-        .share_environment(
-            &shared_env.id,
-            &user_owner.account_id,
-            &[EnvironmentRole::Viewer], // not Admin
-        )
-        .await?;
+    create_permission_share(
+        &user_shared.registry_service_client().await,
+        user_shared.account_id,
+        user_owner.account_id,
+        "readonly-plugin-grant-access",
+        vec![environment_view_grant(
+            user_shared.account_id,
+            &shared_env.application_name.0,
+            &shared_env.name.0,
+            user_owner.account_email.as_str(),
+        )],
+    )
+    .await?;
 
     let component = user_owner
         .component(&plugin_env.id, "oplog_processor_release")
@@ -516,9 +612,28 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
     let (_, env) = owner.app_and_env().await?;
     let (_, plugin_env) = owner.app_and_env().await?;
 
-    let environment_share = owner
-        .share_environment(&env.id, &shared.account_id, &[EnvironmentRole::Admin])
-        .await?;
+    let permission_share = create_permission_share(
+        &client_owner,
+        owner.account_id,
+        shared.account_id,
+        "list-grants-revoked-access",
+        vec![
+            environment_view_grant(
+                owner.account_id,
+                &env.application_name.0,
+                &env.name.0,
+                shared.account_email.as_str(),
+            ),
+            environment_plugin_grant_grant(
+                owner.account_id,
+                &env.application_name.0,
+                &env.name.0,
+                shared.account_email.as_str(),
+                "view",
+            ),
+        ],
+    )
+    .await?;
 
     let comp = owner
         .component(&plugin_env.id, "oplog_processor_release")
@@ -550,8 +665,8 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
         )
         .await?;
 
-    client_shared
-        .delete_environment_share(&environment_share.id.0, environment_share.revision.into())
+    client_owner
+        .delete_permission_share(&permission_share.id.0, permission_share.revision.into())
         .await?;
 
     let result_shared = client_shared
@@ -644,9 +759,28 @@ async fn shared_user_can_fetch_deleted_grant_with_include_deleted(
     let client_shared = shared.registry_service_client().await;
 
     let (_, env) = owner.app_and_env().await?;
-    owner
-        .share_environment(&env.id, &shared.account_id, &[EnvironmentRole::Admin])
-        .await?;
+    create_permission_share(
+        &client_owner,
+        owner.account_id,
+        shared.account_id,
+        "fetch-deleted-grant-access",
+        vec![
+            environment_view_grant(
+                owner.account_id,
+                &env.application_name.0,
+                &env.name.0,
+                shared.account_email.as_str(),
+            ),
+            environment_plugin_grant_grant(
+                owner.account_id,
+                &env.application_name.0,
+                &env.name.0,
+                shared.account_email.as_str(),
+                "view",
+            ),
+        ],
+    )
+    .await?;
 
     let component = owner
         .component(&env.id, "oplog_processor_release")
@@ -753,9 +887,28 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
     let client_revoked = revoked_user.registry_service_client().await;
 
     let (_, env) = owner.app_and_env().await?;
-    let share = owner
-        .share_environment(&env.id, &revoked_user.account_id, &[EnvironmentRole::Admin])
-        .await?;
+    let permission_share = create_permission_share(
+        &client_owner,
+        owner.account_id,
+        revoked_user.account_id,
+        "revoked-fetch-grant-access",
+        vec![
+            environment_view_grant(
+                owner.account_id,
+                &env.application_name.0,
+                &env.name.0,
+                revoked_user.account_email.as_str(),
+            ),
+            environment_plugin_grant_grant(
+                owner.account_id,
+                &env.application_name.0,
+                &env.name.0,
+                revoked_user.account_email.as_str(),
+                "view",
+            ),
+        ],
+    )
+    .await?;
 
     let component = owner
         .component(&env.id, "oplog_processor_release")
@@ -788,7 +941,7 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
         .await?;
 
     client_owner
-        .delete_environment_share(&share.id.0, share.revision.into())
+        .delete_permission_share(&permission_share.id.0, permission_share.revision.into())
         .await?;
 
     for include_deleted in [false, true] {

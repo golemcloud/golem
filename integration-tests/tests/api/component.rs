@@ -781,6 +781,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                 }],
             }),
             http_endpoint: Vec::new(),
+            read_only: None,
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
@@ -824,6 +825,8 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             implemented_by: RegisteredAgentTypeImplementer {
                 component_id: component.id,
                 component_revision: component.revision,
+                component_name: component.component_name.0.clone(),
+                account_id: component.account_id,
             },
             webhook_prefix_authority_and_path: None
         }]

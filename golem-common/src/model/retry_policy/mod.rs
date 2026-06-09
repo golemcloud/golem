@@ -4469,21 +4469,23 @@ mod tests {
         assert_eq!(roundtrip, policy);
     }
 
-    fn retry_wit_resolver() -> golem_wasm::analysis::wit_parser::AnalysedTypeResolve {
+    fn retry_wit_resolver() -> crate::component_introspection::wit_parser::AnalysedTypeResolve {
         let wit_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("wit");
-        golem_wasm::analysis::wit_parser::AnalysedTypeResolve::from_wit_directory(&wit_dir)
-            .expect("Failed to parse WIT directory")
+        crate::component_introspection::wit_parser::AnalysedTypeResolve::from_wit_directory(
+            &wit_dir,
+        )
+        .expect("Failed to parse WIT directory")
     }
 
     fn assert_type_matches_wit(
         rust_type: AnalysedType,
         interface: &str,
         type_name: &str,
-        resolver: &mut golem_wasm::analysis::wit_parser::AnalysedTypeResolve,
+        resolver: &mut crate::component_introspection::wit_parser::AnalysedTypeResolve,
     ) {
-        use golem_wasm::analysis::wit_parser::{TypeName, TypeOwner};
+        use crate::component_introspection::wit_parser::{TypeName, TypeOwner};
 
         let wit_type = resolver
             .analysed_type(&TypeName {

@@ -68,13 +68,13 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
-use crate::services::{HasComponentService, HasOplogService};
+use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
-use crate::worker::status::calculate_last_known_status_for_existing_worker;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
@@ -91,7 +91,7 @@ use futures::TryStreamExt;
 use futures::future::try_join_all;
 use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId, Principal};
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
@@ -166,7 +166,7 @@ impl Drop for WorkerDir {
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use tokio_util::codec::{BytesCodec, FramedRead};
-use tracing::{Instrument, Level, debug, info, span, warn};
+use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
@@ -235,6 +235,24 @@ impl WasiHttpHooks for DurableHttpHooks {
     }
 }
 
+/// Controls how strictly the host filters side-effects performed by user code during an
+/// agent invocation.
+///
+/// `Normal` is the default and applies to every invocation that is not explicitly marked
+/// read-only. `ReadOnly` is set automatically by the worker-executor around the invocation
+/// of any agent method whose [`AgentMethod::read_only`] metadata is `Some(_)`. While
+/// `ReadOnly` is active, outgoing HTTP and RPC host calls are trapped before they are
+/// performed and before any oplog entry is written, surfacing a typed
+/// [`AgentError::ReadOnlyViolation`] to the SDK.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvocationStrictness {
+    /// No additional restrictions beyond the normal durability/persistence machinery.
+    Normal,
+    /// The invocation is restricted to read-only host calls. Outgoing HTTP and RPC calls
+    /// trap immediately with [`AgentError::ReadOnlyViolation`].
+    ReadOnly,
+}
+
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
@@ -265,7 +283,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        agent_id: Option<LegacyParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -569,7 +587,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.created_by
     }
 
-    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+    pub fn parsed_agent_id(&self) -> Option<LegacyParsedAgentId> {
         self.state.agent_id.clone()
     }
 
@@ -838,6 +856,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => Some(RetryDecision::None),
             TrapType::Error {
+                error: AgentError::ReadOnlyViolation(_),
+                ..
+            } => Some(RetryDecision::None),
+            TrapType::Error {
                 error: AgentError::InternalError(_),
                 ..
             } => Some(RetryDecision::None),
@@ -892,6 +914,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::EphemeralSleepTooLong(_) => "ephemeral-sleep-too-long",
             AgentError::EphemeralFuelExhausted(_) => "ephemeral-fuel-exhausted",
             AgentError::EphemeralCannotSuspend(_) => "ephemeral-cannot-suspend",
+            AgentError::ReadOnlyViolation(_) => "read-only-violation",
         }
     }
 
@@ -1265,6 +1288,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }?;
 
+            // A `BeginRemoteWrite` region (remote write / HTTP request) is now open until the
+            // matching `end_function`; the tip is inside it, so block mid-invocation checkpoints.
+            self.state.open_rollback_regions.insert(result);
+
             // The current retry point will point to the BeginRemoteWrite entry
             self.state.current_retry_point = result;
             Ok(result)
@@ -1314,15 +1341,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .oplog
                     .add(OplogEntry::end_remote_write(begin_index))
                     .await;
-                Ok(())
             } else {
                 let (_, _) =
                     crate::get_oplog_entry!(self.state.replay_state, OplogEntry::EndRemoteWrite)?;
-                Ok(())
             }
+            // The `BeginRemoteWrite` region opened in `begin_function` is now closed.
+            self.state.open_rollback_regions.remove(&begin_index);
+            Ok(())
         } else {
             Ok(())
         }
+    }
+
+    /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
+    /// it commits, so the worker's `last_known_status` reflects the committed tip. Writes a
+    /// checkpoint only when we are at a structurally clean boundary (no open rollback region) and
+    /// the committed tip is at/below the `get_oplog_index` marker watermark; otherwise it is a
+    /// cheap no-op. The actual write is further throttled by the checkpointer.
+    async fn maybe_mid_invocation_checkpoint(&self) {
+        if !self.state.at_clean_checkpoint_boundary() {
+            return;
+        }
+        self.public_state
+            .worker()
+            .checkpoint_status_mid_invocation(self.state.min_exposed_marker)
+            .await;
     }
 
     pub async fn begin_transaction_function<Tx, Err>(
@@ -1340,6 +1383,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .add_and_commit_oplog(OplogEntry::begin_remote_transaction(tx_id, None))
                 .await;
 
+            // A remote transaction region is now open until commit/rollback; block checkpoints.
+            self.state.open_rollback_regions.insert(begin_index);
             self.state.current_retry_point = begin_index;
 
             Ok((begin_index, tx))
@@ -1485,6 +1530,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 Ok((original_begin_index, tx))
             }?;
 
+            // The (possibly re-begun) remote transaction region is open until commit/rollback.
+            self.state.open_rollback_regions.insert(result);
             self.state.current_retry_point = original_begin_index;
 
             Ok((result, tx))
@@ -1562,14 +1609,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
-            Ok(())
         } else {
             let (_, _) = crate::get_oplog_entry!(
                 self.state.replay_state,
                 OplogEntry::CommittedRemoteTransaction
             )?;
-            Ok(())
         }
+        // The remote transaction region opened in `begin_transaction_function` is now closed: the
+        // `CommittedRemoteTransaction` entry has been durably committed (live) or replayed, so the
+        // tip is no longer inside a jumpable region on its account.
+        self.state.open_rollback_regions.remove(&begin_index);
+        // The live branch above just committed/updated the status, so this is a clean boundary at
+        // the committed tip (the helper is a no-op during replay and while any other region is
+        // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
+        // invocations.
+        self.maybe_mid_invocation_checkpoint().await;
+        Ok(())
     }
 
     pub async fn rolled_back_transaction_function(
@@ -1589,14 +1644,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
-            Ok(())
         } else {
             let (_, _) = crate::get_oplog_entry!(
                 self.state.replay_state,
                 OplogEntry::RolledBackRemoteTransaction
             )?;
-            Ok(())
         }
+        // The remote transaction region opened in `begin_transaction_function` is now closed: the
+        // `RolledBackRemoteTransaction` entry has been durably committed (live) or replayed, so the
+        // tip is no longer inside a jumpable region on its account.
+        self.state.open_rollback_regions.remove(&begin_index);
+        // The live branch above just committed/updated the status, so this is a clean boundary at
+        // the committed tip (the helper is a no-op during replay and while any other region is
+        // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
+        // invocations.
+        self.maybe_mid_invocation_checkpoint().await;
+        Ok(())
     }
 }
 
@@ -2026,6 +2089,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state
             .open_websocket_connections
             .insert(rep, WebSocketConnectionState { url, headers });
+    }
+
+    /// Returns `Ok(())` if the host is in normal strictness mode, or if the host is in read-only
+    /// strictness but the call site has not been restricted (this function is a no-op in normal
+    /// mode).
+    ///
+    /// Returns `Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation)` if the host is in read-only
+    /// strictness mode. The error carries the agent method name and the host function name, so
+    /// the trap can later be converted to a typed `AgentError::ReadOnlyViolation`.
+    ///
+    /// Call sites should invoke this at the very top of any host function that introduces a
+    /// remote side effect (outgoing HTTP, RPC) before any durability machinery runs.
+    pub fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
+        if self.state.invocation_strictness == InvocationStrictness::ReadOnly {
+            let method = self.state.read_only_method_name.clone().unwrap_or_default();
+            Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+                method,
+                host_function: host_function.to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Returns the current invocation strictness mode.
+    pub fn invocation_strictness(&self) -> InvocationStrictness {
+        self.state.invocation_strictness
     }
 
     pub(crate) fn unregister_open_websocket(&mut self, rep: u32) {
@@ -2465,11 +2555,37 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         decision
     }
 
+    fn enter_read_only_mode(&mut self, method_name: String) {
+        if self.state.invocation_strictness == InvocationStrictness::ReadOnly {
+            warn!(
+                "enter_read_only_mode called while already in read-only mode (current method: {:?}, new method: {})",
+                self.state.read_only_method_name, method_name
+            );
+        }
+        self.state.invocation_strictness = InvocationStrictness::ReadOnly;
+        self.state.read_only_method_name = Some(method_name);
+    }
+
+    fn exit_read_only_mode(&mut self) {
+        match self.state.invocation_strictness {
+            InvocationStrictness::ReadOnly => {
+                self.state.invocation_strictness = InvocationStrictness::Normal;
+                self.state.read_only_method_name = None;
+            }
+            InvocationStrictness::Normal => {
+                warn!(
+                    "exit_read_only_mode called without a matching enter_read_only_mode; \
+                     invocation strictness left as Normal"
+                );
+            }
+        }
+    }
+
     async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        output: &AgentInvocationOutput,
+        output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         let is_live = self.state.is_live();
 
@@ -2480,6 +2596,26 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         "component_revision missing in AgentInvocationOutput during replay",
                     )
                 })?;
+
+                // Classify the just-completed invocation up front so we can
+                // bump the read-only cache epoch on successful mutating
+                // completion. For non-AgentMethod results
+                // (initialization, manual update, snapshot
+                // load/save, oplog processing) we always invalidate — these
+                // are all state-changing. For AgentMethod results we ask the
+                // worker whether the method is `read_only`.
+                let invalidates_read_only_cache = match &output.result {
+                    AgentInvocationResult::AgentMethod { .. } => self
+                        .public_state
+                        .worker()
+                        .agent_method_invalidates_read_only_cache(full_function_name),
+                    AgentInvocationResult::AgentInitialization
+                    | AgentInvocationResult::ManualUpdate
+                    | AgentInvocationResult::LoadSnapshot { .. }
+                    | AgentInvocationResult::SaveSnapshot { .. }
+                    | AgentInvocationResult::ProcessOplogEntries { .. } => true,
+                };
+
                 self.public_state
                     .worker()
                     .oplog()
@@ -2497,6 +2633,36 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::Always)
                     .await;
+
+                // Bump the read-only cache epoch after the
+                // `AgentInvocationFinished` entry is committed, but *before*
+                // we publish `InvocationCompleted` to waiters via
+                // `store_invocation_success`. Ordering matters: any client
+                // that observes the completion event must also see an
+                // invalidated cache, otherwise it could read a stale cached
+                // result for the now-mutated state.
+                if invalidates_read_only_cache {
+                    self.public_state.worker().bump_read_only_cache_epoch();
+                }
+
+                // Capture the agent's oplog index right after
+                // `AgentInvocationFinished` was committed, together with the
+                // worker's per-instance fingerprint, so the response carries
+                // an unambiguous identification of the agent state it was
+                // produced from.
+                output.oplog_index = Some(
+                    self.public_state
+                        .worker()
+                        .oplog()
+                        .current_oplog_index()
+                        .await,
+                );
+                output.agent_fingerprint = Some(
+                    self.public_state
+                        .worker()
+                        .get_initial_worker_metadata()
+                        .fingerprint,
+                );
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
@@ -2974,11 +3140,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             }) => {
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
-                                let output = AgentInvocationOutput {
+                                let mut output = AgentInvocationOutput {
                                     result: invocation_result,
                                     consumed_fuel: Some(consumed_fuel),
                                     invocation_status: None,
                                     component_revision: Some(component_revision),
+                                    oplog_index: None,
+                                    agent_fingerprint: None,
                                 };
                                 if let Err(err) = store
                                     .as_context_mut()
@@ -2986,7 +3154,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     .on_agent_invocation_success(
                                         &full_function_name,
                                         consumed_fuel,
-                                        &output,
+                                        &mut output,
                                     )
                                     .await
                                 {
@@ -3239,17 +3407,31 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
-            let latest_worker_status = calculate_last_known_status_for_existing_worker(
+            let agent_mode = worker.initial_worker_metadata.agent_mode;
+            // A running worker should always have a recoverable oplog (a `Create` entry), so a
+            // `None` here is an unexpected invariant violation (e.g. a corrupt/partially-deleted
+            // oplog). Isolate the failure to this one agent instead of aborting recovery of every
+            // other worker on this executor (which propagating would do — and would also fail
+            // executor startup or the shard-assignment RPC, since one poison worker could
+            // permanently block this executor from serving its shards).
+            let Some(latest_worker_status) = calculate_last_known_status_with_checkpoint(
                 this,
                 &owned_agent_id,
-                worker.initial_worker_metadata.agent_mode,
+                agent_mode,
                 worker.last_known_status,
             )
-            .await;
+            .await
+            else {
+                error!(
+                    agent_id = %owned_agent_id,
+                    "Failed to calculate worker status during shard-assignment recovery; skipping agent"
+                );
+                continue;
+            };
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
-            if should_restart_after_shard_assignment_change(&latest_worker_status) {
-                let _ = Worker::get_or_create_running(
+            if should_restart_after_shard_assignment_change(&latest_worker_status)
+                && let Err(err) = Worker::get_or_create_running(
                     this,
                     &owned_agent_id,
                     None,
@@ -3259,7 +3441,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     &InvocationContextStack::fresh(),
                     Principal::anonymous(),
                 )
-                .await?;
+                .await
+            {
+                // Same isolation rationale: don't let one worker that fails to restart abort
+                // recovery of the rest. It will be retried on demand on its next invocation.
+                error!(
+                    agent_id = %owned_agent_id,
+                    error = %err,
+                    "Failed to restart worker during shard-assignment recovery; skipping agent"
+                );
             }
         }
 
@@ -3277,9 +3467,7 @@ fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::AgentInvocation;
-    use golem_common::model::TimestampedAgentInvocation;
-    use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+    use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
     use test_r::test;
 
     #[test]
@@ -3288,11 +3476,11 @@ mod tests {
             status: AgentStatus::Idle,
             ..AgentStatusRecord::default()
         };
-        status.pending_invocations.push(TimestampedAgentInvocation {
+        status.pending_invocations.push(PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
-            invocation: AgentInvocation::ManualUpdate {
-                target_revision: ComponentRevision::INITIAL,
-            },
+            oplog_index: OplogIndex::INITIAL,
+            idempotency_key: None,
+            manual_update_target_revision: Some(ComponentRevision::INITIAL),
         });
 
         assert!(should_restart_after_shard_assignment_change(&status));
@@ -3304,15 +3492,12 @@ mod tests {
             status: AgentStatus::Idle,
             ..AgentStatusRecord::default()
         };
-        status
-            .pending_updates
-            .push_back(TimestampedUpdateDescription {
-                timestamp: Timestamp::now_utc(),
-                oplog_index: OplogIndex::INITIAL,
-                description: UpdateDescription::Automatic {
-                    target_revision: ComponentRevision::INITIAL,
-                },
-            });
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL,
+            target_revision: ComponentRevision::INITIAL,
+            kind: PendingUpdateKind::Automatic,
+        });
 
         assert!(should_restart_after_shard_assignment_change(&status));
     }
@@ -3907,7 +4092,7 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<ParsedAgentId>,
+    agent_id: Option<LegacyParsedAgentId>,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -3941,6 +4126,15 @@ struct PrivateDurableWorkerState {
     pending_http_retry_eligibility: HashMap<u32, HttpRetryEligibility>,
 
     snapshotting_mode: Option<PersistenceLevel>,
+
+    /// Tracks whether the currently executing invocation is restricted to read-only side effects.
+    /// When `ReadOnly`, outgoing HTTP and RPC host calls are trapped before any oplog entry is
+    /// written. Defaults to `Normal` and is reset on every invocation exit path.
+    invocation_strictness: InvocationStrictness,
+
+    /// Name of the agent method currently being invoked under read-only strictness. Captured at
+    /// the invocation entry point so it can be reported in `AgentError::ReadOnlyViolation`.
+    read_only_method_name: Option<String>,
 
     component_metadata: Component,
 
@@ -3998,6 +4192,25 @@ struct PrivateDurableWorkerState {
     /// from scratch.
     active_atomic_regions: Vec<ActiveAtomicRegion>,
 
+    /// Begin indices of currently open rollback-capable regions other than atomic regions: remote
+    /// writes / HTTP requests (`BeginRemoteWrite`..`EndRemoteWrite`) and remote transactions
+    /// (`BeginRemoteTransaction`..`Committed`/`RolledBackRemoteTransaction`). Maintained by
+    /// `begin_function`/`end_function` and the transaction lifecycle functions. While any such
+    /// region is open, the current oplog tip sits inside it, so a later trap/replay can append a
+    /// jump that deletes the tip — making a mid-invocation status checkpoint at the tip unsafe (see
+    /// `at_clean_checkpoint_boundary`). Keyed by begin index so begin/end are self-balancing across
+    /// the messy replay/restart paths; a fresh state is built per worker incarnation, so a region
+    /// left open by a trap is cleared on restart.
+    open_rollback_regions: HashSet<OplogIndex>,
+
+    /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
+    /// invocation (the `NoOp` marker it plants). It is the only realistic `set_oplog_index` target,
+    /// which deletes `(M.next()..source]` and preserves `M`, so a checkpoint at an index `<= M`
+    /// survives such a jump. Mid-invocation checkpoints are not advanced past this watermark. Reset
+    /// at the start of every invocation (a marker held across invocations only costs graceful
+    /// fallback, never correctness).
+    min_exposed_marker: Option<OplogIndex>,
+
     // Update that is pending and should be applied at the end of replay.
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
     pending_update: tokio::sync::Mutex<Option<TimestampedUpdateDescription>>,
@@ -4026,7 +4239,7 @@ struct PrivateDurableWorkerState {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<ParsedAgentId>,
+        agent_id: Option<LegacyParsedAgentId>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -4116,6 +4329,8 @@ impl PrivateDurableWorkerState {
             pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
             snapshotting_mode: None,
+            invocation_strictness: InvocationStrictness::Normal,
+            read_only_method_name: None,
             component_metadata,
             total_linear_memory_size,
             current_filesystem_storage_usage,
@@ -4140,6 +4355,8 @@ impl PrivateDurableWorkerState {
             pending_update: tokio::sync::Mutex::new(pending_update),
             current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
+            open_rollback_regions: HashSet::new(),
+            min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
             resource_limit_entry,
@@ -4355,11 +4572,27 @@ impl PrivateDurableWorkerState {
     pub fn reset_invocation_call_counts(&mut self) {
         self.http_call_count = 0;
         self.rpc_call_count = 0;
+        // The `get_oplog_index` marker watermark is per-invocation: a marker captured in a previous
+        // invocation only costs a graceful checkpoint fallback if jumped to, never correctness.
+        self.min_exposed_marker = None;
     }
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
         self.replay_state.is_live()
+    }
+
+    /// Whether the current oplog tip is a structurally clean boundary at which a mid-invocation
+    /// status checkpoint may be taken: we are live, no rollback-capable region is open (so no later
+    /// trap/replay can append a jump that deletes the tip), and we are not in a persistence regime
+    /// whose entries are not folded normally. The `get_oplog_index` marker watermark is checked
+    /// separately by the caller against the committed status tip.
+    pub fn at_clean_checkpoint_boundary(&self) -> bool {
+        self.is_live()
+            && self.active_atomic_regions.is_empty()
+            && self.open_rollback_regions.is_empty()
+            && self.persistence_level != PersistenceLevel::PersistNothing
+            && self.snapshotting_mode.is_none()
     }
 
     /// Returns whether we are in replay mode where we are replaying old calls.
@@ -4471,6 +4704,12 @@ impl HasConfig for PrivateDurableWorkerState {
 impl HasComponentService for PrivateDurableWorkerState {
     fn component_service(&self) -> Arc<dyn ComponentService> {
         self.component_service.clone()
+    }
+}
+
+impl HasWorkerService for PrivateDurableWorkerState {
+    fn worker_service(&self) -> Arc<dyn WorkerService> {
+        self.worker_service.clone()
     }
 }
 

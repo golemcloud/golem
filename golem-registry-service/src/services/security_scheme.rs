@@ -20,13 +20,17 @@ use crate::repo::security_scheme::SecuritySchemeRepo;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{
+    ClassPermissionTarget, EnvironmentSecuritySchemeName, EnvironmentSecuritySchemeResourcePattern,
+    EnvironmentSecuritySchemeVerb, PermissionTarget,
+};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::security_scheme::{
     SecuritySchemeCreation, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
     SecuritySchemeUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::fmt::Debug;
@@ -52,6 +56,31 @@ pub enum SecuritySchemeError {
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+fn authorize_security_scheme_permission(
+    auth: &AuthCtx,
+    environment: &Environment,
+    name: Option<&SecuritySchemeName>,
+    verb: EnvironmentSecuritySchemeVerb,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::EnvironmentSecurityScheme(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_id.to_string(),
+                application: environment.application_name.0.clone(),
+                environment: environment.name.0.clone(),
+            },
+            resource: name
+                .map(|name| {
+                    EnvironmentSecuritySchemeResourcePattern::Name(EnvironmentSecuritySchemeName(
+                        name.0.clone(),
+                    ))
+                })
+                .unwrap_or(EnvironmentSecuritySchemeResourcePattern::Any),
+        },
+    ))
 }
 
 impl SafeDisplay for SecuritySchemeError {
@@ -115,10 +144,11 @@ impl SecuritySchemeService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::CreateSecurityScheme,
+        authorize_security_scheme_permission(
+            auth,
+            &environment,
+            Some(&data.name),
+            EnvironmentSecuritySchemeVerb::Create,
         )?;
 
         if self.strict_issuer_url_validation {
@@ -168,10 +198,11 @@ impl SecuritySchemeService {
         let (mut security_scheme, environment) =
             self.get_with_environment(security_scheme_id, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateSecurityScheme,
+        authorize_security_scheme_permission(
+            auth,
+            &environment,
+            Some(&security_scheme.name),
+            EnvironmentSecuritySchemeVerb::Update,
         )?;
 
         if update.current_revision != security_scheme.revision {
@@ -237,10 +268,11 @@ impl SecuritySchemeService {
         let (mut security_scheme, environment) =
             self.get_with_environment(security_scheme_id, auth).await?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteSecurityScheme,
+        authorize_security_scheme_permission(
+            auth,
+            &environment,
+            Some(&security_scheme.name),
+            EnvironmentSecuritySchemeVerb::Delete,
         )?;
 
         if current_revision != security_scheme.revision {
@@ -297,10 +329,11 @@ impl SecuritySchemeService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewSecurityScheme,
+        authorize_security_scheme_permission(
+            auth,
+            &environment,
+            None,
+            EnvironmentSecuritySchemeVerb::View,
         )?;
 
         let result = self
@@ -320,10 +353,11 @@ impl SecuritySchemeService {
         name: &SecuritySchemeName,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewSecurityScheme,
+        authorize_security_scheme_permission(
+            auth,
+            environment,
+            Some(name),
+            EnvironmentSecuritySchemeVerb::View,
         )?;
 
         let result = self
@@ -363,10 +397,11 @@ impl SecuritySchemeService {
                 other => other.into(),
             })?;
 
-        auth.authorize_environment_action(
-            environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewSecurityScheme,
+        authorize_security_scheme_permission(
+            auth,
+            &environment,
+            Some(&security_scheme.name),
+            EnvironmentSecuritySchemeVerb::View,
         )
         .map_err(|_| SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id))?;
 

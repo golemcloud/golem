@@ -1,0 +1,172 @@
+# Adding a New Agent to a Scala Golem Component
+
+## Overview
+
+An **agent** is a durable, stateful unit of computation in Golem. Each agent type is defined as a **trait + implementation class** pair using annotations from `golem.runtime.annotations`.
+
+## Steps
+
+1. **Create the agent trait file** — add `src/main/scala/<package>/<AgentName>.scala`
+2. **Create the agent implementation file** — add `src/main/scala/<package>/<AgentName>Impl.scala`
+3. **Annotate the trait** with `@agentDefinition` extending `BaseAgent`
+4. **Annotate the implementation** with `@agentImplementation()`
+5. **Build** — run `golem build` to verify
+
+## Agent Definition
+
+The trait defines the agent's API:
+
+```scala
+import golem.runtime.annotations.agentDefinition
+import golem.BaseAgent
+
+import scala.concurrent.Future
+
+@agentDefinition(mount = "/counters/{name}")
+trait CounterAgent extends BaseAgent {
+
+  class Id(val name: String)
+
+  def increment(): Future[Int]
+
+  def getCount(): Future[Int]
+}
+```
+
+The implementation provides the behavior:
+
+```scala
+import golem.runtime.annotations.agentImplementation
+
+import scala.concurrent.Future
+
+@agentImplementation()
+final class CounterAgentImpl(private val name: String) extends CounterAgent {
+  private var count: Int = 0
+
+  override def increment(): Future[Int] = Future.successful {
+    count += 1
+    count
+  }
+
+  override def getCount(): Future[Int] = Future.successful(count)
+}
+```
+
+## Agent Identity
+
+The agent's constructor parameters define its identity. Declare them as an inner `class Id(...)` in the trait:
+
+```scala
+@agentDefinition()
+trait ShardAgent extends BaseAgent {
+  class Id(val region: String, val partition: Int)
+  // ...
+}
+```
+
+The implementation class takes the same parameters (as a tuple for multi-param constructors):
+
+```scala
+@agentImplementation()
+final class ShardAgentImpl(input: (String, Int)) extends ShardAgent {
+  private val (region, partition) = input
+  // ...
+}
+```
+
+## Custom Types
+
+Use case classes for structured data. The SDK requires a `zio.blocks.schema.Schema` for custom types used as method parameters or return values. For collections, use `List[T]` instead of `Array[T]` — `Array` does not have automatic `Schema` derivation support:
+
+```scala
+import zio.blocks.schema.Schema
+
+final case class Coordinates(lat: Double, lon: Double) derives Schema
+final case class WeatherReport(temperature: Double, description: String) derives Schema
+
+@agentDefinition()
+trait WeatherAgent extends BaseAgent {
+  class Id(val apiKey: String)
+  def getWeather(coords: Coordinates): Future[WeatherReport]
+}
+```
+
+## Returning Failures
+
+Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
+
+- **Uncaught errors** (`Future.failed`, thrown exceptions that escape the method) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
+- **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's return type using `Either[E, A]` wrapped in a `Future`. Both `E` and `A` need a `Schema` instance.
+
+```scala
+import golem.runtime.annotations.{agentDefinition, agentImplementation}
+import golem.BaseAgent
+import zio.blocks.schema.Schema
+
+import scala.concurrent.Future
+
+enum WithdrawError derives Schema:
+  case InsufficientFunds(available: Long)
+  case AccountClosed
+
+@agentDefinition(mount = "/wallets/{owner}")
+trait Wallet extends BaseAgent {
+  class Id(val owner: String)
+
+  def withdraw(amount: Long): Future[Either[WithdrawError, Long]]
+}
+
+@agentImplementation()
+final class WalletImpl(private val owner: String) extends Wallet {
+  private var balance: Long = 0L
+  private var closed: Boolean = false
+
+  override def withdraw(amount: Long): Future[Either[WithdrawError, Long]] =
+    Future.successful {
+      if (closed) Left(WithdrawError.AccountClosed)
+      else if (amount > balance) Left(WithdrawError.InsufficientFunds(balance))
+      else {
+        balance -= amount
+        Right(balance)
+      }
+    }
+}
+```
+
+Returning `Left(WithdrawError.X)` completes the invocation successfully — the caller receives the error as a value. Returning a failed `Future` (e.g. `Future.failed(new RuntimeException(...))`) or letting an exception escape will instead trigger a retry and eventually fail the whole agent.
+
+## HTTP API Annotations
+
+Agents can expose methods as HTTP endpoints using `@endpoint` and `@header`:
+
+```scala
+import golem.runtime.annotations.{endpoint, header}
+
+@agentDefinition(mount = "/api/{id}")
+trait ApiAgent extends BaseAgent {
+  class Id(val id: String)
+
+  @endpoint(method = "GET", path = "/data")
+  def getData(@header("Authorization") auth: String): Future[String]
+
+  @endpoint(method = "POST", path = "/update")
+  def update(body: UpdateRequest): Future[UpdateResponse]
+}
+```
+
+### Related Guides
+- Load [`golem-js-runtime`](/next/how-to-guides/common/golem-js-runtime) for details on the QuickJS runtime environment, available Web/Node.js APIs, and npm compatibility
+- Load [`golem-file-io-scala`](/next/how-to-guides/scala/golem-file-io-scala) for reading and writing files from agent code
+
+## Key Constraints
+
+- All agent traits must extend `BaseAgent` and be annotated with `@agentDefinition`
+- All agent implementations must be annotated with `@agentImplementation()`
+- Custom types used in agent methods require a `zio.blocks.schema.Schema` instance (use `derives Schema` in Scala 3)
+- Constructor parameters define agent identity — they must be serializable types with `Schema` instances
+- The `class Id(...)` inner class in the agent trait defines the constructor parameter schema
+- The implementation takes constructor params directly (single param) or as a tuple (multi-param)
+- Agents are created implicitly on first invocation — no separate creation step
+- Invocations are processed sequentially in a single thread — no concurrency within a single agent
+- The `scalacOptions += "-experimental"` flag is required for macro annotations

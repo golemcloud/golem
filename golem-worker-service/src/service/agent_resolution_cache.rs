@@ -316,6 +316,8 @@ mod tests {
                 implemented_by: RegisteredAgentTypeImplementer {
                     component_id: ComponentId(Uuid::nil()),
                     component_revision: ComponentRevision::INITIAL,
+                    component_name: "test-component".to_string(),
+                    account_id: AccountId(Uuid::nil()),
                 },
             },
             environment_id: env_id,
@@ -351,15 +353,6 @@ mod tests {
             &self,
             _: &golem_common::model::auth::TokenSecret,
         ) -> Result<AuthCtx, RegistryServiceError> {
-            unimplemented!()
-        }
-        async fn get_auth_details_for_environment(
-            &self,
-            _: EnvironmentId,
-            _: bool,
-            _: &AuthCtx,
-        ) -> Result<golem_service_base::model::auth::AuthDetailsForEnvironment, RegistryServiceError>
-        {
             unimplemented!()
         }
         async fn get_resource_limits(

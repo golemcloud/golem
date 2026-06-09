@@ -15,9 +15,10 @@
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+use futures::FutureExt;
 use golem_common::model::agent::AgentError as AgentInvocationError;
 use golem_common::model::agent::UntypedDataValue;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, LegacyParsedAgentId};
 use golem_common::model::agent::{
     DataSchema, ElementSchema, NamedElementSchema, UntypedElementValue,
 };
@@ -205,22 +206,46 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     store.data_mut().set_running();
 
+    // If the invocation targets a read-only AgentMethod, enable the read-only invocation
+    // strictness for the duration of the call. We restore the mode on every exit path:
+    // normal `Ok` / `Err` returns from the wasmtime call site as well as panics that
+    // unwind through the call. This is the only place where strictness is enabled.
+    let read_only_method = lowered.read_only_method.clone();
+    if let Some(method_name) = &read_only_method {
+        store.data_mut().enter_read_only_mode(method_name.clone());
+    }
+
     let kind = lowered.kind;
-    let call_result = match function {
-        FindFunctionResult::ExportedFunction(function) => {
-            invoke(
-                &mut store,
-                function,
-                decoded_params,
-                &lowered.display_name,
-                kind,
-            )
-            .await
+    let call_future = async {
+        match function {
+            FindFunctionResult::ExportedFunction(function) => {
+                invoke(
+                    &mut store,
+                    function,
+                    decoded_params,
+                    &lowered.display_name,
+                    kind,
+                )
+                .await
+            }
+            FindFunctionResult::ResourceDrop => {
+                // Special function: drop
+                drop_resource(&mut store, &lowered.params, &lowered.display_name, kind).await
+            }
         }
-        FindFunctionResult::ResourceDrop => {
-            // Special function: drop
-            drop_resource(&mut store, &lowered.params, &lowered.display_name, kind).await
-        }
+    };
+
+    let call_outcome = std::panic::AssertUnwindSafe(call_future)
+        .catch_unwind()
+        .await;
+
+    if read_only_method.is_some() {
+        store.data_mut().exit_read_only_mode();
+    }
+
+    let call_result = match call_outcome {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
     };
 
     store.data().set_suspended();
@@ -579,12 +604,17 @@ pub struct LoweredInvocation {
     pub display_name: String,
     /// The exact WIT parameters to pass to the function
     pub params: Vec<Value>,
+    /// `Some(method_name)` when the invocation targets an `AgentMethod` whose
+    /// `read_only` metadata is set. The worker-executor uses this to enable the
+    /// read-only invocation strictness mode for the duration of the call, trapping
+    /// outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
+    pub read_only_method: Option<String>,
 }
 
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentId>,
+    agent_id: Option<&LegacyParsedAgentId>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
     let kind = invocation.kind();
     match invocation {
@@ -610,6 +640,7 @@ pub fn lower_invocation(
                     input.into_value(),
                     principal.into_value(),
                 ],
+                read_only_method: None,
             })
         }
         AgentInvocation::AgentMethod {
@@ -618,6 +649,7 @@ pub fn lower_invocation(
             principal,
             ..
         } => {
+            let mut read_only_method: Option<String> = None;
             if let Some(agent_id) = agent_id {
                 let agent_type = component_metadata
                     .find_agent_type_by_name(&agent_id.agent_type)
@@ -637,6 +669,9 @@ pub fn lower_invocation(
                     }
                     Some(method) => {
                         validate_input_against_schema(&input, &method.input_schema, &method_name)?;
+                        if method.read_only.is_some() {
+                            read_only_method = Some(method_name.clone());
+                        }
                     }
                 }
             }
@@ -657,6 +692,7 @@ pub fn lower_invocation(
                     input.into_value(),
                     principal.into_value(),
                 ],
+                read_only_method,
             })
         }
         AgentInvocation::ManualUpdate { .. } => Err(WorkerExecutorError::invalid_request(
@@ -675,6 +711,7 @@ pub fn lower_invocation(
                 wit_fqfn,
                 display_name: "save-snapshot".to_string(),
                 params: vec![],
+                read_only_method: None,
             })
         }
         AgentInvocation::LoadSnapshot { snapshot, .. } => {
@@ -690,6 +727,7 @@ pub fn lower_invocation(
                 wit_fqfn,
                 display_name: "load-snapshot".to_string(),
                 params: vec![snapshot.into_value()],
+                read_only_method: None,
             })
         }
         AgentInvocation::ProcessOplogEntries {
@@ -739,6 +777,7 @@ pub fn lower_invocation(
                     val_first_entry_index,
                     val_entries,
                 ],
+                read_only_method: None,
             })
         }
     }

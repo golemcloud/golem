@@ -17,7 +17,6 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
-use crate::log::log_error;
 use crate::log::log_warn_action;
 use crate::model::text::account::{AccountGetView, AccountNewView};
 use anyhow::bail;
@@ -41,11 +40,7 @@ impl AccountCommandHandler {
             AccountSubcommand::Update {
                 account_id,
                 account_name,
-                account_email,
-            } => {
-                self.cmd_update(account_id.account_id, account_name, account_email)
-                    .await
-            }
+            } => self.cmd_update(account_id.account_id, account_name).await,
             AccountSubcommand::New {
                 account_name,
                 account_email,
@@ -66,14 +61,8 @@ impl AccountCommandHandler {
     async fn cmd_update(
         &self,
         account_id: Option<AccountId>,
-        account_name: Option<String>,
-        account_email: Option<String>,
+        account_name: String,
     ) -> anyhow::Result<()> {
-        if account_name.is_none() && account_email.is_none() {
-            log_error("account name or email must be provided");
-            bail!(NonSuccessfulExit)
-        }
-
         let account = self.get(account_id).await?;
         let account = self
             .ctx
@@ -84,8 +73,7 @@ impl AccountCommandHandler {
                 &account.id.0,
                 &AccountUpdate {
                     current_revision: account.revision,
-                    name: account_name,
-                    email: account_email.map(AccountEmail::new),
+                    name: Some(account_name),
                 },
             )
             .await
@@ -105,6 +93,7 @@ impl AccountCommandHandler {
             .create_account(&AccountCreation {
                 name: account_name,
                 email: AccountEmail::new(account_email),
+                roles: Vec::new(),
             })
             .await
             .map_service_error()?;

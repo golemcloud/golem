@@ -16,6 +16,9 @@ use crate::Tracing;
 use anyhow::anyhow;
 use axum::Router;
 use axum::routing::get;
+use golem_common::component_introspection::wit_parser::{
+    SharedAnalysedTypeResolve, TypeName, TypeOwner,
+};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     ComponentModelElementValue, DataValue, ElementValue, ElementValues,
@@ -32,7 +35,6 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{drain_connection, stdout_event_matching, stdout_events};
 use golem_wasm::analysis::analysed_type;
-use golem_wasm::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
 use golem_wasm::{IntoValue, Record};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
@@ -644,7 +646,7 @@ async fn get_workers_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::base_model::agent::ParsedAgentId,
+        caller_agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
         name_filter: Option<String>,
         expected_count: usize,
         executor: &TestWorkerExecutor,
@@ -775,7 +777,7 @@ async fn get_metadata_from_worker(
 
     fn get_agent_id_val(
         component_id: &ComponentId,
-        agent_id: &golem_common::base_model::agent::ParsedAgentId,
+        agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
     ) -> Value {
         let component_id_val = {
             let (high, low) = component_id.0.as_u64_pair();
@@ -787,8 +789,8 @@ async fn get_metadata_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::base_model::agent::ParsedAgentId,
-        other_agent_id: &golem_common::base_model::agent::ParsedAgentId,
+        caller_agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
+        other_agent_id: &golem_common::base_model::agent::LegacyParsedAgentId,
         executor: &TestWorkerExecutor,
     ) -> anyhow::Result<()> {
         let agent_id_val1 = get_agent_id_val(&component.id, caller_agent_id);
@@ -3725,6 +3727,11 @@ async fn worker_created_by_reflects_component_owner_not_caller(
         account_id: caller_account_id,
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
+        effective_surface: golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        },
     })
     .into();
 
@@ -3813,6 +3820,11 @@ async fn worker_environment_reflects_component_not_caller(
         account_id: caller_account_id,
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
+        effective_surface: golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        },
     })
     .into();
 
@@ -3952,6 +3964,11 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
         account_id: caller_account_id,
         account_plan_id: context.account_plan_id,
         account_roles: context.account_roles.clone(),
+        effective_surface: golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        },
     })
     .into();
 
