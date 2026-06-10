@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use base64::Engine;
 use golem_common::base_model::agent::{
-    BinaryReference, BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema,
-    ElementSchema, TextReference, TextReferenceValue, TextSource, TextType, UntypedElementValue,
+    ComponentModelElementSchema, ElementSchema, UntypedElementValue,
 };
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 pub fn extract_multimodal_element_value(
     name: &str,
@@ -27,114 +24,21 @@ pub fn extract_multimodal_element_value(
 ) -> Result<UntypedElementValue, String> {
     match elem_schema {
         ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
-            let value_and_type =
-                golem_wasm::ValueAndType::parse_with_type(value_json, element_type).map_err(
-                    |errs| {
-                        format!(
-                            "parts[{}] '{}': failed to parse value: {}",
-                            index,
-                            name,
-                            errs.join(", ")
-                        )
-                    },
-                )?;
-            Ok(UntypedElementValue::ComponentModel(value_and_type.value))
+            let value = crate::mcp::invoke::parse_component_model_value(value_json, element_type)
+                .map_err(|e| {
+                format!("parts[{}] '{}': failed to parse value: {}", index, name, e)
+            })?;
+            Ok(UntypedElementValue::ComponentModel(value))
         }
         ElementSchema::UnstructuredText(descriptor) => {
-            let obj = value_json.as_object().ok_or_else(|| {
-                format!(
-                    "parts[{}] '{}': value must be an object with 'data' and optional 'languageCode'",
-                    index, name
-                )
-            })?;
-
-            let data = obj
-                .get("data")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| format!("parts[{}] '{}': missing 'data' string field", index, name))?
-                .to_string();
-
-            let language_code = obj.get("languageCode").and_then(|v| v.as_str());
-
-            if let Some(code) = language_code
-                && let Some(allowed) = &descriptor.restrictions
-                && !allowed.is_empty()
-                && !allowed.iter().any(|t| t.language_code == code)
-            {
-                let expected: Vec<&str> =
-                    allowed.iter().map(|t| t.language_code.as_str()).collect();
-                return Err(format!(
-                    "parts[{}] '{}': language code '{}' is not allowed. Expected one of: {}",
-                    index,
-                    name,
-                    code,
-                    expected.join(", ")
-                ));
-            }
-
-            let text_type = language_code.map(|code| TextType {
-                language_code: code.to_string(),
-            });
-
-            Ok(UntypedElementValue::UnstructuredText(TextReferenceValue {
-                value: TextReference::Inline(TextSource { data, text_type }),
-            }))
+            let value = crate::mcp::invoke::parse_unstructured_text(value_json, descriptor)
+                .map_err(|e| format!("parts[{}] '{}': {}", index, name, e))?;
+            Ok(UntypedElementValue::UnstructuredText(value))
         }
         ElementSchema::UnstructuredBinary(descriptor) => {
-            let obj = value_json.as_object().ok_or_else(|| {
-                format!(
-                    "parts[{}] '{}': value must be an object with 'data' and 'mimeType'",
-                    index, name
-                )
-            })?;
-
-            let b64 = obj.get("data").and_then(|v| v.as_str()).ok_or_else(|| {
-                format!("parts[{}] '{}': missing 'data' string field", index, name)
-            })?;
-
-            let mime_type = obj
-                .get("mimeType")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    format!(
-                        "parts[{}] '{}': missing 'mimeType' string field",
-                        index, name
-                    )
-                })?;
-
-            if let Some(allowed) = &descriptor.restrictions
-                && !allowed.is_empty()
-                && !allowed.iter().any(|t| t.mime_type == mime_type)
-            {
-                let expected: Vec<&str> = allowed.iter().map(|t| t.mime_type.as_str()).collect();
-                return Err(format!(
-                    "parts[{}] '{}': MIME type '{}' is not allowed. Expected one of: {}",
-                    index,
-                    name,
-                    mime_type,
-                    expected.join(", ")
-                ));
-            }
-
-            let data = base64::engine::general_purpose::STANDARD
-                .decode(b64)
-                .map_err(|e| {
-                    format!(
-                        "parts[{}] '{}': failed to decode base64: {}",
-                        index, name, e
-                    )
-                })?;
-
-            Ok(UntypedElementValue::UnstructuredBinary(
-                BinaryReferenceValue {
-                    value: BinaryReference::Inline(BinarySource {
-                        data,
-                        binary_type: BinaryType {
-                            mime_type: mime_type.to_string(),
-                        },
-                    }),
-                },
-            ))
+            let value = crate::mcp::invoke::parse_unstructured_binary(value_json, descriptor)
+                .map_err(|e| format!("parts[{}] '{}': {}", index, name, e))?;
+            Ok(UntypedElementValue::UnstructuredBinary(value))
         }
     }
 }
@@ -142,7 +46,9 @@ pub fn extract_multimodal_element_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::base_model::agent::{BinaryDescriptor, TextDescriptor, TextType};
+    use golem_common::base_model::agent::{
+        BinaryDescriptor, BinaryReference, BinaryType, TextDescriptor, TextReference, TextType,
+    };
     use golem_wasm::analysis::analysed_type::str;
     use serde_json::json;
     use test_r::test;
@@ -160,7 +66,7 @@ mod tests {
     #[test]
     fn extracts_text_without_language_code() {
         let schema = ElementSchema::UnstructuredText(TextDescriptor { restrictions: None });
-        let value = json!({"data": "some text"});
+        let value = json!({"text": "some text"});
         let result = extract_multimodal_element_value("note", &value, &schema, 0).unwrap();
         match result {
             UntypedElementValue::UnstructuredText(t) => match t.value {
@@ -177,7 +83,7 @@ mod tests {
     #[test]
     fn extracts_text_with_language_code() {
         let schema = ElementSchema::UnstructuredText(TextDescriptor { restrictions: None });
-        let value = json!({"data": "bonjour", "languageCode": "fr"});
+        let value = json!({"text": "bonjour", "language": "fr"});
         let result = extract_multimodal_element_value("note", &value, &schema, 0).unwrap();
         match result {
             UntypedElementValue::UnstructuredText(t) => match t.value {
@@ -198,7 +104,7 @@ mod tests {
                 language_code: "en".to_string(),
             }]),
         });
-        let value = json!({"data": "hola", "languageCode": "es"});
+        let value = json!({"text": "hola", "language": "es"});
         let err = extract_multimodal_element_value("note", &value, &schema, 1).unwrap_err();
         assert!(
             err.contains("language code 'es' is not allowed"),
@@ -209,7 +115,7 @@ mod tests {
     #[test]
     fn extracts_binary() {
         let schema = ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None });
-        let value = json!({"data": "AQID", "mimeType": "image/png"});
+        let value = json!({"bytes": "AQID", "mime_type": "image/png"});
         let result = extract_multimodal_element_value("img", &value, &schema, 0).unwrap();
         match result {
             UntypedElementValue::UnstructuredBinary(b) => match b.value {
@@ -230,7 +136,7 @@ mod tests {
                 mime_type: "image/png".to_string(),
             }]),
         });
-        let value = json!({"data": "AQID", "mimeType": "image/jpeg"});
+        let value = json!({"bytes": "AQID", "mime_type": "image/jpeg"});
         let err = extract_multimodal_element_value("img", &value, &schema, 0).unwrap_err();
         assert!(
             err.contains("MIME type 'image/jpeg' is not allowed"),
@@ -241,24 +147,24 @@ mod tests {
     #[test]
     fn error_on_invalid_base64() {
         let schema = ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None });
-        let value = json!({"data": "!!!invalid!!!", "mimeType": "image/png"});
+        let value = json!({"bytes": "!!!invalid!!!", "mime_type": "image/png"});
         let err = extract_multimodal_element_value("img", &value, &schema, 0).unwrap_err();
         assert!(err.contains("base64"), "got: {err}");
     }
 
     #[test]
-    fn error_on_missing_data_field_text() {
+    fn error_on_missing_text_field() {
         let schema = ElementSchema::UnstructuredText(TextDescriptor { restrictions: None });
         let value = json!({"other": "stuff"});
         let err = extract_multimodal_element_value("note", &value, &schema, 0).unwrap_err();
-        assert!(err.contains("missing 'data'"), "got: {err}");
+        assert!(err.contains("text"), "got: {err}");
     }
 
     #[test]
-    fn error_on_missing_mime_type() {
+    fn error_on_missing_bytes_field() {
         let schema = ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None });
-        let value = json!({"data": "AQID"});
+        let value = json!({"mime_type": "image/png"});
         let err = extract_multimodal_element_value("img", &value, &schema, 0).unwrap_err();
-        assert!(err.contains("mimeType"), "got: {err}");
+        assert!(err.contains("bytes"), "got: {err}");
     }
 }

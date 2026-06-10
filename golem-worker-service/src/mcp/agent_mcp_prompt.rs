@@ -12,9 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::agent::{
-    AgentConstructor, AgentMethod, AgentTypeName, DataSchema, ElementSchema, NamedElementSchema,
+use crate::mcp::schema::field_name_mapping;
+use golem_common::base_model::agent::AgentTypeName;
+use golem_common::schema::adapters::{
+    is_multimodal_schema_type, multimodal_variant_cases, resolve_ref,
 };
+use golem_common::schema::agent::{
+    AgentConstructorSchema, AgentMethodSchema, FieldSource, InputSchema, NamedField, OutputSchema,
+};
+use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::schema_type::SchemaType;
 use rmcp::model::{
     GetPromptResult, Prompt, PromptMessage, PromptMessageContent, PromptMessageRole,
 };
@@ -49,16 +56,26 @@ impl AgentMcpPrompt {
 
     pub fn from_method_hint(
         agent_type_name: &AgentTypeName,
-        method: &AgentMethod,
-        constructor: &AgentConstructor,
+        graph: &SchemaGraph,
+        method: &AgentMethodSchema,
+        constructor: &AgentConstructorSchema,
         prompt_hint: &str,
     ) -> Self {
         let prompt_name = format!("{}-{}", agent_type_name.0, method.name);
         let name = PromptName(prompt_name.clone());
 
-        let constructor_arg_names = constructor_arg_names(&constructor.input_schema);
-        let input_description = describe_input(&constructor_arg_names, &method.input_schema);
-        let output_description = describe_output(&method.output_schema);
+        // Mirror the advertised tool schema: constructor/method parameter names
+        // that collide are disambiguated, so the prompt must list the same
+        // (possibly prefixed) property names a client will actually send.
+        let mapping = field_name_mapping(constructor, method);
+        let constructor_fields =
+            mapping.apply_to_constructor_fields(constructor.input_schema.fields());
+        let method_input_schema =
+            InputSchema::Parameters(mapping.apply_to_method_fields(method.input_schema.fields()));
+
+        let constructor_arg_names = constructor_arg_names(&constructor_fields);
+        let input_description = describe_input(graph, &constructor_arg_names, &method_input_schema);
+        let output_description = describe_output(graph, &method.output_schema);
 
         let mut text = prompt_hint.to_string();
 
@@ -92,125 +109,114 @@ impl AgentMcpPrompt {
     }
 }
 
-fn constructor_arg_names(schema: &DataSchema) -> Vec<String> {
-    match schema {
-        DataSchema::Tuple(schemas) => schemas.elements.iter().map(|e| e.name.clone()).collect(),
-        DataSchema::Multimodal(_) => vec![],
-    }
+fn constructor_arg_names(fields: &[NamedField]) -> Vec<String> {
+    fields
+        .iter()
+        .filter(|f| matches!(f.source, FieldSource::UserSupplied))
+        .map(|f| f.name.clone())
+        .collect()
 }
 
 fn describe_input(
+    graph: &SchemaGraph,
     constructor_arg_names: &[String],
-    method_input_schema: &DataSchema,
+    method_input_schema: &InputSchema,
 ) -> Option<String> {
-    match method_input_schema {
-        DataSchema::Tuple(schemas) => {
-            let mut all_names: Vec<&str> =
-                constructor_arg_names.iter().map(|s| s.as_str()).collect();
-            all_names.extend(schemas.elements.iter().map(|e| e.name.as_str()));
+    let user_fields: Vec<&NamedField> = method_input_schema
+        .fields()
+        .iter()
+        .filter(|f| matches!(f.source, FieldSource::UserSupplied))
+        .collect();
 
-            if all_names.is_empty() {
-                None
-            } else {
-                Some(format!(
-                    "Expected JSON input properties: {}",
-                    all_names.join(", ")
-                ))
-            }
+    // A multimodal method input is carried as a single user field (`parts`)
+    // whose schema is the structural form `list<variant<… Role::Multimodal>>`.
+    let multimodal_field = user_fields
+        .iter()
+        .find(|f| is_multimodal_schema_type(graph, &f.schema).unwrap_or(false));
+
+    if let Some(field) = multimodal_field {
+        let part_names: Vec<String> = multimodal_variant_cases(graph, &field.schema)
+            .ok()
+            .flatten()
+            .map(|cases| cases.iter().map(|c| c.name.clone()).collect())
+            .unwrap_or_default();
+
+        let mut all_property_names: Vec<String> = constructor_arg_names.to_vec();
+        if !part_names.is_empty() {
+            all_property_names.push(field.name.clone());
         }
-        DataSchema::Multimodal(schemas) => {
-            let part_names: Vec<&str> = schemas.elements.iter().map(|e| e.name.as_str()).collect();
 
-            let mut all_property_names: Vec<&str> =
-                constructor_arg_names.iter().map(|s| s.as_str()).collect();
-
-            if !part_names.is_empty() {
-                all_property_names.push("parts");
-            }
-
-            let mut desc = String::new();
-
-            if !all_property_names.is_empty() {
-                desc.push_str(&format!(
-                    "Expected JSON input properties: {}",
-                    all_property_names.join(", ")
-                ));
-            }
-
-            if !part_names.is_empty() {
-                desc.push_str(&format!(
-                    "\n\nThe \"parts\" property is an array with elements named: {}",
-                    part_names.join(", ")
-                ));
-            }
-
-            if desc.is_empty() { None } else { Some(desc) }
+        let mut desc = String::new();
+        if !all_property_names.is_empty() {
+            desc.push_str(&format!(
+                "Expected JSON input properties: {}",
+                all_property_names.join(", ")
+            ));
         }
-    }
-}
-
-fn describe_output_element(element: &NamedElementSchema) -> String {
-    match &element.schema {
-        ElementSchema::ComponentModel(_) => "JSON".to_string(),
-
-        ElementSchema::UnstructuredText(text_desc) => {
-            if let Some(desc) = &text_desc.restrictions {
-                if desc.is_empty() {
-                    return "text".to_string();
-                }
-
-                return format!(
-                    "text with with one of the following language codes: {}",
-                    desc.iter()
-                        .map(|x| x.language_code.clone())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-
-            "text".to_string()
+        if !part_names.is_empty() {
+            desc.push_str(&format!(
+                "\n\nThe \"{}\" property is an array with elements named: {}",
+                field.name,
+                part_names.join(", ")
+            ));
         }
-        ElementSchema::UnstructuredBinary(binary) => {
-            if let Some(restrictions) = &binary.restrictions {
-                if restrictions.is_empty() {
-                    return "binary".to_string();
-                }
 
-                return format!(
-                    "binary with one of the following mime-types: {}",
-                    restrictions
-                        .iter()
-                        .map(|x| x.mime_type.clone())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
+        if desc.is_empty() { None } else { Some(desc) }
+    } else {
+        let mut all_names: Vec<String> = constructor_arg_names.to_vec();
+        all_names.extend(user_fields.iter().map(|f| f.name.clone()));
 
-            "binary".to_string()
-        }
-    }
-}
-
-fn describe_output(schema: &DataSchema) -> Option<String> {
-    match schema {
-        DataSchema::Tuple(schemas) => match schemas.elements.as_slice() {
-            [] => None,
-            [single] => Some(format!("output hint: {}", describe_output_element(single))),
-            _ => None,
-        },
-        DataSchema::Multimodal(schemas) => {
-            if schemas.elements.is_empty() {
-                return None;
-            }
-            let parts: Vec<String> = schemas
-                .elements
-                .iter()
-                .map(describe_output_element)
-                .collect();
+        if all_names.is_empty() {
+            None
+        } else {
             Some(format!(
-                "output hint: multimodal response: {}",
-                parts.join(", ")
+                "Expected JSON input properties: {}",
+                all_names.join(", ")
             ))
+        }
+    }
+}
+
+fn describe_output_type(graph: &SchemaGraph, ty: &SchemaType) -> String {
+    match resolve_ref(graph, ty) {
+        Ok(SchemaType::Text { restrictions, .. }) => match &restrictions.languages {
+            Some(langs) if !langs.is_empty() => format!(
+                "text with one of the following language codes: {}",
+                langs.join(", ")
+            ),
+            _ => "text".to_string(),
+        },
+        Ok(SchemaType::Binary { restrictions, .. }) => match &restrictions.mime_types {
+            Some(mimes) if !mimes.is_empty() => format!(
+                "binary with one of the following mime-types: {}",
+                mimes.join(", ")
+            ),
+            _ => "binary".to_string(),
+        },
+        _ => "JSON".to_string(),
+    }
+}
+
+fn describe_output(graph: &SchemaGraph, schema: &OutputSchema) -> Option<String> {
+    match schema {
+        OutputSchema::Unit => None,
+        OutputSchema::Single(ty) => {
+            if let Some(cases) = multimodal_variant_cases(graph, ty).ok().flatten() {
+                if cases.is_empty() {
+                    return None;
+                }
+                let parts: Vec<String> = cases
+                    .iter()
+                    .filter_map(|c| c.payload.as_ref())
+                    .map(|body| describe_output_type(graph, body))
+                    .collect();
+                Some(format!(
+                    "output hint: multimodal response: {}",
+                    parts.join(", ")
+                ))
+            } else {
+                Some(format!("output hint: {}", describe_output_type(graph, ty)))
+            }
         }
     }
 }
@@ -237,12 +243,54 @@ impl PromptRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::base_model::agent::{
-        BinaryDescriptor, ComponentModelElementSchema, DataSchema, NamedElementSchema,
-        NamedElementSchemas, TextDescriptor,
+    use golem_common::schema::metadata::Role;
+    use golem_common::schema::schema_type::{
+        BinaryRestrictions, TextRestrictions, VariantCaseType,
     };
-    use golem_wasm::analysis::analysed_type::str;
     use test_r::test;
+
+    fn constructor(fields: Vec<NamedField>) -> AgentConstructorSchema {
+        AgentConstructorSchema {
+            name: None,
+            description: "ctor".to_string(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(fields),
+        }
+    }
+
+    fn method(
+        name: &str,
+        description: &str,
+        input: InputSchema,
+        output: OutputSchema,
+    ) -> AgentMethodSchema {
+        AgentMethodSchema {
+            name: name.to_string(),
+            description: description.to_string(),
+            prompt_hint: None,
+            input_schema: input,
+            output_schema: output,
+            http_endpoint: vec![],
+            read_only: None,
+        }
+    }
+
+    /// Build the structural multimodal input form: a single user-supplied
+    /// `parts` field whose schema is `list<variant<… Role::Multimodal>>`.
+    fn multimodal_parts_field(branches: Vec<(&str, SchemaType)>) -> NamedField {
+        let mut variant = SchemaType::variant(
+            branches
+                .into_iter()
+                .map(|(name, body)| VariantCaseType {
+                    name: name.to_string(),
+                    payload: Some(body),
+                    metadata: Default::default(),
+                })
+                .collect(),
+        );
+        variant.metadata_mut().role = Some(Role::Multimodal);
+        NamedField::user_supplied("parts", SchemaType::list(variant))
+    }
 
     #[test]
     fn creates_prompt_from_constructor_hint() {
@@ -321,41 +369,24 @@ mod tests {
 
     #[test]
     fn method_prompt_name_is_agent_type_dash_method() {
-        let constructor = AgentConstructor {
-            name: None,
-            description: "ctor".to_string(),
-            prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "city".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: str(),
-                    }),
-                }],
-            }),
-        };
-        let method = AgentMethod {
-            name: "get_weather".to_string(),
-            description: "Gets weather".to_string(),
-            prompt_hint: Some("Fetch the weather".to_string()),
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "location".to_string(),
-                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-                }],
-            }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "report".to_string(),
-                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-                }],
-            }),
-            http_endpoint: vec![],
-            read_only: None,
-        };
+        let graph = SchemaGraph::empty();
+        let constructor = constructor(vec![NamedField::user_supplied(
+            "city",
+            SchemaType::string(),
+        )]);
+        let method = method(
+            "get_weather",
+            "Gets weather",
+            InputSchema::Parameters(vec![NamedField::user_supplied(
+                "location",
+                SchemaType::text(TextRestrictions::default()),
+            )]),
+            OutputSchema::Single(Box::new(SchemaType::text(TextRestrictions::default()))),
+        );
 
         let prompt = AgentMcpPrompt::from_method_hint(
             &AgentTypeName("WeatherAgent".to_string()),
+            &graph,
             &method,
             &constructor,
             "Fetch the weather",
@@ -371,51 +402,27 @@ mod tests {
 
     #[test]
     fn method_prompt_text_includes_constructor_and_method_args_and_output() {
-        let constructor = AgentConstructor {
-            name: None,
-            description: "ctor".to_string(),
-            prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "tenant".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: str(),
-                    }),
-                }],
-            }),
-        };
-        let method = AgentMethod {
-            name: "analyze".to_string(),
-            description: "Analyze data".to_string(),
-            prompt_hint: Some("Run analysis".to_string()),
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![
-                    NamedElementSchema {
-                        name: "query".to_string(),
-                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                            element_type: str(),
-                        }),
-                    },
-                    NamedElementSchema {
-                        name: "image".to_string(),
-                        schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                            restrictions: None,
-                        }),
-                    },
-                ],
-            }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "result".to_string(),
-                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
-                }],
-            }),
-            http_endpoint: vec![],
-            read_only: None,
-        };
+        let graph = SchemaGraph::empty();
+        let constructor = constructor(vec![NamedField::user_supplied(
+            "tenant",
+            SchemaType::string(),
+        )]);
+        let method = method(
+            "analyze",
+            "Analyze data",
+            InputSchema::Parameters(vec![
+                NamedField::user_supplied("query", SchemaType::string()),
+                NamedField::user_supplied(
+                    "image",
+                    SchemaType::binary(BinaryRestrictions::default()),
+                ),
+            ]),
+            OutputSchema::Single(Box::new(SchemaType::text(TextRestrictions::default()))),
+        );
 
         let prompt = AgentMcpPrompt::from_method_hint(
             &AgentTypeName("DataAgent".to_string()),
+            &graph,
             &method,
             &constructor,
             "Run analysis",
@@ -436,46 +443,24 @@ mod tests {
 
     #[test]
     fn method_prompt_multimodal_input_describes_parts_array() {
-        let constructor = AgentConstructor {
-            name: None,
-            description: "ctor".to_string(),
-            prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas {
-                elements: vec![NamedElementSchema {
-                    name: "tenant".to_string(),
-                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                        element_type: str(),
-                    }),
-                }],
-            }),
-        };
-        let method = AgentMethod {
-            name: "process".to_string(),
-            description: "Process multimodal".to_string(),
-            prompt_hint: Some("Process it".to_string()),
-            input_schema: DataSchema::Multimodal(NamedElementSchemas {
-                elements: vec![
-                    NamedElementSchema {
-                        name: "description".to_string(),
-                        schema: ElementSchema::UnstructuredText(TextDescriptor {
-                            restrictions: None,
-                        }),
-                    },
-                    NamedElementSchema {
-                        name: "photo".to_string(),
-                        schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
-                            restrictions: None,
-                        }),
-                    },
-                ],
-            }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-            http_endpoint: vec![],
-            read_only: None,
-        };
+        let graph = SchemaGraph::empty();
+        let constructor = constructor(vec![NamedField::user_supplied(
+            "tenant",
+            SchemaType::string(),
+        )]);
+        let method = method(
+            "process",
+            "Process multimodal",
+            InputSchema::Parameters(vec![multimodal_parts_field(vec![
+                ("description", SchemaType::text(TextRestrictions::default())),
+                ("photo", SchemaType::binary(BinaryRestrictions::default())),
+            ])]),
+            OutputSchema::Unit,
+        );
 
         let prompt = AgentMcpPrompt::from_method_hint(
             &AgentTypeName("MultiAgent".to_string()),
+            &graph,
             &method,
             &constructor,
             "Process it",
@@ -499,24 +484,18 @@ mod tests {
 
     #[test]
     fn method_prompt_omits_empty_sections() {
-        let constructor = AgentConstructor {
-            name: None,
-            description: "ctor".to_string(),
-            prompt_hint: None,
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-        };
-        let method = AgentMethod {
-            name: "ping".to_string(),
-            description: "Ping".to_string(),
-            prompt_hint: Some("Just ping".to_string()),
-            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-            output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-            http_endpoint: vec![],
-            read_only: None,
-        };
+        let graph = SchemaGraph::empty();
+        let constructor = constructor(vec![]);
+        let method = method(
+            "ping",
+            "Ping",
+            InputSchema::Parameters(vec![]),
+            OutputSchema::Unit,
+        );
 
         let prompt = AgentMcpPrompt::from_method_hint(
             &AgentTypeName("PingAgent".to_string()),
+            &graph,
             &method,
             &constructor,
             "Just ping",

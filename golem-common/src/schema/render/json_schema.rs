@@ -15,12 +15,13 @@
 //! Renderer that produces a JSON Schema document from a `SchemaGraph`/
 //! `SchemaType`.
 
+use crate::schema::agent::{FieldSource, InputSchema, OutputSchema};
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec,
-    ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
-    VariantCaseType,
+    BinaryRestrictions, DiscriminatorRule, NamedFieldType, PathSpec, QuantitySpec, QuantityValue,
+    QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
+    UrlRestrictions, VariantCaseType,
 };
 use serde_json::{Map, Number, Value};
 use std::collections::{HashMap, HashSet};
@@ -28,16 +29,56 @@ use std::collections::{HashMap, HashSet};
 const JSON_SCHEMA_DRAFT: &str = "https://json-schema.org/draft/2020-12/schema";
 const MIME_TYPE_PATTERN: &str = "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$";
 
+/// Configuration for the JSON Schema renderer.
+///
+/// The renderer always produces the same canonical structural document for
+/// every consumer; the only knob is whether to emit the `$schema` draft
+/// marker at the document root (consumers that embed the schema elsewhere,
+/// such as tool/resource schemas, omit it).
+#[derive(Clone, Copy, Debug)]
+pub struct JsonSchemaConfig {
+    /// Emit the `$schema` JSON Schema draft marker at the document root.
+    pub include_draft_marker: bool,
+}
+
+impl JsonSchemaConfig {
+    /// Canonical standalone JSON Schema document (includes the `$schema`
+    /// draft marker).
+    pub const CANONICAL: Self = Self {
+        include_draft_marker: true,
+    };
+
+    /// Canonical JSON Schema document without the `$schema` draft marker, for
+    /// consumers that embed the schema elsewhere (e.g. tool/resource schemas).
+    pub const WITHOUT_DRAFT_MARKER: Self = Self {
+        include_draft_marker: false,
+    };
+}
+
+/// Render `(graph, ty)` to a canonical JSON Schema document (includes the
+/// `$schema` draft marker). See [`to_json_schema_with_config`] for the
+/// configurable form.
+pub fn to_json_schema(graph: &SchemaGraph, ty: &SchemaType) -> Value {
+    to_json_schema_with_config(graph, ty, JsonSchemaConfig::CANONICAL)
+}
+
 /// Render `(graph, ty)` to a JSON Schema document. When `ty` is a
 /// `Ref(TypeId)` the document is `{ "$defs": {…}, "$ref": "#/$defs/<id>" }`;
 /// otherwise the root schema is emitted inline with `$defs` carrying every
 /// named definition from the graph plus any union per-branch synthesised
 /// schemas under tag-derived keys (see [`BranchNameTable`]).
-pub fn to_json_schema(graph: &SchemaGraph, ty: &SchemaType) -> Value {
+///
+/// `config.include_draft_marker` controls whether the `$schema` draft marker
+/// is added at the document root.
+pub fn to_json_schema_with_config(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    config: JsonSchemaConfig,
+) -> Value {
     let table = build_branch_name_table(graph, ty);
-    let mut root = render_type(graph, ty, true, &table);
-    let mut defs = render_defs(graph, &table);
-    add_union_branch_defs(graph, ty, &mut defs, &table);
+    let mut root = render_type(graph, ty, true, &table, config);
+    let mut defs = render_defs(graph, &table, config);
+    add_union_branch_defs(graph, ty, &mut defs, &table, config);
     if !defs.is_empty() {
         if let Some(obj) = root.as_object_mut() {
             obj.insert("$defs".to_string(), Value::Object(defs));
@@ -48,7 +89,9 @@ pub fn to_json_schema(graph: &SchemaGraph, ty: &SchemaType) -> Value {
             root = Value::Object(wrapper);
         }
     }
-    if let Some(obj) = root.as_object_mut() {
+    if config.include_draft_marker
+        && let Some(obj) = root.as_object_mut()
+    {
         // Insert the JSON Schema draft marker at the top of the produced
         // root schema. OpenAPI removes this; see `super::openapi`.
         let mut with_schema = Map::with_capacity(obj.len() + 1);
@@ -64,19 +107,110 @@ pub fn to_json_schema(graph: &SchemaGraph, ty: &SchemaType) -> Value {
     root
 }
 
+/// Render an [`InputSchema`] to a JSON Schema object document.
+///
+/// The result is an `object` schema whose `properties` are the input's
+/// **user-supplied** parameters (`FieldSource::AutoInjected` fields are host
+/// provided and never surfaced to callers, so they are omitted). `required`
+/// lists every user-supplied parameter whose schema is not an `option<…>`.
+/// `$defs` (named definitions plus synthesised per-union-branch schemas) is
+/// attached at the document root so the document is self-contained.
+///
+/// This reuses the same node rendering as [`to_json_schema_with_config`] by
+/// projecting the parameter list onto a synthetic record root, then replacing
+/// the record's (all-required) `required` array with the option-aware one.
+pub fn input_schema_to_json_schema(
+    graph: &SchemaGraph,
+    input: &InputSchema,
+    config: JsonSchemaConfig,
+) -> Value {
+    let InputSchema::Parameters(fields) = input;
+    let user_fields: Vec<&crate::schema::agent::NamedField> = fields
+        .iter()
+        .filter(|f| matches!(f.source, FieldSource::UserSupplied))
+        .collect();
+    let record_fields: Vec<NamedFieldType> = user_fields
+        .iter()
+        .map(|f| NamedFieldType {
+            name: f.name.clone(),
+            body: f.schema.clone(),
+            metadata: f.metadata.clone(),
+        })
+        .collect();
+    let record = SchemaType::Record {
+        fields: record_fields,
+        metadata: MetadataEnvelope::default(),
+    };
+    let mut doc = to_json_schema_with_config(graph, &record, config);
+    if let Some(obj) = doc.as_object_mut() {
+        let required: Vec<Value> = user_fields
+            .iter()
+            .filter(|f| !resolves_to_option(graph, &f.schema))
+            .map(|f| Value::String(f.name.clone()))
+            .collect();
+        obj.insert("required".to_string(), Value::Array(required));
+    }
+    doc
+}
+
+/// Render an [`OutputSchema`] to an optional JSON Schema document.
+///
+/// `OutputSchema::Unit` renders to `None` (the method has no return value).
+/// `OutputSchema::Single(ty)` renders `ty` via [`to_json_schema_with_config`].
+///
+/// This renderer applies no protocol policy: it does **not** suppress
+/// multimodal outputs. Consumers that omit `outputSchema` for multimodal
+/// (e.g. the MCP exporter) make that decision themselves.
+pub fn output_schema_to_json_schema(
+    graph: &SchemaGraph,
+    output: &OutputSchema,
+    config: JsonSchemaConfig,
+) -> Option<Value> {
+    match output {
+        OutputSchema::Unit => None,
+        OutputSchema::Single(ty) => Some(to_json_schema_with_config(graph, ty, config)),
+    }
+}
+
+/// Whether `ty`, after following any `Ref` chain against `graph`, is an
+/// `option<…>`. Used to decide whether an input parameter is required.
+fn resolves_to_option(graph: &SchemaGraph, ty: &SchemaType) -> bool {
+    let mut current = ty;
+    let mut visited: HashSet<TypeId> = HashSet::new();
+    loop {
+        match current {
+            SchemaType::Option { .. } => return true,
+            SchemaType::Ref { id, .. } => {
+                if !visited.insert(id.clone()) {
+                    return false;
+                }
+                match graph.lookup(id) {
+                    Some(def) => current = &def.body,
+                    None => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
 /// Build a `$defs` object covering every named definition in the graph.
 ///
 /// Per RFC 6901 §4, JSON Pointer escaping (`~0`/`~1`) applies to the
 /// *pointer string*, not to the resolved object member name. The map key
 /// is therefore the **raw** `TypeId.0` string; the escaped form is only
 /// used inside `$ref` pointers (see [`ref_pointer`]).
-pub(super) fn render_defs(graph: &SchemaGraph, table: &BranchNameTable) -> Map<String, Value> {
+pub(super) fn render_defs(
+    graph: &SchemaGraph,
+    table: &BranchNameTable,
+    config: JsonSchemaConfig,
+) -> Map<String, Value> {
     let mut defs = Map::new();
     for def in &graph.defs {
         // The def's metadata now lives on `def.body` directly; `render_type`
         // already attaches inline-node metadata, so no extra `attach_metadata`
         // call is required here.
-        let mut body = render_type(graph, &def.body, false, table);
+        let mut body = render_type(graph, &def.body, false, table, config);
         if let Some(name) = &def.name
             && let Some(obj) = body.as_object_mut()
         {
@@ -94,11 +228,12 @@ pub(super) fn add_union_branch_defs(
     root_ty: &SchemaType,
     defs: &mut Map<String, Value>,
     table: &BranchNameTable,
+    config: JsonSchemaConfig,
 ) {
     let mut emitted = HashSet::new();
-    collect_union_branch_defs(graph, root_ty, defs, &mut emitted, table);
+    collect_union_branch_defs(graph, root_ty, defs, &mut emitted, table, config);
     for def in &graph.defs {
-        collect_union_branch_defs(graph, &def.body, defs, &mut emitted, table);
+        collect_union_branch_defs(graph, &def.body, defs, &mut emitted, table, config);
     }
 }
 
@@ -108,24 +243,16 @@ fn collect_union_branch_defs(
     defs: &mut Map<String, Value>,
     emitted: &mut HashSet<String>,
     table: &BranchNameTable,
+    config: JsonSchemaConfig,
 ) {
     match ty {
-        SchemaType::Union { spec, metadata } => {
-            // Multimodal unions carry placeholder per-branch discriminators
-            // (the actual tag lives positionally in the outer envelope), so
-            // those rules must not be lifted into the branch schemas.
-            let multimodal = matches!(
-                metadata.role,
-                Some(crate::schema::metadata::Role::Multimodal)
-            );
+        SchemaType::Union { spec, .. } => {
             for branch in spec.branches.iter() {
-                let key = table.name_for(branch, multimodal).to_string();
+                let key = table.name_for(branch).to_string();
                 if emitted.insert(key.clone()) {
-                    let mut body = render_type(graph, &branch.body, false, table);
+                    let mut body = render_type(graph, &branch.body, false, table, config);
                     attach_metadata(&mut body, &branch.metadata);
-                    if let Some(obj) = body.as_object_mut()
-                        && !multimodal
-                    {
+                    if let Some(obj) = body.as_object_mut() {
                         // Constrain the branch schema further with the
                         // discriminator. For record-shaped rules this adds
                         // an extra constraint on the discriminator field;
@@ -134,46 +261,46 @@ fn collect_union_branch_defs(
                     }
                     defs.insert(key, body);
                 }
-                collect_union_branch_defs(graph, &branch.body, defs, emitted, table);
+                collect_union_branch_defs(graph, &branch.body, defs, emitted, table, config);
             }
         }
         SchemaType::Record { fields, .. } => {
             for f in fields {
-                collect_union_branch_defs(graph, &f.body, defs, emitted, table);
+                collect_union_branch_defs(graph, &f.body, defs, emitted, table, config);
             }
         }
         SchemaType::Variant { cases, .. } => {
             for case in cases {
                 if let Some(p) = &case.payload {
-                    collect_union_branch_defs(graph, p, defs, emitted, table);
+                    collect_union_branch_defs(graph, p, defs, emitted, table, config);
                 }
             }
         }
         SchemaType::Tuple { elements, .. } => {
             for e in elements {
-                collect_union_branch_defs(graph, e, defs, emitted, table);
+                collect_union_branch_defs(graph, e, defs, emitted, table, config);
             }
         }
         SchemaType::List { element, .. }
         | SchemaType::FixedList { element, .. }
         | SchemaType::Option { inner: element, .. } => {
-            collect_union_branch_defs(graph, element, defs, emitted, table);
+            collect_union_branch_defs(graph, element, defs, emitted, table, config);
         }
         SchemaType::Map { key, value, .. } => {
-            collect_union_branch_defs(graph, key, defs, emitted, table);
-            collect_union_branch_defs(graph, value, defs, emitted, table);
+            collect_union_branch_defs(graph, key, defs, emitted, table, config);
+            collect_union_branch_defs(graph, value, defs, emitted, table, config);
         }
         SchemaType::Result { spec, .. } => {
             if let Some(t) = &spec.ok {
-                collect_union_branch_defs(graph, t, defs, emitted, table);
+                collect_union_branch_defs(graph, t, defs, emitted, table, config);
             }
             if let Some(t) = &spec.err {
-                collect_union_branch_defs(graph, t, defs, emitted, table);
+                collect_union_branch_defs(graph, t, defs, emitted, table, config);
             }
         }
         SchemaType::Future { inner, .. } | SchemaType::Stream { inner, .. } => {
             if let Some(t) = inner {
-                collect_union_branch_defs(graph, t, defs, emitted, table);
+                collect_union_branch_defs(graph, t, defs, emitted, table, config);
             }
         }
         _ => {}
@@ -199,19 +326,16 @@ fn collect_union_branch_defs(
 /// canonical structural key used internally is a `blake3` hash of the
 /// branch's deterministic JSON serialisation.
 pub(super) struct BranchNameTable {
-    names: HashMap<(String, bool), String>,
+    names: HashMap<String, String>,
 }
 
 impl BranchNameTable {
-    pub(super) fn name_for(&self, branch: &UnionBranch, multimodal: bool) -> &str {
+    pub(super) fn name_for(&self, branch: &UnionBranch) -> &str {
         let key = canonical_branch_key(branch);
-        self.names
-            .get(&(key, multimodal))
-            .map(String::as_str)
-            .expect(
-                "BranchNameTable must contain every union branch reachable from the render root \
+        self.names.get(&key).map(String::as_str).expect(
+            "BranchNameTable must contain every union branch reachable from the render root \
                  — `build_branch_name_table` is the source of truth for this invariant",
-            )
+        )
     }
 }
 
@@ -249,11 +373,11 @@ fn canonical_branch_key(branch: &UnionBranch) -> String {
 
 #[derive(Default)]
 struct BranchCollector {
-    /// `(canonical-key, multimodal)` for every encountered branch, in
-    /// walk order, with no duplicates. Used both for membership and for
-    /// deterministic iteration during name resolution.
-    keys: Vec<(String, bool)>,
-    occurrences: HashMap<(String, bool), Occurrence>,
+    /// Canonical key for every encountered branch, in walk order, with no
+    /// duplicates. Used both for membership and for deterministic iteration
+    /// during name resolution.
+    keys: Vec<String>,
+    occurrences: HashMap<String, Occurrence>,
     /// Path of segments describing the current position in the schema
     /// graph (record-field names, variant-case names, "key"/"value",
     /// "ok"/"err", outer branch tags, …).
@@ -268,9 +392,8 @@ struct Occurrence {
 }
 
 impl BranchCollector {
-    fn record(&mut self, branch: &UnionBranch, multimodal: bool) {
-        let canonical = canonical_branch_key(branch);
-        let key = (canonical, multimodal);
+    fn record(&mut self, branch: &UnionBranch) {
+        let key = canonical_branch_key(branch);
         if let std::collections::hash_map::Entry::Vacant(slot) = self.occurrences.entry(key.clone())
         {
             slot.insert(Occurrence {
@@ -290,13 +413,9 @@ impl BranchCollector {
     /// occurrences and pollute the disambiguation path.
     fn walk_type(&mut self, ty: &SchemaType) {
         match ty {
-            SchemaType::Union { spec, metadata } => {
-                let multimodal = matches!(
-                    metadata.role,
-                    Some(crate::schema::metadata::Role::Multimodal)
-                );
+            SchemaType::Union { spec, .. } => {
                 for branch in &spec.branches {
-                    self.record(branch, multimodal);
+                    self.record(branch);
                     self.path.push(branch.tag.clone());
                     self.walk_type(&branch.body);
                     self.path.pop();
@@ -368,24 +487,18 @@ impl BranchCollector {
 
     fn into_table(self, mut taken: HashSet<String>) -> BranchNameTable {
         // Compute each occurrence's preferred name (from its `tag`) and
-        // group by it. A `Multimodal` suffix is appended to a multimodal
-        // occurrence's preferred name iff the same structural branch
-        // also appears in a non-multimodal context — that's the only
-        // case where the two would otherwise collide.
-        let mut groups: Vec<(String, Vec<(String, bool)>)> = Vec::new();
+        // group by it.
+        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
         for key in &self.keys {
             let occ = &self.occurrences[key];
-            let mut preferred = sanitise_to_upper_camel(&occ.tag);
-            if key.1 && self.occurrences.contains_key(&(key.0.clone(), false)) {
-                preferred.push_str("Multimodal");
-            }
+            let preferred = sanitise_to_upper_camel(&occ.tag);
             match groups.iter_mut().find(|(name, _)| name == &preferred) {
                 Some((_, members)) => members.push(key.clone()),
                 None => groups.push((preferred, vec![key.clone()])),
             }
         }
 
-        let mut names = HashMap::<(String, bool), String>::new();
+        let mut names = HashMap::<String, String>::new();
         for (preferred, members) in groups {
             if members.len() == 1 && !taken.contains(&preferred) {
                 // Unique preferred name and not colliding with a graph
@@ -399,7 +512,7 @@ impl BranchCollector {
                 // assigned names are symmetric.
                 for key in members {
                     let occ = &self.occurrences[&key];
-                    let assigned = disambiguate(&preferred, &occ.path, &taken, &key.0);
+                    let assigned = disambiguate(&preferred, &occ.path, &taken, &key);
                     taken.insert(assigned.clone());
                     names.insert(key, assigned);
                 }
@@ -524,6 +637,7 @@ pub(super) fn render_type(
     ty: &SchemaType,
     root: bool,
     table: &BranchNameTable,
+    config: JsonSchemaConfig,
 ) -> Value {
     let mut rendered = match ty {
         SchemaType::Ref { id, .. } => obj([("$ref", Value::String(ref_pointer(id, root)))]),
@@ -551,7 +665,7 @@ pub(super) fn render_type(
             let mut props = Map::new();
             let mut required = Vec::with_capacity(fields.len());
             for field in fields {
-                let mut field_schema = render_type(graph, &field.body, false, table);
+                let mut field_schema = render_type(graph, &field.body, false, table, config);
                 attach_metadata(&mut field_schema, &field.metadata);
                 props.insert(field.name.clone(), field_schema);
                 required.push(Value::String(field.name.clone()));
@@ -564,7 +678,9 @@ pub(super) fn render_type(
             ])
         }
 
-        SchemaType::Variant { cases, .. } => Value::Object(variant_schema(graph, cases, table)),
+        SchemaType::Variant { cases, .. } => {
+            Value::Object(variant_schema(graph, cases, table, config))
+        }
 
         SchemaType::Enum { cases, .. } => obj([
             ("type", Value::String("string".to_string())),
@@ -607,7 +723,7 @@ pub(super) fn render_type(
                         Value::Array(
                             elements
                                 .iter()
-                                .map(|e| render_type(graph, e, false, table))
+                                .map(|e| render_type(graph, e, false, table, config))
                                 .collect(),
                         ),
                     ),
@@ -619,14 +735,14 @@ pub(super) fn render_type(
 
         SchemaType::List { element, .. } => obj([
             ("type", Value::String("array".to_string())),
-            ("items", render_type(graph, element, false, table)),
+            ("items", render_type(graph, element, false, table, config)),
         ]),
 
         SchemaType::FixedList {
             element, length, ..
         } => obj([
             ("type", Value::String("array".to_string())),
-            ("items", render_type(graph, element, false, table)),
+            ("items", render_type(graph, element, false, table, config)),
             ("minItems", Value::Number((*length).into())),
             ("maxItems", Value::Number((*length).into())),
         ]),
@@ -637,8 +753,8 @@ pub(super) fn render_type(
                 (
                     "prefixItems",
                     Value::Array(vec![
-                        render_type(graph, key, false, table),
-                        render_type(graph, value, false, table),
+                        render_type(graph, key, false, table, config),
+                        render_type(graph, value, false, table, config),
                     ]),
                 ),
                 ("items", Value::Bool(false)),
@@ -655,11 +771,11 @@ pub(super) fn render_type(
             "oneOf",
             Value::Array(vec![
                 obj([("type", Value::String("null".to_string()))]),
-                render_type(graph, inner, false, table),
+                render_type(graph, inner, false, table, config),
             ]),
         )]),
 
-        SchemaType::Result { spec, .. } => Value::Object(result_schema(graph, spec, table)),
+        SchemaType::Result { spec, .. } => Value::Object(result_schema(graph, spec, table, config)),
 
         SchemaType::Text { restrictions, .. } => Value::Object(text_schema(restrictions)),
         SchemaType::Binary { restrictions, .. } => Value::Object(binary_schema(restrictions)),
@@ -675,9 +791,7 @@ pub(super) fn render_type(
         ]),
         SchemaType::Quantity { spec, .. } => Value::Object(quantity_schema(spec)),
 
-        SchemaType::Union { spec, metadata } => {
-            Value::Object(union_schema(graph, spec, metadata, table))
-        }
+        SchemaType::Union { spec, .. } => Value::Object(union_schema(graph, spec, table, config)),
 
         SchemaType::Secret { spec, .. } => Value::Object(secret_schema(spec)),
         SchemaType::QuotaToken { spec, .. } => Value::Object(quota_token_schema(spec)),
@@ -731,6 +845,7 @@ fn variant_schema(
     graph: &SchemaGraph,
     cases: &[VariantCaseType],
     table: &BranchNameTable,
+    config: JsonSchemaConfig,
 ) -> Map<String, Value> {
     let one_of: Vec<Value> = cases
         .iter()
@@ -740,7 +855,7 @@ fn variant_schema(
                 let mut props = Map::new();
                 props.insert(
                     case.name.clone(),
-                    render_type(graph, payload_ty, false, table),
+                    render_type(graph, payload_ty, false, table, config),
                 );
                 obj([
                     ("type", Value::String("object".to_string())),
@@ -763,16 +878,17 @@ fn result_schema(
     graph: &SchemaGraph,
     spec: &ResultSpec,
     table: &BranchNameTable,
+    config: JsonSchemaConfig,
 ) -> Map<String, Value> {
     let ok_inner = spec
         .ok
         .as_deref()
-        .map(|t| render_type(graph, t, false, table))
+        .map(|t| render_type(graph, t, false, table, config))
         .unwrap_or_else(|| obj([("type", Value::String("null".to_string()))]));
     let err_inner = spec
         .err
         .as_deref()
-        .map(|t| render_type(graph, t, false, table))
+        .map(|t| render_type(graph, t, false, table, config))
         .unwrap_or_else(|| obj([("type", Value::String("null".to_string()))]));
     let one_of = vec![
         obj([
@@ -1074,29 +1190,18 @@ fn quota_token_schema(_spec: &QuotaTokenSpec) -> Map<String, Value> {
 fn union_schema(
     graph: &SchemaGraph,
     spec: &UnionSpec,
-    metadata: &MetadataEnvelope,
     table: &BranchNameTable,
+    config: JsonSchemaConfig,
 ) -> Map<String, Value> {
     // Each branch gets a per-branch reference into `$defs` (synthesised
     // by `add_union_branch_defs`), so the `oneOf` and any discriminator
     // mapping resolves against schemas the renderer actually emits. The
     // branch key is resolved through `BranchNameTable` so two unrelated
-    // unions sharing a tag get disambiguated names; the same lookup also
-    // distinguishes a normal-mode and a multimodal-mode occurrence of
-    // the same structural branch.
-    let multimodal = matches!(
-        metadata.role,
-        Some(crate::schema::metadata::Role::Multimodal)
-    );
+    // unions sharing a tag get disambiguated names.
     let one_of: Vec<Value> = spec
         .branches
         .iter()
-        .map(|b| {
-            obj([(
-                "$ref",
-                Value::String(ref_to_def_key(table.name_for(b, multimodal))),
-            )])
-        })
+        .map(|b| obj([("$ref", Value::String(ref_to_def_key(table.name_for(b))))]))
         .collect();
     let mut m = Map::new();
     m.insert("oneOf".to_string(), Value::Array(one_of));
@@ -1108,10 +1213,7 @@ fn union_schema(
                 _ => None,
             };
             if let Some(lit) = literal {
-                mapping.insert(
-                    lit,
-                    Value::String(ref_to_def_key(table.name_for(branch, multimodal))),
-                );
+                mapping.insert(lit, Value::String(ref_to_def_key(table.name_for(branch))));
             }
         }
         let mut d = Map::new();
@@ -1122,6 +1224,7 @@ fn union_schema(
         m.insert("discriminator".to_string(), Value::Object(d));
     }
     let _ = graph;
+    let _ = config;
     m
 }
 

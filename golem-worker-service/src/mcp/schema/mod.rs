@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use field_disambiguation::*;
 pub use mcp_tool_schema::*;
 
-pub(crate) mod mcp_schema;
+mod field_disambiguation;
 mod mcp_tool_schema;

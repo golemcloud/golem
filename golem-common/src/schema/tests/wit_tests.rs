@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::strategies;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::TypeId;
+use crate::schema::proptest_strategies as strategies;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::wit::{
     DecodeError, EncodeError, decode_graph, decode_typed, decode_value, encode_graph, encode_typed,
@@ -38,7 +38,7 @@ proptest! {
 
     /// Encoding and then decoding any schema value yields a value
     /// bitwise-equal to the original (with `NaN`-tolerant comparison for
-    /// floats, see [`crate::schema::tests::strategies::schema_values_eq`]).
+    /// floats, see [`crate::schema::proptest_strategies::schema_values_eq`]).
     #[test]
     fn value_round_trip(value in schema_value_strategy()) {
         let wire = encode_value(&value);

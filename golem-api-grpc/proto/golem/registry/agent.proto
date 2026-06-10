@@ -4,6 +4,7 @@ package golem.registry;
 
 import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
+import "golem/schema/agent.proto";
 import "golem/common/account_id.proto";
 
 message RegisteredAgentTypeImplementer {
@@ -15,5 +16,11 @@ message RegisteredAgentTypeImplementer {
 
 message RegisteredAgentType {
   golem.component.AgentType agent_type = 1;
+  RegisteredAgentTypeImplementer implemented_by = 2;
+}
+
+// Schema-model form of a registered agent type, used by the MCP export path.
+message RegisteredAgentTypeSchema {
+  golem.schema.AgentTypeSchema agent_type = 1;
   RegisteredAgentTypeImplementer implemented_by = 2;
 }

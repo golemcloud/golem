@@ -13,22 +13,25 @@
 // limitations under the License.
 
 use golem_common::base_model::account::AccountId;
-use golem_common::base_model::agent::{
-    AgentMethod, AgentMode, AgentTypeName, DataSchema, NamedElementSchemas,
-};
+use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::model::agent::AgentConstructor;
+use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, FieldSource};
+use golem_common::schema::graph::SchemaGraph;
 use rmcp::model::{Resource, ResourceTemplate};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AgentMcpResource {
     pub kind: AgentMcpResourceKind,
     pub environment_id: EnvironmentId,
     pub account_id: AccountId,
-    pub constructor: AgentConstructor,
-    pub raw_method: AgentMethod,
+    /// Per-agent schema graph that constructor / method `SchemaType::Ref`
+    /// bodies resolve against (see [`super::agent_mcp_tool::AgentMcpTool`]).
+    pub schema_graph: Arc<SchemaGraph>,
+    pub constructor: AgentConstructorSchema,
+    pub method: AgentMethodSchema,
     pub component_id: ComponentId,
     pub agent_type_name: AgentTypeName,
     pub agent_mode: AgentMode,
@@ -132,7 +135,7 @@ impl ResourceRegistry {
             AgentMcpResourceKind::Template { .. } => {
                 let key = AgentMethodKey {
                     agent_type_name: resource.agent_type_name.0.clone(),
-                    method_name: resource.raw_method.name.clone(),
+                    method_name: resource.method.name.clone(),
                 };
                 self.template_resources.insert(key, resource);
             }
@@ -194,11 +197,11 @@ impl ResourceRegistry {
 }
 
 impl AgentMcpResource {
-    pub fn resource_name(agent_type_name: &AgentTypeName, method: &AgentMethod) -> String {
+    pub fn resource_name(agent_type_name: &AgentTypeName, method: &AgentMethodSchema) -> String {
         format!("{}-{}", agent_type_name.0, method.name)
     }
 
-    pub fn static_uri(agent_type_name: &AgentTypeName, method: &AgentMethod) -> String {
+    pub fn static_uri(agent_type_name: &AgentTypeName, method: &AgentMethodSchema) -> String {
         // https://modelcontextprotocol.info/docs/concepts/resources
         // The protocol and path structure is defined by the MCP server implementation.
         // Servers can define their own custom URI schemes.
@@ -207,7 +210,7 @@ impl AgentMcpResource {
 
     pub fn template_uri(
         agent_type_name: &AgentTypeName,
-        method: &AgentMethod,
+        method: &AgentMethodSchema,
         param_names: &[String],
     ) -> String {
         // https://modelcontextprotocol.info/docs/concepts/resources
@@ -218,13 +221,17 @@ impl AgentMcpResource {
         format!("{}/{}", base, placeholders.join("/"))
     }
 
-    pub fn constructor_param_names(constructor: &AgentConstructor) -> Vec<String> {
-        match &constructor.input_schema {
-            DataSchema::Tuple(NamedElementSchemas { elements }) => {
-                elements.iter().map(|e| e.name.clone()).collect()
-            }
-            DataSchema::Multimodal(_) => vec![],
-        }
+    /// The names of the constructor's user-supplied parameters, used to build
+    /// resource template URI segments. Auto-injected parameters are host
+    /// provided and never appear in the URI.
+    pub fn constructor_param_names(constructor: &AgentConstructorSchema) -> Vec<String> {
+        constructor
+            .input_schema
+            .fields()
+            .iter()
+            .filter(|f| matches!(f.source, FieldSource::UserSupplied))
+            .map(|f| f.name.clone())
+            .collect()
     }
 }
 

@@ -61,10 +61,8 @@ use crate::schema::agent::{
     ParsedAgentId,
 };
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
-use crate::schema::schema_type::{NamedFieldType, SchemaType, UnionBranch, UnionSpec};
-use crate::schema::schema_value::{
-    BinaryValuePayload, SchemaValue, TextValuePayload, UnionValuePayload,
-};
+use crate::schema::schema_type::{NamedFieldType, SchemaType};
+use crate::schema::schema_value::{BinaryValuePayload, SchemaValue, TextValuePayload};
 
 /// Forward: legacy [`AgentConstructor`] → [`AgentConstructorSchema`].
 pub fn agent_constructor_to_schema(
@@ -227,7 +225,7 @@ pub fn schema_agent_type_to_legacy(ty: &AgentTypeSchema) -> Result<AgentType, Sc
 ///
 /// Walks the legacy `parameters: DataValue` and constructs a
 /// [`TypedSchemaValue`] whose root is a [`SchemaType::Record`] (for the tuple
-/// shape) or a `list<union<...> with Role::Multimodal>` (for the multimodal
+/// shape) or a `list<variant<...> with Role::Multimodal>` (for the multimodal
 /// shape), with one element per legacy `ElementValue`. Each element's
 /// component-model body is paired with its embedded `AnalysedType`, converted
 /// in-place via [`analysed_type_to_schema_type_inline`] +
@@ -263,7 +261,8 @@ pub fn legacy_data_value_to_typed_schema_value(
 ) -> Result<TypedSchemaValue, SchemaAdapterError> {
     use crate::base_model::agent::NamedElementValues;
     use crate::schema::metadata::{MetadataEnvelope, Role};
-    use crate::schema::schema_type::DiscriminatorRule;
+    use crate::schema::schema_type::VariantCaseType;
+    use crate::schema::schema_value::VariantValuePayload;
     let mut builder = SchemaGraphBuilder::new();
     match value {
         DataValue::Tuple(elements) => {
@@ -285,30 +284,28 @@ pub fn legacy_data_value_to_typed_schema_value(
             ))
         }
         DataValue::Multimodal(NamedElementValues { elements }) => {
-            let mut branches = Vec::with_capacity(elements.len());
-            let mut union_values = Vec::with_capacity(elements.len());
+            let mut cases = Vec::with_capacity(elements.len());
+            let mut variant_values = Vec::with_capacity(elements.len());
             for (i, named) in elements.iter().enumerate() {
                 let (_synth_name, schema_ty, schema_value) =
                     legacy_element_to_named(&mut builder, &named.value, i)?;
-                branches.push(UnionBranch {
-                    tag: named.name.clone(),
-                    body: schema_ty,
-                    discriminator: DiscriminatorRule::FieldAbsent {
-                        field_name: String::new(),
-                    },
+                let case_index = cases.len() as u32;
+                cases.push(VariantCaseType {
+                    name: named.name.clone(),
+                    payload: Some(schema_ty),
                     metadata: MetadataEnvelope::default(),
                 });
-                union_values.push(SchemaValue::Union(UnionValuePayload {
-                    tag: named.name.clone(),
-                    body: Box::new(schema_value),
+                variant_values.push(SchemaValue::Variant(VariantValuePayload {
+                    case: case_index,
+                    payload: Some(Box::new(schema_value)),
                 }));
             }
-            let mut union_ty = SchemaType::union(UnionSpec { branches });
-            union_ty.metadata_mut().role = Some(Role::Multimodal);
+            let mut variant_ty = SchemaType::variant(cases);
+            variant_ty.metadata_mut().role = Some(Role::Multimodal);
             Ok(TypedSchemaValue::new(
-                builder.into_graph_with_root(SchemaType::list(union_ty)),
+                builder.into_graph_with_root(SchemaType::list(variant_ty)),
                 SchemaValue::List {
-                    elements: union_values,
+                    elements: variant_values,
                 },
             ))
         }

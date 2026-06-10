@@ -23,7 +23,7 @@
 
 use crate::schema::graph::SchemaGraph;
 use crate::schema::render::json_schema::{
-    add_union_branch_defs, build_branch_name_table, render_defs, render_type,
+    JsonSchemaConfig, add_union_branch_defs, build_branch_name_table, render_defs, render_type,
 };
 use crate::schema::schema_type::SchemaType;
 use serde_json::{Map, Value};
@@ -44,10 +44,13 @@ use serde_json::{Map, Value};
 /// OpenAPI does not accept the JSON Schema `$schema` keyword, so it is
 /// never emitted here.
 pub fn to_openapi_components(graph: &SchemaGraph, ty: &SchemaType) -> Value {
+    // OpenAPI renders the canonical structural form; only ref-rewriting and
+    // `$schema` omission differ, both handled below.
+    let config = JsonSchemaConfig::CANONICAL;
     let table = build_branch_name_table(graph, ty);
-    let root = rewrite_refs(render_type(graph, ty, true, &table));
-    let mut defs = render_defs(graph, &table);
-    add_union_branch_defs(graph, ty, &mut defs, &table);
+    let root = rewrite_refs(render_type(graph, ty, true, &table, config));
+    let mut defs = render_defs(graph, &table, config);
+    add_union_branch_defs(graph, ty, &mut defs, &table, config);
     // `$defs` map keys are raw per RFC 6901 §4: the JSON Pointer token in a
     // `$ref` is the *escaped* form of the resolved object member name.
     // We preserve raw keys when moving `$defs` → `components.schemas` so

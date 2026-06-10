@@ -13,15 +13,18 @@
 // limitations under the License.
 
 use crate::schema::graph::SchemaGraph;
+use crate::schema::metadata::Role;
+use crate::schema::proptest_strategies::schema_values_eq;
 use crate::schema::render::error::RenderError;
 use crate::schema::render::json_value::{from_json_value, to_json_value};
 use crate::schema::render::tests::paired_strategy::paired_strategy;
 use crate::schema::schema_type::{
     DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaType, TextRestrictions,
-    UnionBranch, UnionSpec,
+    UnionBranch, UnionSpec, VariantCaseType,
 };
-use crate::schema::schema_value::{SchemaValue, TextValuePayload, UnionValuePayload};
-use crate::schema::tests::strategies::schema_values_eq;
+use crate::schema::schema_value::{
+    SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
+};
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
@@ -89,6 +92,50 @@ proptest! {
         let json = to_json_value(&graph, &ty, &value).expect("to_json_value");
         let back = from_json_value(&graph, &ty, &json).expect("from_json_value");
         prop_assert!(schema_values_eq(&value, &back));
+    }
+
+    /// The core multimodal invariant: an arbitrary multimodal value
+    /// (`list<variant<… Role::Multimodal>>` with one element per part case)
+    /// survives `to_json_value` → `from_json_value` unchanged. This holds even
+    /// when two parts share the same payload shape, because the canonical
+    /// variant JSON keys off the case name rather than a discriminator.
+    #[test]
+    fn multimodal_list_value_json_round_trip(parts in prop::collection::vec(paired_strategy(), 1..4)) {
+        // Build the multimodal variant type: one case per generated part,
+        // each carrying a payload (multimodal parts are never payload-less).
+        let cases: Vec<VariantCaseType> = parts
+            .iter()
+            .enumerate()
+            .map(|(i, (part_ty, _))| VariantCaseType {
+                name: format!("p{i}"),
+                payload: Some(part_ty.clone()),
+                metadata: Default::default(),
+            })
+            .collect();
+        let mut variant = SchemaType::variant(cases);
+        variant.metadata_mut().role = Some(Role::Multimodal);
+        let ty = SchemaType::list(variant);
+
+        // One list element per part, each selecting its own case.
+        let elements: Vec<SchemaValue> = parts
+            .iter()
+            .enumerate()
+            .map(|(i, (_, part_value))| {
+                SchemaValue::Variant(VariantValuePayload {
+                    case: i as u32,
+                    payload: Some(Box::new(part_value.clone())),
+                })
+            })
+            .collect();
+        let value = SchemaValue::List { elements };
+
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let json = to_json_value(&graph, &ty, &value).expect("to_json_value");
+        let back = from_json_value(&graph, &ty, &json).expect("from_json_value");
+        prop_assert!(
+            schema_values_eq(&value, &back),
+            "multimodal round-trip mismatch:\n  ty: {ty:?}\n  value: {value:?}\n  json: {json}\n  back: {back:?}"
+        );
     }
 }
 
@@ -542,63 +589,85 @@ fn union_decode_picks_field_absent_branch() {
     }
 }
 
-// --- Multimodal unions ---
+// --- Multimodal variants ---
 //
-// Multimodal unions (`Role::Multimodal`) are positionally tagged in the
-// outer envelope and carry placeholder `FieldAbsent { field_name: "" }`
-// discriminators on each branch. The generic encode/decode pipeline must
-// not apply those placeholder rules to the inner body, otherwise a scalar
-// branch body would fail to encode (`UnionTagMismatch`) or to decode
-// (`UnionNoMatch`).
+// Multimodal is modelled as a tagged `variant` (`Role::Multimodal`), so its
+// JSON value form is the generic, self-contained variant encoding: a
+// single-entry object `{ "<case>": <body> }`. Unlike the previous
+// union-based modelling, this round-trips through `to_json_value` /
+// `from_json_value` for any payload type without an external envelope.
 
-fn multimodal_caption_image_union() -> SchemaType {
-    let mut union = SchemaType::union(UnionSpec {
-        branches: vec![
-            UnionBranch {
-                tag: "caption".to_string(),
-                body: SchemaType::string(),
-                discriminator: DiscriminatorRule::FieldAbsent {
-                    field_name: String::new(),
-                },
-                metadata: Default::default(),
-            },
-            UnionBranch {
-                tag: "image_url".to_string(),
-                body: SchemaType::string(),
-                discriminator: DiscriminatorRule::FieldAbsent {
-                    field_name: String::new(),
-                },
-                metadata: Default::default(),
-            },
-        ],
-    });
-    union.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
-    union
+fn multimodal_caption_image_variant() -> SchemaType {
+    let mut variant = SchemaType::variant(vec![
+        crate::schema::schema_type::VariantCaseType {
+            name: "caption".to_string(),
+            payload: Some(SchemaType::string()),
+            metadata: Default::default(),
+        },
+        crate::schema::schema_type::VariantCaseType {
+            name: "image_url".to_string(),
+            payload: Some(SchemaType::string()),
+            metadata: Default::default(),
+        },
+    ]);
+    variant.metadata_mut().role = Some(crate::schema::metadata::Role::Multimodal);
+    variant
 }
 
 #[test]
-fn multimodal_union_encode_scalar_body_does_not_apply_placeholder_rule() {
-    // A multimodal `caption: string` body should encode to its bare JSON
-    // string without tripping the safety net for the placeholder
-    // `FieldAbsent { field_name: "" }` discriminator.
-    let ty = multimodal_caption_image_union();
+fn multimodal_variant_encodes_as_tagged_object() {
+    // A multimodal `caption: string` case encodes to the self-contained
+    // tagged-object form `{ "caption": "hello world" }`.
+    let ty = multimodal_caption_image_variant();
     let graph = SchemaGraph::anonymous(ty.clone());
-    let value = SchemaValue::Union(UnionValuePayload {
-        tag: "caption".to_string(),
-        body: Box::new(SchemaValue::String("hello world".to_string())),
+    let value = SchemaValue::Variant(crate::schema::schema_value::VariantValuePayload {
+        case: 0,
+        payload: Some(Box::new(SchemaValue::String("hello world".to_string()))),
     });
     let json = to_json_value(&graph, &ty, &value).expect("encode must succeed");
-    assert_eq!(json, json!("hello world"));
+    assert_eq!(json, json!({ "caption": "hello world" }));
 }
 
 #[test]
-fn multimodal_union_decode_is_explicitly_unsupported() {
-    // Generic discriminator-based decoding cannot recover the positional
-    // tag from a bare union body, so the decoder must reject multimodal
-    // unions explicitly rather than silently mis-tag values.
-    let ty = multimodal_caption_image_union();
+fn multimodal_variant_round_trips_through_json() {
+    // The tagged form decodes back to the same value: multimodal no longer
+    // requires an external envelope to recover the alternative.
+    let ty = multimodal_caption_image_variant();
     let graph = SchemaGraph::anonymous(ty.clone());
-    let json = json!("hello world");
-    let err = from_json_value(&graph, &ty, &json).expect_err("multimodal decode must error");
-    assert!(matches!(err, RenderError::Unsupported(_)), "got {err:?}");
+    let value = SchemaValue::Variant(crate::schema::schema_value::VariantValuePayload {
+        case: 1,
+        payload: Some(Box::new(SchemaValue::String("http://img".to_string()))),
+    });
+    let json = to_json_value(&graph, &ty, &value).expect("encode must succeed");
+    assert_eq!(json, json!({ "image_url": "http://img" }));
+    let decoded = from_json_value(&graph, &ty, &json).expect("decode must succeed");
+    assert!(schema_values_eq(&decoded, &value));
+}
+
+#[test]
+fn multimodal_variant_list_round_trips_through_json() {
+    // The real multimodal shape is `list<variant<… Role::Multimodal>>`; an
+    // ordered list of mixed parts round-trips as a JSON array of tagged
+    // objects.
+    let list_ty = SchemaType::list(multimodal_caption_image_variant());
+    let graph = SchemaGraph::anonymous(list_ty.clone());
+    let value = SchemaValue::List {
+        elements: vec![
+            SchemaValue::Variant(crate::schema::schema_value::VariantValuePayload {
+                case: 0,
+                payload: Some(Box::new(SchemaValue::String("a caption".to_string()))),
+            }),
+            SchemaValue::Variant(crate::schema::schema_value::VariantValuePayload {
+                case: 1,
+                payload: Some(Box::new(SchemaValue::String("http://img".to_string()))),
+            }),
+        ],
+    };
+    let json = to_json_value(&graph, &list_ty, &value).expect("encode must succeed");
+    assert_eq!(
+        json,
+        json!([{ "caption": "a caption" }, { "image_url": "http://img" }])
+    );
+    let decoded = from_json_value(&graph, &list_ty, &json).expect("decode must succeed");
+    assert!(schema_values_eq(&decoded, &value));
 }
